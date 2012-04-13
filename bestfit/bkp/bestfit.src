@@ -1,0 +1,797 @@
+! 2008 Victor Ovchinnikov; Harvard/MIT
+! module to perform superposition of two structures
+! An alternative to FROTU, the module also computes derivatives
+! of the rotation matrix w.r.t. Cartesian coordinates
+! Reference for derivatives:
+! Ovchinnikov & Karplus, J. Phys. Chem. B 2012, Analysis and Elimination of a Bias in
+! Targeted Molecular Dynamics Simulations of Biomolecules
+! Basic algorithms: Best-fit alignment : W. Kabsch '78; diagonalization: Cramer's rule
+!
+
+!
+##IF RTMD STRINGM NEWBESTFIT
+!
+  module bestfit
+      !
+      use consta, only: ERRTOL; use chm_kinds
+      !
+      private
+      !
+       logical, private :: qdebug=.false.
+       logical, private :: qcheckdet=.true.
+       logical, private :: qdetfailtrace=.true.
+      !
+      !parameters
+       real(chm_real), parameter :: zero=0d0
+       real(chm_real), parameter :: one=1d0
+       real(chm_real), parameter :: two=2d0
+       real(chm_real), parameter :: half=0.5d0
+       real(chm_real), parameter :: oo3=0.3333333333333333d0
+       real(chm_real), parameter :: oo6=0.1666666666666666d0
+       real(chm_real), parameter :: oo9=0.1111111111111111d0
+       real(chm_real), parameter :: oo27=0.037037037037037037d0
+       real(chm_real), parameter :: pi=3.14159265358979d0
+       real(chm_real), parameter :: twopi=6.283185307179586232d0
+       real(chm_real), parameter :: fourpi=12.566370614359172464d0
+       real(chm_real), parameter :: Kd(3,3)= &
+     & RESHAPE( (/one,zero,zero,zero,one,zero,zero,zero,one/), (/3,3/) ) ! Kronecker delta
+      !
+      !
+       public eig3s ! eigenvalues + eigenvectors of a symmetric 3x3 PosDef matrix
+       public RMSBestFit ! superpose one structure onto another (best-fit in the sense of weighted RMSD)
+       public rmsd ! calculate weighted RMSD between two structures
+      ! auxiliary routines
+       public norm3
+       private unit3
+       public veccross3
+       private com
+       public setdebug
+      !
+       contains
+      !###############################################################
+       subroutine setdebug(switch);
+       implicit none
+       logical :: switch
+       qdebug=switch
+       end subroutine setdebug
+      !###############################################################
+       function norm3(v)
+       implicit none
+       real(chm_real) :: v(3), norm3
+       norm3=sqrt(v(1)*v(1)+v(2)*v(2)+v(3)*v(3))
+       if (norm3.lt.ERRTOL()*50) norm3=zero
+       end function norm3
+      !###############################################################
+       function unit3(v)
+       implicit none
+       real(chm_real) :: v(3), norm, unit3(3)
+      ! need to be careful with roundoff error
+       norm=sqrt(v(1)*v(1)+v(2)*v(2)+v(3)*v(3))
+       if (norm.lt.ERRTOL()*50) then; norm=one; else; norm=one/norm; endif
+       unit3=(/v(1)*norm, v(2)*norm, v(3)*norm/)
+       end function unit3
+      !###############################################################
+       function veccross3(v1,v2)
+       implicit none
+       real(chm_real) :: v1(3), v2(3), veccross3(3)
+       veccross3=(/v1(2)*v2(3)-v1(3)*v2(2), &
+     & v1(3)*v2(1)-v1(1)*v2(3), &
+     & v1(1)*v2(2)-v1(2)*v2(1)/)
+       end function veccross3
+      !###############################################################
+       function com(x,w)
+       implicit none
+      ! note: assuming sum(w)=1
+       real(chm_real) :: x(:,:), w(:), com(3)
+! com=matmul(transpose(x),w) ! quick and dirty
+       com(1)=dot_product(x(:,1),w)
+       com(2)=dot_product(x(:,2),w)
+       com(3)=dot_product(x(:,3),w)
+!
+       end function com
+      !###############################################################
+       function rmsd(x,y,w)
+       implicit none
+      ! note: assuming sum(w)=1
+       real(chm_real) :: x(:,:), y(:,:), w(:), rmsd, rmsd2!, wsum
+       integer :: n, m, i, j
+       n=size(x,1); m=size(x,2); rmsd2=zero; ! wsum=zero
+       do i=1,n
+        do j=1,m
+         rmsd2=rmsd2+( ( x(i,j)-y(i,j) )**2 * w(i) )
+        enddo
+! wsum=wsum+w(i)
+       enddo
+! if (wsum.lt.ERRTOL()*50) wsum=1d0
+! rmsd=sqrt(rmsd2/w2sum)
+       rmsd=sqrt(rmsd2)
+! write(6,*) '*******RMSD: ',rmsd
+       end function rmsd
+      !################################################################
+       subroutine eig3s(M, eval, evec)
+      ! Exact diagonalization of a 3X3 SYMMETRIC matrix
+      ! The symmetry is used in the assumption that all of the eigenvalues are REAL
+       implicit none
+      !
+       real(chm_real) :: M(3,3)
+       real(chm_real) :: a11, a12, a13, a21, a22, a23, a31, a32, a33
+       real(chm_real) :: a0, a1, a2, Qq, Rr, Dd, rootQ, rootQ3, theta
+       real(chm_real) :: a,b,c,d,e,f,g,h,i,det13,det12
+       real(chm_real) :: eval(3), evec(3,3), p(3), q(3), r(3), v(3), &
+     & dummy, pn, qn
+       integer :: j,k,l
+      !
+       real(chm_real):: errtol_
+      !
+       errtol_=ERRTOL()*50
+      !
+      !
+       if (qdebug) then
+      ! determinant of M
+        dummy= &
+     & M(1,1)*(M(2,2)*M(3,3)-M(2,3)*M(3,2))+ &
+     & M(1,2)*(M(2,3)*M(3,1)-M(2,1)*M(3,3))+ &
+     & M(1,3)*(M(2,1)*M(3,2)-M(2,2)*M(3,1))
+        write(666,*) ' Det(M) [must be >=0] : ', dummy
+       endif
+      !
+      !
+       a11=M(1,1); a12=M(1,2); a13=M(1,3)
+       a21=M(2,1); a22=M(2,2); a23=M(2,3)
+       a31=M(3,1); a32=M(3,2); a33=M(3,3)
+      !
+      ! solve the characteristic equation
+       a2=-(a11+a22+a33)
+       a1= (a11*a22+a11*a33+a22*a33-a23*a32-a12*a21-a13*a31)
+       a0=-(a11*a22*a33+a12*a23*a31+a13*a21*a32- &
+     & a11*a23*a32-a13*a31*a22-a12*a21*a33)
+      !
+       Qq=oo3*a1 - oo9*a2*a2
+       Rr=oo6*a2*a1 - half*a0 - oo27*a2**3
+      ! Dd=Qq**3+Rr*Rr ! Discriminant: D == 0 implies theta=1 below
+      !
+       rootQ=sqrt(-Qq)
+       rootQ3=rootQ**3
+      !
+      ! write(0,*) 'errtol:',errtol_
+      ! write(0,*) 'D:', Dd
+      ! write(0,*) 'Q:', Qq
+      ! write(0,*) 'R:', Rr
+      ! write(0,*) 'rootQ:', rootQ
+      !
+       if (rootQ.lt.errtol_) then ! for the indentity matrix
+        eval(1)=-a2*oo3
+        eval(2)=-a2*oo3
+        eval(3)=-a2*oo3
+       else
+        Dd=Rr/rootQ3
+        ! denormalize to 1 if very close; acos very sensitive to roundoff error
+        if (abs(abs(Dd)-one).lt.errtol_) then
+         theta=zero
+        else
+         theta=acos( max(-one, min(Rr/rootQ3,one)) ) ! protect from out-of-range arguments
+        endif
+      !
+        eval(1)=two*rootQ*cos( theta*oo3) -a2*oo3
+        eval(2)=two*rootQ*cos((theta+twopi) *oo3)-a2*oo3
+        eval(3)=two*rootQ*cos((theta+fourpi)*oo3)-a2*oo3
+       endif
+      ! write(0,*) 'EVAL:', eval
+      ! Dd=Rr/rootQ3
+      ! write(0,'(A,5E30.20)') 'test:', theta, rootQ3, Dd, acos(Dd), acos(1d0)
+      !############# truncate if within errtol of 0 ###################
+       if (abs(eval(1)) .lt. errtol_) eval(1)=zero
+       if (abs(eval(2)) .lt. errtol_) eval(2)=zero
+        if (abs(eval(3)) .lt. errtol_) eval(3)=zero
+      ! sort eigen-values in DECREASING order
+       if (eval(1).lt.eval(2)) then;
+        dummy=eval(1); eval(1)=eval(2); eval(2)=dummy; endif
+       if (eval(1).lt.eval(3)) then;
+        dummy=eval(1); eval(1)=eval(3); eval(3)=dummy; endif
+       if (eval(2).lt.eval(3)) then;
+        dummy=eval(2); eval(2)=eval(3); eval(3)=dummy; endif
+      !######################### now compute eigenvectors ############
+      !
+       do j=1,3
+       ! change notation
+        a=a11-eval(j); b=a12 ; c=a13
+        d=a21 ; e=a22-eval(j); f=a23
+        g=a31 ; h=a32 ; i=a33-eval(j)
+      ! columnspace vectors:
+        p=(/a, d, g/) ; pn=norm3(p)
+        q=(/b, e, h/) ; qn=norm3(q)
+        r=(/c, f, i/) ;
+      !
+        if (pn .lt.errtol_) then; v=(/one , zero, zero/) ! ;write(0,*) 198, p
+        elseif (qn .lt.errtol_) then; v=(/zero, one, zero/) ! ;write(0,*) 199, q
+        elseif (norm3(r).lt.errtol_) then; v=(/zero, zero, one /) ! ;write(0,*) 200, r
+        elseif (abs(abs(dot_product(p,q)) - pn*qn) .gt. errtol_) then ! P || Q
+      ! set z=1
+      ! use Cramer's rule
+         det12=a*e-b*d
+         det13=a*h-b*g
+      !
+         if (abs(det12) .gt. errtol_) then
+          det12=one/det12;
+          v=unit3((/(b*f-c*e)*det12, (d*c-a*f)*det12, one/)) ! ;write(0,*) 209, det12, &
+                                                              ! unit3( (/ (b*f-c*e)*det12, (d*c-a*f)*det12, one /) )
+         elseif (abs(det13) .gt. errtol_) then
+          det13=one/det13;
+          v=unit3((/(b*i-c*h)*det13, (g*c-a*i)*det13, one/)) ! ;write(0,*) 212, det13
+         endif
+        else
+         ! otherwise there is a vector with z = 0 try setting x=1
+         if (abs(b) .gt. errtol_) then; v=unit3((/one, -a/b, zero/)) !;write(0,*) 216, b
+         elseif (abs(e) .gt. errtol_) then; v=unit3((/one, -d/e, zero/)) !;write(0,*) 217, e
+         elseif (abs(h) .gt. errtol_) then; v=unit3((/one, -g/h, zero/)) !;write(0,*) 218, h
+         else ! Q=0 this should not be possible because P Q R are checked above !
+           v=(/zero, one, zero/) !;write(0,*) 220
+         endif
+        endif
+        evec(:,j)=v
+! if the first two evectors are perpendicular, obtain the third by taking a cross product; then bail
+      if (qdebug) write(666,*) " *EIG: ", evec(:,j)
+!
+        if (j.eq.2) then
+         if (qdebug) write(666,*) " < ev1|ev2 > / errtol : ", dot_product(evec(:,1),evec(:,2)), errtol_
+! if (abs(dot_product(evec(:,1),evec(:,2))).lt.errtol_) then
+! note: for a symmetric matrix, different evectors are orthogonal, so use less strict criterion below
+         if (abs(dot_product(evec(:,1),evec(:,2))).lt.half) then
+          evec(:,3)=veccross3(evec(:,1),evec(:,2))
+          if (qdebug) write(666,*) " *EIG: ", evec(:,3)
+! return
+          exit ! quit do loop to skip j=3 iteration, but do not return (multiple returns unfriendly to inlining)
+         endif
+        endif
+       enddo ! j-loop
+      !
+      ! make sure that triple degeneracy is taken into account
+       if (j.gt.2) then ! do not check if we bailed out
+! if ((abs(abs(dot_product(evec(:,1),evec(:,2)))-one).lt.errtol_) &
+! & .and.(abs(abs(dot_product(evec(:,2),evec(:,3)))-one).lt.errtol_))&
+        if ((abs(abs(dot_product(evec(:,1),evec(:,2)))-one).lt.half) & ! see previous comment
+     & .and.(abs(abs(dot_product(evec(:,2),evec(:,3)))-one).lt.half))&
+     & then
+         evec=Kd
+        else
+      ! make sure that double degeneracy is taken into account
+      ! the only possible remaining case is that vectors 1 and 2 are parallel
+         evec(:,1)=veccross3(evec(:,2),evec(:,3))
+        endif
+       endif
+      !
+       end subroutine eig3s
+      !#########################################################
+       subroutine RMSBestFit(x0,y0,w,u,ibeg,iend,gradu,eigval)
+       implicit none
+      ! fit structure in x0 onto y0 in the sense of least RMSD
+      ! implementation of the algorithm by Kabsch 1976 (plus reflection modification)
+      ! 10.09: compute gradients of u w.r.t. y0-com(y0);
+      ! because we are subtracting the COM from both x0 and y0, this is also the
+      ! gradient w.r.t. the absolute coordinates: the matrix u is invariant to translation of
+      ! x if COM(y) is 0, and invariant to translation of y if COM(x) is zero
+      ! gradients are computed only for the indices ibeg -- iend for
+      ! easy parallelization (which is, therefore, not done in this routine)
+      ! note that the _entire_ Grad U array is assumed to be passed in
+      !***************************************************************
+      ! x0 -- orientation structure
+      ! y0 -- template structure
+      ! weights -- fitting weights, e.g. for mass weighting
+      ! x -- output structure
+      ! q -- translation vector (points from COM of x0 to COM of y0
+      ! u -- rotation matrix [ such that x = u . x0 ]
+!
+      ! note: not requiring that sum(w)=1, but this is HIGHLY recommended for FP precision
+       real(chm_real) :: x0(:,:), y0(:,:), w(:)
+       real(chm_real) :: u(3,3)
+       integer, optional :: ibeg, iend
+       real(chm_real), optional :: gradu(:,:,:,:) ! gradient of rotation matrix wrt x0
+       real(chm_real), optional, intent(out) :: eigval(3) ! eigenvalues
+       real(chm_real), dimension(size(x0,1)) :: x1, x2, x3, y1, y2, y3
+       real(chm_real) :: xcom(3),ycom(3),r11,r12,r13,r21,r22,r23,r31,r32,r33, &
+     & detr,reflect_flag, x1w, x2w, x3w
+       real(chm_real) :: r(3,3),rr(3,3),a(3,3),b(3,3),b0(3,3),mu(3),oomu(2), &
+     & rmu(3), roomu(2)
+       integer :: i, j, k, l, n
+       character*10 :: whoami='RMSBestFit'
+       character*63 :: msg
+! for derivatives:
+       logical :: qgrad
+       real(chm_real) :: invA(3,3),detA,e,v(3),c(3),dvdrr(3,3,3,3),dmudrr(3,3,3)
+       real(chm_real) :: gradb(3,3,3)
+       real(chm_real) :: dvdrrfd(3,3,3,3), dmudrrfd(3,3,3), dum(3,3) ! FD
+       real(chm_real) :: a11, a12, a13, a21, a22, a23, a31, a32, a33
+       integer :: p, q, s
+       real(chm_real), allocatable :: grada(:,:,:,:), gradmu(:,:,:)
+       real(chm_real) :: x, y, z, wgt, mu1, mu2, errtol_
+       real(chm_real) :: G(3,3,3)
+!
+       errtol_=ERRTOL()*50
+!
+       if (qdebug) then ; write(666,*) whoami, 'ERRTOL:= ', errtol_ ; endif
+!
+       qgrad=(present(gradu).and.present(ibeg).and.present(iend))
+!
+!
+       n=size(x0, 1)
+!
+       if (qgrad) then
+        ibeg=max(1,ibeg)
+        iend=min(n,iend)
+       endif
+!
+       xcom=com(x0,w)
+       ycom=com(y0,w)
+!
+       x1=x0(:,1)-xcom(1) !x
+       x2=x0(:,2)-xcom(2) !y
+       x3=x0(:,3)-xcom(3) !z
+!
+       y1=y0(:,1)-ycom(1)
+       y2=y0(:,2)-ycom(2)
+       y3=y0(:,3)-ycom(3)
+! initialize
+       r11=zero; r12=zero; r13=zero
+       r21=zero; r22=zero; r23=zero
+       r31=zero; r32=zero; r33=zero
+      ! build correlation matrix
+       do i=1,n
+        x1w=x1(i)*w(i)
+        x2w=x2(i)*w(i)
+        x3w=x3(i)*w(i)
+      !
+        r11=r11+y1(i)*x1w
+        r12=r12+y1(i)*x2w
+        r13=r13+y1(i)*x3w
+      !
+        r21=r21+y2(i)*x1w
+        r22=r22+y2(i)*x2w
+        r23=r23+y2(i)*x3w
+      !
+        r31=r31+y3(i)*x1w
+        r32=r32+y3(i)*x2w
+        r33=r33+y3(i)*x3w
+       enddo
+       r=RESHAPE( (/r11,r21,r31,r12,r22,r32,r13,r23,r33/),(/3,3/))
+       rr=matmul(transpose(r),r) ! r'r
+      ! diagonalize rr
+       call eig3s(rr, mu, a) ! mu -- evalues a -- evectors
+!
+       if (qdebug) then
+        write(666,*) whoami, '> RR matrix:'
+        write(666,'(3E30.23)') rr
+        write(666,*) whoami, '> E-VALUES:'
+        write(666,'(3E22.15)') mu
+        write(666,*) whoami, '> E-VECTORS:'
+        write(666,'(3E22.15)') a
+! verify directly that matrix orthonormal:
+        write(666,*) whoami, '> U x U^T (should be I):'
+        write(666,'(3E22.15)') matmul(a,transpose(a)) ! aa
+! verify directly that diagonalization is correct:
+        b0(:,1)=mu(1)*a(:,1);b0(:,2)=mu(2)*a(:,2);b0(:,3)=mu(3)*a(:,3)! aa
+        write(666,*) whoami, '> RR - U x M x U^T (should be 0):'
+        write(666,'(3E22.15)') matmul(b0,transpose(a))-rr ! aa
+       endif
+!
+       b0=matmul(r,a)
+!
+! handle three zero eigenvalues (single point)
+! note that the eigenvalues are sorted in decreasing order
+       if (abs(mu(1)) .lt. errtol_) then
+        b=Kd; oomu=one; roomu=one; rmu=zero
+        if (qgrad) then ; gradu(:,:,:,ibeg:iend)=zero ; qgrad=.false.; endif ! derivatives are ill-defined
+!*********************************************************************
+! handle two zero eigenvalues (line)
+       elseif (abs(mu(2)) .lt. errtol_) then
+        rmu(1)=sqrt(mu(1)); roomu(1)=one/rmu(1); oomu(1)=roomu(1)**2;
+        b(:,1)=b0(:,1)*roomu(1)
+        oomu(2)=one; roomu(2)=one; rmu(2)=zero
+        if (qgrad) then ; gradu(:,:,:,ibeg:iend)=zero ; qgrad=.false.; endif ! derivatives are ill-defined
+! b(:,2-3) are not unique, so we pick arbitrary vectors
+! try (1,0,0)
+        if ( abs(b(1,1)) .lt. half ) then ! scalar product of b with (1,0,0) is relatively small
+      ! project b1 out of b2 :
+         b(:,2)=&
+     & unit3( (/ one-b(1,1)*b(1,1), -b(1,1)*b(2,1), -b(1,1)*b(3,1)/) )
+        else ! use (0,1,0)
+         b(:,2)=&
+     & unit3( (/ -b(2,1)*b(1,1), one-b(2,1)*b(2,1), -b(2,1)*b(3,1)/) )
+        endif
+       else ! one or fewer zero eigenvalues
+        rmu(1)=sqrt(mu(1)); roomu(1)=one/rmu(1); oomu(1)=roomu(1)**2;
+        rmu(2)=sqrt(mu(2)); roomu(2)=one/rmu(2); oomu(2)=roomu(2)**2;
+        b(:,1)=b0(:,1)*roomu(1)
+        b(:,2)=b0(:,2)*roomu(2)
+       endif
+! note : the third eigenvalue is not explicitly used in the rotation calculation
+       if (abs(mu(3)).lt.errtol_) then; rmu(3)=zero;
+                                  else; rmu(3)=sqrt(mu(3)); endif
+! third vector is determined by the first two
+       b(:,3)=veccross3(b(:,1),b(:,2))
+!
+       u=matmul(b, transpose(a)) ! this is the rotation matrix; apply using: x_new = U . x_old
+!
+       if (qcheckdet) then
+        detr= &
+     & u(1,1)*(u(2,2)*u(3,3)-u(2,3)*u(3,2))+ &
+     & u(1,2)*(u(2,3)*u(3,1)-u(2,1)*u(3,3))+ &
+     & u(1,3)*(u(2,1)*u(3,2)-u(2,2)*u(3,1))
+! if ( abs(detr-one) .gt. errtol_ ) then
+        if ( abs(detr-one) .gt. 1d-3 ) then ! this is a crude test, but should be sufficient
+          write(msg,'(" ROTATION MATRIX (U) NOT UNITARY (DET[U]=",G20.13,")")') detr
+          if (qdetfailtrace) then ! print debugging info after a determinant check failure
+           write(666,*) whoami, '> RR matrix:'
+           write(666,'(3E30.23)') rr
+           write(666,*) whoami, '> E-VALUES:'
+           write(666,'(3E22.15)') mu
+           write(666,*) whoami, '> E-VECTORS:'
+           write(666,'(3E22.15)') a
+! verify directly that matrix orthonormal:
+           write(666,*) whoami, '> U x U^T (should be I):'
+           write(666,'(3E22.15)') matmul(a,transpose(a)) ! aa
+! verify directly that diagonalization is correct:
+           b0(:,1)=mu(1)*a(:,1);b0(:,2)=mu(2)*a(:,2);b0(:,3)=mu(3)*a(:,3)! aa
+           write(666,*) whoami, '> RR - U x M x U^T (should be 0):'
+           write(666,'(3E22.15)') matmul(b0,transpose(a))-rr ! aa
+           if (qgrad) then ; gradu(:,:,:,ibeg:iend)=zero ; qgrad=.false.; endif ! skip derivatives
+         endif !qdetfailtrace
+         call wrndie(0, whoami, msg)
+        endif ! detr/=1
+       endif ! qcheckdet
+!
+       if (qdebug) then
+        write(666,*) whoami, '> ROTATION MATRIX:'
+        write(666,'(3E22.15)') u
+       endif
+!
+       if (present(eigval)) then
+      ! return square root of eigenvalues
+      ! determinant of r
+        detr= &
+     & r(1,1)*(r(2,2)*r(3,3)-r(2,3)*r(3,2))+ &
+     & r(1,2)*(r(2,3)*r(3,1)-r(2,1)*r(3,3))+ &
+     & r(1,3)*(r(2,1)*r(3,2)-r(2,2)*r(3,1))
+        if (detr.lt.0) rmu(3)=-rmu(3)
+        eigval=rmu
+       endif
+! compute gradient
+       if (qgrad) then
+! 1) compute derivative of A w.r.t. RR (and Mu w.r.t RR)
+! 2) compute derivative of RR w.r.t. atom coordinates
+! 3) combine 1 and 2 to produce the derivative of u w.r.t coordinates
+! dvdrr=0d0; dmudrr=0d0 ! aardvark (for FD test)
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+!
+        allocate(grada(3,3,3,ibeg:iend), gradmu(3,3,ibeg:iend))
+!
+! compute d[a]ij/d[rr]pq
+!
+! loop over eigenvectors a of rr
+        do j=1,3
+! construct matrix; a=rr-muI; this matrix is singular; so throw away first row, and put j_th eigenvector (v) in last row to
+! enforce v*dv=0
+         e=mu(j);
+         v=a(:,j);
+!
+         a11=rr(2,1); a12=rr(2,2)-e ; a13=rr(2,3);
+         a21=rr(3,1); a22=rr(3,2) ; a23=rr(3,3)-e;
+         a31=v(1); a32=v(2) ; a33=v(3);
+!
+! make sure A is invertible; if so, compute and store inverse
+! otherwise complain and quit (will deal with exceptions later)
+         detA = a11*(a22*a33-a23*a32)+ &
+     & a12*(a23*a31-a21*a33)+ &
+     & a13*(a21*a32-a22*a31)
+!
+         if (abs(detA).lt.errtol_) then
+          call wrndie(0, whoami, ' EXCEPTION: "A" MATRIX IS SINGULAR. WILL RETURN ZERO.')
+! return
+         else
+! compute inverse explicitly (do not need some entries)
+          detA=one/detA;
+          invA(1,1)=detA*(a22*a33-a23*a32);
+          invA(1,2)=detA*(a13*a32-a12*a33);
+! invA(1,3)=detA*(a23*a12-a22*a13);
+          invA(2,1)=detA*(a23*a31-a21*a33);
+          invA(2,2)=detA*(a11*a33-a13*a31);
+! invA(2,3)=detA*(a13*a21-a11*a23);
+          invA(3,1)=detA*(a21*a32-a22*a31);
+          invA(3,2)=detA*(a12*a31-a11*a32);
+! invA(3,3)=detA*(a11*a22-a12*a21);
+         endif
+! test inverse ! aardvark ! passed
+! write(600+whoiam,*)
+! & matmul(invA,
+! & transpose(RESHAPE((/a11,a12,a13,a21,a22,a23,a31,a32,a33/),
+! & (/3,3/)))) ! note: fills column-wise
+! stop
+!
+! loop over all components in [rr]_pq:
+         do p=1,3
+          do q=1,p
+! compute eigenvalue derivative (actually, dmu/drr_pq + dmu/drr_qp together); OK because rr is always symmetric, so rr_pq and rr_qp change identically
+           dmudrr(j,p,q)=(2d0-Kd(p,q))*v(p)*v(q)
+! construct right hand side vector (c)
+           do s=2,3
+             c(s-1)=v(q) * ( v(p)*v(s)-Kd(s,p) ) + & ! d[rr]_pq contribution
+     & (one - Kd(p,q)) * &
+     & v(p) * ( v(q)*v(s)-Kd(s,q) ) ! d[rr]_qp contribution
+           enddo ! s
+! c(3)=0d0;
+! compute derivative dv/d[rr]
+! note: only entries for which p >= q are populated; in fact, we really are computing dv/d[rr]_pq + dv/d[rr]_qp (this is OK b/c rr_ij=rr_ji)
+! dvdrr(:,j,p,q)=matmul(invA,c);
+            dvdrr(1,j,p,q)=invA(1,1)*c(1)+invA(1,2)*c(2);
+            dvdrr(2,j,p,q)=invA(2,1)*c(1)+invA(2,2)*c(2);
+            dvdrr(3,j,p,q)=invA(3,1)*c(1)+invA(3,2)*c(2);
+! write(700+whoiam,*) j, p, q, dvdrr(:,j,p,q)
+          enddo ! q
+         enddo ! p
+        enddo ! j
+!
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+! aardvark: compute derivatives d()drr by finite differences & compare : PASSED
+! dvdrrfd=0d0;
+! detA=0.00001
+! do p=1,3
+! do q=1,p
+! invA=rr;
+! invA(p,q)=invA(p,q)+detA;
+! invA(q,p)=invA(p,q);
+! call eig3s(invA, v, b);
+! dmudrrfd(:,p,q)=-(mu-v)/detA; !evec
+! dvdrrfd(:,:,p,q)=-(a-b)/detA; !eval
+! enddo
+! enddo
+! write(700,*) 'ANAL: ',dmudrr(:,3,:)
+! write(600,*) 'FDIF: ',dmudrrfd(:,3,:)
+! write(700,*) 'ANAL: ',dvdrr(:,:,3,:)
+! write(600,*) 'FDIF: ',dvdrrfd(:,:,3,:)
+! stop
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+! compute derivatives w.r.t. relative coordinates
+        gradu(:,:,:,ibeg:iend)=0d0
+        do q=ibeg, iend
+         x=x1(q); y=x2(q); z=x3(q); wgt=w(q)
+!
+         do i=1,3
+! compute eigenvalue derivatives
+           a11=dmudrr(i,1,1)
+           a21=dmudrr(i,2,1)
+           a31=dmudrr(i,3,1)
+           a22=dmudrr(i,2,2)
+           a32=dmudrr(i,3,2)
+           a33=dmudrr(i,3,3)
+! gradient w.r.t x-position of atom q
+           gradmu(i,1,q)=wgt * ( &
+     & 2d0 * ( a11*x*r11 + a22*y*r12 + a33*z*r13 ) + &
+     & a21 * ( x*r12 + y*r11 ) + &
+     & a31 * ( x*r13 + z*r11 ) + &
+     & a32 * ( y*r13 + z*r12 ) )
+! gradient w.r.t y-position
+           gradmu(i,2,q)=wgt * ( &
+     & 2d0 * ( a11*x*r21 + a22*y*r22 + a33*z*r23 ) + &
+     & a21 * ( x*r22 + y*r21 ) + &
+     & a31 * ( x*r23 + z*r21 ) + &
+     & a32 * ( y*r23 + z*r22 ) )
+! gradient w.r.t z-position
+           gradmu(i,3,q)=wgt * ( &
+     & 2d0 * ( a11*x*r31 + a22*y*r32 + a33*z*r33 ) + &
+     & a21 * ( x*r32 + y*r31 ) + &
+     & a31 * ( x*r33 + z*r31 ) + &
+     & a32 * ( y*r33 + z*r32 ) )
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+! compute eigenvector derivative
+           do j=1,3
+!
+            a11=dvdrr(i,j,1,1)
+            a21=dvdrr(i,j,2,1)
+            a31=dvdrr(i,j,3,1)
+            a22=dvdrr(i,j,2,2)
+            a32=dvdrr(i,j,3,2)
+            a33=dvdrr(i,j,3,3)
+!
+! gradient w.r.t x-position of atom q
+!
+            grada(i,j,1,q)=wgt * ( &
+     & 2d0 * ( a11*x*r11 + a22*y*r12 + a33*z*r13 ) + &
+     & a21 * ( x*r12 + y*r11 ) + &
+     & a31 * ( x*r13 + z*r11 ) + &
+     & a32 * ( y*r13 + z*r12 ) )
+! gradient w.r.t y-position
+            grada(i,j,2,q)=wgt * ( &
+     & 2d0 * ( a11*x*r21 + a22*y*r22 + a33*z*r23 ) + &
+     & a21 * ( x*r22 + y*r21 ) + &
+     & a31 * ( x*r23 + z*r21 ) + &
+     & a32 * ( y*r23 + z*r22 ) )
+! gradient w.r.t z-position
+            grada(i,j,3,q)=wgt * ( &
+     & 2d0 * ( a11*x*r31 + a22*y*r32 + a33*z*r33 ) + &
+     & a21 * ( x*r32 + y*r31 ) + &
+     & a31 * ( x*r33 + z*r31 ) + &
+     & a32 * ( y*r33 + z*r32 ) )
+           enddo ! j
+         enddo ! i
+!%%%%%%%%%%%%%%%%%%%%%%%%% computed gradients of A, MU w.r.t. translated coordinates i.e. x=x0-xcom %%%%%%%%%%%%
+! compute gradient of u w.r.t. relative(translated) coordinates
+!
+        G(:,:,1)=matmul(r,grada(:,:,1,q))
+        G(:,:,2)=matmul(r,grada(:,:,2,q))
+        G(:,:,3)=matmul(r,grada(:,:,3,q))
+! first, compute gradients of B=RAM^{-1/2}
+! do this for the first two column vectors corresponding to the two largest e-values
+! obtain the third component by usign orthogonality (this also treats mu(3)-->0).
+        do k=1,2 ! columns of b
+         mu1 = roomu(k); mu2=-0.5d0*oomu(k)
+         a11=wgt * (x*a(1,k) + y*a(2,k) + z*a(3,k) ) ! dummy
+         do l=1,3 ! component of gradient: 1:ddx 2:ddy 3:ddz
+          do i=1,3 ! component of vector b_k
+            gradb(i,k,l)=mu1*(mu2*gradmu(k,l,q)*b0(i,k)+ &
+     & a11*Kd(i,l)+ &
+     & G(i,k,l))
+! make a contribution to gradu in this inner loop
+           do j=1,3
+            gradu(i,j,l,q)=gradu(i,j,l,q)+ &
+     & gradb(i,k,l)*a(j,k)+grada(j,k,l,q)*b(i,k)
+           enddo ! j
+          enddo ! i
+         enddo ! l
+        enddo ! k
+! treat b_3 separately below
+        do l=1,3
+         gradb(:,3,l)=veccross3(gradb(:,1,l),b(:,2))- &
+     & veccross3(gradb(:,2,l),b(:,1))
+! compute the rest of the sum
+         do i=1,3; do j=1,3
+            gradu(i,j,l,q)=gradu(i,j,l,q)+ &
+     & gradb(i,3,l)*a(j,3)+grada(j,3,l,q)*b(i,3)
+         enddo; enddo ! i,j
+        enddo ! l
+! OLD CODE; INACCURATE FOR MU_3 --> ZERO
+! do i=1,3
+! do j=1,3
+! gradu(i,j,:,q)=0d0
+! sum over all eigenvalues (k)
+! note that b0=r*a above
+! do k=1,3
+! mu1=roomu(k); mu2=0.5d0*oomu(k)
+! a11=wgt * (x*a(1,k) + y*a(2,k) + z*a(3,k) ) ! dummy
+! do l=1,3
+! gradu(i,j,l,q)=gradu(i,j,l,q) + mu1 * (
+! & (-mu2*gradmu(k,l,q) * b0(i,k) +
+! & G(i,k,l) +
+! & Kd(i,l) * a11) * a(j,k) +
+! & grada(j,k,l,q) * b0(i,k) )
+! enddo ! l
+! separately:
+! w.r.t. x
+! gradu(i,j,1,q)=gradu(i,j,1,q) + mu * (
+! (-mu2*gradmu(k,1,q) * b0(i,k) +
+! & G(i,k) +
+! & Kd(i,1) * wgt * a11) * a(j,k) +
+! & grada(j,k,1,q) * b0(i,k) )
+! w.r.t. y
+! gradu(i,j,2,q)=gradu(i,j,2,q) + mu * (
+! (-mu2*gradmu(k,2,q) * b0(i,k) +
+! & H(i,k) +
+! & Kd(i,2) * wgt * a11) * a(j,k) +
+! & grada(j,k,2,q) * b0(i,k) )
+! w.r.t. z
+! gradu(i,j,3,q)=gradu(i,j,3,q) + mu * (
+! (-mu2*gradmu(k,3,q) * b0(i,k) +
+! & I(i,k) +
+! & Kd(i,3) * wgt * a11) * a(j,k) +
+! & grada(j,k,3,q) * b0(i,k) )
+! enddo ! k
+! enddo ! j
+! enddo ! i
+! otherwise, parallelization is meaningless
+        enddo ! q
+!
+! aardvark: check by finite differences; grad a passed; grad_z mu: passed (did not test _x, _y)
+! grad u passed
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+! repeated code from above:
+! dum=a;
+       if (.false.) then
+! if (.true.) then
+       dum=u;
+! dum=a;
+       v=mu
+       detA=0.0001
+       e=0d0
+       do k=ibeg, iend
+!
+       x1=x0(:,1)-xcom(1) !x
+       x2=x0(:,2)-xcom(2) !y
+       x3=x0(:,3)-xcom(3) !z
+!
+       y1=y0(:,1)-ycom(1)
+       y2=y0(:,2)-ycom(2)
+       y3=y0(:,3)-ycom(3)
+!
+       y2(k)=y2(k)+detA ! perturbation
+!
+! proceed as usual
+! initialize
+       r11=0.0d0; r12=0.0d0; r13=0.0d0
+       r21=0.0d0; r22=0.0d0; r23=0.0d0
+       r31=0.0d0; r32=0.0d0; r33=0.0d0
+      ! build correlation matrix
+       do i=1,n
+        x1w=x1(i)*w(i)
+        x2w=x2(i)*w(i)
+        x3w=x3(i)*w(i)
+      !
+        r11=r11+y1(i)*x1w
+        r12=r12+y1(i)*x2w
+        r13=r13+y1(i)*x3w
+      !
+        r21=r21+y2(i)*x1w
+        r22=r22+y2(i)*x2w
+        r23=r23+y2(i)*x3w
+      !
+        r31=r31+y3(i)*x1w
+        r32=r32+y3(i)*x2w
+        r33=r33+y3(i)*x3w
+       enddo
+       r=RESHAPE( (/r11,r21,r31,r12,r22,r32,r13,r23,r33/),(/3,3/))
+       rr=matmul(transpose(r),r) ! r'r
+      ! determinant of r
+! detr=
+! & r(1,1)*r(2,2)*r(3,3)+r(1,2)*r(2,3)*r(3,1)+r(1,3)*r(2,1)*r(3,2)
+! & -r(1,3)*r(2,2)*r(3,1)-r(1,2)*r(2,1)*r(3,3)-r(1,1)*r(2,3)*r(3,2)
+! a little faster:
+! detr=
+! & r(1,1)*(r(2,2)*r(3,3)-r(2,3)*r(3,2))+
+! & r(1,2)*(r(2,3)*r(3,1)-r(2,1)*r(3,3))+
+! & r(1,3)*(r(2,1)*r(3,2)-r(2,2)*r(3,1))
+
+! reflect_flag=detr/abs(detr) ! this flag is -1 if we have a reflection
+      ! diagonalize rr
+       call eig3s(rr, mu, a) ! mu -- evalues a -- e-vectors
+!
+! write(6,'("EVAL:",3F11.5)') mu
+! write(6,*) mu
+! write(6,'("EVEC:",3F11.5)') a
+! write(6,'("R:",3G20.10)') r
+! write(6,'("RR:",3G20.10)') rr
+!
+       b0=matmul(r,a)
+       do i=1,2 ! if two evals are zero cannot find an optimal rotation
+        if (abs(mu(i)) .lt. errtol_) then ; oomu(i)=1.0d0; roomu(i)=1d0;
+        else ; oomu(i)=1d0/mu(i); roomu(i)=sqrt(oomu(i)); endif
+        b(:,i)=b0(:,i)*roomu(i)
+       enddo
+       b(:,3)=veccross3(b(:,1),b(:,2))
+       u=matmul(b, transpose(a)) ! this is the rotation matrix; apply using: x_new = U . x_old
+! compare gradients
+! grada(:,:,2,k)=(a-dum)/detA
+! gradu(:,:,3,k)=(u-dum)/detA
+! gradmu(:,2,k)=(mu-v)/detA
+       e=max(e,maxval(abs((u-dum)/detA - gradu(:,:,2,k))))
+! e=max(e,maxval(abs((a-dum)/detA - grada(:,:,2,k))))
+       enddo ! k
+! write(700,*) 'ANAL: ',gradu(:,:,2,:)
+! write(600,*) 'FDIF: ',gradu(:,:,3,:)
+! write(700,*) 'ANAL: ',grada(:,:,3,:)
+! write(600,*) 'FDIF: ',grada(:,:,2,:)
+! write(700,*) 'ANAL: ',gradmu(:,3,:)
+! write(600,*) 'FDIF: ',gradmu(:,2,:)
+! write(666,*) 'GRAD_Y U MAXe', e
+! write(666,*) 'GRAD_Y A MAXe', e
+      endif ! ( FD check )
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+!
+        deallocate(grada, gradmu)
+! u=dum ! restore correct matrix
+       endif ! qgrad
+!
+! done
+!
+       end subroutine RMSBestFit
+      !
+  end module bestfit
+!
+##ENDIF

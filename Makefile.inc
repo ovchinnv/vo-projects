@@ -1,0 +1,65 @@
+SHELL=/bin/sh
+FC=ifort
+FFLAGS=-O3 -fast -finline -fp-model fast=2 -xhost -ipo -fno-math-errno -no-inline-factor -no-inline-min-size -c
+#FFLAGS= -O3 -c -check-all -extend-source -fast -fno-math-errno -finline -fp-model fast=2 -xhost -ipo  #-ipo 
+#FFLAGS= -O3 -c -extend-source -fast -fno-math-errno -finline -fp-model fast=2 -xSSE3 -ipo # -no-inline-factor -no-inline-min-size #-ipo 
+#FFLAGS= -O3 -c -extend-source -fast -fno-math-errno -finline -fp-model fast=2 -xhost -no-ipo # -no-inline-factor -no-inline-min-size #-ipo 
+#FC=gfortran
+#FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-132 -ffree-line-length-132 -fno-math-errno -fbounds-check -frange-check #-fopenmp 
+#FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-132 -ffree-line-length-132 -fno-math-errno #-fbounds-check -frange-check 
+#
+DEFS=-D int=integer -D float=real*8 -D bool=logical
+LOCALDEFS=
+# ! note: the VEC routines are probably slower
+
+# note : for single precision define
+#
+#DEFS=$(DEFS) -D DEBUG
+#
+# preprocess with C++ style preprocessor
+# -C flag preserves comments
+
+AR=xiar
+#AR=ar
+AFLAGS=rv
+
+LD=$(FC)
+LDFLAGS=-static -Bstatic
+
+DYNAMOL=objects/molecule/dynamol
+# root must be defined elswhere
+DYNA=$(ROOT)/$(DYNAMOL)
+
+GLOBALMACROS=-include $(ROOT)/source.defs 
+MSG=-include $(ROOT)/source.msg
+GLOBALDEPS=$(ROOT)/source.defs $(ROOT)/source.msg
+LOCALDEPS=
+
+FPP=cpp -P
+FPPFLAGS = -C
+
+.SUFFIXES:
+.SUFFIXES: .o .F90 .a .H .h
+
+default : all
+%.o:%.F90
+	$(FC) $(FFLAGS) $(DEFS) $(LOCALDEFS) $(INCLUDES) $<
+%.o:%.f
+	$(FC) $(FFLAGS) $(DEFS) $(LOCALDEFS) $(INCLUDES) $<
+%.o:%.F
+	$(FC) $(FFLAGS) $(DEFS) $(LOCALDEFS) $(INCLUDES) $<
+%.a:
+	$(AR) $(AFLAGS) $@ $(OBJS)
+%.h:%.H
+	$(FPP) $(FPPFLAGS) $(DEFS) $(LOCALDEFS) $< > $@
+force_look:
+	true
+mod: force_look
+	/bin/sh -c 'for file in `ls *.mod 2>/dev/null`; do  ln -fs `pwd`/$$file ${ROOT}/modules/$$file; done'
+modules: $(OBJS) mod
+	for d in $(DIRS); do (cd $$d; $(MAKE) modules); done
+lib: force_look
+	/bin/sh -c 'for file in `ls *.a 2>/dev/null`; do  ln -fs `pwd`/$$file ${ROOT}/lib/$$file; done'
+libraries: $(OBJS) lib
+	for d in $(DIRS); do (cd $$d; $(MAKE) libraries); done
+.SILENT : force_look clean

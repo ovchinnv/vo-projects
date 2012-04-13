@@ -1,0 +1,186 @@
+!CHARMM Element source/stringm/vector.mod $Revision: 1.0 $
+!C
+!C     IVECTOR_LIST.MOD
+!C
+!c
+##IF STRINGM MULTICOM
+!c
+      module ivector_list
+      use ivector
+!
+      type int_vlist
+       integer, dimension(:), pointer :: i            ! integer label
+       type (int_vector), dimension(:), pointer :: v  ! list of vectors
+       integer :: length ! length of the vector
+       integer :: last ! index of last element
+       logical :: initialized=.false. ! has the vector been initialized
+      end type int_vlist
+!
+      private int_vlist_expand
+      integer, parameter, private :: expand_incr=1
+!
+      contains
+
+       subroutine int_vlist_init( vl )
+      use string
+!       implicit none
+       integer :: i
+       type (int_vlist) :: vl
+!       if (associated(vl%v)) then ... ! testing unassigned pointer is an error in F90 !
+       allocate(vl%v(expand_incr))
+       allocate(vl%i(expand_incr))
+       vl%length=expand_incr
+       vl%last=0
+! allocate new vectors and point to them
+       do i=1,vl%length ; call int_vector_init(vl%v(i)) ; enddo
+       vl%i=0
+       vl%initialized=.true.
+       end subroutine int_vlist_init
+!ccccc
+       subroutine int_vlist_done( vl )
+      use string
+!       implicit none
+       integer :: i
+       type (int_vlist) :: vl
+       if (associated(vl%v)) then
+        do i=1,vl%length ; call int_vector_done(vl%v(i)) ; enddo
+        deallocate(vl%v)
+        vl%length=0
+        vl%last=0
+       endif
+       if (associated(vl%i)) deallocate(vl%i)
+       vl%initialized=.false.
+       end subroutine int_vlist_done
+!ccccc
+       subroutine int_vlist_expand( vl )
+      use string
+!       implicit none
+       type (int_vlist) :: vl
+       integer :: newlength, i
+!
+       type (int_vlist) :: wl ! temporary list
+!
+       if (.not.vl%initialized) then
+        call int_vlist_init(vl)
+       else
+        newlength=vl%length+expand_incr
+!
+        allocate(wl%i(newlength))       ! new memory for labels
+        wl%i(1:vl%length)=vl%i ! copy old data
+        deallocate(vl%i) ! delete old data
+        allocate(vl%i(newlength))
+        vl%i = wl%i ! copy data
+!
+        allocate(wl%v(vl%length))
+        do i=1,vl%length ; wl%v(i)=vl%v(i) ; enddo ! don't quite know why this should work in F90, but it seems to ...
+        deallocate(vl%v) ! delete old data
+        allocate(vl%v(newlength))
+        do i=1,vl%length ; vl%v(i)=wl%v(i) ; enddo ! copy existing vectors
+        do i=vl%length+1,newlength;call int_vector_init(vl%v(i));enddo ! allocate space for additional vectors
+        deallocate(wl%v)
+        vl%length=newlength
+       endif
+       end subroutine int_vlist_expand
+!ccccc
+       function int_vlist_add( vl, i, j ) !   add a new list labeled 'i' ; then add element 'j' to it & return index of label i
+      use string
+!       implicit none
+       type (int_vlist) :: vl
+       integer :: i, k, l, int_vlist_add
+       integer, optional :: j
+!
+       if (.not.vl%initialized) call int_vlist_init(vl)
+!    add element to the list
+       if (vl%last.eq.vl%length) call int_vlist_expand(vl)
+       k=vl%last+1
+       vl%i(k)=i
+       if (present(j)) l=int_vector_add(vl%v(k),j)
+       vl%last=k
+       int_vlist_add=k
+       end function int_vlist_add
+!ccccc
+       function int_vlist_addu( vl, i, j ) !   add element 'j' to list labeled 'i'; return index
+!      add to the list a unique element
+      use string
+!       implicit none
+       type (int_vlist) :: vl
+       integer :: i, k, l, int_vlist_addu
+       integer, optional :: j
+!
+       if (.not.vl%initialized) call int_vlist_init(vl)
+!    add element to the list
+       if (vl%last.eq.vl%length) call int_vlist_expand(vl)
+       k=vl%last+1
+       vl%i(k)=i
+       if (present(j)) l=int_vector_uadd(vl%v(k),j)
+       vl%last=k
+       int_vlist_addu=k
+       end function int_vlist_addu
+!ccccc
+       function int_vlist_uadd( vl, i, j ) ! add a UNIQUE new element to the list and return its index
+!                                        if the element already exists, return its index
+      use string
+!       implicit none
+       type (int_vlist) :: vl
+       integer :: i, k, l, int_vlist_uadd
+       integer, optional :: j
+!
+       if (.not.vl%initialized) call int_vlist_init(vl)
+       do k=1,vl%last
+        if (vl%i(k).eq.i) then
+         int_vlist_uadd=k
+         if (present(j)) l=int_vector_add(vl%v(k),j)
+         return
+        endif
+       enddo
+! if we are here, that means a matching entry was not found; we can safely call regular add (not unique)
+       if (present(j)) then
+        int_vlist_uadd=int_vlist_add( vl, i, j )
+       else
+        int_vlist_uadd=int_vlist_add( vl, i )
+       endif
+!
+       end function int_vlist_uadd
+!ccccc
+       function int_vlist_uaddu( vl, i, j ) ! add a UNIQUE new element to the list and return its index
+!                                        if the element already exists, return its index
+      use string
+!       implicit none
+       type (int_vlist) :: vl
+       integer :: i, k, l, int_vlist_uaddu
+       integer, optional :: j
+!
+       if (.not.vl%initialized) call int_vlist_init(vl)
+       do k=1,vl%last
+        if (vl%i(k).eq.i) then
+         int_vlist_uaddu=k
+         if (present(j)) l=int_vector_uadd(vl%v(k),j)
+         return
+        endif
+       enddo
+! if we are here, that means a matching entry was not found; we can safely call regular addu(nique)
+       if (present(j)) then
+        int_vlist_uaddu=int_vlist_addu( vl, i, j )
+       else
+        int_vlist_uaddu=int_vlist_addu( vl, i )
+       endif
+!
+       end function int_vlist_uaddu
+!ccccc
+       function int_vlist_get( vl, i ) ! if i is found, returns the corresponding list
+      use string
+!       implicit none
+       type (int_vlist) :: vl
+       integer :: i, k
+       integer, pointer :: int_vlist_get(:)
+       do k=1,vl%last
+         if (vl%i(k).eq.i) then
+          allocate(int_vlist_get(vl%v(k)%last))
+          int_vlist_get=vl%v(k)%i(1:vl%v(k)%last)
+          return
+         endif
+       enddo
+       end function int_vlist_get
+!ccccc
+      end module ivector_list
+##ENDIF

@@ -1,0 +1,860 @@
+!CHARMM Element source/machdep/multicom.src $Revision: 1.0 $
+!
+! Victor Ovchinnikov, 7.2009; Harvard University
+!
+! code extension that allows users to define communicators manually
+! required by ensemble/string modules
+! documentation will be provided in multicom.doc
+!
+! NOTE: all routines in this module are meant to be executed on ALL processes
+!
+##IF PARALLEL
+##IF MULTICOM
+!
+      module multicom
+      use ivector ! defined in source/stringm directory
+!
+!    declare encapsulated communicator type
+!
+      type comm_type
+       type (int_vector) :: nodes
+! had to set types below to integer4 to work correctly on 64bit gnu
+       integer*4 :: me
+       integer*4 :: size
+       integer*4 :: comm_id
+       integer*4 :: group_id
+       integer*4 :: parent_id ! ID of the parent communicator ( N/A to first entry )
+      end type comm_type
+!
+!     routines
+      public  multicom_main  ! parser
+      public  multicom_init  ! initialization
+      private multicom_add   ! add communicator
+      private multicom_list  ! list communicators
+      private multicom_set   ! set a communicator in CHARMM to a communicator in this module; depends on parallel.fcm
+      public  multicom_parinit ! reinitialize parallel run (use after communicators have been changed)
+      public  multicom_cleanup
+      private multicom_barrier ! call MPI_BARRIER on any of the known communicators
+      public  multicom_permute_string_ranks
+!
+!     variables
+!
+      type (comm_type), allocatable, private, save :: communicators(:) ! array of communicators
+      integer, save, private :: ncomm=0 ! number of defined communicators
+      logical, save, private :: multicom_initialized=.false.
+      integer, save, private :: first_me=-1, first_size=0
+!
+!     parameters
+!
+      integer, parameter, private :: max_comm = 1024
+!
+!     subroutines
+      contains
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       subroutine multicom_main(comlyn, comlen)
+!      multicom command parser
+       use pme_module, only: qpme, pmesh_setup, pmesh_clear
+       use parser, only: parse_list
+!
+      use string
+      use stream 
+      use ewald 
+!
+       use mpi  ! other platforms -- later
+!
+       implicit none
+!
+       CHARACTER*(*) COMLYN
+       INTEGER COMLEN
+!
+! local variables
+       character*8 :: keyword
+       character*15 :: whoami
+       integer*4 :: ncpu, me
+       integer :: bug, newcomm
+       integer :: kstep, i, j, k, ind, klen
+       integer :: nlocal=-1, nrep=-1
+       logical :: qens, qstr
+       type (int_vector) :: list
+!     functions
+!       logical eqstwc
+!       character*8 nexta8
+!       integer indx, gtrmi, nexti, indxa, decodi
+!
+       data whoami /' MULTICOM_MAIN>'/
+!
+       call MPI_COMM_SIZE(MPI_COMM_WORLD, ncpu, bug)
+       call MPI_COMM_RANK(MPI_COMM_WORLD, me, bug)
+!
+       keyword=nexta8(comlyn,comlen)
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       if (eqstwc(keyword(1:4),4,'INIT',4)) then
+        if (me.eq.0)                                                    &
+     &   call wrndie(1, whoami,                                         &
+     &    'REINITIALIZING USER-DEFINED COMMUNICATOR LIST.')
+        call multicom_init()
+        call multicom_list()
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       elseif (eqstwc(keyword(1:3),3,'ADD',3)) then
+!
+!     parse node list
+        call trima(comlyn, comlen)
+        call parse_list(list, comlyn)
+!
+        do i=1,list%last
+         if (list%i(i).lt.0.or.list%i(i).ge.ncpu) then
+          call wrndie(0,whoami,                                         &
+     &      ' ONE OR MORE NODES OUT OF RANGE. NOTHING DONE.')
+          call int_vector_done(list)
+          return
+         endif
+!
+        enddo
+!
+        if (list%last.eq.0) then
+         call wrndie(0, whoami,                                         &
+     &   ' NO NODES SPECIFIED.')
+        else
+!
+         newcomm=multicom_add(list%i(1:list%last)+1) ! offsetting nodes at 0 and adding 1 here permits users to think of the list as ranks in COMM_WORLD
+!                                                    ! conceptually, this is incorrect because the indices point into the a node array (indexed from 1)
+!                                                    ! of the first communicator (on top of WORLD), but I am making this compromise for simplicity
+!
+         if (newcomm.lt.0) then
+          call wrndie(0, whoami,                                        &
+     &   ' COULD NOT ADD COMMUNICATOR.')
+         else
+          if (prnlev.ge.3) write(outu,222) whoami, newcomm
+         endif
+        endif
+        call int_vector_done(list)
+ 222  FORMAT(/A, ' ADDED COMMUNICATOR ',I4,'.')
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       elseif (eqstwc(keyword(1:4),4,'BARR',4)) then
+        keyword=nexta8(comlyn,comlen) ! CHARMM communicator name, e.g. LOCAL
+        call multicom_barrier(keyword) ! pass subset of array -- only the communnicators
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       elseif (eqstwc(keyword(1:3),3,'SET',3)) then
+        keyword=nexta8(comlyn,comlen) ! CHARMM communicator name, e.g. LOCAL
+!    process communicator list (essentially same code as for add; communicator indices start at 1)
+!    here, inode indexes communicators
+        call trima(comlyn, comlen)
+        call parse_list(list, comlyn)
+!    check range
+        do i=1, list%last
+         if (list%i(i).lt.1.or.list%i(i).gt.ncomm) then
+          call wrndie(0,whoami,                                         &
+     &     ' ONE OR MORE COMMUNICATORS OUT OF RANGE. NOTHING DONE.')
+          call int_vector_done(list)
+          return
+         endif
+        enddo ! check
+!
+        if (list%last.eq.0) then
+         call wrndie(0, whoami,                                         &
+     &   ' NO COMMUNICATORS SPECIFIED.')
+        else
+         call multicom_set(keyword, list%i(1:list%last)) ! pass subset of array -- only the communnicators
+!     warn if LOCAL modified
+         if (len(keyword).ge.5) then
+!         if (eqstwc(keyword,5,'LOCAL',5)) then
+          if (keyword(1:5).eq.'LOCAL'.or.keyword(1:5).eq.'GROUP') then  ! keep group for backward compatibility
+           if (first_me.eq.0)                                           &
+     &      write(OUTU, '(2A)') whoami,                                 &
+     &' WARNING: MPI_COMM_LOCAL CHANGED (REINITIALIZING PARALLEL RUN).'
+           call multicom_parinit()
+          endif ! local
+         endif ! len
+        endif ! ind
+!
+        call int_vector_done(list)
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       elseif (eqstwc(keyword(1:4),4,'LIST',4)) then
+        call multicom_list()
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       elseif (eqstwc(keyword(1:4),4,'DONE',4)) then
+        if (me.ge.0)                                                    &
+     &   call wrndie(0, whoami,                                         &
+     &    'REMOVING USER-DEFINED COMMUNICATOR LIST.')
+        call multicom_cleanup()
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!    now have to reinitialize CHARMM communicators; this is not done here
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       elseif (eqstwc(keyword(1:7),7,'PARINIT',7)) then
+!ccccccc call parallel initialization routines (use after comm_local has been modified)
+        call  multicom_parinit()
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!ccccc in this section, provide "canned" communicator setups for various tasks, ]
+!cccc  e.g. ENSEMBLE/STRING modules
+       elseif (.false.                                                  &
+     &         .or. eqstwc(keyword(1:4),4,'ENSE', 4)                    & !##ENSEMBLE
+     &         .or. eqstwc(keyword(1:4),4,'STRI', 4)                    & !##STRINGM
+     &                ) then
+!      setup a standard ensemble/string case
+        qens=eqstwc(keyword(1:4),4,'ENSE', 4)
+        qstr=eqstwc(keyword(1:4),4,'STRI', 4)
+!
+        klen=len(keyword)
+        call nextwd(comlyn, comlen, keyword, klen, i)
+        nlocal=decodi(keyword, i)
+        if (nlocal.le.0) then
+         call wrndie(0, whoami,                                         &
+     &' INVALID NUMBER OF PROCESSORS PER REPLICA ('//keyword(1:i)//').')
+        else
+         call gtrmwd(comlyn, comlen, 'BY', 2, keyword, klen, i)
+         nrep=decodi(keyword, i)
+         if (nrep.le.0) then
+          call wrndie(0, whoami,                                        &
+     &         ' INVALID NUMBER OF REPLICAS ('//keyword(1:i)//').')
+         elseif (ncpu.lt.nrep*nlocal) then
+          call wrndie(0,whoami,                                         &
+     &         ' REQUESTING TOO MANY PROCESSORS. NOTHING DONE.')
+         else
+!       set up for a (nlocal x nrep) run
+!       use existing routines
+          if (qens) keyword='ENSEMBLE'
+          if (qstr) keyword='STRING'
+          if (first_me.eq.0)                                            &
+     & write(OUTU, 333) whoami, keyword, whoami, nrep, nlocal
+ 333  FORMAT(/A, ' WILL SET UP COMMUNICATORS FOR ',A,                   &
+     & /,A,' ON ', I5, ' REPLICA(S) WITH ', I5,                         &
+     & ' PROCESSORS PER REPLICA.')
+!
+          call multicom_init() ! (re)initialize
+!     define nrep communicators (local)
+          do i=1, nrep
+           ind = multicom_add( (/ ((i-1)*nlocal+j, j=1,nlocal) /) )
+          enddo
+!
+          call multicom_set('LOCAL', (/ (i+1, i=1, nrep)/)) ! set local communicator
+!     define ENSBL/STRNG
+          ind = multicom_add( (/ ((j-1)*nlocal+1, j=1, nrep) /) )
+          if (qens) call multicom_set('ENSBL', (/ nrep+2/) )
+          if (qstr) call multicom_set('STRNG', (/ nrep+2/) )
+!
+          call multicom_parinit()
+!    warn about `unused' processors
+          if (first_me.eq.0) then
+           if (first_size.gt.nlocal*nrep)                               &
+     &     write(OUTU,444) whoami,first_size-nlocal*nrep, keyword
+ 444  FORMAT(A, I5, ' PROCESSORS WILL NOT BE USED FOR ',                &
+     &       A,' CALCULATIONS.')
+          endif ! first_me
+         endif ! nrep
+        endif ! nlocal
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       else
+            CALL WRNDIE(0, whoami,                                      &
+     &       'UNRECOGNIZED SUBCOMMAND: '//keyword)
+       endif
+!
+       end subroutine multicom_main
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       subroutine multicom_parinit()
+!
+       use pme_module, only: qpme, pmesh_setup, pmesh_clear
+!
+      use string
+!       implicit none
+      use stream 
+      use ewald 
+!
+       character*18 :: whoami
+       data whoami /' MULTICOM_PARINIT>'/
+!
+       if (first_me.eq.0) write(outu, '(2A)') whoami,                   &
+     &                     ' CALLING PARSTRT'
+       call PARSTRT()
+!
+!           write(0,*) 'BACK FROM PARSTART'
+!       if (LEWALD.and.QPME) then
+!        if (first_me.eq.0) write(outu, '(2A)') whoami,
+!     &                      ' CALLING PMESH_CLEAR'
+!        call PMESH_CLEAR()
+!
+!        if (first_me.eq.0) write(outu, '(2A)') whoami,
+!     &    ' CALLING PMESH_SETUP'
+!        call PMESH_SETUP()
+!       endif
+!
+       end subroutine multicom_parinit
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       subroutine multicom_init()
+       use string
+       use mpi 
+       implicit none
+!     locals
+       integer*4 :: communicator
+       integer :: i, j
+       integer :: bug=0
+       character*15 :: whoami
+       logical :: found=.false.
+!
+       data whoami /' MULTICOM_INIT>'/
+!
+       communicator=MPI_COMM_WORLD
+!
+       if (multicom_initialized) then
+        call multicom_cleanup()
+       endif
+
+!     allocate communicator array:
+       allocate(communicators(max_comm))
+       ncomm=0 ! number of communicators
+       do i=1, max_comm
+        communicators(i)%me=MPI_UNDEFINED
+        communicators(i)%size=1
+        communicators(i)%comm_id=MPI_COMM_NULL
+        communicators(i)%group_id=MPI_GROUP_NULL
+        communicators(i)%parent_id=-1
+       enddo
+!
+       if (ncomm.eq.max_comm) then
+        call wrndie(0,whoami,                                           &
+     &  ' NUMBER OF ALLOWED COMMUNICATORS EXCEEDED.')
+        call multicom_cleanup()
+        return
+       endif
+!
+       ncomm=ncomm+1
+!
+       call MPI_COMM_GROUP(communicator, communicators(ncomm)%group_id, &
+     &                     bug)
+
+       call MPI_GROUP_SIZE(communicators(ncomm)%group_id, i,j)
+       call MPI_COMM_RANK(communicator, communicators(ncomm)%me, bug)
+       call MPI_COMM_SIZE(communicator, communicators(ncomm)%size, bug)
+       communicators(ncomm)%comm_id=communicator
+       communicators(ncomm)%parent_id=0
+       first_me=communicators(ncomm)%me
+       first_size=communicators(ncomm)%size
+!
+!     store procs:
+       do i=0,first_size-1
+        j=int_vector_uadd(communicators(ncomm)%nodes, i)
+       enddo
+!
+       multicom_initialized=.true.
+       end subroutine multicom_init
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       function multicom_add(nodes,comm)
+!      define a new communicator & return pointer into communicator array
+!      all communicators are defined from the absolute one defined in multicom_init
+!      it is currently MPI_COMM_WORLD; for a communicator parent_id=n means that the
+!      _values_ in the nodes array correspond to _indices_ into the parent's nodes array,
+!      except when n=0, in thich case the _values_ in the nodes array are actual ranks in the
+!      absolute communicator; these ranks are also group ranks, which can be used to create
+!      additional groups and communicators; in the current implementation, parent_id is 0
+!      for all communicators;
+!
+       use mpi 
+!
+       implicit none
+!
+       integer, optional :: comm ! omission implies 1st communicator (WORLD)
+       integer :: nodes(:)
+!     locals
+       integer :: comm_id, node_id
+       integer :: numnodes, nproc, i, j
+       integer :: multicom_add
+       integer :: bug=0
+       integer*4, allocatable :: list(:)
+!
+       character*14 :: whoami
+!
+       data whoami /' MULTICOM_ADD>'/
+!
+       multicom_add=-1
+       if (.not.multicom_initialized) call multicom_init()
+!
+       if (present(comm)) then
+        comm_id=comm
+       else
+        comm_id=1
+       endif
+!
+       if (comm_id.gt.ncomm.or.comm_id.lt.1) then
+        call wrndie(0,whoami,                                           &
+     & ' INVALID PARENT COMMUNICATOR.')
+        return
+       endif
+!
+!     parse processor array
+       if (ncomm.eq.max_comm) then
+        call wrndie(0,whoami,                                           &
+     &  ' NUMBER OF ALLOWED COMMUNICATORS EXCEEDED.')
+        return
+       endif
+!
+       ncomm=ncomm+1
+!
+       do i=1,SIZE(nodes)
+!       determine node_id relative to first communicator (WORLD)
+        j=comm_id
+        node_id=nodes(i) ! node relative to the requested comm.
+        do while (j.gt.0) ! want to get node index relative to the absolute communicator
+         node_id=communicators(j)%nodes%i(node_id) ! node id in parent communicator of j
+         j      =communicators(j)%parent_id
+        enddo
+!       save absolute node ID
+        j=int_vector_uadd(communicators(ncomm)%nodes, node_id) ! relative to 1
+       enddo
+!
+       nproc=communicators(ncomm)%nodes%last
+       allocate(list(nproc)); ! stay with 4-bit ints for MPI
+       list=communicators(ncomm)%nodes%i(1:nproc)
+
+!      define new group
+       call MPI_GROUP_INCL(communicators(1)%group_id,                   &
+     &                   nproc, list,                                   & ! 4-bit integer array
+     &                   communicators(ncomm)%group_id, bug)
+!
+! check for empty group
+       if (communicators(ncomm)%group_id.eq.MPI_GROUP_EMPTY) then
+        call wrndie(0, whoami, ' NO VALID NODES FOUND. NOTHING DONE.')
+        ncomm=ncomm-1
+        return
+       endif
+!
+!       call MPI_GROUP_SIZE(communicators(ncomm)%group_id, i,j)
+! create communicator based on new group; on some nodes this will return MPI_COMM_NULL
+!                                         although the corresponding group should never be NULL
+       call MPI_COMM_CREATE(communicators(1)%comm_id,                   &
+     &                      communicators(ncomm)%group_id,              &
+     &                      communicators(ncomm)%comm_id, bug)
+!
+!     obtain size + rank from communicator
+       if (communicators(ncomm)%comm_id.ne.MPI_COMM_NULL) then
+        call MPI_COMM_RANK(communicators(ncomm)%comm_id,                &
+     &                     communicators(ncomm)%me, bug)
+        call MPI_COMM_SIZE(communicators(ncomm)%comm_id,                &
+     &                     communicators(ncomm)%size, bug)
+!      since we expressed all nodes relative to absolute comm, parent ID is 0
+        communicators(ncomm)%parent_id=0
+       else
+        communicators(ncomm)%size=1 ! for consistency with many communication routines, which bail when size=1
+        communicators(ncomm)%parent_id=0 ! parent is 0 -- see above
+        communicators(ncomm)%me=MPI_UNDEFINED
+       endif
+!
+       multicom_add=ncomm
+!
+       if (allocated(list)) deallocate(list)
+!
+       end function multicom_add
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       subroutine multicom_cleanup()
+!      remove all traces of multicom, but leave MPI_COMM_WORLD intact
+       use mpi 
+!
+       implicit none
+!
+       integer :: i, bug
+       integer*4 :: result
+!
+       if (allocated(communicators)) then
+        do i=1,ncomm
+         call int_vector_done(communicators(i)%nodes)
+!     destroy group & communicators
+         if (communicators(i)%comm_id.ne.MPI_COMM_NULL) then ! it is an error to use MPI_COMM_NULL in compare
+       call MPI_COMM_COMPARE(MPI_COMM_WORLD,communicators(i)%comm_id,   &
+     &                     result, bug)
+!      write(0,*) first_me, communicators(i)%comm_id, i
+!
+          if (result.ne.MPI_IDENT)                                      &
+     &     call MPI_COMM_FREE(communicators(i)%comm_id, bug) ! keep world
+         endif
+!cccccccc
+         if (communicators(i)%group_id.ne.MPI_GROUP_NULL)               &
+     &    call MPI_GROUP_FREE(communicators(i)%group_id, bug)
+        enddo
+        ncomm=0
+        deallocate(communicators)
+       endif
+!
+!     reset communicators in CHARMM
+       call parcomm_reset() ! MPI_COMMs correct, but numnod is not updated
+       call multicom_parinit()
+!
+       multicom_initialized=.false.
+!
+       end subroutine multicom_cleanup
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       subroutine multicom_list()
+!      list currently defined communicators
+       use mpi 
+       use stream 
+!      use multicom_ltm
+!
+       implicit none
+!
+       integer :: i, bug
+       integer*4 :: j,k ! aardvark
+       character*15 :: whoami
+!
+       data whoami /' MULTICOM_LIST>'/
+!
+       if (.not.multicom_initialized) then
+        call wrndie(0,whoami,                                           &
+     &  ' COMMUNICATOR MODULE NOT INITIALIZED.')
+        return
+       endif
+!
+       if (ncomm.lt.1) then
+        call wrndie(0, whoami,                                          &
+     & ' INTERNAL ERROR: NO COMMUNICATORS DEFINED.')
+        return
+       endif
+!
+       if (communicators(1)%me.eq.0) then
+         write(outu, 111) whoami ! 0 writes
+         do i=1, ncomm
+           write(outu, 112) whoami, i, communicators(i)%parent_id
+           write(outu, '(" MULTICOM_LIST> ", 10I5)')                    &
+     &    communicators(i)%nodes%i(1:communicators(i)%nodes%last)
+         enddo
+       endif
+ 111  FORMAT (/A,' THE FOLLOWING COMMUNICATORS ARE DEFINED:')
+ 112  FORMAT (A, ' #', I5, ' NODE LIST (RELATIVE TO #',I5,'):')
+!
+! aardvaark
+
+!      j= MPI_UNDEFINED
+!      if (MPI_COMM_LOCAL.ne.MPI_COMM_NULL)
+!     & call MPI_COMM_RANK(MPI_COMM_LOCAL,j,bug)
+!      write(900+first_me,*) first_me, MPI_COMM_LOCAL, j
+!      if (SIZE_LOCAL.gt.1) CALL MPI_BARRIER(MPI_COMM_LOCAL,bug)
+
+! aardvaark
+       end subroutine multicom_list
+!
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       subroutine multicom_barrier(comm_name)
+       use string
+       use multicom_ltm
+       use parallel 
+       use stream 
+       use exfunc 
+       use mpi 
+!
+       implicit none
+!
+       character*(*) :: comm_name
+!    local vars
+       character*18 :: whoami
+       integer :: c, m, s, l, error
+!
+       data whoami /' MULTICOM_BARRIER>'/
+!
+       if (.not.multicom_initialized) then
+        call wrndie(0,whoami,                                           &
+     &  ' COMMUNICATOR MODULE NOT INITIALIZED. NOTHING DONE.')
+        return
+       endif
+!
+       l=len(comm_name)
+       call trima(comm_name, l)
+       if (l.le.0) then
+        call wrndie(0, whoami,                                          &
+     &   'COMMUNICATOR NAME NOT SPECIFIED. NOTHING DONE.')
+        return
+       endif
+!
+!    cycle through existing communicator list
+       l=5  ! length of communicator id string
+       if (comm_name(1:5).eq.'LOCAL') then
+        c=MPI_COMM_LOCAL; s=SIZE_LOCAL; m=ME_LOCAL;
+       elseif (comm_name(1:5).eq.'GROUP') then ! for backward compatibility
+        c=MPI_COMM_LOCAL; s=SIZE_LOCAL; m=ME_LOCAL;
+       elseif (comm_name(1:5).eq.'ENSBL') then                         !##ENSEMBLE
+        c=MPI_COMM_ENSBL; s=SIZE_ENSBL; m=ME_ENSBL;                    !##ENSEMBLE
+       elseif (comm_name(1:5).eq.'STRNG') then                         !##STRINGM
+        c=MPI_COMM_STRNG; s=SIZE_STRNG; m=ME_STRNG;                    !##STRINGM
+       elseif (comm_name(1:6).eq.'GLOBAL') then
+        c=MPI_COMM_GLOBAL; s=SIZE_GLOBAL; m=ME_GLOBAL;
+        l=6
+       elseif (comm_name(1:5).eq.'WORLD') then
+!    this should not be necessary since 'GLOBAL' wraps 'WORLD'; primarily for debugging
+        c=MPI_COMM_WORLD; m=1;
+       else
+        call wrndie(0, whoami,                                          &
+     &   ' '//comm_name//' IS NOT IN USE. NOTHING DONE.')
+        return
+       endif
+!
+       if (first_me.eq.0) then
+         write(OUTU, '(2A)') whoami,                                    &
+     &    ' CALLING MPI_BARRIER ON COMMUNICATOR "'//comm_name(1:l)//'".'
+       endif
+!
+       if (c.ne.MPI_COMM_NULL.and.m.ne.MPI_UNDEFINED)                   &
+     & call MPI_BARRIER(c, error)
+!
+       end subroutine multicom_barrier
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       subroutine multicom_set(comm_name, commlist)
+!     set various communicators based on the multicom 'database'
+!     note: all processors are meant to execute this routine
+       use multicom_ltm
+       use parallel 
+       use stream 
+       use mpi 
+!
+       implicit none
+!
+       character*(*) :: comm_name
+       integer :: commlist(:)
+!    local vars
+       integer :: llist
+       integer :: comm_id, node_id, parent_id
+       character*14 :: whoami
+       integer :: numnodes, c, m, s
+       integer :: bug, lcomm, i, j
+       logical :: found=.false., foundg=.false.
+!
+       integer :: flag(0:first_size-1), flagg(0:first_size-1)
+!
+       data whoami /' MULTICOM_SET>'/
+!
+       if (.not.multicom_initialized) then
+        call wrndie(0,whoami,                                           &
+     &  ' COMMUNICATOR MODULE NOT INITIALIZED. NOTHING DONE.')
+        return
+       endif
+!
+!      first check whether the communicator ids are valid
+       llist=SIZE(commlist)
+       do i=1, llist
+        if (commlist(i).gt.ncomm.or.commlist(i).lt.1) then
+         call wrndie(0, whoami,                                         &
+     &  'SOME COMMUNICATOR IDs INVALID. NOTHING DONE.')
+         return
+        endif
+       enddo
+!
+       flag=0
+       flagg=0
+!
+       lcomm=len(comm_name)
+!
+!    loop over all communicators. Note that no check for overlapping groups is made
+!    in the case a node belonging to multiple groups,
+!    the last communicator assignment overwrites previous ones
+!
+       do j=1, llist
+        comm_id=commlist(j)
+! define dummy vars to shorten code
+! note that any of these might be undefined
+        c=communicators(comm_id)%comm_id  ! could be MPI_COMM_NULL on this node
+        m=communicators(comm_id)%me       ! could be MPI_COMM_UNDEFINED
+        s=communicators(comm_id)%size
+!
+!      detect if null communicator (unlikely, just bug check)
+        found=c.eq.MPI_COMM_NULL
+        call MPI_ALLREDUCE(found, foundg, 1, MPI_LOGICAL, MPI_LAND,     &
+     &   communicators(1)%comm_id, bug)
+        if (foundg) then
+         call wrndie(0,whoami,                                          &
+     &    ' UNEXPECTED ERROR: COMMUNICATOR HANDLE NULL ON ALL NODES.')
+         return
+        endif
+!
+        numnodes=communicators(comm_id)%nodes%last
+!
+!          write(0,*) communicators(comm_id)%nodes%i(1:numnodes)
+        do i=1, numnodes
+!
+         node_id  =communicators(comm_id)%nodes%i(i) ! node id in parent (possibly 0)
+         parent_id=communicators(comm_id)%parent_id  ! possibly 0
+!           write(700+ME_GLOBAL,*) parent_id ! aa
+!
+         do while (parent_id.ne.0)
+          node_id  =communicators(parent_id)%nodes%i(node_id) ! node_id in parent of parent
+          parent_id=communicators(parent_id)%parent_id        ! parent of parent (possibly 0)
+         enddo
+!       write(0,*) numnodes, node_id, comm_id, parent_id
+!       stop
+!     set communicator
+         if (first_me .eq. node_id ) then
+! check communicator list
+          if (lcomm.ge.5) then
+!
+           flag(node_id)=node_id+1 ! this flag means that a communicator assignment is successful
+!
+           if (comm_name(1:5).eq.'LOCAL') then
+            MPI_COMM_LOCAL=c; SIZE_LOCAL=s; ME_LOCAL=m;
+           elseif (comm_name(1:5).eq.'GROUP') then     ! for backward compatibility
+            MPI_COMM_LOCAL=c; SIZE_LOCAL=s; ME_LOCAL=m;
+!               write(700+first_me,*) MPI_COMM_LOCAL, c, ME_LOCAL
+!
+           elseif (comm_name(1:5).eq.'ENSBL') then                         !##ENSEMBLE
+            MPI_COMM_ENSBL=c; SIZE_ENSBL=s; ME_ENSBL=m                     !##ENSEMBLE
+!
+           elseif (comm_name(1:5).eq.'STRNG') then                         !##STRINGM
+            MPI_COMM_STRNG=c; SIZE_STRNG=s; ME_STRNG=m                     !##STRINGM
+           else
+            flag(node_id)=0
+           endif
+          endif ! lcomm
+!
+         endif ! first_me
+!
+        enddo ! i=1, numnodes
+       enddo ! over commlist array (j)
+!
+!      combine flagg; have to do some ad-hoc gymnastics because of integer size
+       call MPI_ALLREDUCE(flag, flagg,                                  &
+     & first_size,                                                      &                            !##.not.INTEGER8
+     & first_size*2,                                                    &                          !##INTEGER8
+     & MPI_INTEGER, MPI_MAX, communicators(1)%comm_id, bug)
+!     flagg array is positive for nodes on which assignment worked, and 0
+!     for which it did not; for the latter nodes, explicitly set
+!     communicator to null, size to 1, and me to MPI_UNDEFINED:
+       c=MPI_COMM_NULL; s=1; m=MPI_UNDEFINED
+       if (flag(first_me).eq.0) then
+         if (comm_name(1:5).eq.'LOCAL') then
+          MPI_COMM_LOCAL=c; SIZE_LOCAL=s; ME_LOCAL=m;
+         elseif (comm_name(1:5).eq.'GROUP') then         ! for compatibility with older scripts
+          MPI_COMM_LOCAL=c; SIZE_LOCAL=s; ME_LOCAL=m;
+!
+         elseif (comm_name(1:5).eq.'ENSBL') then                         !##ENSEMBLE
+          MPI_COMM_ENSBL=c; SIZE_ENSBL=s; ME_ENSBL=m                     !##ENSEMBLE
+!
+         elseif (comm_name(1:5).eq.'STRNG') then                         !##STRINGM
+          MPI_COMM_STRNG=c; SIZE_STRNG=s; ME_STRNG=m                     !##STRINGM
+         endif
+       endif ! lcomm
+!
+       llist=sum(min(flagg,1)) ! # nodes with successful assignments
+       found=(llist.gt.0)
+       if (.not.found) then
+        call wrndie(0, whoami,                                          &
+     &   ' '//comm_name//' IS NOT IN USE ON REQUESTED NODES.')
+       else
+        if (first_me.eq.0) then
+         write(OUTU, '(2A)') whoami,                                    &
+     &    ' ASSIGNED "'//comm_name(1:5)//                               &
+     &    '" COMMUNICATOR ON THE FOLLOWING NODES:'
+         write(OUTU, '(" MULTICOM_SET> ",20I5)')                        &
+     &    PACK(flagg, flagg.gt.0)-1! node numbering starts from 0
+         if (llist.lt.first_size)                                       & ! warn that on some nodes, communicator is still unassigned
+     &    write(OUTU, '(2A,I5,A)') whoami,                              &
+     &   ' COMMUNICATOR "'//comm_name(1:5)//'" UNASSIGNED ON ',         &
+     &   first_size-llist, ' NODES.'
+        endif ! first_me
+       endif ! .not.found
+!
+       end subroutine multicom_set
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+##IF STRINGM
+       subroutine multicom_permute_string_ranks(ranks)
+       use multicom_ltm
+       use mpi 
+!    assume that the string communicator exists (MPI_COMM_STRNG)
+!    loop over all communicators & find the string communicator
+!    create a new communicator using the nodes of the string comm.,
+!    but using WORLD as parent. Delete the existing string communicator
+!    and set the new communicator to MPI_COMM STRNG.
+!
+       implicit none
+       integer :: ranks(:)
+!
+       integer :: ranks_world(size(ranks)) ! ranks with respect to WORLD communicator
+       integer :: i, j, k, comm, node_id, parent_id
+       logical :: found
+       integer :: itype, bug
+       character*31 :: whoami
+       data whoami /' MULTICOM_PERMUTE_STRING_RANKS>'/
+!
+       if (.not.multicom_initialized) then
+        call wrndie(0,whoami,                                           &
+     &  ' COMMUNICATOR MODULE NOT INITIALIZED. NOTHING DONE.')
+        return
+       endif
+!
+       itype=MPI_INTEGER      !##.not.INTEGER8
+       itype=MPI_INTEGER8     !##INTEGER8
+!
+       if (ncomm.lt.1) then
+        call wrndie(0, whoami,                                          &
+     & ' INTERNAL ERROR: NO COMMUNICATORS DEFINED.')
+        return
+       endif
+!
+       comm=0
+       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.ME_STRNG.eq.0) then
+        found=.false.
+        do while (.not.found.and.comm.lt.ncomm)
+         comm=comm+1
+         found=(communicators(comm)%comm_id.eq.MPI_COMM_STRNG)
+        enddo
+        if (.not.found) comm=0
+       endif
+! reduce
+       call MPI_ALLREDUCE(comm, i, 1, itype, MPI_BOR,                   &
+     &                    MPI_COMM_GLOBAL, bug)
+       comm=i
+       if (comm.eq.0) then
+        call wrndie(0, whoami,                                          &
+     & ' INTERNAL ERROR: MPI_COMM_STRNG NOT FOUND.')
+        return
+       endif
+!
+!     add new communicator
+!       write(800+ME_GLOBAL,*) comm
+!       write(800+ME_GLOBAL,*) ranks-1
+!       write(800+ME_GLOBAL,*)
+!     &   communicators(comm)%nodes%i(1:size(ranks))
+!
+!
+       j=multicom_add(ranks, comm)
+!     assing MPI_COMM_STRNG to new communicator
+       do i=1, communicators(j)%nodes%last
+!
+         node_id  =communicators(j)%nodes%i(i) ! node_id in j's parent
+         parent_id=communicators(j)%parent_id  ! j's parent
+!
+         do while (parent_id.ne.0) ! want to get node index relative to the global communicator (WORLD)
+          node_id  =communicators(parent_id)%nodes%i(node_id) ! node id in parent of parent
+          parent_id=communicators(parent_id)%parent_id
+         enddo
+!     set communicator
+         if (first_me .eq. node_id ) then
+          MPI_COMM_STRNG=communicators(j)%comm_id
+          SIZE_STRNG=    communicators(j)%size
+          ME_STRNG=      communicators(j)%me
+         endif ! first_me
+!
+       enddo ! i=1, numnodes
+!    destroy old communicator and group
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!      do not do any checks -- assume rest of code works correctly
+       if (communicators(comm)%comm_id.ne.MPI_COMM_NULL)                & ! comm will be null on slave nodes
+     &   call MPI_COMM_FREE(communicators(comm)%comm_id, bug)
+       call MPI_GROUP_FREE(communicators(comm)%group_id, bug) ! group will be defined on all nodes
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!    overwrite old communicator by new communicator;
+       communicators(comm)%me       =communicators(j)%me
+       communicators(comm)%size     =communicators(j)%size
+       communicators(comm)%comm_id  =communicators(j)%comm_id
+       communicators(comm)%group_id =communicators(j)%group_id
+       communicators(comm)%parent_id=communicators(j)%parent_id
+       call int_vector_done(communicators(comm)%nodes)
+       do i=1,communicators(j)%nodes%last
+        k=int_vector_uadd(communicators(comm)%nodes,                    &
+     &          communicators(j)%nodes%i(i))
+       enddo
+!     remove old string communicator
+       call int_vector_done(communicators(j)%nodes)
+       ncomm=ncomm-1
+!       write(800+ME_GLOBAL,*)
+!     &   communicators(comm)%nodes%i(1:size(ranks)) !aa
+!        close(800+ME_GLOBAL)
+!
+       end subroutine multicom_permute_string_ranks
+##ENDIF
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      end module multicom
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+##ENDIF
+##ENDIF
