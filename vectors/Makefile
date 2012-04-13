@@ -27,8 +27,8 @@ rvector_list.F90: vector_list_template.ftn
 clean:
 	rm -f *.mod *.o *.a ivector.F90 rvector.F90 ivector_list.F90 rvector_list.F90 $(CHARMM_SOURCES) *.tmp
 
-charmm: $(CHARMM_SOURCES) $(GLOBALDEPS)
-%.src:%.tmp
+charmm: $(CHARMM_SOURCES)
+%.src:%.tmp $(GLOBALDEPS)
 	$(FPP) $(FPPFLAGS) -D__CHARMM $(GLOBALMACROS) $< > $@
 ivector.tmp: vector_template.ftn
 	$(FPP) $(FPPFLAGS) -D'__DATANAME=i' -D'__DATATYPE=int' -D'__TYPENAME=int' $(MSG) -D__CHARMM $< >$@

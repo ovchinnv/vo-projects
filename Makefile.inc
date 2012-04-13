@@ -8,7 +8,7 @@ FFLAGS=-O3 -fast -finline -fp-model fast=2 -xhost -ipo -fno-math-errno -no-inlin
 #FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-132 -ffree-line-length-132 -fno-math-errno -fbounds-check -frange-check #-fopenmp 
 #FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-132 -ffree-line-length-132 -fno-math-errno #-fbounds-check -frange-check 
 #
-DEFS=-D int=integer -D float=real*8 -D bool=logical
+DEFS=-D int=integer -D float=real*8 -D bool=logical -D mpiint=integer*4
 # ! note: the VEC routines are probably slower
 
 # note : for single precision define
@@ -34,7 +34,7 @@ MSG=-include $(ROOT)/source.msg
 GLOBALDEPS=$(ROOT)/source.defs $(ROOT)/source.msg
 
 FPP=cpp -P
-FPPFLAGS = -C
+FPPFLAGS = -CC
 
 .SUFFIXES:
 .SUFFIXES: .o .F90 .a .H .h
@@ -50,11 +50,11 @@ default : all
 %.a:
 	$(AR) $(AFLAGS) $@ $(OBJS)
 ########################## SOURCE CODE #######################
-%.h:%.H
+%.h:%.H $(LOCALDEPS) $(GLOBALDEPS)
 	$(FPP) $(FPPFLAGS) $(DEFS) $(LOCALDEFS) $< > $@
-%.F90:%.ftn
+%.F90:%.ftn $(LOCALDEPS) $(GLOBALDEPS)
 	$(FPP) $(FPPFLAGS) $(DEFS) -U__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(MSG) -P $< > $@
-%.src:%.ftn $(LOCALDEPS)
+%.src:%.ftn $(LOCALDEPS) $(GLOBALDEPS) 
 	$(FPP) $(FPPFLAGS)         -D__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(MSG) -P $< > $@
 ######################### OTHER RULES ########################
 force_look:
