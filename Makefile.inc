@@ -9,7 +9,6 @@ FFLAGS=-O3 -fast -finline -fp-model fast=2 -xhost -ipo -fno-math-errno -no-inlin
 #FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-132 -ffree-line-length-132 -fno-math-errno #-fbounds-check -frange-check 
 #
 DEFS=-D int=integer -D float=real*8 -D bool=logical
-LOCALDEFS=
 # ! note: the VEC routines are probably slower
 
 # note : for single precision define
@@ -33,7 +32,6 @@ DYNA=$(ROOT)/$(DYNAMOL)
 GLOBALMACROS=-include $(ROOT)/source.defs 
 MSG=-include $(ROOT)/source.msg
 GLOBALDEPS=$(ROOT)/source.defs $(ROOT)/source.msg
-LOCALDEPS=
 
 FPP=cpp -P
 FPPFLAGS = -C
@@ -42,16 +40,23 @@ FPPFLAGS = -C
 .SUFFIXES: .o .F90 .a .H .h
 
 default : all
-%.o:%.F90
+########################### OBJECTS ##########################
+%.o:%.F90 $(LIBDEPS)
 	$(FC) $(FFLAGS) $(DEFS) $(LOCALDEFS) $(INCLUDES) $<
-%.o:%.f
+%.o:%.f $(LIBDEPS)
 	$(FC) $(FFLAGS) $(DEFS) $(LOCALDEFS) $(INCLUDES) $<
-%.o:%.F
+%.o:%.F $(LIBDEPS)
 	$(FC) $(FFLAGS) $(DEFS) $(LOCALDEFS) $(INCLUDES) $<
 %.a:
 	$(AR) $(AFLAGS) $@ $(OBJS)
+########################## SOURCE CODE #######################
 %.h:%.H
 	$(FPP) $(FPPFLAGS) $(DEFS) $(LOCALDEFS) $< > $@
+%.F90:%.ftn
+	$(FPP) $(FPPFLAGS) $(DEFS) -U__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(MSG) -P $< > $@
+%.src:%.ftn $(LOCALDEPS)
+	$(FPP) $(FPPFLAGS)         -D__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(MSG) -P $< > $@
+######################### OTHER RULES ########################
 force_look:
 	true
 mod: force_look
