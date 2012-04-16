@@ -34,7 +34,7 @@ MSG=-include $(ROOT)/source.msg
 GLOBALDEPS=$(ROOT)/source.defs $(ROOT)/source.msg
 
 FPP=cpp -P
-FPPFLAGS = -CC
+FPPFLAGS = -C
 
 .SUFFIXES:
 .SUFFIXES: .o .F90 .a .H .h
