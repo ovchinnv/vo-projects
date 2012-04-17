@@ -8,7 +8,7 @@ FFLAGS=-O3 -fast -finline -fp-model fast=2 -xhost -ipo -fno-math-errno -no-inlin
 #FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-132 -ffree-line-length-132 -fno-math-errno -fbounds-check -frange-check #-fopenmp 
 #FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-132 -ffree-line-length-132 -fno-math-errno #-fbounds-check -frange-check 
 #
-DEFS=-D int=integer -D float=real*8 -D bool=logical -D mpiint=integer*4
+DEFS=-D int=integer -D float=real*8 -D bool=logical -D mpiint=integer*4 -D mpifloat=MPI_REAL
 # ! note: the VEC routines are probably slower
 
 # note : for single precision define
