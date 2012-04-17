@@ -33,6 +33,9 @@ GLOBALMACROS=-include $(ROOT)/source.defs
 MSG=-include $(ROOT)/source.msg
 GLOBALDEPS=$(ROOT)/source.defs $(ROOT)/source.msg
 
+SOURCES=$(OBJS:%.o=%.F90)
+CHARMM_SOURCES=$(OBJS:%.o=%.src)
+
 FPP=cpp -P
 FPPFLAGS = -C
 
@@ -59,7 +62,7 @@ default : all
 ######################### OTHER RULES ########################
 force_look:
 	true
-mod: force_look
+mod:
 	/bin/sh -c 'for file in `ls *.mod 2>/dev/null`; do  ln -fs `pwd`/$$file ${ROOT}/modules/$$file; done'
 modules: $(OBJS) mod
 	for d in $(DIRS); do (cd $$d; $(MAKE) modules); done
