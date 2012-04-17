@@ -2,7 +2,7 @@ ROOT=..
 OBJS=sm_var.o sm_config.o splines.o sm_util.o
 
 #LOCALMACROS=-include source.defs
-LOCALDEPS=mpifloat.def
+LOCALDEPS=mpitype.def
 
 include $(ROOT)/Makefile.inc
 
