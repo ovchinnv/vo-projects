@@ -1,12 +1,14 @@
-! This source file was was generated automatically from a master source
-! code tree, which may or may not be distributed with this code,
-! because it is up to the distributor, and not up to me.
-! If you edit this file (rather than the master source file)
-! your changes will be lost if another pull from the master tree occurs.
-! In case you are wondering why, this approach makes it possible for
-! me to have the same master source code interfaced with different
-! applications (some of which are written in a way that is quite far
-! from being object-oriented) at the source level
+! **********************************************************************!
+! This source file was was generated automatically from a master source !
+! code tree, which may or may not be distributed with this code, !
+! because it is up to the distributor, and not up to me. !
+! If you edit this file (rather than the master source file) !
+! your changes will be lost if another pull from the master tree occurs.!
+! In case you are wondering why, this approach makes it possible for !
+! me to have the same master source code interfaced with different !
+! applications (some of which are written in a way that is quite far !
+! from being object-oriented) at the source level. !
+! **********************************************************************!
       module parser
       implicit none
       private
@@ -64,6 +66,7 @@
       public list_params ! list parameters
       public adjustleft
       public numword
+      public pop_string
       public toupper
       public tolower
       public itoa
@@ -316,7 +319,6 @@
          if (l.lt.200) l=l+1
          cmdline(l:l)='*'
          if (any(comment.eq.cmdline(1:1))) l=1 ! skip lines that are comments
-
          i=0
          qtag=.true. ; ltag=0 ! each line is required to begin with a tag
          qval=.false.; lval=0
@@ -517,7 +519,6 @@
         endif
        enddo ! over all lines in the file
 !
-
 
 
        if (qerror) then
@@ -758,8 +759,10 @@
 !
        end subroutine tolower
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-       subroutine adjustleft(a)
+! this subroutine uses a custom definition of white space
+       subroutine adjustleft(a, space)
         character*(*) :: a
+        character, optional :: space(:)
         integer :: l, i, j
         l=len(a)
         if (l.gt.0) then
@@ -793,7 +796,7 @@
 
    l=len_trim(a);
    n=0
-   if (l.eq.0.or.any(a(1:l).eq.space2)) return
+   if (l.eq.0.or.any(a(1:l).eq.space2)) return ! this is string comparison: any applies to space2
    j=1
    i=1
    do while (j.gt.0)
@@ -810,5 +813,30 @@
    endif
    numword=n
   end function numword
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  function pop_string(a,n) result(b) ! returns the next white-space-delimited word in a string, and removes it from the string
+   character*(*) :: a
+   character(len=len(a)) :: b
+   character, parameter :: tab=char(9)
+   character*2, parameter :: space = ' '//tab
+   character, parameter :: space2(2) = (/' ',tab/)
+   integer, optional :: n
+   integer :: j,l
+
+   if (present(n)) a(max(0,n):)='' ! erase string beyond length n
+!
+   call adjustleft(a,space2)
+   l=len_trim(a);
+   b='';
+   if (l.eq.0) return
+   j=scan(a(1:l),space)
+   if (j.gt.1) then
+    b=a(1:j-1)
+    a=a(j:l)
+   else ! there must be only one word
+    b=a(1:l)
+    a=''
+   endif
+  end function pop_string
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
       end module parser

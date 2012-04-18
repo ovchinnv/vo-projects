@@ -12,6 +12,7 @@
       module multidiag
       implicit none
       contains
+!
       subroutine mdiag(diag,r,n,ndiag)
 ! V. Ovchinnikov (ovchinnv_at_georgetown_dot_edu), 2010. No Warranty whatsoever.
 ! multidiagonal matrix solver
