@@ -1,5 +1,5 @@
 ROOT=..
-OBJS=iparselist.o
+OBJS=parselist.o
 
 INCLUDES=-I $(ROOT)/modules
 
