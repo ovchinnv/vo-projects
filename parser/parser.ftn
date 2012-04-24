@@ -56,6 +56,7 @@
       public adjustleft
       public numword
       public pop_string
+      public get_remove_parameter
       public toupper
       public tolower
       public itoa
@@ -549,15 +550,17 @@
        end subroutine list_params
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 ! auxiliary functions (they need not be part of this module)
-       function atoi(a)
+       function atoi(a, invalid)
 ! NOTE: no overflow check yet
        use output, only: warning
-       int :: atoi, i, l, j, k, sgn, base
+       int, optional, intent(in) :: invalid
+       int :: atoi, i, l, j, k, sgn, base, missing
        character*200 :: b
        character*(*) :: a
        character*4, parameter :: whoami = 'ATOI'
        int :: flag(10)
 ! convert string to integer
+       if (present(invalid)) then ; missing=invalid ; else ; missing=-999 ; endif
        i=0
 !
        b=a
@@ -566,10 +569,13 @@
        if (l.ge.1) then
         if (b(1:1).eq.hyphen) then
          sgn=-1
-         b(1:l-1)=b(2:l); l=l-1
+         b(1:l-1)=b(2:l); l=l-1; 
+         if (l.eq.0) i = -missing ; ! only a hyphen present : will multiply by -1 and quit
         else
          sgn=1
         endif
+       else
+        i=missing; sgn=1
        endif ! l.ge.1
 !       
        base=1
@@ -577,7 +583,7 @@
         where(digits2.eq.b(j:j)); flag=1 ; elsewhere; flag=0 ; endwhere; k=sum(maxloc(flag))-1
         if (all(flag.eq.0)) then 
          call warning(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO INTEGER.',-1)
-         i=-999; sgn=1;
+         i=missing; sgn=1;
          exit
         else
          i=i+base*k
@@ -820,23 +826,46 @@
    character, parameter :: tab=char(9)
    character*2, parameter :: space = ' '//tab
    character, parameter :: space2(2) = (/' ',tab/)
-   int, optional :: n
+   int, optional, intent(inout) :: n
    int :: j,l
 
    if (present(n)) a(max(0,n):)='' ! erase string beyond length n
 !
    call adjustleft(a,space2)
    l=len_trim(a);
-   b='';
-   if (l.eq.0) return
    j=scan(a(1:l),space)
-   if (j.gt.1) then
-    b=a(1:j-1)
-    a=a(j:l)
-   else ! there must be only one word
-    b=a(1:l)
-    a=''
-   endif
+   if (j.eq.0) j=l+1 ! there must be only one word
+   b=a(1:j-1)
+   a=a(j:l)
+   if (present(n)) n=l-j+1
   end function pop_string
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  function get_remove_parameter(a,tag,n) result(b)
+  character(len=*) :: a
+  character(len=*) :: tag
+  int, optional, intent(inout) :: n
+  int :: ltag, j, l
+  character(len=len(a)) :: b, right
+  character(len=len(tag)) :: copy
+!
+  character*2, parameter :: space = ' '//tab
+  character, parameter :: space2(2) = (/' ',tab/)
+!
+  b=''
+  copy=tag; call adjustleft(copy,space2); ltag=len_trim(copy)
+  if (present(n)) a(max(0,n):)=''        ! erase string beyond length n
+  call adjustleft(a,space2); l=len_trim(a);
+  if (ltag.gt.0.and.l.gt.0) then 
+!
+   j=index(a(1:l),copy(1:ltag));
+   if (j.gt.0) then
+    right=a(j+ltag:)
+    b=pop_string(right)
+    a(j:)=right
+    if (present(n)) n=len_trim(a)
+   endif
+  endif
+!
+  end function get_remove_parameter
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
       end module parser
