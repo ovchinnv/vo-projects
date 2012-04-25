@@ -555,8 +555,8 @@
        use output, only: warning
        integer, optional, intent(in) :: invalid
        integer :: atoi, i, l, j, k, sgn, base, missing
-       character*200 :: b
-       character*(*) :: a
+       character(len=*), intent(in) :: a
+       character(len=len(a)) :: b
        character*4, parameter :: whoami = 'ATOI'
        integer :: flag(10)
 ! convert string to integer

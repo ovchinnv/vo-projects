@@ -1,20 +1,23 @@
 ROOT=../..
-CHARMM_SOURCES=ftsm_var.src
-include $(ROOT)/Makefile.inc
+OBJS=ftsm_var.o
 
 COMMON=..
+INCLUDES= -I $(COMMON) -I $(ROOT)/modules
+
 
 #LOCALMACROS=-include source.defs
 #LOCALDEPS=source.defs
-LIBDEP=$(COMMON)/sm_common.o
+#LIBDEP=$(COMMON)/sm_common.o
 
-OBJS=ftsm_var.o
-SOURCES=ftsm_var.F90
+include $(ROOT)/Makefile.inc
 
-default: all
-all: $(OBJS)
+ftsm_var.o: sm_common_vars
 
-charmm: $(CHARMM_SOURCES)
+sm_common_vars:
+	$(MAKE) -C $(COMMON) sm_var.o sm_config.o 
 
 clean: 
 	rm -f *.mod $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(EXE)
+
+
+.PNONY : sm_common_vars

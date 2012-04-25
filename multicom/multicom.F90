@@ -1,12 +1,14 @@
-! This source file was was generated automatically from a master source
-! code tree, which may or may not be distributed with this code,
-! because it is up to the distributor, and not up to me.
-! If you edit this file (rather than the master source file)
-! your changes will be lost if another pull from the master tree occurs.
-! In case you are wondering why, this approach makes it possible for
-! me to have the same master source code interfaced with different
-! applications (some of which are written in a way that is quite far
-! from being object-oriented) at the source level
+! **********************************************************************!
+! This source file was was generated automatically from a master source !
+! code tree, which may or may not be distributed with this code, !
+! because it is up to the distributor, and not up to me. !
+! If you edit this file (rather than the master source file) !
+! your changes will be lost if another pull from the master tree occurs.!
+! In case you are wondering why, this approach makes it possible for !
+! me to have the same master source code interfaced with different !
+! applications (some of which are written in a way that is quite far !
+! from being object-oriented) at the source level. !
+! **********************************************************************!
 !
 ! code extension that allows users to define communicators manually
 ! required by string module
@@ -57,10 +59,10 @@
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine multicom_main(comlyn, comlen)
 ! multicom command parser
-       use ilistparser
+       use parselist
 !
-       __DEP_PARSER
-       __DEP_OUTPUT
+       use parser
+       use output
        use mpi
 !
        implicit none
@@ -77,14 +79,14 @@
        integer :: nlocal=-1, nrep=-1
        logical :: qens, qstr
        type (int_vector) :: list
-       character(len=80) :: msg__
+       character(len=80) :: msg___
 !
        data whoami /' MULTICOM_MAIN>'/
 !
        call MPI_COMM_SIZE(MPI_COMM_WORLD, ncpu, bug)
        call MPI_COMM_RANK(MPI_COMM_WORLD, me, bug)
 !
-       keyword=__NEXTA(comlyn,comlen)
+       keyword=pop_string(comlyn,comlen) ; comlen=len_trim(comlyn)
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        if ( keyword(1:4).eq.'INIT'(1:4) ) then
         if (me.eq.0) &
@@ -117,19 +119,19 @@
          if (newcomm.lt.0) then
           write(0,*) 'WARNING FROM: ',whoami,': ',' COULD NOT ADD COMMUNICATOR.'
          else
-          write(msg__,222) whoami, newcomm;
-          __PRINTL(msg__,3) ! print if verbosity >= 3
+          write(msg___,222) whoami, newcomm;
+          write(0,'(A)') msg___ ! print if verbosity >= 3
          endif
         endif
         call int_vector_done(list)
  222 FORMAT(/A, ' ADDED COMMUNICATOR ',I4,'.')
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        elseif ( keyword(1:4).eq.'BARR'(1:4) ) then
-        keyword=__NEXTA(comlyn,comlen) ! communicator name, e.g. LOCAL
+        keyword=pop_string(comlyn,comlen) ; comlen=len_trim(comlyn) ! communicator name, e.g. LOCAL
         call multicom_barrier(keyword) ! pass subset of array -- only the communnicators
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        elseif ( keyword(1:3).eq.'SET'(1:3) ) then
-        keyword=__NEXTA(comlyn,comlen) ! communicator name, e.g. LOCAL
+        keyword=pop_string(comlyn,comlen) ; comlen=len_trim(comlyn) ! communicator name, e.g. LOCAL
 ! process communicator list (essentially same code as for add; communicator indices start at 1)
 ! here, inode indexes communicators
         comlyn(comlen+1:)=''; comlyn=adjustl(comlyn); comlen=len_trim(comlyn)
@@ -151,9 +153,9 @@
          if (len(keyword).ge.5) then
           if (keyword(1:5).eq.'LOCAL'.or.keyword(1:5).eq.'GROUP') then ! keep group for backward compatibility
            if (first_me.eq.0) then
-            write(msg__, '(2A)') whoami, &
+            write(msg___, '(2A)') whoami, &
      & ' WARNING: MPI_COMM_LOCAL CHANGED (REINITIALIZING PARALLEL RUN).'
-            call wrndie(0,'(A)') msg__
+            write(0,'(A)') msg___
            endif
            call multicom_parinit()
           endif ! local
@@ -187,22 +189,22 @@
         qstr=( keyword(1:4).eq.'STRI'(1:4) )
 !
         klen=len(keyword)
-        keyword=__NEXTA(comlyn,comlen)
-        nlocal=__ATOI(keyword, klen)
+        keyword=pop_string(comlyn,comlen) ; comlen=len_trim(comlyn)
+        nlocal=atoi(keyword(1:klen))
         if (nlocal.le.0) then
-         write(msg__,*)' INVALID NUMBER OF PROCESSORS PER REPLICA (',keyword,').';write(0,*) 'WARNING FROM: ',whoami,': ',msg__
+         write(msg___,*)' INVALID NUMBER OF PROCESSORS PER REPLICA (',keyword,').';write(0,*) 'WARNING FROM: ',whoami,': ',msg___
         else
-         i=scan(comlyn(1:comlen), 'BY');
+         i=index(comlyn(1:comlen), 'BY');
          if (i.gt.0) then
           comlyn=comlyn(2+i:comlen)
           comlen=comlen-i-1
-          keyword=__NEXTA(comlyn,comlen)
+          keyword=pop_string(comlyn,comlen) ; comlen=len_trim(comlyn)
          else
           keyword=''
          endif
-         nrep=__ATOI(keyword, i)
+         nrep=atoi(keyword(1:i))
          if (nrep.le.0) then
-          write(msg__,*)' INVALID NUMBER OF REPLICAS (',keyword,').';write(0,*) 'WARNING FROM: ',whoami,': ',msg__
+          write(msg___,*)' INVALID NUMBER OF REPLICAS (',keyword,').';write(0,*) 'WARNING FROM: ',whoami,': ',msg___
          elseif (ncpu.lt.nrep*nlocal) then
           write(0,*) 'WARNING FROM: ',whoami,': ',' REQUESTING TOO MANY PROCESSORS. NOTHING DONE.'
          else
@@ -211,11 +213,11 @@
           if (qens) keyword='ENSEMBLE'
           if (qstr) keyword='STRING'
           if (first_me.eq.0) then
-           write(msg__, 333) whoami, keyword, whoami, nrep, nlocal
+           write(msg___, 333) whoami, keyword, whoami, nrep, nlocal
  333 FORMAT(/A, ' WILL SET UP COMMUNICATORS FOR ',A, &
      & /,A,' ON ', I5, ' REPLICA(S) WITH ', I5, &
      & ' PROCESSORS PER REPLICA.')
-           call wrndie(0,'(A)') msg__
+           write(0,'(A)') msg___
           endif ! first_me
 !
           call multicom_init() ! (re)initialize
@@ -234,23 +236,23 @@
 ! warn about `unused' processors
           if (first_me.eq.0) then
            if (first_size.gt.nlocal*nrep) then
-            write(msg__,444) whoami,first_size-nlocal*nrep, keyword
+            write(msg___,444) whoami,first_size-nlocal*nrep, keyword
  444 FORMAT(A, I5, ' PROCESSORS WILL NOT BE USED FOR ', &
      & A,' CALCULATIONS.');
-            call wrndie(0,'(A)') msg__
+            write(0,'(A)') msg___
            endif ! first_size
           endif ! first_me
          endif ! nrep
         endif ! nlocal
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        else
-            write(msg__,*)' UNRECOGNIZED SUBCOMMAND: ',keyword;write(0,*) 'WARNING FROM: ',whoami,': ',msg__
+            write(msg___,*)' UNRECOGNIZED SUBCOMMAND: ',keyword;write(0,*) 'WARNING FROM: ',whoami,': ',msg___
        endif
 !
        end subroutine multicom_main
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine multicom_parinit()
-       __DEP_INIT
+       use mpi
 !
        implicit none
 !
@@ -259,7 +261,7 @@
        data whoami /' MULTICOM_PARINIT>'/
 !
 !
-      __PARINIT
+      ! nothing by default
 !
        end subroutine multicom_parinit
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -460,14 +462,14 @@
        subroutine multicom_list()
 ! list currently defined communicators
 ! use mpi
-       __DEP_OUTPUT
+       use output
 !
        implicit none
 !
        integer :: i, bug
        integer*4 :: j,k ! aardvark
        character(len=15) :: whoami
- character(len=80) :: msg__
+ character(len=80) :: msg___
 !
        data whoami /' MULTICOM_LIST>'/
 !
@@ -482,11 +484,11 @@
        endif
 !
        if (communicators(1)%me.eq.0) then
-         write(msg__, 111) whoami ; call wrndie(0,'(A)') msg__ ! 0 writes
+         write(msg___, 111) whoami ; write(0,'(A)') msg___ ! 0 writes
          do i=1, ncomm
-           write(msg__, 112) whoami, i, communicators(i)%parent_id ; call wrndie(0,'(A)') msg__
-           write(msg__, '(" MULTICOM_LIST> ", 10I5)') &
-     & communicators(i)%nodes%i(1:communicators(i)%nodes%last) ; call wrndie(0,'(A)') msg__
+           write(msg___, 112) whoami, i, communicators(i)%parent_id ; write(0,'(A)') msg___
+           write(msg___, '(" MULTICOM_LIST> ", 10I5)') &
+     & communicators(i)%nodes%i(1:communicators(i)%nodes%last) ; write(0,'(A)') msg___
          enddo
        endif
  111 FORMAT (/A,' THE FOLLOWING COMMUNICATORS ARE DEFINED:')
@@ -504,16 +506,16 @@
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine multicom_barrier(comm_name)
        use multicom_aux
-       __DEP_OUTPUT
+       use output
        use mpi
 !
        implicit none
 !
-       character(len=(*)) :: comm_name
+       character(len=*) :: comm_name
 ! local vars
        character(len=18) :: whoami
-       integer :: c, m, s, l, error
- character(len=80) :: msg__
+       integer :: c, m, s, l, ierror
+ character(len=80) :: msg___
 !
        data whoami /' MULTICOM_BARRIER>'/
 !
@@ -530,32 +532,31 @@
 !
 ! cycle through existing communicator list
        l=5 ! length of communicator id string
-       if (comm_name(1:5).eq.'LOCAL') then
+!
+       if (comm_name(1:5).eq.'WORLD') then
+! this should not be necessary since 'GLOBAL' wraps 'WORLD'; primarily for debugging
+        c=MPI_COMM_WORLD; m=1;
+       elseif (comm_name(1:5).eq.'LOCAL') then
         c=MPI_COMM_LOCAL; s=SIZE_LOCAL; m=ME_LOCAL;
        elseif (comm_name(1:5).eq.'GROUP') then ! for backward compatibility
         c=MPI_COMM_LOCAL; s=SIZE_LOCAL; m=ME_LOCAL;
-       elseif (comm_name(1:5).eq.'ENSBL') then !!**CHARMM_ONLY**!##ENSEMBLE
-        c=MPI_COMM_ENSBL; s=SIZE_ENSBL; m=ME_ENSBL; !!**CHARMM_ONLY**!##ENSEMBLE
-       elseif (comm_name(1:5).eq.'STRNG') then !!**CHARMM_ONLY**!##STRINGM
-        c=MPI_COMM_STRNG; s=SIZE_STRNG; m=ME_STRNG; !!**CHARMM_ONLY**!##STRINGM
        elseif (comm_name(1:6).eq.'GLOBAL') then
         c=MPI_COMM_GLOBAL; s=SIZE_GLOBAL; m=ME_GLOBAL;
         l=6
-       elseif (comm_name(1:5).eq.'WORLD') then
-! this should not be necessary since 'GLOBAL' wraps 'WORLD'; primarily for debugging
-        c=MPI_COMM_WORLD; m=1;
+       elseif (comm_name(1:5).eq.'STRNG') then !!**CHARMM_ONLY**!##STRINGM
+        c=MPI_COMM_STRNG; s=SIZE_STRNG; m=ME_STRNG; !!**CHARMM_ONLY**!##STRINGM
        else
-        write(msg__,*)comm_name,' IS NOT IN USE. NOTHING DONE.';write(0,*) 'WARNING FROM: ',whoami,': ',msg__
+        write(msg___,*)comm_name,' IS NOT IN USE. NOTHING DONE.';write(0,*) 'WARNING FROM: ',whoami,': ',msg___
         return
        endif
 !
        if (first_me.eq.0) then
-         write(msg__, '(2A)') whoami, &
-     & ' CALLING MPI_BARRIER ON COMMUNICATOR "'//comm_name(1:l)//'".'; __PRINT(_MSGBUF)
+         write(msg___, '(2A)') whoami, &
+     & ' CALLING MPI_BARRIER ON COMMUNICATOR "',comm_name(1:l),'".'; write(0,'(A)') msg___
        endif
 !
        if (c.ne.MPI_COMM_NULL.and.m.ne.MPI_UNDEFINED) &
-     & call MPI_BARRIER(c, error)
+     & call MPI_BARRIER(c, ierror)
 !
        end subroutine multicom_barrier
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -563,12 +564,12 @@
 ! set various communicators based on the multicom 'database'
 ! note: all processors are meant to execute this routine
        use multicom_aux
-       __DEP_OUTPUT
+       use output
        use mpi
 !
        implicit none
 !
-       character(len=(*)) :: comm_name
+       character(len=*) :: comm_name
        integer :: commlist(:)
 ! local vars
        integer :: llist
@@ -579,7 +580,7 @@
        logical :: found=.false., foundg=.false.
 !
        integer :: flag(0:first_size-1), flagg(0:first_size-1)
- character(len=80) :: msg__
+ character(len=80) :: msg___
 !
        data whoami /' MULTICOM_SET>'/
 !
@@ -650,8 +651,6 @@
            elseif (comm_name(1:5).eq.'GROUP') then ! for backward compatibility
             MPI_COMM_LOCAL=c; SIZE_LOCAL=s; ME_LOCAL=m;
 !
-           elseif (comm_name(1:5).eq.'ENSBL') then !!**CHARMM_ONLY**!##ENSEMBLE
-            MPI_COMM_ENSBL=c; SIZE_ENSBL=s; ME_ENSBL=m !!**CHARMM_ONLY**!##ENSEMBLE
 !
            elseif (comm_name(1:5).eq.'STRNG') then !!**CHARMM_ONLY**!##STRINGM
             MPI_COMM_STRNG=c; SIZE_STRNG=s; ME_STRNG=m !!**CHARMM_ONLY**!##STRINGM
@@ -666,7 +665,7 @@
        enddo ! over commlist array (j)
 !
 !
-       if (kind(comm).eq.8) then
+       if (kind(itype).eq.8) then
         itype=MPI_INTEGER8
        else
         itype=MPI_INTEGER
@@ -684,8 +683,6 @@
          elseif (comm_name(1:5).eq.'GROUP') then ! for compatibility with older scripts
           MPI_COMM_LOCAL=c; SIZE_LOCAL=s; ME_LOCAL=m;
 !
-         elseif (comm_name(1:5).eq.'ENSBL') then !!**CHARMM_ONLY**!##ENSEMBLE
-          MPI_COMM_ENSBL=c; SIZE_ENSBL=s; ME_ENSBL=m !!**CHARMM_ONLY**!##ENSEMBLE
 !
          elseif (comm_name(1:5).eq.'STRNG') then !!**CHARMM_ONLY**!##STRINGM
           MPI_COMM_STRNG=c; SIZE_STRNG=s; ME_STRNG=m !!**CHARMM_ONLY**!##STRINGM
@@ -695,19 +692,19 @@
        llist=sum(min(flagg,1)) ! # nodes with successful assignments
        found=(llist.gt.0)
        if (.not.found) then
-        write(msg__,*)comm_name,' IS NOT IN USE ON REQUESTED NODES.';write(0,*) 'WARNING FROM: ',whoami,': ',msg__
+        write(msg___,*)comm_name,' IS NOT IN USE ON REQUESTED NODES.';write(0,*) 'WARNING FROM: ',whoami,': ',msg___
        else
         if (first_me.eq.0) then
-         write(msg__, '(2A)') whoami, &
+         write(msg___, '(2A)') whoami, &
      & ' ASSIGNED "'//comm_name(1:5)//                               &
-     & '" COMMUNICATOR ON THE FOLLOWING NODES:'; call wrndie(0,'(A)') msg__
-         write(msg__, '(" MULTICOM_SET> ",20I5)') &
+     & '" COMMUNICATOR ON THE FOLLOWING NODES:'; write(0,'(A)') msg___
+         write(msg___, '(" MULTICOM_SET> ",20I5)') &
      & PACK(flagg, flagg.gt.0)-1 ! node numbering starts from 0
-          call wrndie(0,'(A)') msg__
+          write(0,'(A)') msg___
          if (llist.lt.first_size) & ! warn that on some nodes, communicator is still unassigned
-     & write(msg__, '(2A,I5,A)') whoami, &
+     & write(msg___, '(2A,I5,A)') whoami, &
      & ' COMMUNICATOR "'//comm_name(1:5)//'" UNASSIGNED ON ',         &
-     & first_size-llist, ' NODES.' ; call wrndie(0,'(A)') msg__
+     & first_size-llist, ' NODES.' ; write(0,'(A)') msg___
         endif ! first_me
        endif ! .not.found
 !

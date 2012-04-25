@@ -34,6 +34,11 @@ MSG=-include $(ROOT)/source.msg
 CHMSG=-include $(ROOT)/charmm.msg
 GLOBALDEPS=$(ROOT)/source.defs $(ROOT)/source.msg
 
+MPI_HOME=/usr/local/mpich2-intel
+
+MPI_INCLUDE=-I $(MPI_HOME)/include
+MPI_LIB=-L $(MPI_HOME)/lib
+
 SOURCES=$(OBJS:%.o=%.F90)
 CHARMM_SOURCES=$(OBJS:%.o=%.src)
 
@@ -44,13 +49,14 @@ FPPFLAGS = -C
 .SUFFIXES: .o .F90 .a .H .h
 
 default : all
+all: $(OBJS)
 ########################### OBJECTS ##########################
 %.o:%.F90 $(LIBDEPS)
-	$(FC) $(FFLAGS) $(DEFS) $(LOCALDEFS) $(INCLUDES) $<
+	$(FC) $(FFLAGS) $(DEFS) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $<
 %.o:%.f $(LIBDEPS)
-	$(FC) $(FFLAGS) $(DEFS) $(LOCALDEFS) $(INCLUDES) $<
+	$(FC) $(FFLAGS) $(DEFS) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $<
 %.o:%.F $(LIBDEPS)
-	$(FC) $(FFLAGS) $(DEFS) $(LOCALDEFS) $(INCLUDES) $<
+	$(FC) $(FFLAGS) $(DEFS) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $<
 %.a:
 	$(AR) $(AFLAGS) $@ $(OBJS)
 ########################## SOURCE CODE #######################
@@ -61,6 +67,10 @@ default : all
 %.src:%.ftn $(LOCALDEPS) $(GLOBALDEPS) 
 	$(FPP) $(FPPFLAGS)         -D__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(CHMSG) -P $< > $@
 ######################### OTHER RULES ########################
+charmm: $(CHARMM_SOURCES)
+source: $(SOURCES)
+$(OBJS):$(SOURCES)
+
 force_look:
 	true
 mod:
@@ -72,3 +82,5 @@ lib: force_look
 libraries: $(OBJS) lib
 	for d in $(DIRS); do (cd $$d; $(MAKE) libraries); done
 .SILENT : force_look clean
+clean: 
+	rm -f *.mod $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(EXE)

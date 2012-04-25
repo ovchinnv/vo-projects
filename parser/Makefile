@@ -10,9 +10,5 @@ all: $(OBJS)
 parser.o : output
 output:
 	$(MAKE) -C $(ROOT)/output all modules
-$(OBJS):$(SOURCES)
-source: $(SOURCES)
-clean: 
-	rm -f *.mod $(SOURCES) $(OBJS)
 
 .PHONY : output

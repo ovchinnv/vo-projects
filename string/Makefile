@@ -6,10 +6,5 @@ LOCALDEPS=mpitype.def source.defs
 
 include $(ROOT)/Makefile.inc
 
-default: all
-all: $(OBJS)
-$(OBJS):$(SOURCES)
-charmm: $(CHARMM_SOURCES)
-source: $(SOURCES)
 clean: 
-	rm -f *.mod $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(EXE)
+	rm -f *.mod $(CHARMM_SOURCES) $(SOURCES) $(OBJS)

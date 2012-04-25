@@ -48,7 +48,7 @@ __CHARMM_ONLY##IF MULTICOM
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine multicom_main(comlyn, comlen)
 !      multicom command parser
-       use ilistparser
+       use parselist
 !
        __DEP_PARSER
        __DEP_OUTPUT
@@ -526,10 +526,10 @@ __CHARMM_ONLY##IF MULTICOM
 !
        implicit none
 !
-       character(len=(*)) :: comm_name
+       character(len=*) :: comm_name
 !    local vars
        character(len=18) :: whoami
-       int :: c, m, s, l, error
+       int :: c, m, s, l, ierror
  __DECLARE_MSGBUF
 !
        data whoami /' MULTICOM_BARRIER>'/
@@ -547,20 +547,27 @@ __CHARMM_ONLY##IF MULTICOM
 !
 !    cycle through existing communicator list
        l=5  ! length of communicator id string
-       if (comm_name(1:5).eq.'LOCAL') then
+!
+       if (comm_name(1:5).eq.'WORLD') then
+!    this should not be necessary since 'GLOBAL' wraps 'WORLD'; primarily for debugging
+        c=MPI_COMM_WORLD; m=1;
+#ifdef __BASIC
+       elseif (comm_name(1:5).eq.'LOCAL') then
         c=MPI_COMM_LOCAL; s=SIZE_LOCAL; m=ME_LOCAL;
        elseif (comm_name(1:5).eq.'GROUP') then ! for backward compatibility
         c=MPI_COMM_LOCAL; s=SIZE_LOCAL; m=ME_LOCAL;
-       elseif (comm_name(1:5).eq.'ENSBL') then                         !__CHARMM_ONLY##ENSEMBLE
-        c=MPI_COMM_ENSBL; s=SIZE_ENSBL; m=ME_ENSBL;                    !__CHARMM_ONLY##ENSEMBLE
-       elseif (comm_name(1:5).eq.'STRNG') then                         !__CHARMM_ONLY##STRINGM
-        c=MPI_COMM_STRNG; s=SIZE_STRNG; m=ME_STRNG;                    !__CHARMM_ONLY##STRINGM
        elseif (comm_name(1:6).eq.'GLOBAL') then
         c=MPI_COMM_GLOBAL; s=SIZE_GLOBAL; m=ME_GLOBAL;
         l=6
-       elseif (comm_name(1:5).eq.'WORLD') then
-!    this should not be necessary since 'GLOBAL' wraps 'WORLD'; primarily for debugging
-        c=MPI_COMM_WORLD; m=1;
+#ifdef __ENSEMBLE
+       elseif (comm_name(1:5).eq.'ENSBL') then                         !__CHARMM_ONLY##ENSEMBLE
+        c=MPI_COMM_ENSBL; s=SIZE_ENSBL; m=ME_ENSBL;                    !__CHARMM_ONLY##ENSEMBLE
+#endif
+#ifdef __STRING
+       elseif (comm_name(1:5).eq.'STRNG') then                         !__CHARMM_ONLY##STRINGM
+        c=MPI_COMM_STRNG; s=SIZE_STRNG; m=ME_STRNG;                    !__CHARMM_ONLY##STRINGM
+#endif
+#endif
        else
         __WARN(whoami,comm_name,' IS NOT IN USE. NOTHING DONE.')
         return
@@ -568,11 +575,11 @@ __CHARMM_ONLY##IF MULTICOM
 !
        if (first_me.eq.0) then
          write(_MSGBUF, '(2A)') whoami,                                 &
-     &    ' CALLING MPI_BARRIER ON COMMUNICATOR "'//comm_name(1:l)//'".'; __PRINT(_MSGBUF)
+     &    ' CALLING MPI_BARRIER ON COMMUNICATOR "',comm_name(1:l),'".'; __PRINT(_MSGBUF)
        endif
 !
        if (c.ne.MPI_COMM_NULL.and.m.ne.MPI_UNDEFINED)                   &
-     & call MPI_BARRIER(c, error)
+     & call MPI_BARRIER(c, ierror)
 !
        end subroutine multicom_barrier
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -585,7 +592,7 @@ __CHARMM_ONLY##IF MULTICOM
 !
        implicit none
 !
-       character(len=(*)) :: comm_name
+       character(len=*) :: comm_name
        int :: commlist(:)
 !    local vars
        int :: llist
@@ -662,19 +669,25 @@ __CHARMM_ONLY##IF MULTICOM
 !
            flag(node_id)=node_id+1 ! this flag means that a communicator assignment is successful
 !
+#ifdef __BASIC
            if (comm_name(1:5).eq.'LOCAL') then
             MPI_COMM_LOCAL=c; SIZE_LOCAL=s; ME_LOCAL=m;
            elseif (comm_name(1:5).eq.'GROUP') then     ! for backward compatibility
             MPI_COMM_LOCAL=c; SIZE_LOCAL=s; ME_LOCAL=m;
 !
+#ifdef __ENSEMBLE
            elseif (comm_name(1:5).eq.'ENSBL') then                         !__CHARMM_ONLY##ENSEMBLE
             MPI_COMM_ENSBL=c; SIZE_ENSBL=s; ME_ENSBL=m                     !__CHARMM_ONLY##ENSEMBLE
+#endif
 !
+#ifdef __STRING
            elseif (comm_name(1:5).eq.'STRNG') then                         !__CHARMM_ONLY##STRINGM
             MPI_COMM_STRNG=c; SIZE_STRNG=s; ME_STRNG=m                     !__CHARMM_ONLY##STRINGM
+#endif
            else
             flag(node_id)=0
            endif
+#endif
           endif ! lcomm
 !
          endif ! first_me
@@ -683,7 +696,7 @@ __CHARMM_ONLY##IF MULTICOM
        enddo ! over commlist array (j)
 !
 !
-#if __CHARMM
+#ifdef __CHARMM
        itype=MPI_INTEGER      !__CHARMM_ONLY##.not.INTEGER8
        itype=MPI_INTEGER8     !__CHARMM_ONLY##INTEGER8
 #else
@@ -701,17 +714,23 @@ __CHARMM_ONLY##IF MULTICOM
 !     communicator to null, size to 1, and me to MPI_UNDEFINED:
        c=MPI_COMM_NULL; s=1; m=MPI_UNDEFINED
        if (flag(first_me).eq.0) then
+#ifdef __BASIC
          if (comm_name(1:5).eq.'LOCAL') then
           MPI_COMM_LOCAL=c; SIZE_LOCAL=s; ME_LOCAL=m;
          elseif (comm_name(1:5).eq.'GROUP') then         ! for compatibility with older scripts
           MPI_COMM_LOCAL=c; SIZE_LOCAL=s; ME_LOCAL=m;
 !
+#ifdef __ENSEMBLE
          elseif (comm_name(1:5).eq.'ENSBL') then                         !__CHARMM_ONLY##ENSEMBLE
           MPI_COMM_ENSBL=c; SIZE_ENSBL=s; ME_ENSBL=m                     !__CHARMM_ONLY##ENSEMBLE
+#endif
 !
+#ifdef __STRING
          elseif (comm_name(1:5).eq.'STRNG') then                         !__CHARMM_ONLY##STRINGM
           MPI_COMM_STRNG=c; SIZE_STRNG=s; ME_STRNG=m                     !__CHARMM_ONLY##STRINGM
+#endif
          endif
+#endif
        endif ! lcomm
 !
        llist=sum(min(flagg,1)) ! # nodes with successful assignments
