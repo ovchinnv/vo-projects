@@ -1,6 +1,7 @@
 ! **********************************************************************!
-! This source file was was generated automatically, (specifically for !
-! the CHARMM) from a master source code tree, using a preprocessor. !
+! This source file was was generated automatically from a master source !
+! code tree, which may or may not be distributed with this code, !
+! because it is up to the distributor, and not up to me. !
 ! If you edit this file (rather than the master source file) !
 ! your changes will be lost if another pull from the master tree occurs.!
 ! In case you are wondering why, this approach makes it possible for !
@@ -12,7 +13,7 @@
 ! reparametrize string
 ! open file for iput/output
 !
-##IF STRINGM
+!**CHARMM_ONLY**!##IF STRINGM
 !
       subroutine compute_work_fd(x,xbc0,xbc1,f,n,work)
       use multicom_aux
@@ -20,23 +21,19 @@
 !
       implicit none
       integer :: n
-      real(chm_real) :: x(n), f(n)
-      real(chm_real) :: work(:)
-      real(chm_real), optional :: xbc0(n), xbc1(n)
+      real*8 :: x(n), f(n)
+      real*8 :: work(:)
+      real*8, optional :: xbc0(n), xbc1(n)
 ! locals
       integer :: fbc0=0, fbc1=0 ! fixed bc local flags
       integer ierror, nall, i, nrep, me, nensem
 !
 ! local arrays (f90)
-      real(chm_real), allocatable :: xall(:,:), fall(:,:)
-      real(chm_real), allocatable :: dxall(:,:), fall_c(:,:)
-      real(chm_real), allocatable :: wme(:)
+      real*8, allocatable :: xall(:,:), fall(:,:)
+      real*8, allocatable :: dxall(:,:), fall_c(:,:)
+      real*8, allocatable :: wme(:)
       integer*4 :: s_disp(SIZE_STRNG), r_disp(SIZE_STRNG), &
      & s_count(SIZE_STRNG), r_count(SIZE_STRNG) ! have to declare these as integer*4 -- it's a problem!
- integer :: mpifloat=MPI_REAL !##SINGLE
- integer :: mpifloat=MPI_REAL8 !##.not.SINGLE
- integer :: mpi_int=MPI_INTEGER !##.not.INTEGER8
- integer :: mpi_int=MPI_INTEGER8 !##INTEGER8
 ! begin
 ! bail if not a replica root; will syncronize slave nodes elsewhere
       if (MPI_COMM_STRNG.eq.MPI_COMM_NULL) return
@@ -67,11 +64,11 @@
       enddo
       r_count=s_count(me+1)
 !
-      call mpi_alltoallv(x,s_count,s_disp,mpifloat, &
-     & xall,r_count,r_disp,mpifloat, &
+      call mpi_alltoallv(x,s_count,s_disp,MPI_REAL, &
+     & xall,r_count,r_disp,MPI_REAL, &
      & MPI_COMM_STRNG, ierror)
-      call mpi_alltoallv(f,s_count,s_disp,mpifloat, &
-     & fall,r_count,r_disp,mpifloat, &
+      call mpi_alltoallv(f,s_count,s_disp,MPI_REAL, &
+     & fall,r_count,r_disp,MPI_REAL, &
      & MPI_COMM_STRNG, ierror)
 ! take care of BC as well
       if (fbc0.eq.1) &
@@ -94,7 +91,7 @@
       enddo
 !
 ! reduce work
-      call mpi_allreduce(wme, work, nrep, mpifloat, &
+      call mpi_allreduce(wme, work, nrep, MPI_REAL, &
      & MPI_SUM, MPI_COMM_STRNG, ierror)
 ! done!
 !
@@ -118,38 +115,34 @@
       implicit none
 !
       integer n
-      real(chm_real) :: rin(n), rout(n), wgt(n)
+      real*8 :: rin(n), rout(n), wgt(n)
       integer :: interp_method
-      real(chm_real) :: d_arclength(:), curvature(:)
-      real(chm_real), optional :: r_bc_0(n), r_bc_1(n) ! optional fixed bc data
+      real*8 :: d_arclength(:), curvature(:)
+      real*8, optional :: r_bc_0(n), r_bc_1(n) ! optional fixed bc data
 !
       integer, parameter :: linear=1, spline=2, bspline=3
 !
 ! locals
-      real(chm_real) :: rin_w(n) ! weighted by wgt
-      real(chm_real) :: swgt(n) ! square root of weights
+      real*8 :: rin_w(n) ! weighted by wgt
+      real*8 :: swgt(n) ! square root of weights
       integer :: fbc0=0, fbc1=0 ! fixed bc local flags
       integer :: ierror, nall, i, j, nrep, me, nensem
 !
 ! local arrays (f90)
-      real(chm_real), allocatable :: rall(:,:), drall(:,:), dr2all(:,:)
+      real*8, allocatable :: rall(:,:), drall(:,:), dr2all(:,:)
 !
       integer*4 :: s_disp(SIZE_STRNG), r_disp(SIZE_STRNG), &
      & s_count(SIZE_STRNG), r_count(SIZE_STRNG) ! have to declare these as integer*4 -- it's a problem!
-      real(chm_real), allocatable :: rr(:), rrpp(:), dsn(:), ds(:), ds2me(:), &
+      real*8, allocatable :: rr(:), rrpp(:), dsn(:), ds(:), ds2me(:), &
      & ds2all(:), s(:), t(:), curv_me(:)
-      real(chm_real) :: dum, wrs
- integer :: mpifloat=MPI_REAL !##SINGLE
- integer :: mpifloat=MPI_REAL8 !##.not.SINGLE
- integer :: mpi_int=MPI_INTEGER !##.not.INTEGER8
- integer :: mpi_int=MPI_INTEGER8 !##INTEGER8
+      real*8 :: dum, wrs
 !
       interface ! to linear interpolation routine
        subroutine linear_interp(xin,yin,nin,xout,yout,nout,dydxout)
        integer :: nin, nout
-       real(chm_real) :: xin(nin), yin(nin), xout(nout), yout(nout)
-       real(chm_real), optional :: dydxout(nout) ! tangent computation
-       real(chm_real) :: dydx(nout)
+       real*8 :: xin(nin), yin(nin), xout(nout), yout(nout)
+       real*8, optional :: dydxout(nout) ! tangent computation
+       real*8 :: dydx(nout)
        end subroutine linear_interp
       end interface
 !
@@ -188,8 +181,8 @@
       wrs=1./sum(wgt)
       swgt=sqrt(wgt)*wrs ! no checking for nonnegative numbers
       rin_w=rin*swgt
-      call mpi_alltoallv(rin_w,s_count,s_disp,mpifloat, &
-     & rall,r_count,r_disp,mpifloat, &
+      call mpi_alltoallv(rin_w,s_count,s_disp,MPI_REAL, &
+     & rall,r_count,r_disp,MPI_REAL, &
      & MPI_COMM_STRNG, ierror)
 ! take care of BC as well
       if (fbc0.eq.1) &
@@ -208,7 +201,7 @@
       drall=rall(:,2:nrep)-rall(:,1:nrep-1)
       ds2me=sum(drall**2,1)
 ! reduce ds2
-      call mpi_allreduce(ds2me, ds2all, nrep-1, mpifloat, &
+      call mpi_allreduce(ds2me, ds2all, nrep-1, MPI_REAL, &
      & MPI_SUM, MPI_COMM_STRNG, ierror)
 ! now can compute arclength
       s(1)=0
@@ -232,7 +225,7 @@
 ! compute magnitude
       curv_me=sum(dr2all**2,1)
 ! reduce from all cpus
-      call mpi_allreduce(curv_me, curvature, nrep-2, mpifloat, &
+      call mpi_allreduce(curv_me, curvature, nrep-2, MPI_REAL, &
      & MPI_SUM, MPI_COMM_STRNG, ierror)
 ! take square root
       curvature=sqrt(curvature)
@@ -269,11 +262,11 @@
         rall(i,:)=rr
        enddo
       else
-        call call wrndie(0 , '<INTERP_DRIVER>' , 'NO VALID INTERPOLATION METHODS SELECTED')
+        call write(0,*) 'WARNING FROM: ','<INTERP_DRIVER>',': ','NO VALID INTERPOLATION METHODS SELECTED'
       endif
 !ccccc now scatter new coordinates into xout,yout,zout
-      call mpi_alltoallv(rall,r_count,r_disp,mpifloat, &
-     & rout,s_count,s_disp,mpifloat, &
+      call mpi_alltoallv(rall,r_count,r_disp,MPI_REAL, &
+     & rout,s_count,s_disp,MPI_REAL, &
      & MPI_COMM_STRNG, ierror)
 ! note: rout obtained in this way is scaled by wgt
 ! we need to unscale it:
@@ -293,62 +286,58 @@
      & drout, & ! optional computation of tangent
      & r_bc_0, r_bc_1) ! provide additional arrays for fixed bc
 !
-      use stream
+      use output
       use multicom_aux
       use mpi
 !
       implicit none
 !
       integer :: n
-      real(chm_real) :: rin(n), rout(n), wgt(n)
+      real*8 :: rin(n), rout(n), wgt(n)
       integer, intent(in) :: interp_method
       integer :: max_iterations
-      real(chm_real) :: tol, d_arclength(:), curvature(:)
-      real(chm_real), optional :: dst_cutoff ! wavenumber cutoff for the sine transform
-      real(chm_real), optional :: drout(n) ! optional computation of tangent
-      real(chm_real) , optional :: r_bc_0(n), r_bc_1(n) ! optional fixed bc data
+      real*8 :: tol, d_arclength(:), curvature(:)
+      real*8, optional :: dst_cutoff ! wavenumber cutoff for the sine transform
+      real*8, optional :: drout(n) ! optional computation of tangent
+      real*8 , optional :: r_bc_0(n), r_bc_1(n) ! optional fixed bc data
 !
       integer, parameter :: linear=1, spline=2, bspline=3, dst=4
 !
 ! locals
-      real(chm_real) :: rin_w(n)
-      real(chm_real) :: swgt(n)
+      real*8 :: rin_w(n)
+      real*8 :: swgt(n)
       integer :: fbc0=0, fbc1=0 ! fixed bc local flags
       integer :: ierror, nall, i, j, nrep, me, n_me, nensem
 !
 ! fine-grid interpolation
       integer :: nfine
-      real(chm_real), pointer, dimension(:) :: sfine, tfine
+      real*8, pointer, dimension(:) :: sfine, tfine
 !
 ! local arrays (f90)
-      real(chm_real), allocatable :: rall(:,:), drall(:,:), dr2all(:,:)
-      real(chm_real), pointer :: rfine(:,:), drfine(:,:)
-      real(chm_real), allocatable :: rh(:) ! for sine transform
-      real(chm_real), allocatable :: sinvec(:,:) ! for sine transform
-      real(chm_real), allocatable :: sinvec_fine(:,:) ! for sine tranform
+      real*8, allocatable :: rall(:,:), drall(:,:), dr2all(:,:)
+      real*8, pointer :: rfine(:,:), drfine(:,:)
+      real*8, allocatable :: rh(:) ! for sine transform
+      real*8, allocatable :: sinvec(:,:) ! for sine transform
+      real*8, allocatable :: sinvec_fine(:,:) ! for sine tranform
 !
       integer*4 :: s_disp(SIZE_STRNG), r_disp(SIZE_STRNG), &
      & s_count(SIZE_STRNG), r_count(SIZE_STRNG) ! have to declare these as integer*4 -- it's a problem!
 !
-      real(chm_real), allocatable :: rr(:), rrpp(:), rrtan(:), &
+      real*8, allocatable :: rr(:), rrpp(:), rrtan(:), &
      & ds(:), s(:), tuni(:), tnew(:), & ! for sine transform
      & curv_me(:) ! local contribution to curvature
 !
-      real(chm_real), pointer, dimension(:) :: rrfine, ds2me_fine, &
+      real*8, pointer, dimension(:) :: rrfine, ds2me_fine, &
      & dsfine, ds2all_fine
-! real(chm_real) :: rrfine(nfine), ds2me_fine(nfine-1),
+! real*8 :: rrfine(nfine), ds2me_fine(nfine-1),
 ! & dsfine(nfine-1), ds2all_fine(nfine-1)
 !
       integer :: iteration
       integer :: npass ! for sine transform
-      real(chm_real) :: def, dum
-      real(chm_real), parameter :: pi=3.14159265358979323846
-      real(chm_real) :: r0, r1, wrs
+      real*8 :: def, dum
+      real*8, parameter :: pi=3.14159265358979323846
+      real*8 :: r0, r1, wrs
  character(len=80) :: msg__
- integer :: mpifloat=MPI_REAL !##SINGLE
- integer :: mpifloat=MPI_REAL8 !##.not.SINGLE
- integer :: mpi_int=MPI_INTEGER !##.not.INTEGER8
- integer :: mpi_int=MPI_INTEGER8 !##INTEGER8
       character(len=19) :: whoami
       data whoami /' INTERP_DRIVER_SCI>'/
 !
@@ -356,9 +345,9 @@
        subroutine linear_interp(xin,yin,nin,xout,yout,nout,dydxout)
        implicit none
        integer :: nin, nout
-       real(chm_real) :: xin(nin), yin(nin), xout(nout), yout(nout)
-       real(chm_real), optional :: dydxout(nout) ! tangent computation
-       real(chm_real) :: dydx(nout)
+       real*8 :: xin(nin), yin(nin), xout(nout), yout(nout)
+       real*8, optional :: dydxout(nout) ! tangent computation
+       real*8 :: dydx(nout)
        end subroutine linear_interp
       end interface
 !
@@ -386,7 +375,7 @@
       if (interp_method.eq.dst) then
        if (.not. present(dst_cutoff)) dst_cutoff=0.5 ! by default, only the lower half of wn kept
        if (dst_cutoff.gt.1) &
-       call wrndie(0 , whoami , 'SINE TRANSFORM CUTOFF > 1.0; WILL SET TO 0.5');
+       write(0,*) 'WARNING FROM: ',whoami,': ','SINE TRANSFORM CUTOFF > 1.0; WILL SET TO 0.5';
        npass=min(nrep,ceiling(nrep*dst_cutoff))
        allocate(sinvec(nrep,nrep))
        allocate(rh(nrep)) ! allocate wavenumber array
@@ -413,9 +402,10 @@
       swgt=sqrt(wgt)*wrs
       rin_w=rin*swgt
 !
-      call mpi_alltoallv(rin_w,s_count,s_disp,mpifloat, &
-     & rall,r_count,r_disp,mpifloat, &
+      call mpi_alltoallv(rin_w,s_count,s_disp,MPI_REAL, &
+     & rall,r_count,r_disp,MPI_REAL, &
      & MPI_COMM_STRNG, ierror)
+
 ! take care of BC as well
       if (fbc0.eq.1) &
      & rall(1:r_count(1),1)= &
@@ -485,7 +475,8 @@
         rfine(i,:)=rrfine ! copy to fine array
        enddo ! loop over variables
       else
-        call wrndie(0 , whoami , 'NO VALID INTERPOLATION METHODS SELECTED')
+        write(0,*) 'WARNING FROM: ',whoami,': ','NO VALID INTERPOLATION METHODS SELECTED'
+
       endif
 ! now we have a finely spaced path
 !
@@ -494,7 +485,7 @@
 !
       ds2me_fine=sum(drfine**2,1)
 ! reduce ds2
-      call mpi_allreduce(ds2me_fine, ds2all_fine, nfine-1, mpifloat, &
+      call mpi_allreduce(ds2me_fine, ds2all_fine, nfine-1, MPI_REAL, &
      & MPI_SUM, MPI_COMM_STRNG, ierror)
 !
 ! compute (fine) arclength s
@@ -517,7 +508,7 @@
       dr2all(:,1:nrep-2)=dr2all(:,2:nrep-1)-dr2all(:,1:nrep-2)
       curv_me=sum(dr2all**2,1)
 ! reduce from all cpus
-      call mpi_allreduce(curv_me, curvature, nrep-2, mpifloat, &
+      call mpi_allreduce(curv_me, curvature, nrep-2, MPI_REAL, &
      & MPI_SUM, MPI_COMM_STRNG, ierror)
 ! take square root and divide by ds^2
       curvature=sqrt(curvature)/ds(1:nrep-2)/ds(2:nrep-1)
@@ -585,12 +576,12 @@
         rfine(i,:)=rrfine ! copy to fine array
        enddo ! loop over variables
        else
-        call wrndie(0 , whoami , 'NO VALID INTERPOLATION METHODS SELECTED')
+        write(0,*) 'WARNING FROM: ',whoami,': ','NO VALID INTERPOLATION METHODS SELECTED'
        endif
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccc
        drfine=rfine(:,2:nfine)-rfine(:,1:nfine-1)
        ds2me_fine=sum(drfine**2,1)
-       call mpi_allreduce(ds2me_fine, ds2all_fine, nfine-1, mpifloat, &
+       call mpi_allreduce(ds2me_fine, ds2all_fine, nfine-1, MPI_REAL, &
      & MPI_SUM, MPI_COMM_STRNG, ierror)
 !
        sfine(1)=0
@@ -608,7 +599,7 @@
        dr2all(:,1:nrep-2)=dr2all(:,2:nrep-1)-dr2all(:,1:nrep-2)
        curv_me=sum(dr2all**2,1)
 ! reduce from all cpus
-       call mpi_allreduce(curv_me, curvature, nrep-2, mpifloat, &
+       call mpi_allreduce(curv_me, curvature, nrep-2, MPI_REAL, &
      & MPI_SUM, MPI_COMM_STRNG, ierror)
 ! take square root and divide by ds^2
        curvature=sqrt(curvature)/ds(1:nrep-2)/ds(2:nrep-1)
@@ -616,15 +607,15 @@
       enddo
 ! print message
       if (prnlev.ge.4) then
-       write(msg__,666) whoami, iteration, def; write (OUTU,'(A)') msg__
+       write(msg__,666) whoami, iteration, def; write(0,'(A)') msg__
  666 format(A,' ',I4,' ITERATIONS. DEF=',F10.5)
       endif
 !
 ! save arclength to pass back to calling routine
       d_arclength=ds
 !ccccc now scatter new coordinates into rout
-      call mpi_alltoallv(rall,r_count,r_disp,mpifloat, &
-     & rout,s_count,s_disp,mpifloat, &
+      call mpi_alltoallv(rall,r_count,r_disp,MPI_REAL, &
+     & rout,s_count,s_disp,MPI_REAL, &
      & MPI_COMM_STRNG, ierror)
 ! note: rall is scaled by wgt, so we need to unscale rout:
       rout=rout/swgt
@@ -632,8 +623,8 @@
 ! drall is computed inside the iteration loop; if there were no
 ! iterations, leave drout untouched; (also do nothing if drout not passed in)
       if (present(drout).and.(iteration.gt.0)) then
-       call mpi_alltoallv(drall,r_count,r_disp,mpifloat, &
-     & drout,s_count,s_disp,mpifloat, &
+       call mpi_alltoallv(drall,r_count,r_disp,MPI_REAL, &
+     & drout,s_count,s_disp,MPI_REAL, &
      & MPI_COMM_STRNG, ierror)
 ! note: drout is scaled by wgt; to unscale, uncomment below
 ! drout=drout/swgt
@@ -641,6 +632,7 @@
        dum=dot_product(drout,drout)
        drout=drout/sqrt(dum)
       endif
+
 ! done!
 !cccccccccccccccccccccccccccccccccccccccccccccccccc
       deallocate(rall, drall, dr2all, rfine, drfine)
@@ -648,6 +640,7 @@
       deallocate(tfine,sfine,rrfine,ds2me_fine,dsfine,ds2all_fine)
       if (interp_method.eq.dst) &
      & deallocate(sinvec, sinvec_fine, rh)
+
       end subroutine interp_driver_sci
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -660,70 +653,67 @@
      & drout, & ! optional computation of tangent
      & r_bc_0, r_bc_1) ! provide additional arrays for fixed bc
 !
-      use stream
+      use output
       use multicom_aux
       use mpi
 !
       implicit none
 !
       integer :: n
-      real(chm_real) :: rin(n), rout(n), wgt(n)
+      real*8 :: rin(n), rout(n), wgt(n)
       integer, intent(in) :: interp_method
       integer :: max_iterations
-      real(chm_real) :: tol, d_arclength(:), curvature(:)
-      real(chm_real), optional :: dst_cutoff ! wavenumber cutoff for the sine transform
-      real(chm_real), optional :: drout(n) ! optional computation of tangent
-      real(chm_real) , optional :: r_bc_0(n), r_bc_1(n) ! optional fixed bc data
+      real*8 :: tol, d_arclength(:), curvature(:)
+      real*8, optional :: dst_cutoff ! wavenumber cutoff for the sine transform
+      real*8, optional :: drout(n) ! optional computation of tangent
+      real*8 , optional :: r_bc_0(n), r_bc_1(n) ! optional fixed bc data
 !
       integer, parameter :: linear=1, spline=2, bspline=3, dst=4
 !
 ! locals
-      real(chm_real) :: rin_w(n)
-      real(chm_real) :: swgt(n)
+      real*8 :: rin_w(n)
+      real*8 :: swgt(n)
       integer :: fbc0=0, fbc1=0 ! fixed bc local flags
       integer :: ierror, nall, i, j, nrep, me, n_me, nensem
       logical :: qroot
 !
 ! fine-grid interpolation
       integer :: nfine
-      real(chm_real), allocatable, dimension(:) :: sfine, tfine
+      real*8, allocatable, dimension(:) :: sfine, tfine
 !
 ! local arrays (f90)
-      real(chm_real), allocatable :: rall(:,:), drall(:,:), dr2all(:,:)
-      real(chm_real), allocatable :: rfine(:,:), drfine(:,:)
-      real(chm_real), allocatable :: rh(:) ! for sine transform
-      real(chm_real), allocatable :: sinvec(:,:) ! for sine transform
-      real(chm_real), allocatable :: sinvec_fine(:,:) ! for sine tranform
+      real*8, allocatable :: rall(:,:), drall(:,:), dr2all(:,:)
+      real*8, allocatable :: rfine(:,:), drfine(:,:)
+      real*8, allocatable :: rh(:) ! for sine transform
+      real*8, allocatable :: sinvec(:,:) ! for sine transform
+      real*8, allocatable :: sinvec_fine(:,:) ! for sine tranform
 !
       integer*4 :: s_disp(SIZE_STRNG), r_disp(SIZE_STRNG), &
      & s_count(SIZE_STRNG), r_count(SIZE_STRNG) ! have to declare these as integer*4 -- it's a problem!
 !
-      real(chm_real), allocatable :: rr(:), rrpp(:), rrtan(:), &
+      real*8, allocatable :: rr(:), rrpp(:), rrtan(:), &
      & ds(:), s(:), tuni(:), tnew(:) ! for sine transform
 !
-      real(chm_real), allocatable, dimension(:) :: rrfine, &
+      real*8, allocatable, dimension(:) :: rrfine, &
      & dsfine, ds2_fine
 !
       integer :: iteration
       integer :: npass ! for sine transform
-      real(chm_real) :: def, dum
-      real(chm_real), parameter :: pi=3.14159265358979323846
-      real(chm_real) :: r0, r1, wrs
+      real*8 :: def, dum
+      real*8, parameter :: pi=3.14159265358979323846
+      real*8 :: r0, r1, wrs
       integer :: mpi_int
  character(len=80) :: msg__
- integer :: mpifloat=MPI_REAL !##SINGLE
- integer :: mpifloat=MPI_REAL8 !##.not.SINGLE
- integer :: mpi_int=MPI_INTEGER !##.not.INTEGER8
- integer :: mpi_int=MPI_INTEGER8 !##INTEGER8
+
       character(len=24) :: whoami
       data whoami /' INTERP_DRIVER_SCI_ROOT>'/
 !
       interface ! to linear interpolation routine
        subroutine linear_interp(xin,yin,nin,xout,yout,nout,dydxout)
        integer :: nin, nout
-       real(chm_real) :: xin(nin), yin(nin), xout(nout), yout(nout)
-       real(chm_real), optional :: dydxout(nout) ! tangent computation
-       real(chm_real) :: dydx(nout)
+       real*8 :: xin(nin), yin(nin), xout(nout), yout(nout)
+       real*8, optional :: dydxout(nout) ! tangent computation
+       real*8 :: dydx(nout)
        end subroutine linear_interp
       end interface
 !
@@ -751,7 +741,7 @@
       if (interp_method.eq.dst) then
        if (.not. present(dst_cutoff)) dst_cutoff=0.5 ! by default, only the lower half of wn kept
        if (dst_cutoff.gt.1) &
-     & call wrndie(0 , whoami , 'SINE TRANSFORM CUTOFF > 1.0; WILL SET TO 0.5')
+     & write(0,*) 'WARNING FROM: ',whoami,': ','SINE TRANSFORM CUTOFF > 1.0; WILL SET TO 0.5'
        npass=min(nrep,ceiling(nrep*dst_cutoff))
        allocate(sinvec(nrep,nrep))
        allocate(rh(nrep)) ! allocate wavenumber array
@@ -773,7 +763,7 @@
       rin_w=rin*swgt
 !
 ! gather all data on root
-      call mpi_gather(rin_w,n,mpifloat,rall(1,fbc0+1),n,mpifloat, &
+      call mpi_gather(rin_w,n,MPI_REAL,rall(1,fbc0+1),n,MPI_REAL, &
      & 0,MPI_COMM_STRNG, ierror)
 !
 ! the rest of reparametrization done by root
@@ -837,7 +827,7 @@
          rfine(i,:)=rrfine ! copy to fine array
         enddo ! loop over variables
        else
-        call wrndie(0 , whoami , 'NO VALID INTERPOLATION METHODS SELECTED')
+        write(0,*) 'WARNING FROM: ',whoami,': ','NO VALID INTERPOLATION METHODS SELECTED'
 !
        endif
 ! now we have a finely spaced path
@@ -930,7 +920,7 @@
           rfine(i,:)=rrfine ! copy to fine array
          enddo ! loop over variables
         else
-         call wrndie(0 , whoami , 'NO VALID INTERPOLATION METHODS SELECTED')
+         write(0,*) 'WARNING FROM: ',whoami,': ','NO VALID INTERPOLATION METHODS SELECTED'
         endif
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccc
         drfine=rfine(:,2:nfine)-rfine(:,1:nfine-1)
@@ -954,7 +944,7 @@
        enddo ! convergence loop
 ! print message
        if (prnlev.ge.4) then
-        write(msg__,666) whoami, iteration, def; write (OUTU,'(A)') msg__
+        write(msg__,666) whoami, iteration, def; write(0,'(A)') msg__
  666 format(A,' ',I4,' ITERATIONS. DEF=',F10.5)
        endif
 !
@@ -962,8 +952,9 @@
        d_arclength=ds
 !
       endif ! qroot
+
 !ccccc now scatter new coordinates into rout
-      call mpi_scatter(rall(1,fbc0+1), n, mpifloat, rout, n ,mpifloat, &
+      call mpi_scatter(rall(1,fbc0+1), n, MPI_REAL, rout, n ,MPI_REAL, &
      & 0, MPI_COMM_STRNG, ierror)
 ! note: may want to broadcast curvature and arclength
 !
@@ -979,7 +970,7 @@
        call mpi_bcast(iteration,1,mpi_int,0,MPI_COMM_STRNG,ierror)
        if (iteration.gt.0) then
 ! write(0,*) 'sending drout'
-        call mpi_scatter(drall(1,fbc0), n, mpifloat, drout, n ,mpifloat, &
+        call mpi_scatter(drall(1,fbc0), n, MPI_REAL, drout, n ,MPI_REAL, &
      & 0, MPI_COMM_STRNG, ierror)
 ! note: drout is scaled by wgt; to unscale, uncomment below
 ! drout=drout/swgt
@@ -988,6 +979,7 @@
         drout=drout/sqrt(dum)
        endif
       endif ! drout present
+
 ! done!
 !cccccccccccccccccccccccccccccccccccccccccccccccccc
       deallocate(rall, drall, dr2all, rfine, drfine)
@@ -995,6 +987,7 @@
       deallocate(tfine,sfine,rrfine,ds2_fine,dsfine)
       if (interp_method.eq.dst) &
      & deallocate(sinvec, sinvec_fine, rh)
+
 !
 ! write(me_global+100,*) present(drout), rout
 ! close(me_global+100)
@@ -1016,36 +1009,33 @@
       implicit none
 !
       integer :: n
-      real(chm_real) :: rin(n), rout(n), wgt(n)
-      real(chm_real) :: d_arclength(:), curvature(:)
-      real(chm_real), optional :: drout(n) ! optional computation of tangent
-      real(chm_real) , optional :: r_bc_0(n), r_bc_1(n) ! optional fixed bc data
+      real*8 :: rin(n), rout(n), wgt(n)
+      real*8 :: d_arclength(:), curvature(:)
+      real*8, optional :: drout(n) ! optional computation of tangent
+      real*8 , optional :: r_bc_0(n), r_bc_1(n) ! optional fixed bc data
 !
 ! locals
-      real(chm_real) :: rin_w(n)
-      real(chm_real) :: swgt(n)
+      real*8 :: rin_w(n)
+      real*8 :: swgt(n)
       integer :: fbc0=0, fbc1=0 ! fixed bc local flags
       integer :: ierror, nall, i, j, nrep, me, nensem, im, iteration
       logical :: qroot
 !
 ! local arrays (f90)
-      real(chm_real), allocatable :: rall(:,:), drall(:,:), &
+      real*8, allocatable :: rall(:,:), drall(:,:), &
      & rall_new(:,:), drall_new(:,:), &
      & ds2_new(:), cons(:), rhs(:), alpha(:), &
      & dalpha(:)
-      real(chm_real), pointer :: a(:,:), ao(:), am(:), ap(:)
+      real*8, pointer :: a(:,:), ao(:), am(:), ap(:)
 !
       integer*4 :: s_disp(SIZE_STRNG), r_disp(SIZE_STRNG), &
      & s_count(SIZE_STRNG), r_count(SIZE_STRNG) ! have to declare these as integer*4 -- it's a problem!
 !
-      real(chm_real) :: r0, r1, wrs, err, dum
-      real(chm_real), parameter :: errtol = 1e-8
+      real*8 :: r0, r1, wrs, err, dum
+      real*8, parameter :: errtol = 1e-8
       integer , parameter :: max_iterations = 200
 !
- integer :: mpifloat=MPI_REAL !##SINGLE
- integer :: mpifloat=MPI_REAL8 !##.not.SINGLE
- integer :: mpi_int=MPI_INTEGER !##.not.INTEGER8
- integer :: mpi_int=MPI_INTEGER8 !##INTEGER8
+
 !
       character(len=21 :: whoami
       data whoami /' INTERP_LINEAR_EXACT>'/
@@ -1081,7 +1071,7 @@
       rin_w=rin*swgt
 !
 ! gather all data on root
-      call mpi_gather(rin_w,n,mpifloat,rall(1,fbc0+1),n,mpifloat, &
+      call mpi_gather(rin_w,n,MPI_REAL,rall(1,fbc0+1),n,MPI_REAL, &
      & 0,MPI_COMM_STRNG, ierror)
 !
 ! the rest of reparametrization done by root
@@ -1148,7 +1138,7 @@
         if (err.lt.errtol) then
          exit
         elseif (iteration.gt.max_iterations) then
- call wrndie(0 , whoami , 'NO CONVERGENCE AFTER MAXIMUM NUMBER OF ITERATIONS.')
+ write(0,*) 'WARNING FROM: ',whoami,': ','NO CONVERGENCE AFTER MAXIMUM NUMBER OF ITERATIONS.'
 ! close(600+ME_GLOBAL)
          rall=rall_new
          exit
@@ -1177,7 +1167,7 @@
       endif ! qroot
 !
 !ccccc now scatter new coordinates into rout
-      call mpi_scatter(rall(1,fbc0+1), n, mpifloat, rout, n ,mpifloat, &
+      call mpi_scatter(rall(1,fbc0+1), n, MPI_REAL, rout, n ,MPI_REAL, &
      & 0, MPI_COMM_STRNG, ierror)
 ! note: may want to broadcast curvature and arclength
 !
@@ -1185,7 +1175,7 @@
       rout=rout/swgt
 !
       if (present(drout)) then
-        call mpi_scatter(drall_new(1,fbc0), n, mpifloat, drout, n ,mpifloat, &
+        call mpi_scatter(drall_new(1,fbc0), n, MPI_REAL, drout, n ,MPI_REAL, &
      & 0, MPI_COMM_STRNG, ierror)
 ! note: drout is scaled by wgt; to unscale, uncomment below
 ! drout=drout/swgt
@@ -1193,6 +1183,7 @@
         dum=dot_product(drout,drout)
         drout=drout/sqrt(dum)
       endif ! drout present
+
 ! done!
 !cccccccccccccccccccccccccccccccccccccccccccccccccc
       deallocate(rall,drall,rall_new,drall_new)
@@ -1211,28 +1202,25 @@
       implicit none
 !
       integer :: n
-      real(chm_real) :: rin(n), drout(n), wgt(n)
-      real(chm_real) :: d_arclength(:), curvature(:)
-      real(chm_real), optional :: r_bc_0(n), r_bc_1(n) ! optional fixed bc data
+      real*8 :: rin(n), drout(n), wgt(n)
+      real*8 :: d_arclength(:), curvature(:)
+      real*8, optional :: r_bc_0(n), r_bc_1(n) ! optional fixed bc data
 !
 ! locals
-      real(chm_real) :: rin_w(n) ! r weighted by wgt
-      real(chm_real) :: swgt(n)
+      real*8 :: rin_w(n) ! r weighted by wgt
+      real*8 :: swgt(n)
       integer :: fbc0=0, fbc1=0 ! fixed bc local flags
       integer ierror, nall, i, j, nrep, me, nensem ! 9.08: replaced ncpu with nrep[lica]
 !
 ! local arrays (f90)
-      real(chm_real), allocatable :: rall(:,:), drall(:,:), dr2all(:,:)
+      real*8, allocatable :: rall(:,:), drall(:,:), dr2all(:,:)
 !
       integer*4 :: s_disp(SIZE_STRNG), r_disp(SIZE_STRNG), &
      & s_count(SIZE_STRNG), r_count(SIZE_STRNG) ! have to declare these as integer*4 -- it's a problem!
-      real(chm_real), allocatable :: ds(:), dsn(:), ds2me(:), &
+      real*8, allocatable :: ds(:), dsn(:), ds2me(:), &
      & ds2all(:), s(:), curv_me(:)
-      real(chm_real) :: wrs
- integer :: mpifloat=MPI_REAL !##SINGLE
- integer :: mpifloat=MPI_REAL8 !##.not.SINGLE
- integer :: mpi_int=MPI_INTEGER !##.not.INTEGER8
- integer :: mpi_int=MPI_INTEGER8 !##INTEGER8
+      real*8 :: wrs
+
 ! begin
 ! bail if not a replica root; will synchronize slave nodes elsewhere
       if (MPI_COMM_STRNG.eq.MPI_COMM_NULL) return
@@ -1244,6 +1232,7 @@
       nensem=SIZE_STRNG
       nrep=nensem+fbc0+fbc1
 ! allocate work arrays, now that we know nrep
+
       allocate(ds(nrep-1), dsn(nrep-1), ds2me(nrep), ds2all(nrep-1), &
      & s(nrep),curv_me(nrep-2))
 !
@@ -1254,6 +1243,7 @@
       rall=0.0
       drall=0.0
       dr2all=0.0
+
       do i=1,nensem
        s_disp(i)=min((i-1)*nall,n-1) ! in case n<ncpu; want to keep valid address
        r_disp(i)=(i-1+fbc0)*nall ! fixed bc0 correction
@@ -1265,8 +1255,8 @@
       wrs=1./sum(wgt)
       swgt=sqrt(wgt)*wrs
       rin_w=rin*swgt
-      call mpi_alltoallv(rin_w,s_count,s_disp,mpifloat, &
-     & rall,r_count,r_disp,mpifloat, &
+      call mpi_alltoallv(rin_w,s_count,s_disp,MPI_REAL, &
+     & rall,r_count,r_disp,MPI_REAL, &
      & MPI_COMM_STRNG, ierror)
 !
 ! take care of BC as well
@@ -1286,7 +1276,7 @@
       drall(:,1:nrep-1)=rall(:,2:nrep)-rall(:,1:nrep-1)
       ds2me=sum(drall**2,1)
 ! reduce ds2
-      call mpi_allreduce(ds2me, ds2all, nrep-1, mpifloat, &
+      call mpi_allreduce(ds2me, ds2all, nrep-1, MPI_REAL, &
      & MPI_SUM, MPI_COMM_STRNG, ierror)
 ! now can compute arclength
       s(1)=0
@@ -1310,7 +1300,7 @@
 ! compute magnitude
       curv_me=sum(dr2all**2,1)
 ! reduce from all cpus
-      call mpi_allreduce(curv_me, curvature, nrep-2, mpifloat, &
+      call mpi_allreduce(curv_me, curvature, nrep-2, MPI_REAL, &
      & MPI_SUM, MPI_COMM_STRNG, ierror)
 ! take square root
       curvature=sqrt(curvature)
@@ -1323,8 +1313,8 @@
       enddo
 !
 !ccccc now scatter tangent vector
-      call mpi_alltoallv(drall,r_count,r_disp,mpifloat, &
-     & drout,s_count,s_disp,mpifloat, &
+      call mpi_alltoallv(drall,r_count,r_disp,MPI_REAL, &
+     & drout,s_count,s_disp,MPI_REAL, &
      & MPI_COMM_STRNG, ierror)
 ! drout is scaled by wgt, we can `unscale' it here if desired:
 ! drout=drout/swgt
@@ -1338,79 +1328,6 @@
 !
       end subroutine compute_dr
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-!ccccccccccccccccccc open file cleanly ccccccccccccccccccccccccccccc
-      subroutine open_file(ifile,fname,form,acc)
-!
-      use string
-      use stream
-      use dimens_fcm
-      use multicom_aux
-!
-      implicit none
-!
-! for reading a file
-      integer ifile
-      character(len=(*)) :: fname, form, acc
-!
-! locals
-      character(len=11) :: whoami
-      integer :: error,ifile2,flen,k
-      logical :: OPENUN,QFORM,QWRITE, QERROR
-      integer :: l
-! make a copy of fname in case vinquire corrupts it on some platforms
-      character(len=(MXCMSZ)) :: fname_bkp
-!
-      integer lunass ! function
-      data whoami/' OPEN_FILE>'/
-!
-!ccccccccccccccccccc begin ccccccccccccccccccc
-      if (iolev.lt.0) return
-      if (ME_LOCAL.ne.0) return ! allow only the replica roots to open files
-!
-      flen=len(fname)
-      call trima(fname,flen)
-      l=len(form)
-      call trima(form,l)
-! if the unit is undefined, request a file handle
-       if (ifile.eq.-1) Ifile=LUNASS(90)
-! inquire into unit status
-       fname_bkp=fname
-       CALL VINQRE('UNIT',fname_bkp,flen,k,OPENUN,QFORM,QWRITE,ifile)
-       IF (OPENUN) THEN
-           IF(WRNLEV.GE.2) WRITE(OUTU,'(2A)') &
-     & whoami,' Unit already open.', &
-     & ' The old file will be closed first.'
-           CALL VCLOSE(ifile,'KEEP',ERROR)
-       ENDIF
-! check if the file is connected to another number
-! when calling by file, length field is destroyed
-       fname_bkp=fname
-       CALL VINQRE('FILE',fname_bkp,k,k,OPENUN,QFORM,QWRITE,ifile2)
-       IF (OPENUN) THEN
-            IF(WRNLEV.GE.2) WRITE(OUTU,'(A,/,2A)') &
-     & whoami, &
-     & ' ***** WARNING ***** another unit is already ', &
-     & ' assigned to the file - it will be disconnected first.'
-            CALL VCLOSE(ifile2,'KEEP',ERROR)
-       ELSE ! try lower case
-            fname_bkp=fname
-            call cnvtlc(fname_bkp,flen)
-            CALL VINQRE('FILE',fname_bkp,k,k,OPENUN,QFORM,QWRITE,ifile2)
-            IF (OPENUN) THEN
-               IF(WRNLEV.GE.2) WRITE(OUTU,'(A,/,2A)') &
-     & whoami, &
-     & ' ***** WARNING ***** another unit is already ', &
-     & ' assigned to the file - it will be disconnected first.'
-               CALL VCLOSE(ifile2,'KEEP',ERROR)
-            endif
-! call cnvtUC(fname,flen) ! restore to UC
-       endif
-       CALL VOPEN(Ifile,fname,form,acc,QERROR)
-       IF(QERROR) then
-            CALL WRNDIE(0,whoami, &
-     & '"OPEN" not possible.')
-       ENDIF
-      end subroutine open_file
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 ! frames align moved here from cv_frames modules because of circular dependency problem
       subroutine frames_align_string(x,y,z,mass,min_rmsd,ind)
@@ -1421,23 +1338,23 @@
        use smcv_var, only : nstring, mestring
 !
        use multicom_aux
-       use stream
+       use output
        use mpi
 !
        implicit none
 !
-       real(chm_real) :: x(:), y(:), z(:), mass(:)
+       real*8 :: x(:), y(:), z(:), mass(:)
        logical, optional :: min_rmsd
        integer, optional :: ind ! frame index
 !
        logical :: qrmsd
        character(len=21 :: whoami
-       real(chm_real) :: A1(3,3), A2(3,3), A3(3,3), A4(3,3), o(3), xx, yy, zz, w
-       real(chm_real), allocatable, dimension(:) :: x0, x1, x2, x3, x4, &
+       real*8 :: A1(3,3), A2(3,3), A3(3,3), A4(3,3), o(3), xx, yy, zz, w
+       real*8, allocatable, dimension(:) :: x0, x1, x2, x3, x4, &
      & y0, y1, y2, y3, y4, &
      & z0, z1, z2, z3, z4, &
      & m0
-       real(chm_real) :: totm0, corr1, corr2, corr3, corr4, cmax, &
+       real*8 :: totm0, corr1, corr2, corr3, corr4, cmax, &
      & rmsd1, rmsd2, rmsd3, rmsd4, mrmsd ! for rmsd alignment
        integer, allocatable, dimension (:) :: ind0
        integer :: i, j, ii, jj, ibeg, iend, ncom
@@ -1445,17 +1362,13 @@
        integer :: error
 !
  character(len=80) :: msg__
- integer :: mpifloat=MPI_REAL !##SINGLE
- integer :: mpifloat=MPI_REAL8 !##.not.SINGLE
- integer :: mpi_int=MPI_INTEGER !##.not.INTEGER8
- integer :: mpi_int=MPI_INTEGER8 !##INTEGER8
 !
        data whoami /' FRAMES_ALIGN_STRING>'/
 ! do work
 !
 ! check for initialization
        if (.not.frames_initialized) then
-         call wrndie(0 , whoami , 'NO FRAMES DEFINED. NOTHING DONE.')
+         write(0,*) 'WARNING FROM: ',whoami,': ','NO FRAMES DEFINED. NOTHING DONE.'
          return
        endif
 !
@@ -1463,7 +1376,7 @@
        if (present(ind)) then ! reset ith frame
 ! check frame number:
          if (ind.lt.1.or.ind.gt.frames%num_frames) then
-          call wrndie(0 , whoami , 'OUT OF BOUNDS. NOTHING DONE.')
+          write(0,*) 'WARNING FROM: ',whoami,': ','OUT OF BOUNDS. NOTHING DONE.'
           return
          endif
 !
@@ -1471,7 +1384,7 @@
         else ! select all
          ibeg=1; iend=frames%num_frames
          if (ibeg.gt.iend) then
-          call wrndie(0 , whoami , 'NO FRAMES DEFINED. NOTHING DONE.')
+          write(0,*) 'WARNING FROM: ',whoami,': ','NO FRAMES DEFINED. NOTHING DONE.'
           return
          endif
        endif
@@ -1592,11 +1505,11 @@
 !ccc (1) if we are replicas [1 .. nstring-1], first receive aligned coordinates from
 !ccc replica on the left (0 .. nstring -2)
          if (mestring.gt.0) then
-          call MPI_RECV(x0, ncom, mpifloat, mestring-1, &
+          call MPI_RECV(x0, ncom, MPI_REAL, mestring-1, &
      & 1, MPI_COMM_STRNG, stat, error)
-          call MPI_RECV(y0, ncom, mpifloat, mestring-1, &
+          call MPI_RECV(y0, ncom, MPI_REAL, mestring-1, &
      & 2, MPI_COMM_STRNG, stat, error)
-          call MPI_RECV(z0, ncom, mpifloat, mestring-1, &
+          call MPI_RECV(z0, ncom, MPI_REAL, mestring-1, &
      & 3, MPI_COMM_STRNG, stat, error)
 !ccc now manipulate local axes to achieve best RMSD
           corr1=dot_product(x0,x1)+dot_product(y0,y1)+dot_product(z0,z1)
@@ -1608,19 +1521,19 @@
           if (cmax.eq.corr1) then;
            frames%r(:,:,i)=A1; ! this is already true
            if (qrmsd.and.mrmsd.ne.rmsd1) &
-     & write(msg__,600) whoami,mestring,i,whoami; write (OUTU,'(A)') msg__
+     & write(msg__,600) whoami,mestring,i,whoami; write(0,'(A)') msg__
           elseif (cmax.eq.corr2) then
            frames%r(:,:,i)=A2; x1=x2; y1=y2; z1=z2;
            if (qrmsd.and.mrmsd.ne.rmsd2) &
-     & write(msg__,600) whoami,mestring,i,whoami; write (OUTU,'(A)') msg__
+     & write(msg__,600) whoami,mestring,i,whoami; write(0,'(A)') msg__
           elseif (cmax.eq.corr3) then
            frames%r(:,:,i)=A3; x1=x3; y1=y3; z1=z3;
            if (qrmsd.and.mrmsd.ne.rmsd3) &
-     & write(msg__,600) whoami,mestring,i,whoami; write (OUTU,'(A)') msg__
+     & write(msg__,600) whoami,mestring,i,whoami; write(0,'(A)') msg__
           elseif (cmax.eq.corr4) then
            frames%r(:,:,i)=A4; x1=x4; y1=y4; z1=z4;
            if (qrmsd.and.mrmsd.ne.rmsd4) &
-     & write(msg__,600) whoami,mestring,i,whoami; write (OUTU,'(A)') msg__
+     & write(msg__,600) whoami,mestring,i,whoami; write(0,'(A)') msg__
           endif
  600 FORMAT(A,' FOR REPLICA ',I3,', FRAME ',I3,', STRING ALIGNMENT AND'&
      & ,/,A,' MIN. CV RMSD CRITERIA DIFFER.')
@@ -1629,11 +1542,11 @@
 !ccc (2) if we are replicas [0 .. nensem-2], send aligned local coordinates to
 !ccc replica on the right (1 .. nensem -1)
          if (mestring.lt.nstring-1) then
-          call MPI_SEND(x1, ncom, mpifloat, mestring+1, &
+          call MPI_SEND(x1, ncom, MPI_REAL, mestring+1, &
      & 1, MPI_COMM_STRNG, error)
-          call MPI_SEND(y1, ncom, mpifloat, mestring+1, &
+          call MPI_SEND(y1, ncom, MPI_REAL, mestring+1, &
      & 2, MPI_COMM_STRNG, error)
-          call MPI_SEND(z1, ncom, mpifloat, mestring+1, &
+          call MPI_SEND(z1, ncom, MPI_REAL, mestring+1, &
      & 3, MPI_COMM_STRNG, error)
          endif ! whoiam
 ! free memory
@@ -1647,10 +1560,10 @@
 ! now broadcast relevant frames + cv to slave nodes
        if (MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.SIZE_LOCAL.gt.1) then
         call MPI_BCAST(frames%r(:,:,ibeg:iend), (iend-ibeg+1)*9, &
-     & mpifloat, 0, MPI_COMM_LOCAL, error)
-        call MPI_BCAST(cv%r(1,main), cv%num_cv, mpifloat, &
+     & MPI_REAL, 0, MPI_COMM_LOCAL, error)
+        call MPI_BCAST(cv%r(1,main), cv%num_cv, MPI_REAL, &
      & 0, MPI_COMM_LOCAL, error)
-        call MPI_BCAST(cv%r(1,comp), cv%num_cv, mpifloat, &
+        call MPI_BCAST(cv%r(1,comp), cv%num_cv, MPI_REAL, &
      & 0, MPI_COMM_LOCAL, error)
        endif
 !
@@ -1674,25 +1587,21 @@
 !
        implicit none
 !
-       real(chm_real) :: x(:), y(:), z(:), mass(:)
+       real*8 :: x(:), y(:), z(:), mass(:)
        integer, optional :: ind ! frame index
 !
        character(len=18 :: whoami
-       real(chm_real) :: A1(3,3), A2(3,3), A3(3,3), A4(3,3)
-       real(chm_real) :: rmsd1, rmsd2, rmsd3, rmsd4, mrmsd ! for rmsd alignment
+       real*8 :: A1(3,3), A2(3,3), A3(3,3), A4(3,3)
+       real*8 :: rmsd1, rmsd2, rmsd3, rmsd4, mrmsd ! for rmsd alignment
        integer :: i, ibeg, iend, error
 !
- integer :: mpifloat=MPI_REAL !##SINGLE
- integer :: mpifloat=MPI_REAL8 !##.not.SINGLE
- integer :: mpi_int=MPI_INTEGER !##.not.INTEGER8
- integer :: mpi_int=MPI_INTEGER8 !##INTEGER8
 !
        data whoami /' FRAME_ALIGN_RMSD>'/
 ! do work
 !
 ! check for initialization
        if (.not.frames_initialized) then
-         call wrndie(0 , whoami , 'NO FRAMES DEFINED. NOTHING DONE.')
+         write(0,*) 'WARNING FROM: ',whoami,': ','NO FRAMES DEFINED. NOTHING DONE.'
          return
        endif
 !
@@ -1700,7 +1609,7 @@
        if (present(ind)) then ! reset ith frame
 ! check frame number:
          if (ind.lt.1.or.ind.gt.frames%num_frames) then
-          call wrndie(0 , whoami , 'OUT OF BOUNDS. NOTHING DONE.')
+          write(0,*) 'WARNING FROM: ',whoami,': ','OUT OF BOUNDS. NOTHING DONE.'
           return
          endif
 !
@@ -1708,7 +1617,7 @@
         else ! select all
          ibeg=1; iend=frames%num_frames
          if (ibeg.gt.iend) then
-          call wrndie(0 , whoami , 'NO FRAMES DEFINED. NOTHING DONE.')
+          write(0,*) 'WARNING FROM: ',whoami,': ','NO FRAMES DEFINED. NOTHING DONE.'
           return
          endif
        endif
@@ -1770,10 +1679,10 @@
 ! now broadcast relevant frames + cv to slave nodes
        if (MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.SIZE_LOCAL.gt.1) then
         call MPI_BCAST(frames%r(:,:,ibeg:iend), (iend-ibeg+1)*9, &
-     & mpifloat, 0, MPI_COMM_LOCAL, error)
-        call MPI_BCAST(cv%r(1,main), cv%num_cv, mpifloat, &
+     & MPI_REAL, 0, MPI_COMM_LOCAL, error)
+        call MPI_BCAST(cv%r(1,main), cv%num_cv, MPI_REAL, &
      & 0, MPI_COMM_LOCAL, error)
-        call MPI_BCAST(cv%r(1,comp), cv%num_cv, mpifloat, &
+        call MPI_BCAST(cv%r(1,comp), cv%num_cv, MPI_REAL, &
      & 0, MPI_COMM_LOCAL, error)
        endif
 !
@@ -1795,14 +1704,14 @@
        use smcv_master, only : smcv_voronoi_whereami ! used for rmsd test
        use sm_var, only : mestring
 !
-       use stream
+       use output
 !
        implicit none
-       real(chm_real) :: x(:), y(:), z(:), mass(:)
+       real*8 :: x(:), y(:), z(:), mass(:)
        integer, optional :: ind ! frame index
 !
        character(len=18 :: whoami
-       real(chm_real) :: A1(3,3), A2(3,3), A3(3,3), A4(3,3)
+       real*8 :: A1(3,3), A2(3,3), A3(3,3), A4(3,3)
        integer :: where1, where2, where3, where4, me
        integer :: i, ibeg, iend
 character(len=80) :: msg__
@@ -1811,18 +1720,18 @@ character(len=80) :: msg__
 !
 ! check for initialization
        if (.not.frames_initialized) then
-         call wrndie(0 , whoami , 'NO FRAMES DEFINED. NOTHING DONE.')
+         write(0,*) 'WARNING FROM: ',whoami,': ','NO FRAMES DEFINED. NOTHING DONE.'
          return
        endif
 !
        if (.not.cv_common_voronoi_initialized) then
-         call wrndie(0 , whoami , 'VORONOI DATA NOT INITIALIZED. NOTHING DONE.')
+         write(0,*) 'WARNING FROM: ',whoami,': ','VORONOI DATA NOT INITIALIZED. NOTHING DONE.'
          return
        endif
 !
 ! check if a valid map is present
        if (any(cv%voronoi_map.eq.-1)) then
-         call wrndie(0 , whoami , 'VORONOI MAP CONTAINS INVALID ENTRIES. NOTHING DONE.')
+         write(0,*) 'WARNING FROM: ',whoami,': ','VORONOI MAP CONTAINS INVALID ENTRIES. NOTHING DONE.'
          return
        endif
 !
@@ -1832,7 +1741,7 @@ character(len=80) :: msg__
        if (present(ind)) then ! reset ith frame
 ! check frame number:
          if (ind.lt.1.or.ind.gt.frames%num_frames) then
-          call wrndie(0 , whoami , 'OUT OF BOUNDS. NOTHING DONE.')
+          write(0,*) 'WARNING FROM: ',whoami,': ','OUT OF BOUNDS. NOTHING DONE.'
           return
          endif
 !
@@ -1840,7 +1749,7 @@ character(len=80) :: msg__
         else ! select all
          ibeg=1; iend=frames%num_frames
          if (ibeg.gt.iend) then
-          call wrndie(0 , whoami , 'NO FRAMES DEFINED. NOTHING DONE.')
+          write(0,*) 'WARNING FROM: ',whoami,': ','NO FRAMES DEFINED. NOTHING DONE.'
           return
          endif
        endif
@@ -1885,7 +1794,7 @@ character(len=80) :: msg__
          else
             frames%r(:,:,i)=A1; ! default (unsafe)
             cv%voronoi_whereami=where1
-            write(msg__,601) whoami,mestring ; write (OUTU,'(A)') msg__
+            write(msg__,601) whoami,mestring ; write(0,'(A)') msg__
  601 FORMAT(A,' REPLICA ',I3,' IS OUTSIDE OF ASSIGNED CELL.')
          endif ! mrmsd
 !
@@ -1906,7 +1815,7 @@ character(len=80) :: msg__
 !
       implicit none
 !
-      real(chm_real) :: message(*)
+      real*8 :: message(*)
       integer :: size, type, rank, error, comm
       integer*4 :: count(size), displ(size)
 ! local variables
@@ -1940,4 +1849,4 @@ character(len=80) :: msg__
 !
       end subroutine hypercube_allgatherv
 !
-##ENDIF
+!**CHARMM_ONLY**!##ENDIF

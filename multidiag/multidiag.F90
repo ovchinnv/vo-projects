@@ -24,9 +24,9 @@
 ! this means that several entries of the diagonals (except the main diagonal) will not be used;
 ! e.g.:
 ! a b|c d e 0 0 0 0
-! a|b c d e 0 0 0
-! |a b c d e 0 0
-! |0 a b c d e 0
+! . a|b c d e 0 0 0
+! . .|a b c d e 0 0
+! . .|0 a b c d e 0
 ! in the above, the entries to the left of the boundary (a b & a) diag(-2,1)=diag(-1,1)=diag(-1,2)=0 (and are NOT used; that's where the storage space
 ! is wasted)
 ! Note, finally, that the main diagonal cannot have zero entries (which just reiterates that this is a special purpose solver)

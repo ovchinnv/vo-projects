@@ -8,8 +8,8 @@ __CHARMM_ONLY##IF STRINGM
 !-----------------------------------------------
 ! calls string method parsers
 !-----------------------------------------------
-      CHARACTER*(*) :: COMLYN
-      INTEGER :: COMLEN
+      character(len=*) :: comlyn
+      int :: comlen
 !
 ! local variables
 !
@@ -32,10 +32,10 @@ __CHARMM_ONLY##IF STRINGM
         call ftsm_parse(comlyn, comlen) ! FTSM parser
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       elseif (__STRNCMP(keyword,'OPEN',4)) then
-        call sm_open(comlyn, comlen, .true.) ! open a file on each replica
+        call sm_open(comlyn, comlen, .true.)    ! open a file on each replica
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       elseif (__STRNCMP(keyword,'CLOS',4)) then
-        call sm_close(comlyn, comlen) ! open a file on each replica
+        call sm_close(comlyn, comlen)        ! close a file on each replica
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       else
             __WARN(whoami,'UNRECOGNIZED SUBCOMMAND: ',keyword)
@@ -46,53 +46,45 @@ __CHARMM_ONLY##IF STRINGM
        SUBROUTINE SM_OPEN(COMLYN,COMLEN, loud)
 !-----------------------------------------------------------------------
 ! Opens 1 file per replica process
-! TODO: Include checking to make sure each replica's file name is
-! different (when opening with write access).
 !-----------------------------------------------------------------------
-! adaptation of RB's ensemble code; VO 8.09
 ! much of this code is duplicated from the main charmm open routine (vopen)
-! however, at present, this duplication seems to be a better solution than
-! generalizing vopen
        use smcv_var, only: smcv_initialized
        use sm0k, only: sm0k_initialized
        use ftsm_var, only: ftsm_initialized
 !
-      use string
-!       implicit none
-
-      use dimens_fcm 
-      use consta 
-      use stream 
-      use machio 
-      use exfunc 
+       __DEPMOD
+       __DEP_MPI
+       __DEP_MULTICOM
 !
-      use string 
-      use number 
-      use mpi               !__CHARMM_ONLY##MPI
+       __IMPNONE
 !
-      use multicom_ltm       !__CHARMM_ONLY##MULTICOM
-      use parallel 
-!
-       CHARACTER*(*) COMLYN
-       INTEGER COMLEN
-!
-       INTEGER MXFILE, MXPREF, MXSUFF
-       INTEGER FLEN, L, UNUM, UNUM2, IERROR, I
+       character(len=*) :: COMLYN
+       int :: COMLEN
+#ifdef __CHARMM
+!********************** CHARMM *************************************************
+       integer MXFILE, MXPREF, MXSUFF
+       integer FLEN, L, UNUM, UNUM2, IERROR, I
        LOGICAL ERR, QOPEN, QFORM, QWRITE, QENS
 !
-__CHARMM_ONLY##IF UNIX OS2
+##IF UNIX OS2
        PARAMETER (MXFILE=128)
-__CHARMM_ONLY##ELSE
+##ELSE
        PARAMETER (MXFILE=256)
-__CHARMM_ONLY##ENDIF
-       INTEGER FMLEN, IPT, STSLEN, FACCL
+##ENDIF
+       integer FMLEN, IPT, STSLEN, FACCL
        PARAMETER (FMLEN=11,STSLEN=8,FACCL=7)
        CHARACTER*(MXFILE) FILEX, JUNKNM, FNAM2
        CHARACTER*(FMLEN) FORMT
        CHARACTER*(STSLEN) FSTAT
        CHARACTER*(FACCL) FACC
 !
-       int :: oldiol
+       integer :: oldiol
+!********************** END CHARMM *********************************************
+#else
+       character(len=132) :: filex, formt, facc
+       int :: unum, flen
+#endif
+!
        bool :: loud
        character(len=(9) :: whoami
        data whoami /' SM_OPEN>'/
@@ -100,26 +92,28 @@ __CHARMM_ONLY##ENDIF
        if (.not.(smcv_initialized                                       &
      &       .or.sm0k_initialized                                       &
      &       .or.ftsm_initialized)) then
-        if (ME_GLOBAL.eq.0) call wrndie(0,whoami,                       &
-     &   ' STRING METHOD NOT INITIALIZED. NOTHING DONE.')
+        if (ME_GLOBAL.eq.0) &
+        __WRN(whoami,' STRING METHOD NOT INITIALIZED. NOTHING DONE.')
         return
        endif
 !
        if (ME_STRNG.ne.MPI_UNDEFINED) then ! only roots work
-!      modify iolev
-        oldiol=iolev
-        iolev=1 ! so that vinquire works
 ! unum
-        UNUM=GTRMI(COMLYN,COMLEN,'UNIT',-1)
+        UNUM=__GET_RM_I(COMLYN,COMLEN,'UNIT',-1)
         IF (UNUM.LT.0) THEN
-         CALL WRNDIE(0,whoami,' NO UNIT NUMBER SPECIFIED')
-         RETURN
+         __WRN(whoami,' NO UNIT NUMBER SPECIFIED')
+#ifdef __CHARMM
+         return
+#endif
         ENDIF
 ! filename
-        CALL GTRMWA(COMLYN, COMLEN, 'NAME', 4, FILEX, MXFILE, FLEN)
+        __GET_RM_A(COMLYN, COMLEN, 'NAME', 4, FILEX, MXFILE, FLEN)
         IF (FLEN.LE.0) THEN
-         CALL WRNDIE(0, whoami, 'NO FILE NAME GIVEN')
+         __WRN(whoami, 'NO FILE NAME GIVEN')
+         return
         ENDIF
+#ifdef __CHARMM
+!********************** CHARMM *************************************************
 ! remove quotes
         IPT=0
         DO I=1,FLEN
@@ -135,6 +129,10 @@ __CHARMM_ONLY##ENDIF
 !
         fnam2=filex
         call expnam(filex, flen, err)
+!      modify iolev so that vinquire works
+        oldiol=iolev
+        iolev=1 
+!
 !     unit already open?
         CALL VINQRE('UNIT',JUNKNM,MXFILE,I,QOPEN,QFORM,QWRITE,UNUM)
         IF (QOPEN) THEN
@@ -155,36 +153,43 @@ __CHARMM_ONLY##ENDIF
          IFREEU(UNUM2) = 0
         ENDIF
 !
+!********************** END CHARMM *************************************************
+#endif
 ! format
-        IF (INDXA(COMLYN,COMLEN,'UNFO').GT.0) THEN
+        IF (__INDX_RM(COMLYN,COMLEN,'UNFO').GT.0) THEN
          FORMT='UNFORMATTED'
-        ELSE IF (INDXA(COMLYN,COMLEN,'FILE').GT.0) THEN
+        ELSE IF (__INDX_RM(COMLYN,COMLEN,'FILE').GT.0) THEN
          FORMT='UNFORMATTED'
-        ELSE IF (INDXA(COMLYN,COMLEN,'FORM').GT.0) THEN
+        ELSE IF (__INDX_RM(COMLYN,COMLEN,'FORM').GT.0) THEN
          FORMT='FORMATTED'
-        ELSE IF (INDXA(COMLYN,COMLEN,'CARD').GT.0) THEN
+        ELSE IF (__INDX_RM(COMLYN,COMLEN,'CARD').GT.0) THEN
          FORMT='FORMATTED'
         ELSE
-         CALL WRNDIE(1,whoami,                                          &
-     &    'NO FORMATTING SPECIFICATION, IT WILL BE OPENED UNFORMATTED')
+ __WRN(whoami,'NO FORMAT SPECIFIED, WILL USE "UNFORMATTED"')
          FORMT='UNFORMATTED'
         ENDIF
 !
+#ifdef __CHARMM
+!************************** CHARMM *************************************************
 ! status
         CALL GTRMWA(COMLYN, COMLEN, 'STAT', 4, FSTAT, STSLEN, L)
         IF (L.LE.0) THEN
             FSTAT = 'UNKNOWN'
         ENDIF
+!********************** END CHARMM *************************************************
+#endif
 ! access
-        IF (INDXA(COMLYN,COMLEN,'APPE').GT.0) THEN
+        IF (__INDX_RM(COMLYN,COMLEN,'APPE').GT.0) THEN
          FACC='APPEND'
-        ELSE IF (INDXA(COMLYN,COMLEN,'READ').GT.0) THEN
+        ELSE IF (__INDX_RM(COMLYN,COMLEN,'READ').GT.0) THEN
          FACC='READ'
-        ELSE IF (INDXA(COMLYN,COMLEN,'WRIT').GT.0) THEN
+        ELSE IF (__INDX_RM(COMLYN,COMLEN,'WRIT').GT.0) THEN
          FACC='WRITE'
         ELSE
           FACC='READ'
         ENDIF
+#ifdef __CHARMM
+!************************** CHARMM *************************************************
         flen=mxfile
         call trima(fnam2,flen)
         if (loud) then
@@ -242,6 +247,12 @@ __CHARMM_ONLY##ENDIF
        call PSNDC(COMLYN,1) ! updated command line (since slaves did not read)
        call PSND4(COMLEN,1)
 !       call PSND4(IFREE(UNUM),1) ! slaves should know nothing about the open file
+!********************** END CHARMM *************************************************
+#else
+       call files_open(unum,filex,formt,facc)
+       __TRIMA(comlyn, comlen)
+       __BROADCAST_STRING(comlyn,len(comlyn),mpichar)
+#endif
 !
        END SUBROUTINE SM_OPEN
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -251,21 +262,18 @@ __CHARMM_ONLY##ENDIF
        use sm0k, only: sm0k_initialized
        use ftsm_var, only: ftsm_initialized
 !
-      use string
-!       implicit none
-      use exfunc 
-      use machio 
-      use multicom_aux       !__CHARMM_ONLY##MULTICOM
-      use parallel 
-!
+       __DEPMOD
        __DEP_MPI
+       __DEP_MULTICOM
 !
-       CHARACTER*(*) COMLYN
-       INTEGER COMLEN
+       implicit none
 !
-       INTEGER UNUM, IERROR
+       CHARACTER(len=*) :: COMLYN
+       int :: COMLEN
 !
-       character(len=(10) :: whoami
+       int :: UNUM
+!
+       character(len=10) :: whoami
        data whoami /' SM_CLOSE>'/
 !
        if (.not.(smcv_initialized                                       &
@@ -276,25 +284,34 @@ __CHARMM_ONLY##ENDIF
         return
        endif
 !
-       UNUM=GTRMI(COMLYN,COMLEN,'UNIT',-1)
+       UNUM=__GET_RM_I(COMLYN,COMLEN,'UNIT',-1)
 !
-       if(ME_STRNG.eq.MPI_UNDEFINED) return ! only ensemble heads work
+       if(ME_STRNG.ne.MPI_UNDEFINED) then ! only ensemble heads work
 !
+#ifdef __CHARMM
+!**********************************************
 !       if ((MOD(IFREEU(UNUM),8).EQ.0).AND.
-       if (IFREEU(UNUM).NE.0) THEN
-        CLOSE(UNIT=UNUM)
-        IFREEU(UNUM) = 0
+        if (IFREEU(UNUM).NE.0) THEN
+         CLOSE(UNIT=UNUM)
+         IFREEU(UNUM) = 0
+        endif
+!**********************************************
+#else
+        call files_close(unum)
+#endif
        endif
 !
        end subroutine sm_close
-!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!**********************************************************************
+#ifdef __CHARMM
 __CHARMM_ONLY##ELSE ! string not compiled
       subroutine sm_main(COMLYN,COMLEN)
 !----------------------------------------------------------------------
-      use stream 
+      use stream
+      implicit none
       CHARACTER*(*) COMLYN
-      INTEGER COMLEN
-      WRITE (OUTU, '(A)') 'STRING METHOD NOT COMPILED'
-      return
+      integer :: COMLEN
+      WRITE(OUTU,'(A)') 'STRING METHOD NOT COMPILED'
       end subroutine sm_main
+#endif
 __CHARMM_ONLY##ENDIF

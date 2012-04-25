@@ -868,4 +868,30 @@
 !
   end function get_remove_parameter
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  function remove_tag(a,tag,n) result(j)
+  character(len=*) :: a
+  character(len=*) :: tag
+  integer, optional, intent(inout) :: n
+  integer :: ltag, j, l
+  character(len=len(tag)) :: copy
+!
+  character*2, parameter :: space = ' '//tab
+  character, parameter :: space2(2) = (/' ',tab/)
+!
+  copy=tag; call adjustleft(copy,space2); ltag=len_trim(copy)
+  if (present(n)) a(max(0,n):)='' ! erase string beyond length n
+  call adjustleft(a,space2); l=len_trim(a);
+  if (ltag.gt.0.and.l.gt.0) then
+!
+   j=index(a(1:l),copy(1:ltag));
+   if (j.gt.0) then
+    a(j:)=a(j+ltag:)
+    if (present(n)) n=len_trim(a)
+   endif
+  else
+   j=0
+  endif
+!
+  end function remove_tag
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
       end module parser
