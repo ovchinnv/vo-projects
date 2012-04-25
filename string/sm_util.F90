@@ -702,7 +702,6 @@
       real*8 :: def, dum
       real*8, parameter :: pi=3.14159265358979323846
       real*8 :: r0, r1, wrs
-      integer :: mpi_int
  character(len=80) :: msg___
 
       character(len=24) :: whoami
@@ -967,7 +966,7 @@
 ! write(0,*) present(drout)
 !
       if (present(drout)) then
-       call mpi_bcast(iteration,1,mpi_int,0,MPI_COMM_STRNG,ierror)
+       call mpi_bcast(iteration,1,MPI_INTEGER,0,MPI_COMM_STRNG,ierror)
        if (iteration.gt.0) then
 ! write(0,*) 'sending drout'
         call mpi_scatter(drall(1,fbc0), n, MPI_REAL, drout, n ,MPI_REAL, &
@@ -1710,7 +1709,7 @@
        real*8 :: x(:), y(:), z(:), mass(:)
        integer, optional :: ind ! frame index
 !
-       character(len=18 :: whoami
+       character(len=18) :: whoami
        real*8 :: A1(3,3), A2(3,3), A3(3,3), A4(3,3)
        integer :: where1, where2, where3, where4, me
        integer :: i, ibeg, iend

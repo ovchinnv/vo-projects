@@ -67,7 +67,7 @@
        use mpi
        use multicom_aux
 !
-       ! implicit none
+      
 !
        character(len=*) :: COMLYN
        integer :: COMLEN
@@ -124,7 +124,7 @@
         ENDIF
        call files_open(unum,filex,formt,facc)
        comlen=min(max(0,comlen),len(comlyn));comlyn(comlen+1:)='';call adjustleft(comlyn,(/' ',tab/));comlen=len_trim(comlyn)
-       call mpi_bcast(comlyn,len(comlyn),MPI_CHARACTER,0,MPI_COMM_STRNG,ierror)
+       call mpi_bcast(comlyn,len(comlyn),MPI_CHARACTER,0,MPI_COMM_LOCAL,ierror)
 !
        END SUBROUTINE SM_OPEN
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc

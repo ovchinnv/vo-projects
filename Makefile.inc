@@ -8,7 +8,7 @@ FFLAGS=-O3 -fast -finline -fp-model fast=2 -xhost -ipo -fno-math-errno -no-inlin
 #FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-132 -ffree-line-length-132 -fno-math-errno -fbounds-check -frange-check #-fopenmp 
 #FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-132 -ffree-line-length-132 -fno-math-errno #-fbounds-check -frange-check 
 #
-DEFS=-D int=integer -D float=real*8 -D bool=logical -D mpiint=integer*4 -D mpifloat=MPI_REAL -D mpichar=MPI_CHARACTER
+DEFS=-D int=integer -D float=real*8 -D bool=logical -D int4mpi=integer*4 -D mpiint=MPI_INTEGER -D mpifloat=MPI_REAL -D mpichar=MPI_CHARACTER
 # ! note: the VEC routines are probably slower
 
 # note : for single precision define
@@ -48,7 +48,7 @@ FPPFLAGS = -C
 .SUFFIXES:
 .SUFFIXES: .o .F90 .a .H .h
 
-default : all
+default : all modules
 all: $(OBJS)
 ########################### OBJECTS ##########################
 %.o:%.F90 $(LIBDEPS)
@@ -67,7 +67,6 @@ all: $(OBJS)
 %.src:%.ftn $(LOCALDEPS) $(GLOBALDEPS) 
 	$(FPP) $(FPPFLAGS)         -D__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(CHMSG) -P $< > $@
 ######################### OTHER RULES ########################
-charmm: $(CHARMM_SOURCES)
 source: $(SOURCES)
 $(OBJS):$(SOURCES)
 
