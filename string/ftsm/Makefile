@@ -1,5 +1,5 @@
 ROOT=../..
-OBJS=ftsm_var.o ftsm_rex.o
+OBJS=ftsm_var.o ftsm_rex.o 
 
 COMMON=..
 INCLUDES= -I $(COMMON) -I $(ROOT)/modules
@@ -9,6 +9,7 @@ LOCALDEPS=source.defs ../source.defs
 
 include $(ROOT)/Makefile.inc
 
+ftsm.o: ftsm_var.o ftsm_rex.o
 ftsm_var.o: sm_common_vars
 ftsm_rex.o: constants ivector ftsm_var.o
 
@@ -24,4 +25,4 @@ ivector:
 charmm: $(CHARMM_SOURCES)
 
 
-.PNONY : sm_common_vars constants ivector
+.PHONY : sm_common_vars constants ivector

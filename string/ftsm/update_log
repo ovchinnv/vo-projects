@@ -1,12 +1,608 @@
-__CHARMM_ONLY##IF PARALLEL				      |	__CHARMM_ONLY__CHARMM_ONLY##IF PARALLEL
-__CHARMM_ONLY##IF STRINGM				      |	__CHARMM_ONLY__CHARMM_ONLY##IF STRINGM
-      __DEP_MULTICOM_ltm       !__CHARMM_ONLY##MULTICOM	      |	      __DEP_MULTICOM_ltm       !__CHARMM_ONLY__CHARMM_ONLY##M
-     &                     MPI_INTEGER,                       |	     &                     MPI_INTEGER,                      
-     &                     MPI_INTEGER8,                      |	     &                     MPI_INTEGER8,                     
-     &  call PSND4(rex_map,nstring)     !__CHARMM_ONLY##.not. |	     &  call PSND4(rex_map,nstring)     !__CHARMM_ONLY__CHARM
-     &  call PSND8(rex_map,nstring)     !__CHARMM_ONLY##INTEG |	     &  call PSND8(rex_map,nstring)     !__CHARMM_ONLY__CHARM
-      __DEP_MULTICOM_ltm       !__CHARMM_ONLY##MULTICOM	      |	      __DEP_MULTICOM_ltm       !__CHARMM_ONLY__CHARMM_ONLY##M
-       type=MPI_INTEGER                       !__CHARMM_ONLY# |	       type=MPI_INTEGER                       !__CHARMM_ONLY_
-       type=MPI_INTEGER8                      !__CHARMM_ONLY# |	       type=MPI_INTEGER8                      !__CHARMM_ONLY_
-__CHARMM_ONLY##ENDIF					      |	__CHARMM_ONLY__CHARMM_ONLY##ENDIF
-__CHARMM_ONLY##ENDIF					      |	__CHARMM_ONLY__CHARMM_ONLY##ENDIF
+##IF STRINGM						      |	__CHARMM_ONLY##IF STRINGM
+##IF PARALLEL						      |	__CHARMM_ONLY##IF PARALLEL
+      use bestfit, only : RMSBestFit, rmsd		      |	      __DEP_BESTFIT, only : RMSBestFit, rmsd
+      use string					      |	      __DEP_OUTPUT
+      use stream 					      |	      __DEP_PARSER 
+      use number 					      |	      __DEP_NUMBER 
+      use multicom_ltm       !##MULTICOM		      |	      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
+      use consta 					      |	      __DEP_CONST 
+      use mpi 						      |	      __DEP_MPI 
+      implicit none					      |	      __IMPNONE
+      character*(*) :: comlyn				      |	      character(len=(*) :: comlyn
+      integer :: comlen					      |	      int :: comlen
+      integer :: ivver, ivv2, iorig, ileap ! for dynamics     |	      int :: ivver, ivv2, iorig, ileap ! for dynamics
+      integer :: error, klen, strl			      |	      int :: error, klen, strl
+      character*8 :: keyword				      |	      character(len=8 :: keyword
+      character*80 :: fname				      |	      character(len=80 :: fname
+      character*6 :: whoami				      |	      character(len=6 :: whoami
+      real*8 :: zval, k, step				      |	      float :: zval, k, step
+      integer :: ifile, c1, c2, qcor, qdcd, oldiol, flen,     |	      int :: ifile, c1, c2, qcor, qdcd, oldiol, flen,        
+      real*8, pointer :: fd_error(:,:)			      |	      float, pointer :: fd_error(:,:)
+      logical :: qroot, qslave, qprint, qcomp		      |	      bool :: qroot, qslave, qprint, qcomp
+      keyword=nexta4(comlyn,comlen)			      |	      keyword=__NEXTA(comlyn,comlen)
+       call wrndie(0,whoami,' SMCV IS ON AND CANNOT BE USED W |	       __WRN(whoami,' SMCV IS ON AND CANNOT BE USED WITH FTSM
+      if (eqstwc(keyword(1:4),4,'INIT',4)) then		      |	      if (__STRNCMP(keyword(1:4),4,'INIT',4)) then
+      if (eqstwc(keyword(1:4),4,'DONE',4)) then		      |	      if (__STRNCMP(keyword(1:4),4,'DONE',4)) then
+      elseif (eqstwc(keyword(1:4),4,'REPA',4)) then	      |	      elseif (__STRNCMP(keyword(1:4),4,'REPA',4)) then
+      elseif (eqstwc(keyword(1:4),4,'STAT',4)) then	      |	      elseif (__STRNCMP(keyword(1:4),4,'STAT',4)) then
+      elseif (eqstwc(keyword(1:4),4,'DYNA',4)) then	      |	      elseif (__STRNCMP(keyword(1:4),4,'DYNA',4)) then
+       ivver=indxa(comlyn, comlen, 'VVER')		      |	       ivver=__INDX_RM(comlyn, comlen, 'VVER')
+       ivv2=indxa(comlyn, comlen, 'VV2')		      |	       ivv2=__INDX_RM(comlyn, comlen, 'VV2')
+       iorig=indxa(comlyn, comlen, 'ORIG')		      |	       iorig=__INDX_RM(comlyn, comlen, 'ORIG')
+       ileap=indxa(comlyn, comlen, 'LEAP')		      |	       ileap=__INDX_RM(comlyn, comlen, 'LEAP')
+        call wrndie(0, whoami,                                |	        __WRN( whoami,                                       
+       update_on=(indxa(comlyn,comlen, 'UPDA').gt.0)	      |	       update_on=(__INDX_RM(comlyn,comlen, 'UPDA').gt.0)
+        update_freq=gtrmi(comlyn,comlen,'UPDF',0)	      |	        update_freq=__GET_RM_I(comlyn,comlen,'UPDF',0)
+         call wrndie(0, whoami,                               |	         __WRN( whoami,                                      
+         repa_on=(indxa(comlyn,comlen, 'REPA').gt.0)	      |	         repa_on=(__INDX_RM(comlyn,comlen, 'REPA').gt.0)
+       stat_on=(indxa(comlyn,comlen, 'STAT').gt.0)	      |	       stat_on=(__INDX_RM(comlyn,comlen, 'STAT').gt.0)
+        stat_freq=gtrmi(comlyn,comlen,'STAF',0)		      |	        stat_freq=__GET_RM_I(comlyn,comlen,'STAF',0)
+         call wrndie(0, whoami,                               |	         __WRN( whoami,                                      
+       evolve_ftsm_on=(indxa(comlyn,comlen, 'EVOL').gt.0)     |	       evolve_ftsm_on=(__INDX_RM(comlyn,comlen, 'EVOL').gt.0)
+        evolve_freq=gtrmi(comlyn,comlen,'EVOF',0)	      |	        evolve_freq=__GET_RM_I(comlyn,comlen,'EVOF',0)
+         call wrndie(0, whoami,                               |	         __WRN( whoami,                                      
+        evolve_nskip=gtrmi(comlyn,comlen,'EVOS',0)	      |	        evolve_nskip=__GET_RM_I(comlyn,comlen,'EVOS',0)
+        evolve_expo_on=(indxa(comlyn,comlen,'EXPO').gt.0) ! u |	        evolve_expo_on=(__INDX_RM(comlyn,comlen,'EXPO').gt.0)
+        evolve_aver_on=(indxa(comlyn,comlen,'AVER').gt.0) ! r |	        evolve_aver_on=(__INDX_RM(comlyn,comlen,'AVER').gt.0)
+          num_ave_samples=gtrmi(comlyn,comlen,'NAVE',-1)      |	          num_ave_samples=__GET_RM_I(comlyn,comlen,'NAVE',-1)
+           call wrndie(0,whoami, ' INVALID NUMBER OF SAMPLES  |	           __WRN(whoami, ' INVALID NUMBER OF SAMPLES SPECIFIE
+          num_ave_samples=gtrmi(comlyn,comlen,'MAXAVE',-1)    |	          num_ave_samples=__GET_RM_I(comlyn,comlen,'MAXAVE',-
+           call wrndie(0,whoami,                              |	           __WRN(whoami,                                     
+         call wrndie(0, whoami,                               |	         __WRN( whoami,                                      
+         call wrndie(0, whoami,                               |	         __WRN( whoami,                                      
+        call wrndie(0, whoami,                                |	        __WRN( whoami,                                       
+       restrained_on=(indxa(comlyn,comlen, 'RSTR').gt.0)      |	       restrained_on=(__INDX_RM(comlyn,comlen, 'RSTR').gt.0)
+        restrained_eq_steps=gtrmi(comlyn,comlen,'REEQ',0)     |	        restrained_eq_steps=__GET_RM_I(comlyn,comlen,'REEQ',0
+       repl_x_on=(indxa(comlyn,comlen,'REX').gt.0)	      |	       repl_x_on=(__INDX_RM(comlyn,comlen,'REX').gt.0)
+        repl_x_freq=gtrmi(comlyn,comlen,'REXF',0)	      |	        repl_x_freq=__GET_RM_I(comlyn,comlen,'REXF',0)
+          call wrndie(0,whoami,                               |	          __WRN(whoami,                                      
+          call wrndie(0,whoami,                               |	          __WRN(whoami,                                      
+         string_noprint=(indxa(comlyn,comlen,'NOPR').gt.0)    |	         string_noprint=(__INDX_RM(comlyn,comlen,'NOPR').gt.0
+        WRITE (OUTU,'(2A)')                                   |	        WRITE (_MSGBUF,'(2A)')                               
+            WRITE (OUTU,'(/,2A,/,2A,I7,A)')                   |	            WRITE (_MSGBUF,'(/,2A,/,2A,I7,A)')               
+            WRITE (OUTU,'(2A,I7,A)')                          |	            WRITE (_MSGBUF,'(2A,I7,A)')                      
+               write(outu,671) whoami, whoami, evolve_expo_me |	               write(_MSGBUF,671) whoami, whoami, evolve_expo
+               write(outu,6710) whoami, whoami, num_evolve_sa |	               write(_MSGBUF,6710) whoami, whoami, num_evolve
+     &          write(outu, 6711) whoami, max_evolve_samples  |	     &          write(_MSGBUF, 6711) whoami, max_evolve_sampl
+          WRITE (OUTU,666) whoami, update_freq		      |	          WRITE (_MSGBUF,666) whoami, update_freq
+     &    WRITE (OUTU,667) whoami			      |	     &    WRITE (_MSGBUF,667) whoami
+            WRITE (OUTU,'(2A)')                               |	            WRITE (_MSGBUF,'(2A)')                           
+            write(outu,665) whoami, restrained_eq_steps	      |	            write(_MSGBUF,665) whoami, restrained_eq_steps
+            write (outu,'(2A)') whoami,                       |	            write (_MSGBUF,'(2A)') whoami,                   
+            write (outu,'(2A)') whoami,                       |	            write (_MSGBUF,'(2A)') whoami,                   
+            write(outu,668) whoami, stat_freq		      |	            write(_MSGBUF,668) whoami, stat_freq
+            write(outu,691) whoami, whoami, repl_x_freq, repl |	            write(_MSGBUF,691) whoami, whoami, repl_x_freq, r
+      elseif (eqstwc(keyword(1:4),4,'FILL',4)) then ! set pat |	      elseif (__STRNCMP(keyword(1:4),4,'FILL',4)) then ! set 
+       qcomp=(indxa(comlyn, comlen, 'COMP').gt.0)	      |	       qcomp=(__INDX_RM(comlyn, comlen, 'COMP').gt.0)
+         if (qprint) write(outu,6657) whoami		      |	         if (qprint) write(_MSGBUF,6657) whoami
+         if (qprint) write(outu,6660) whoami		      |	         if (qprint) write(_MSGBUF,6660) whoami
+      elseif (eqstwc(keyword(1:4),4,'TEST',4)) then !	      |	      elseif (__STRNCMP(keyword(1:4),4,'TEST',4)) then !
+       if (indxa(comlyn,comlen,'GRAD').gt.0) then ! finite-di |	       if (__INDX_RM(comlyn,comlen,'GRAD').gt.0) then ! finit
+        if (qprint) write(outu, 7001) whoami,whoami,step,whoa |	        if (qprint) write(_MSGBUF, 7001) whoami,whoami,step,w
+         call wrndie(0,whoami,                                |	         __WRN(whoami,                                       
+           write(outu,7006) whoami, whoami, whoami, whoami    |	           write(_MSGBUF,7006) whoami, whoami, whoami, whoami
+            write(outu,'(A,3'//real_format//'F15.9)')         |	            write(_MSGBUF,'(A,3'//real_format//'F15.9)')     
+           write(outu,7013) whoami, whoami, whoami	      |	           write(_MSGBUF,7013) whoami, whoami, whoami
+            write(outu,'(A,3'//real_format//'F15.9)')         |	            write(_MSGBUF,'(A,3'//real_format//'F15.9)')     
+          write(outu,7003) whoami, zval, whoami		      |	          write(_MSGBUF,7003) whoami, zval, whoami
+          write(outu,7004) whoami, zval, whoami		      |	          write(_MSGBUF,7004) whoami, zval, whoami
+       if (indxa(comlyn,comlen,'PARA').gt.0) then ! parallel  |	       if (__INDX_RM(comlyn,comlen,'PARA').gt.0) then ! paral
+        if (qprint) write(outu, 7005) whoami,whoami,whoami    |	        if (qprint) write(_MSGBUF, 7005) whoami,whoami,whoami
+         call wrndie(0,whoami,                                |	         __WRN(whoami,                                       
+           write(outu,7006) whoami, whoami, whoami, whoami    |	           write(_MSGBUF,7006) whoami, whoami, whoami, whoami
+            write(outu,'(A,4'//real_format//'F15.9)')         |	            write(_MSGBUF,'(A,4'//real_format//'F15.9)')     
+           write(outu,7010) whoami, whoami, whoami	      |	           write(_MSGBUF,7010) whoami, whoami, whoami
+            write(outu,'(A,4'//real_format//'F15.9)')         |	            write(_MSGBUF,'(A,4'//real_format//'F15.9)')     
+          write(outu,7007) whoami, zval, whoami, parallel_tol |	          write(_MSGBUF,7007) whoami, zval, whoami, parallel_
+          write(outu,7008) whoami, zval, whoami, parallel_tol |	          write(_MSGBUF,7008) whoami, zval, whoami, parallel_
+      elseif (eqstwc(keyword(1:4),4,'PARA',4)) then	      |	      elseif (__STRNCMP(keyword(1:4),4,'PARA',4)) then
+        keyword=nexta4(comlyn, comlen)			      |	        keyword=__NEXTA(comlyn, comlen)
+            if (qprint) write(outu,7009) whoami, 'FORCES', ke |	            if (qprint) write(_MSGBUF,7009) whoami, 'FORCES',
+            if (qprint) write(outu,7009) whoami, 'FORCES', ke |	            if (qprint) write(_MSGBUF,7009) whoami, 'FORCES',
+            call wrndie(0,whoami,'UNKNOWN OPTION SPECIFIED')  |	            __WRN(whoami,'UNKNOWN OPTION SPECIFIED')
+      elseif (eqstwc(keyword(1:4),4,'PRIN',4)) then	      |	      elseif (__STRNCMP(keyword(1:4),4,'PRIN',4)) then
+       qcor=indxa(comlyn,comlen,'COR'); qcor = min(qcor,1)    |	       qcor=__INDX_RM(comlyn,comlen,'COR'); qcor = min(qcor,1
+       qdcd=indxa(comlyn,comlen,'DCD'); qdcd = min(qdcd,1)    |	       qdcd=__INDX_RM(comlyn,comlen,'DCD'); qdcd = min(qdcd,1
+        call wrndie(0, whoami,                                |	        __WRN( whoami,                                       
+       ifile=gtrmi(comlyn,comlen,'UNIT',-1)		      |	       ifile=__GET_RM_I(comlyn,comlen,'UNIT',-1)
+         if (flen.GT.0) call open_file(ifile,fname,'FORMATTED |	         if (flen.GT.0) call __OPEN_FILE(ifile,fname,'FORMATT
+        if (flen.GT.0) call open_file(ifile,fname,'UNFORMATTE |	        if (flen.GT.0) call __OPEN_FILE(ifile,fname,'UNFORMAT
+        c1=gtrmi(comlyn, comlen, 'COL', -1)		      |	        c1=__GET_RM_I(comlyn, comlen, 'COL', -1)
+         if (qprint) write(outu,6679) whoami, c1	      |	         if (qprint) write(_MSGBUF,6679) whoami, c1
+         if (qprint) write(outu,6689) whoami		      |	         if (qprint) write(_MSGBUF,6689) whoami
+         if (flen.gt.0) call vclose(ifile,'KEEP',error)	      |	         if (flen.gt.0) call __CLOSE_FILE(ifile,'KEEP',error)
+      elseif (eqstwc(keyword(1:4),4,'READ',4)) then	      |	      elseif (__STRNCMP(keyword(1:4),4,'READ',4)) then
+       qcor=indxa(comlyn,comlen,'COR'); qcor = min(qcor,1)    |	       qcor=__INDX_RM(comlyn,comlen,'COR'); qcor = min(qcor,1
+       qdcd=indxa(comlyn,comlen,'DCD'); qdcd = min(qdcd,1)    |	       qdcd=__INDX_RM(comlyn,comlen,'DCD'); qdcd = min(qdcd,1
+        call wrndie(0, whoami,                                |	        __WRN( whoami,                                       
+       ifile=gtrmi(comlyn,comlen,'UNIT',-1)		      |	       ifile=__GET_RM_I(comlyn,comlen,'UNIT',-1)
+       c1=gtrmi(comlyn, comlen, 'COL', 0)		      |	       c1=__GET_RM_I(comlyn, comlen, 'COL', 0)
+         if (flen.GT.0) call open_file(ifile,fname,'FORMATTED |	         if (flen.GT.0) call __OPEN_FILE(ifile,fname,'FORMATT
+         if (flen.GT.0) call open_file(ifile,fname,'UNFORMATT |	         if (flen.GT.0) call __OPEN_FILE(ifile,fname,'UNFORMA
+         if (qprint) write(outu,6699) whoami, c1	      |	         if (qprint) write(_MSGBUF,6699) whoami, c1
+         if (qprint) write(outu,6709) whoami		      |	         if (qprint) write(_MSGBUF,6709) whoami
+         if (flen.gt.0) call vclose(ifile,'KEEP',error)	      |	         if (flen.gt.0) call __CLOSE_FILE(ifile,'KEEP',error)
+         call PSND8(r_f(:,:,c1), 3*nforced) ! forcing coordin |	         call __BROADCAST_LOCAL_8B(r_f(:,:,c1), 3*nforced) ! 
+         if (qdiffrot) call PSND8(r_o(:,:,c1), 3*norient) ! s |	         if (qdiffrot) call __BROADCAST_LOCAL_8B(r_o(:,:,c1),
+      elseif (eqstwc(keyword(1:4),4,'SWAP',4)) then ! swap tw |	      elseif (__STRNCMP(keyword(1:4),4,'SWAP',4)) then ! swap
+        call nextwd(comlyn, comlen, keyword, klen, strl)      |	        call __NEXTA(comlyn, comlen, keyword, klen, strl)
+        c1=decodi(keyword, strl)			      |	        c1=__ATOI(keyword, strl)
+        call nextwd(comlyn, comlen, keyword, klen, strl)      |	        call __NEXTA(comlyn, comlen, keyword, klen, strl)
+        c2=decodi(keyword, strl)			      |	        c2=__ATOI(keyword, strl)
+        if (qprint) write(outu,6729) whoami, c1, c2	      |	        if (qprint) write(_MSGBUF,6729) whoami, c1, c2
+      elseif (eqstwc(keyword(1:4),4,'COPY',4)) then ! copy fo |	      elseif (__STRNCMP(keyword(1:4),4,'COPY',4)) then ! copy
+        call nextwd(comlyn, comlen, keyword, klen, strl)      |	        call __NEXTA(comlyn, comlen, keyword, klen, strl)
+        c1=decodi(keyword, strl)			      |	        c1=__ATOI(keyword, strl)
+        call nextwd(comlyn, comlen, keyword, klen, strl)      |	        call __NEXTA(comlyn, comlen, keyword, klen, strl)
+        c2=decodi(keyword, strl)			      |	        c2=__ATOI(keyword, strl)
+        if (qprint) write(outu,6739) whoami, c1, c2	      |	        if (qprint) write(_MSGBUF,6739) whoami, c1, c2
+      elseif (eqstwc(keyword(1:4),4,'SET',3)) then ! modify k |	      elseif (__STRNCMP(keyword(1:4),4,'SET',3)) then ! modif
+        iorie=indxa(comlyn, comlen, 'ORIE')		      |	        iorie=__INDX_RM(comlyn, comlen, 'ORIE')
+        irmsd=indxa(comlyn, comlen, 'RMSD')		      |	        irmsd=__INDX_RM(comlyn, comlen, 'RMSD')
+           call wrndie(0,whoami,                              |	           __WRN(whoami,                                     
+            write(outu,100) whoami, norient		      |	            write(_MSGBUF,100) whoami, norient
+            write(outu,101) whoami			      |	            write(_MSGBUF,101) whoami
+             write(outu,102) whoami			      |	             write(_MSGBUF,102) whoami
+             write(outu,103) whoami			      |	             write(_MSGBUF,103) whoami
+          call wrndie(0,whoami,                               |	          __WRN(whoami,                                      
+           call wrndie(0,whoami,                              |	           __WRN(whoami,                                     
+            write(outu,104) whoami, nforced		      |	            write(_MSGBUF,104) whoami, nforced
+            write(outu,105) whoami			      |	            write(_MSGBUF,105) whoami
+             write(outu,102) whoami			      |	             write(_MSGBUF,102) whoami
+             write(outu,103) whoami			      |	             write(_MSGBUF,103) whoami
+          call wrndie(0,whoami,                               |	          __WRN(whoami,                                      
+           if (qprint) write(outu,6756) whoami, k	      |	           if (qprint) write(_MSGBUF,6756) whoami, k
+           if (qprint) write(outu,6757) whoami, k	      |	           if (qprint) write(_MSGBUF,6757) whoami, k
+           if (qprint) write(outu,6746) whoami, k	      |	           if (qprint) write(_MSGBUF,6746) whoami, k
+           if (qprint) write(outu,6757) whoami, k	      |	           if (qprint) write(_MSGBUF,6757) whoami, k
+           if (qprint) write(outu,6752) whoami, k	      |	           if (qprint) write(_MSGBUF,6752) whoami, k
+           if (qprint) write(outu,6757) whoami, k	      |	           if (qprint) write(_MSGBUF,6757) whoami, k
+        elseif (indxa(comlyn,comlen,'MASS').gt.0) then ! mass |	        elseif (__INDX_RM(comlyn,comlen,'MASS').gt.0) then ! 
+          keyword=nexta8(comlyn, comlen)		      |	          keyword=__NEXTA(comlyn, comlen)
+          call trima(keyword,klen)			      |	          call __TRIMA(keyword,klen)
+            if (qprint) write(outu,8001) whoami, 'SET FROM AT |	            if (qprint) write(_MSGBUF,8001) whoami, 'SET FROM
+            if (qprint) write(outu,8001) whoami, 'WILL BE UNI |	            if (qprint) write(_MSGBUF,8001) whoami, 'WILL BE 
+            if (qprint) write(outu,8001) whoami, 'SET FROM WM |	            if (qprint) write(_MSGBUF,8001) whoami, 'SET FROM
+            if (qprint) write(outu,8001) whoami, 'SET FROM WC |	            if (qprint) write(_MSGBUF,8001) whoami, 'SET FROM
+            call wrndie(0,whoami,'UNKNOWN OPTION SPECIFIED')  |	            __WRN(whoami,'UNKNOWN OPTION SPECIFIED')
+        elseif (indxa(comlyn,comlen,'PROJ').gt.0) then ! mass |	        elseif (__INDX_RM(comlyn,comlen,'PROJ').gt.0) then ! 
+          keyword=nexta8(comlyn, comlen)		      |	          keyword=__NEXTA(comlyn, comlen)
+          call trima(keyword,klen)			      |	          call __TRIMA(keyword,klen)
+            if (qprint)  write (outu,'(2A)') whoami,          |	            if (qprint)  write (_MSGBUF,'(2A)') whoami,      
+            if (qprint) write (outu,'(2A)') whoami,           |	            if (qprint) write (_MSGBUF,'(2A)') whoami,       
+            call wrndie(0,whoami,'UNKNOWN OPTION SPECIFIED')  |	            __WRN(whoami,'UNKNOWN OPTION SPECIFIED')
+          irep=gtrmi(comlyn, comlen, 'REP', -1)		      |	          irep=__GET_RM_I(comlyn, comlen, 'REP', -1)
+           if (qprint) write(outu, 6773) whoami, whoami, zval |	           if (qprint) write(_MSGBUF, 6773) whoami, whoami, z
+           if (qprint) write(outu,6774) whoami, irep, zval    |	           if (qprint) write(_MSGBUF,6774) whoami, irep, zval
+          irep=gtrmi(comlyn, comlen, 'REP', -1)		      |	          irep=__GET_RM_I(comlyn, comlen, 'REP', -1)
+           if (qprint) write(outu, 6776) whoami, whoami, zval |	           if (qprint) write(_MSGBUF, 6776) whoami, whoami, z
+           if (qprint) write(outu,6775) whoami, irep, zval    |	           if (qprint) write(_MSGBUF,6775) whoami, irep, zval
+          irep=gtrmi(comlyn, comlen, 'REP', -1)		      |	          irep=__GET_RM_I(comlyn, comlen, 'REP', -1)
+           if (qprint) write(outu, 6777) whoami, whoami, zval |	           if (qprint) write(_MSGBUF, 6777) whoami, whoami, z
+           if (qprint) write(outu,6778) whoami, irep, zval    |	           if (qprint) write(_MSGBUF,6778) whoami, irep, zval
+      elseif (eqstwc(keyword(1:4),4,'LIST',4)) then ! list fo |	      elseif (__STRNCMP(keyword(1:4),4,'LIST',4)) then ! list
+       if (qprint) write(outu,6762) whoami		      |	       if (qprint) write(_MSGBUF,6762) whoami
+!      use string					      |	!      __DEP_OUTPUT
+      use stream 					      |	      __DEP_PARSER 
+      use multicom_ltm       !##MULTICOM		      |	      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
+      use mpi 						      |	      __DEP_MPI 
+      implicit none					      |	      __IMPNONE
+      integer :: error					      |	      int :: error
+      logical :: qroot, qslave				      |	      bool :: qroot, qslave
+      character*11 :: whoami				      |	      character(len=11 :: whoami
+        write(outu, 111) whoami, ME_GLOBAL, whoami	      |	        write(_MSGBUF, 111) whoami, ME_GLOBAL, whoami
+        write(outu, 112) whoami, ME_GLOBAL, whoami	      |	        write(_MSGBUF, 112) whoami, ME_GLOBAL, whoami
+          write(outu,'(2A)')                                  |	          write(_MSGBUF,'(2A)')                              
+          write(outu,'(2A,I5, A)')                            |	          write(_MSGBUF,'(2A,I5, A)')                        
+      use stream 					      |	      __DEP_PARSER 
+      use multicom_ltm       !##MULTICOM		      |	      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
+      use mpi 						      |	      __DEP_MPI 
+      character*11 :: whoami				      |	      character(len=11 :: whoami
+     &  write(outu,'(2A,I5, A)') whoami, ' CLEANING UP.'      |	     &  write(_MSGBUF,'(2A,I5, A)') whoami, ' CLEANING UP.'
+      use stream 					      |	      __DEP_PARSER 
+      use multicom_ltm       !##MULTICOM		      |	      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
+      use mpi 						      |	      __DEP_MPI 
+      implicit none					      |	      __IMPNONE
+      character*16 :: whoami				      |	      character(len=16 :: whoami
+      logical :: qprint, qroot				      |	      bool :: qprint, qroot
+      if (qprint) write(outu,8002) whoami		      |	      if (qprint) write(_MSGBUF,8002) whoami
+      use stream 					      |	      __DEP_PARSER 
+      use multicom_ltm       !##MULTICOM		      |	      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
+      use mpi 						      |	      __DEP_MPI 
+      implicit none					      |	      __IMPNONE
+      integer :: j, iatom				      |	      int :: j, iatom
+      character*8 :: sid, rid, ren, ac			      |	      character(len=8 :: sid, rid, ren, ac
+      character*17 :: whoami				      |	      character(len=17 :: whoami
+       write(outu,'(A)') '\t ORIENTATION ATOMS:'	      |	       write(_MSGBUF,'(A)') '\t ORIENTATION ATOMS:'
+         write(outu,667) '\t',j, iatom, sid, rid, ren, ac     |	         write(_MSGBUF,667) '\t',j, iatom, sid, rid, ren, ac
+         write(outu,'(A)') '\t FORCING ATOMS'		      |	         write(_MSGBUF,'(A)') '\t FORCING ATOMS'
+          write(outu,667) '\t',j, iatom, sid, rid, ren, ac    |	          write(_MSGBUF,667) '\t',j, iatom, sid, rid, ren, ac
+        write(outu,'(A)')'\t FORCING AND ORIENTATION ATOMS AR |	        write(_MSGBUF,'(A)')'\t FORCING AND ORIENTATION ATOMS
+!      use string					      |	!      __DEP_OUTPUT
+      use number 					      |	      __DEP_NUMBER 
+      use stream 					      |	      __DEP_PARSER 
+      use multicom_ltm       !##MULTICOM		      |	      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
+      implicit none					      |	      __IMPNONE
+      real*8 :: w(n), a					      |	      float :: w(n), a
+      character*18 :: whoami				      |	      character(len=18 :: whoami
+      integer :: i, j, n				      |	      int :: i, j, n
+     & write(outu,668)                                        |	     & write(_MSGBUF,668)                                    
+       call wrndie(0,whoami,'NO STRING ATOMS FOUND. NOTHING D |	       __WRN(whoami,'NO STRING ATOMS FOUND. NOTHING DONE.')
+!     & call wrndie(0,whoami,'NO ORIENTATION ATOMS FOUND.')   |	!     & __WRN(whoami,'NO ORIENTATION ATOMS FOUND.')
+         call wrndie(0,whoami,'WEIGHT ARRAY BOUNDS EXCEEDED.  |	         __WRN(whoami,'WEIGHT ARRAY BOUNDS EXCEEDED. ABORT.')
+        call wrndie(0,whoami,                                 |	        __WRN(whoami,                                        
+!     & call wrndie(0,whoami,'NO FORCED ATOMS FOUND.')	      |	!     & __WRN(whoami,'NO FORCED ATOMS FOUND.')
+         call wrndie(0,whoami,'WEIGHT ARRAY BOUNDS EXCEEDED.  |	         __WRN(whoami,'WEIGHT ARRAY BOUNDS EXCEEDED. ABORT.')
+        call wrndie(0,whoami,                                 |	        __WRN(whoami,                                        
+!      use string					      |	!      __DEP_OUTPUT
+      implicit none					      |	      __IMPNONE
+      integer :: c1, c2					      |	      int :: c1, c2
+      real*8 :: com(3)					      |	      float :: com(3)
+      character*11 :: whoami				      |	      character(len=11 :: whoami
+      integer :: i,j					      |	      int :: i,j
+       call wrndie(0,whoami,'INVALID COLUMN SPECIFIED. ABORT. |	       __WRN(whoami,'INVALID COLUMN SPECIFIED. ABORT.')
+      use number 					      |	      __DEP_NUMBER 
+      implicit none					      |	      __IMPNONE
+      integer :: c1, c2					      |	      int :: c1, c2
+      character*11 :: whoami				      |	      character(len=11 :: whoami
+      integer :: i,j					      |	      int :: i,j
+       call wrndie(0,whoami,'INVALID COLUMN SPECIFIED. ABORT. |	       __WRN(whoami,'INVALID COLUMN SPECIFIED. ABORT.')
+      use number 					      |	      __DEP_NUMBER 
+      use multicom_ltm       !##MULTICOM		      |	      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
+      use mpi 						      |	      __DEP_MPI 
+!							      |	!
+      implicit none					      |	      __IMPNONE
+!							      |	!
+      real*8 :: x(:), y(:), z(:)			      |	      float :: x(:), y(:), z(:)
+      character*11 :: whoami				      |	      character(len=11 :: whoami
+      integer :: i,j,n					      |	      int :: i,j,n
+      logical :: qroot, qslave				      |	      bool :: qroot, qslave
+      real*8, pointer, dimension(:,:) :: rl, rc, rr	      |	      float, pointer, dimension(:,:) :: rl, rc, rr
+      integer :: me					      |	      int :: me
+       call wrndie(0,whoami,                                  |	       __WRN(whoami,                                         
+      call wrndie(0,whoami,'COORDINATE ARRAY BOUNDS EXCEEDED. |	      __WRN(whoami,'COORDINATE ARRAY BOUNDS EXCEEDED. ABORT.'
+      call wrndie(0,whoami,'COORDINATE ARRAY BOUNDS EXCEEDED. |	      __WRN(whoami,'COORDINATE ARRAY BOUNDS EXCEEDED. ABORT.'
+!       call PSND8(r_f,9*nforced) ! send three adjacent sets  |	!       call __BROADCAST_LOCAL_8B(r_f,9*nforced) ! send three
+!       if (qdiffrot) call PSND8(r_o,9*norient)		      |	!       if (qdiffrot) call __BROADCAST_LOCAL_8B(r_o,9*norient
+      implicit none					      |	      __IMPNONE
+      integer :: i, j					      |	      int :: i, j
+      integer, allocatable :: temp(:,:)			      |	      int, allocatable :: temp(:,:)
+      use mpi 						      |	      __DEP_MPI 
+      implicit none					      |	      __IMPNONE
+      integer :: error					      |	      int :: error
+      integer(kind=MPI_ADDRESS_KIND) :: lb, extent	      |	      int(kind=MPI_ADDRESS_KIND) :: lb, extent
+      implicit none					      |	      __IMPNONE
+      real*8 :: x(:), y(:), z(:)			      |	      float :: x(:), y(:), z(:)
+      real*8 :: h					      |	      float :: h
+      real*8, pointer :: error(:,:)			      |	      float, pointer :: error(:,:)
+      integer :: i, j, jj				      |	      int :: i, j, jj
+      real*8 :: d, ap, am, bp, bm			      |	      float :: d, ap, am, bp, bm
+      real*8 :: s					      |	      float :: s
+      character*19 :: whoami				      |	      character(len=19 :: whoami
+       call wrndie(0,whoami,'COORDINATE PERTURBATION ZERO.')  |	       __WRN(whoami,'COORDINATE PERTURBATION ZERO.')
+      use multicom_ltm       !##MULTICOM		      |	      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
+      use mpi 						      |	      __DEP_MPI 
+      implicit none					      |	      __IMPNONE
+!							      |	!
+      real*8 :: x(:), y(:), z(:)			      |	      float :: x(:), y(:), z(:)
+      real*8, pointer :: error(:,:)			      |	      float, pointer :: error(:,:)
+      real*8 :: am, bm					      |	      float :: am, bm
+!							      |	!
+      integer :: i					      |	      int :: i
+      logical :: qpara					      |	      bool :: qpara
+      logical :: qgrp					      |	      bool :: qgrp
+      character*20 :: whoami				      |	      character(len=20 :: whoami
+      use multicom_ltm       !##MULTICOM		      |	      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
+      use stream 					      |	      __DEP_PARSER 
+##IF CVELOCI						      |	__CHARMM_ONLY##IF CVELOCI
+##ENDIF							      |	__CHARMM_ONLY##ENDIF
+      use mpi 						      |	      __DEP_MPI 
+      implicit none					      |	      __IMPNONE
+      character*16 :: whoami				      |	      character(len=16 :: whoami
+      character*80 :: title(maxtit)			      |	      character(len=80 :: title(maxtit)
+      real*8 :: r(natom,3)				      |	      float :: r(natom,3)
+      integer :: stringatoms(natom), string_inds(natom), i, j |	      int :: stringatoms(natom), string_inds(natom), i, j, k,
+      integer :: ifile					      |	      int :: ifile
+      integer, optional :: col, ibeg, iend		      |	      int, optional :: col, ibeg, iend
+      integer :: c, ierr, stat(MPI_STATUS_SIZE), ibg, ie, ind |	      int :: c, ierr, stat(MPI_STATUS_SIZE), ibg, ie, ind
+      integer :: rtype=MPI_DOUBLE_PRECISION, ntitle	      |	      int :: rtype=MPI_DOUBLE_PRECISION, ntitle
+      logical :: qroot					      |	      bool :: qroot
+       call wrndie(0, whoami, 'INVALID COLUMN. ABORT.')	      |	       __WRN( whoami, 'INVALID COLUMN. ABORT.')
+       call wrndie(0, whoami, 'INVALID FRAMES REQUESTED. ABOR |	       __WRN( whoami, 'INVALID FRAMES REQUESTED. ABORT.')
+       ncv=ncvel ; ncvel=0  !##CVELOCI ! exclude constant vel |	       ncv=ncvel ; ncvel=0  !__CHARMM_ONLY##CVELOCI ! exclude
+     &  r(:,1), .false.,                                      |	     &  r(:,1), .false.,                                     
+!     $                  CG,QCG,                              |	!     $                  CG,QCG,                             
+     &   r(:,1), .false.,                                     |	     &   r(:,1), .false.,                                    
+       ncvel=ncv !##CVELOCI				      |	       ncvel=ncv !__CHARMM_ONLY##CVELOCI
+      use multicom_ltm       !##MULTICOM		      |	      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
+      use stream 					      |	      __DEP_PARSER 
+      use mpi 						      |	      __DEP_MPI 
+      implicit none					      |	      __IMPNONE
+      character*15 :: whoami				      |	      character(len=15 :: whoami
+      character*80 :: title(maxtit)			      |	      character(len=80 :: title(maxtit)
+      real*8 :: r(natom,3)				      |	      float :: r(natom,3)
+      real*8 :: trash8(natom) ! scratch array for ugly routin |	      float :: trash8(natom) ! scratch array for ugly routine
+      integer :: stringatoms(natom), string_inds(natom), i, j |	      int :: stringatoms(natom), string_inds(natom), i, j, k,
+      integer, optional :: col				      |	      int, optional :: col
+      integer :: c, ierr, stat(MPI_STATUS_SIZE)		      |	      int :: c, ierr, stat(MPI_STATUS_SIZE)
+      integer :: rtype=MPI_DOUBLE_PRECISION		      |	      int :: rtype=MPI_DOUBLE_PRECISION
+      integer :: nfile, istep, istats, ndof, begin_, stop_,   |	      int :: nfile, istep, istats, ndof, begin_, stop_,      
+      real*8 :: delta					      |	      float :: delta
+      logical :: qdim4, qcg				      |	      bool :: qdim4, qcg
+       call wrndie(0, whoami, 'INVALID COLUMN. ABORT.')	      |	       __WRN( whoami, 'INVALID COLUMN. ABORT.')
+     &  trash8, qcg,                                          |	     &  trash8, qcg,                                         
+     &   call wrndie(0,whoami,                                |	     &   __WRN(whoami,                                       
+        call wrndie(0,whoami,                                 |	        __WRN(whoami,                                        
+!     $                  CG,QCG,                         !##C |	!     $                  CG,QCG,                         !__C
+!C    Q_PLL    mfc added logical variable to signal whether   |	!C    Q_PLL    mfc added bool variable to signal whether
+     &   trash8, qcg,                                         |	     &   trash8, qcg,                                        
+      use stream 					      |	      __DEP_PARSER 
+      implicit none					      |	      __IMPNONE
+      character*16 :: whoami				      |	      character(len=16 :: whoami
+      character*80 :: title(maxtit)			      |	      character(len=80 :: title(maxtit)
+      real*8 :: r(natom,3)				      |	      float :: r(natom,3)
+      integer :: stringatoms(natom), i, j, k, ind	      |	      int :: stringatoms(natom), i, j, k, ind
+      integer, optional :: col				      |	      int, optional :: col
+      integer :: c, ifile				      |	      int :: c, ifile
+      integer :: ntitle					      |	      int :: ntitle
+      real*8 :: wdum(natom+1)				      |	      float :: wdum(natom+1)
+      integer :: icntrl(20)=0, modew			      |	      int :: icntrl(20)=0, modew
+       call wrndie(0, whoami, 'INVALID COLUMN. ABORT.')	      |	       __WRN( whoami, 'INVALID COLUMN. ABORT.')
+      use stream 					      |	      __DEP_PARSER 
+      use number 					      |	      __DEP_NUMBER 
+      implicit none					      |	      __IMPNONE
+      character*15 :: whoami				      |	      character(len=15 :: whoami
+      character*80 :: title(maxtit), cdummy=''		      |	      character(len=80 :: title(maxtit), cdummy=''
+      real*8 :: r(natom,3)				      |	      float :: r(natom,3)
+      integer :: stringatoms(natom), i, j, k, ind	      |	      int :: stringatoms(natom), i, j, k, ind
+      integer, optional :: col				      |	      int, optional :: col
+      integer :: c, ifile				      |	      int :: c, ifile
+      real*8 :: xdum(natom+1), ydum(natom+1), zdum(natom+1),  |	      float :: xdum(natom+1), ydum(natom+1), zdum(natom+1),  
+      integer :: icntrl(20), moder, ntitle=0		      |	      int :: icntrl(20), moder, ntitle=0
+      integer :: ifree(natom)				      |	      int :: ifree(natom)
+       call wrndie(0, whoami, 'INVALID COLUMN. ABORT.')	      |	       __WRN( whoami, 'INVALID COLUMN. ABORT.')
+      use string					      |	      __DEP_OUTPUT
+      use stream 					      |	      __DEP_PARSER 
+      use multicom_ltm       !##MULTICOM		      |	      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
+      use mpi 						      |	      __DEP_MPI 
+      implicit none					      |	      __IMPNONE
+      character*80 :: rex_fname_old			      |	      character(len=80 :: rex_fname_old
+      integer :: rex_flen_old, oldiol, error		      |	      int :: rex_flen_old, oldiol, error
+      character*8 keyword				      |	      character(len=8 keyword
+      character*16 whoami				      |	      character(len=16 whoami
+      logical :: qroot, qprint				      |	      bool :: qroot, qprint
+      stat_iteration_counter=gtrmi(comlyn, comlen, 'COUN', -1 |	      stat_iteration_counter=__GET_RM_I(comlyn, comlen, 'COUN
+       if (qprint) write(outu,639) whoami, stat_iteration_cou |	       if (qprint) write(_MSGBUF,639) whoami, stat_iteration_
+      if (indxa(comlyn,comlen,'RMSD').gt.0) then ! request fo |	      if (__INDX_RM(comlyn,comlen,'RMSD').gt.0) then ! reques
+         call wrndie(0,whoami,                                |	         __WRN(whoami,                                       
+         if (indxa(comlyn,comlen,'RAPP').gt.0) then ! APPEND? |	         if (__INDX_RM(comlyn,comlen,'RAPP').gt.0) then ! APP
+          write(outu,660 ) whoami,rmsd0_fname(1:rmsd0_flen)   |	          write(_MSGBUF,660 ) whoami,rmsd0_fname(1:rmsd0_flen
+          write(outu,661 ) whoami			      |	          write(_MSGBUF,661 ) whoami
+      if (indxa(comlyn,comlen,'ARCL').gt.0) then	      |	      if (__INDX_RM(comlyn,comlen,'ARCL').gt.0) then
+         call wrndie(0,whoami,                                |	         __WRN(whoami,                                       
+         if (indxa(comlyn,comlen,'AAPP').gt.0) then ! APPEND? |	         if (__INDX_RM(comlyn,comlen,'AAPP').gt.0) then ! APP
+          write(outu,652) whoami,s_fname(1:s_flen)	      |	          write(_MSGBUF,652) whoami,s_fname(1:s_flen)
+          write(outu,653) whoami			      |	          write(_MSGBUF,653) whoami
+      if (indxa(comlyn,comlen,'CURV').gt.0) then	      |	      if (__INDX_RM(comlyn,comlen,'CURV').gt.0) then
+         call wrndie(0,whoami,                                |	         __WRN(whoami,                                       
+         if (indxa(comlyn,comlen,'CAPP').gt.0) then ! APPEND? |	         if (__INDX_RM(comlyn,comlen,'CAPP').gt.0) then ! APP
+          write(outu,6521) whoami,c_fname(1:c_flen)	      |	          write(_MSGBUF,6521) whoami,c_fname(1:c_flen)
+          write(outu,6531) whoami			      |	          write(_MSGBUF,6531) whoami
+      if (indxa(comlyn,comlen,'FREE').gt.0) then	      |	      if (__INDX_RM(comlyn,comlen,'FREE').gt.0) then
+         call wrndie(0,whoami,                                |	         __WRN(whoami,                                       
+         if (indxa(comlyn,comlen,'FAPP').gt.0) then ! APPEND? |	         if (__INDX_RM(comlyn,comlen,'FAPP').gt.0) then ! APP
+          write(outu,6520) whoami,fe_fname(1:fe_flen)	      |	          write(_MSGBUF,6520) whoami,fe_fname(1:fe_flen)
+          write(outu,6530) whoami			      |	          write(_MSGBUF,6530) whoami
+      if (indxa(comlyn,comlen,'CENT').gt.0) then	      |	      if (__INDX_RM(comlyn,comlen,'CENT').gt.0) then
+     &      write(outu,6620 ) whoami,centers_fname(1:centers_ |	     &      write(_MSGBUF,6620 ) whoami,centers_fname(1:cente
+         if (indxa(comlyn,comlen,'CEAP').gt.0) then ! APPEND? |	         if (__INDX_RM(comlyn,comlen,'CEAP').gt.0) then ! APP
+          call wrndie(0,whoami,                               |	          __WRN(whoami,                                      
+      if (indxa(comlyn,comlen,'REXM').gt.0) then	      |	      if (__INDX_RM(comlyn,comlen,'REXM').gt.0) then
+     &      write(outu,6721) whoami,rex_fname(1:rex_flen)     |	     &      write(_MSGBUF,6721) whoami,rex_fname(1:rex_flen)
+             write(outu,6722) whoami,rex_fname_old(1:rex_flen |	             write(_MSGBUF,6722) whoami,rex_fname_old(1:rex_f
+             call open_file(rex_funit,rex_fname_old(1:rex_fle |	             call __OPEN_FILE(rex_funit,rex_fname_old(1:rex_f
+          if (qprint) call vclose(rex_funit, 'KEEP', error)   |	          if (qprint) call __CLOSE_FILE(rex_funit, 'KEEP', er
+          call wrndie(0,whoami,                               |	          __WRN(whoami,                                      
+      if (indxa(comlyn,comlen,'REXL').gt.0) then	      |	      if (__INDX_RM(comlyn,comlen,'REXL').gt.0) then
+        rextime_offset=gtrmi(comlyn, comlen, 'ROFF', 0);      |	        rextime_offset=__GET_RM_I(comlyn, comlen, 'ROFF', 0);
+         if (qprint) write(outu,6724) whoami, whoami,rextime_ |	         if (qprint) write(_MSGBUF,6724) whoami, whoami,rexti
+     &      write(outu,6723) whoami,whoami,rex_fname(1:rex_fl |	     &      write(_MSGBUF,6723) whoami,whoami,rex_fname(1:rex
+         if (indxa(comlyn,comlen,'RXAP').gt.0) then ! APPEND? |	         if (__INDX_RM(comlyn,comlen,'RXAP').gt.0) then ! APP
+          call wrndie(0,whoami,                               |	          __WRN(whoami,                                      
+      if (indxa(comlyn,comlen,'FORC').gt.0) then	      |	      if (__INDX_RM(comlyn,comlen,'FORC').gt.0) then
+     &     write(outu,6625) whoami,forces_fname(1:forces_flen |	     &     write(_MSGBUF,6625) whoami,forces_fname(1:forces_f
+         if (indxa(comlyn,comlen,'FCAP').gt.0) then ! APPEND? |	         if (__INDX_RM(comlyn,comlen,'FCAP').gt.0) then ! APP
+         call wrndie(0,whoami,                                |	         __WRN(whoami,                                       
+      use string					      |	      __DEP_OUTPUT
+      use multicom_ltm       !##MULTICOM		      |	      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
+      use stream 					      |	      __DEP_PARSER 
+      use mpi 						      |	      __DEP_MPI 
+!							      |	!
+      implicit none					      |	      __IMPNONE
+      integer :: i, k, fmt_len, oldiol			      |	      int :: i, k, fmt_len, oldiol
+      character*80 :: fmt_real, fmt_int, fmt		      |	      character(len=80 :: fmt_real, fmt_int, fmt
+      real*8 :: r_com(3)				      |	      float :: r_com(3)
+      real*8 :: u (3,3)= RESHAPE( (/1,0,0,0,1,0,0,0,1/), (/3, |	      float :: u (3,3)= RESHAPE( (/1,0,0,0,1,0,0,0,1/), (/3,3
+      real*8 :: rmsd0, rmsd0_all(nstring), fc_all(2,nstring)  |	      float :: rmsd0, rmsd0_all(nstring), fc_all(2,nstring)
+      integer :: error					      |	      int :: error
+      character*11 whoami				      |	      character(len=11 whoami
+      logical :: qroot, qprint, qgrp			      |	      bool :: qroot, qprint, qgrp
+       call wrndie(0,whoami,                                  |	       __WRN(whoami,                                         
+       call trima(fmt_real,fmt_len)			      |	       call __TRIMA(fmt_real,fmt_len)
+            call open_file(rmsd0_funit, rmsd0_fname,          |	            call __OPEN_FILE(rmsd0_funit, rmsd0_fname,       
+            call vclose(rmsd0_funit, 'KEEP', error)	      |	            call __CLOSE_FILE(rmsd0_funit, 'KEEP', error)
+          call open_file(s_funit, s_fname,                    |	          call __OPEN_FILE(s_funit, s_fname,                 
+          call vclose(s_funit, 'KEEP', error)		      |	          call __CLOSE_FILE(s_funit, 'KEEP', error)
+          call wrndie(0,whoami,                               |	          __WRN(whoami,                                      
+          call open_file(c_funit, c_fname,                    |	          call __OPEN_FILE(c_funit, c_fname,                 
+          call vclose(c_funit, 'KEEP', error)		      |	          call __CLOSE_FILE(c_funit, 'KEEP', error)
+          call wrndie(0,whoami,                               |	          __WRN(whoami,                                      
+          call open_file(fe_funit, fe_fname,                  |	          call __OPEN_FILE(fe_funit, fe_fname,               
+          call vclose(fe_funit, 'KEEP', error)		      |	          call __CLOSE_FILE(fe_funit, 'KEEP', error)
+         call wrndie(0,whoami,                                |	         __WRN(whoami,                                       
+          call open_file(rex_funit,                           |	          call __OPEN_FILE(rex_funit,                        
+          call vclose(rex_funit, 'KEEP', error)		      |	          call __CLOSE_FILE(rex_funit, 'KEEP', error)
+         call wrndie(0,whoami,                                |	         __WRN(whoami,                                       
+           call open_file(rex_funit,                          |	           call __OPEN_FILE(rex_funit,                       
+         if (qprint) call vclose(rex_funit,'KEEP',error)      |	         if (qprint) call __CLOSE_FILE(rex_funit,'KEEP',error
+         call open_file(centers_funit, centers_fname,'UNFORMA |	         call __OPEN_FILE(centers_funit, centers_fname,'UNFOR
+!     &       IEND=2**31-1) ! largest 4-byte integer     ! ho |	!     &       IEND=2**31-1) ! largest 4-byte int     ! howeve
+        if (qprint) call vclose(centers_funit, 'KEEP', error) |	        if (qprint) call __CLOSE_FILE(centers_funit, 'KEEP', 
+          call open_file(forces_funit, forces_fname,          |	          call __OPEN_FILE(forces_funit, forces_fname,       
+     &     call vclose(forces_funit, 'KEEP', error)	      |	     &     call __CLOSE_FILE(forces_funit, 'KEEP', error)
+      use stream					      |	      __DEP_PARSER
+      implicit none					      |	      __IMPNONE
+      character*12 :: whoami				      |	      character(len=12 :: whoami
+      integer :: error					      |	      int :: error
+      logical :: ok, qorie				      |	      bool :: ok, qorie
+       call wrndie(0,whoami,'FTSM NOT INITIALIZED. ABORT.')   |	       __WRN(whoami,'FTSM NOT INITIALIZED. ABORT.')
+       call wrndie(0,whoami,'NO ORIENTATION ATOMS FOUND. ABOR |	       __WRN(whoami,'NO ORIENTATION ATOMS FOUND. ABORT.')
+       call wrndie(0,whoami,'NO FORCING ATOMS FOUND. ABORT.') |	       __WRN(whoami,'NO FORCING ATOMS FOUND. ABORT.')
+      use stream 					      |	      __DEP_PARSER 
+      use multicom_ltm       !##MULTICOM		      |	      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
+      use mpi 						      |	      __DEP_MPI 
+      implicit none					      |	      __IMPNONE
+      real*8 :: x(:), y(:), z(:),                             |	      float :: x(:), y(:), z(:),                             
+      integer :: iteration ! MD iteration		      |	      int :: iteration ! MD iteration
+      real*8 :: s					      |	      float :: s
+      character*11 :: whoami				      |	      character(len=11 :: whoami
+      logical :: qgrp					      |	      bool :: qgrp
+      integer :: i, bug, qfac				      |	      int :: i, bug, qfac
+         if (prnlev.ge.3.and..not.string_noprint) write(outu, |	         if (prnlev.ge.3.and..not.string_noprint) write(_MSGB
+            if (prnlev.ge.3.and..not.string_noprint) write(ou |	            if (prnlev.ge.3.and..not.string_noprint) write(_M
+          if (prnlev.ge.3.and..not.string_noprint) write(outu |	          if (prnlev.ge.3.and..not.string_noprint) write(_MSG
+          if (prnlev.ge.3.and..not.string_noprint) write(outu |	          if (prnlev.ge.3.and..not.string_noprint) write(_MSG
+            if (prnlev.ge.3.and..not.string_noprint) write(ou |	            if (prnlev.ge.3.and..not.string_noprint) write(_M
+         if (prnlev.ge.3.and..not.string_noprint) write(outu, |	         if (prnlev.ge.3.and..not.string_noprint) write(_MSGB
+           if (prnlev.ge.3) write(outu,'(2A)')                |	           if (prnlev.ge.3) write(_MSGBUF,'(2A)')            
+      use number 					      |	      __DEP_NUMBER 
+      use multicom_ltm       !##MULTICOM		      |	      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
+      use mpi 						      |	      __DEP_MPI 
+      implicit none					      |	      __IMPNONE
+      real*8 :: x(:), y(:), z(:)			      |	      float :: x(:), y(:), z(:)
+      logical :: deriv, qgrp, qcombine			      |	      bool :: deriv, qgrp, qcombine
+      real*8, optional :: t				      |	      float, optional :: t
+      real*8 :: s, oms ! this value indicates how much of the |	      float :: s, oms ! this value indicates how much of the 
+      integer :: ind, i, j, k, obeg, oend, p, q, error	      |	      int :: ind, i, j, k, obeg, oend, p, q, error
+      real*8 :: u (3,3), u1(3,3), u2(3,3), u3(3,3)	      |	      float :: u (3,3), u1(3,3), u2(3,3), u3(3,3)
+      real*8 :: r_com(3) ! COM vector			      |	      float :: r_com(3) ! COM vector
+      real*8 :: rho, rho1, rho2, r1(3), r2(3), r3(3), d, d1,  |	      float :: rho, rho1, rho2, r1(3), r2(3), r3(3), d, d1, d
+      real*8 :: omdpar					      |	      float :: omdpar
+      real*8 :: a11, a12, a13, a21, a22, a23, a31, a32, a33   |	      float :: a11, a12, a13, a21, a22, a23, a31, a32, a33
+      real*8 :: b11, b12, b13, b21, b22, b23, b31, b32, b33   |	      float :: b11, b12, b13, b21, b22, b23, b31, b32, b33
+      real*8, dimension(:,:,:,:), pointer :: ugrad, ugrad1, u |	      float, dimension(:,:,:,:), pointer :: ugrad, ugrad1, ug
+      real*8, pointer, dimension(:,:) :: roi,rol,ror,roc,rol_ |	      float, pointer, dimension(:,:) :: roi,rol,ror,roc,rol_r
+      real*8, pointer, dimension(:,:) :: rfi,rfl,rfr,rfc,rfl_ |	      float, pointer, dimension(:,:) :: rfi,rfl,rfr,rfc,rfl_r
+      real*8, pointer, dimension(:,:) :: fopar, foprp, ffpar, |	      float, pointer, dimension(:,:) :: fopar, foprp, ffpar, 
+      real*8, pointer, dimension(:,:) :: rfpar, rfprp	      |	      float, pointer, dimension(:,:) :: rfpar, rfprp
+      real*8, pointer :: M(:,:)				      |	      float, pointer :: M(:,:)
+      integer*4, allocatable :: orient_count(:), orient_displ |	      int4mpi, allocatable :: orient_count(:), orient_displ(:
+      real*8, parameter :: tol=rsmall			      |	      float, parameter :: tol=rsmall
+      real*8, pointer :: ow(:), fw(:)			      |	      float, pointer :: ow(:), fw(:)
+       real*8 :: message(*)				      |	       float :: message(*)
+       integer :: size, type, rank, error, comm		      |	       int :: size, type, rank, error, comm
+       integer*4 :: count(size), displ(size)		      |	       int4mpi :: count(size), displ(size)
+           call PSND8(r_o(1,1,fpar),6*norient) ! perp follows |	           call __BROADCAST_LOCAL_8B(r_o(1,1,fpar),6*norient)
+            call PSND8(fopar,3*norient)			      |	            call __BROADCAST_LOCAL_8B(fopar,3*norient)
+      implicit none					      |	      __IMPNONE
+      real*8 :: fx(:), fy(:), fz(:)			      |	      float :: fx(:), fy(:), fz(:)
+      real*8, pointer, dimension(:,:) :: ffpar, ffprp, fopar, |	      float, pointer, dimension(:,:) :: ffpar, ffprp, fopar, 
+      real*8 :: pre1, pre2				      |	      float :: pre1, pre2
+      real*8 :: fac, fac2, t, omt			      |	      float :: fac, fac2, t, omt
+      integer :: i, ind					      |	      int :: i, ind
+      logical :: addforce  ! whether to add forces to running |	      bool :: addforce  ! whether to add forces to running fo
+      logical :: qendpoint				      |	      bool :: qendpoint
+      implicit none					      |	      __IMPNONE
+      real*8 :: x(:), y(:), z(:)			      |	      float :: x(:), y(:), z(:)
+      integer :: ind, j, k				      |	      int :: ind, j, k
+      real*8 :: t, omt					      |	      float :: t, omt
+      real*8 :: u (3,3)= RESHAPE( (/1,0,0,0,1,0,0,0,1/), (/3, |	      float :: u (3,3)= RESHAPE( (/1,0,0,0,1,0,0,0,1/), (/3,3
+      real*8, pointer :: r_com(:), ow(:), fw(:)		      |	      float, pointer :: r_com(:), ow(:), fw(:)
+      real*8, pointer, dimension(:,:) :: roi, roc, rfi, rfc   |	      float, pointer, dimension(:,:) :: roi, roc, rfi, rfc
+      implicit none					      |	      __IMPNONE
+      use multicom_ltm       !##MULTICOM		      |	      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
+      use mpi 						      |	      __DEP_MPI 
+      real*8 :: avforces(2,nstring)			      |	      float :: avforces(2,nstring)
+      integer :: bug, i					      |	      int :: bug, i
+      character*20 :: whoami				      |	      character(len=20 :: whoami
+!        call PSND8(fe,nstring)				      |	!        call __BROADCAST_LOCAL_8B(fe,nstring)
+      implicit none					      |	      __IMPNONE
+      real*8 :: r_com(3), w				      |	      float :: r_com(3), w
+      real*8, pointer :: ro_com(:)			      |	      float, pointer :: ro_com(:)
+      integer, optional :: c				      |	      int, optional :: c
+      integer :: col, i					      |	      int :: col, i
+      real*8, pointer, dimension(:,:) :: ro, rf		      |	      float, pointer, dimension(:,:) :: ro, rf
+      use multicom_ltm       !##MULTICOM		      |	      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
+      use mpi 						      |	      __DEP_MPI 
+      implicit none					      |	      __IMPNONE
+      logical :: qroot, qslave, qsend_o			      |	      bool :: qroot, qslave, qsend_o
+      logical, optional :: qsendo			      |	      bool, optional :: qsendo
+      real*8, pointer, dimension(:,:) :: rlf, rcf, rrf, rlo,  |	      float, pointer, dimension(:,:) :: rlf, rcf, rrf, rlo, r
+      integer :: me, bug				      |	      int :: me, bug
+      integer*4 :: stat(MPI_STATUS_SIZE)		      |	      int4mpi :: stat(MPI_STATUS_SIZE)
+       call PSND8(r_f(:,:,left),9*nforced) ! send three sets  |	       call __BROADCAST_LOCAL_8B(r_f(:,:,left),9*nforced) ! s
+       if (qsend_o) call PSND8(r_o(:,:,left),9*norient)	      |	       if (qsend_o) call __BROADCAST_LOCAL_8B(r_o(:,:,left),9
+      use stream 					      |	      __DEP_PARSER 
+      use multicom_ltm       !##MULTICOM		      |	      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
+      use mpi 						      |	      __DEP_MPI 
+      implicit none					      |	      __IMPNONE
+      character*11 :: whoami				      |	      character(len=11 :: whoami
+      logical :: qroot, qslave, qprint			      |	      bool :: qroot, qslave, qprint
+      logical, optional :: qbcast			      |	      bool, optional :: qbcast
+      real*8 :: u(3,3)= RESHAPE( (/1,0,0,0,1,0,0,0,1/), (/3,3 |	      float :: u(3,3)= RESHAPE( (/1,0,0,0,1,0,0,0,1/), (/3,3/
+      real*8 :: r_o_com(3)=(/0d0,0d0,0d0/) ! COM vector	      |	      float :: r_o_com(3)=(/0d0,0d0,0d0/) ! COM vector
+      real*8, pointer, dimension(:,:) :: ro, rf, ro1, rf1     |	      float, pointer, dimension(:,:) :: ro, rf, ro1, rf1
+      real*8 :: w					      |	      float :: w
+      real*8 :: weights(nforced,3) ! assuming nforced is reas |	      float :: weights(nforced,3) ! assuming nforced is reaso
+      integer*4 :: RTYPE=MPI_DOUBLE_PRECISION		      |	      int4mpi :: RTYPE=MPI_DOUBLE_PRECISION
+      integer*4 :: stat(MPI_STATUS_SIZE)		      |	      int4mpi :: stat(MPI_STATUS_SIZE)
+      integer :: i, ierr				      |	      int :: i, ierr
+      use string					      |	      __DEP_OUTPUT
+!        implicit none					      |	!        __IMPNONE
+        integer n					      |	        int n
+        real*8 rin(n), rout(n), wgt(n)			      |	        float rin(n), rout(n), wgt(n)
+        integer, intent(in) ::  interp_method		      |	        int, intent(in) ::  interp_method
+        integer max_iterations				      |	        int max_iterations
+        real*8 :: tol, d_arclength(:), curvature(:)	      |	        float :: tol, d_arclength(:), curvature(:)
+        real*8, optional :: dst_cutoff			      |	        float, optional :: dst_cutoff
+        real*8, optional :: dr(n) ,r_bc_0(n), r_bc_1(n)	      |	        float, optional :: dr(n) ,r_bc_0(n), r_bc_1(n)
+       call wrndie(0, whoami,                                 |	       __WRN( whoami,                                        
+      if (qprint.and.(prnlev.ge.5)) write(outu,690) whoami    |	      if (qprint.and.(prnlev.ge.5)) write(_MSGBUF,690) whoami
+      if (qslave) call PSND8(rf,3*nforced)		      |	      if (qslave) call __BROADCAST_LOCAL_8B(rf,3*nforced)
+      implicit none					      |	      __IMPNONE
+      integer :: which					      |	      int :: which
+      integer :: i					      |	      int :: i
+      use multicom_ltm       !##MULTICOM		      |	      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
+      use consta 					      |	      __DEP_CONST 
+      use stream 					      |	      __DEP_PARSER 
+      use mpi 						      |	      __DEP_MPI 
+      implicit none					      |	      __IMPNONE
+      real*8 :: x(:), y(:), z(:) ! mass(size(x,1))	      |	      float :: x(:), y(:), z(:) ! mass(size(x,1))
+      integer :: itime					      |	      int :: itime
+      integer :: i, j, ibeg, iend, bug, stat(MPI_STATUS_SIZE) |	      int :: i, j, ibeg, iend, bug, stat(MPI_STATUS_SIZE)
+      logical :: deriv, qendpoint, qgrp, qvalid		      |	      bool :: deriv, qendpoint, qgrp, qvalid
+      integer :: which   ! replica with which the exchange wa |	      int :: which   ! replica with which the exchange was at
+      logical :: success ! whether the exchange attempt was s |	      bool :: success ! whether the exchange attempt was succ
+      integer :: nodelist(nstring) ! holds new string replica |	      int :: nodelist(nstring) ! holds new string replica ord
+      integer :: itype ! MPI_INTEGER type		      |	      int :: itype ! MPI_INTEGER type
+      integer :: ndata					      |	      int :: ndata
+      real*8 :: dE_me, dE, s, dpar0i, dperp0i, drms0i, dpar_o |	      float :: dE_me, dE, s, dpar0i, dperp0i, drms0i, dpar_or
+      character*150 :: fnames(5)              ! for storing o |	      character(len=150 :: fnames(5)              ! for stori
+      character*150 :: new_fnames(5)          ! for storing s |	      character(len=150 :: new_fnames(5)          ! for stori
+      logical :: openun(5), qform, qwrite		      |	      bool :: openun(5), qform, qwrite
+      integer :: oldiol					      |	      int :: oldiol
+      real*8, pointer, dimension(:,:,:) :: r_f2, r_o2, r_f3,  |	      float, pointer, dimension(:,:,:) :: r_f2, r_o2, r_f3, r
+      character*20 :: whoami				      |	      character(len=20 :: whoami
+       itype=MPI_INTEGER                       !##.not.INTEGE |	       itype=MPI_INTEGER                       !__CHARMM_ONLY
+       itype=MPI_INTEGER8                      !##INTEGER8    |	       itype=MPI_INTEGER8                      !__CHARMM_ONLY
+         call trima(new_fnames(1), i)			      |	         call __TRIMA(new_fnames(1), i)
+         call trima(new_fnames(2), i)			      |	         call __TRIMA(new_fnames(2), i)
+       call PSND4(success,1)				      |	       call __BROADCAST_LOCAL_4B(success,1)
+       call PSND4(nodelist,nstring)             !##.not.INTEG |	       call __BROADCAST_LOCAL_4B(nodelist,nstring)           
+       call PSND8(nodelist,nstring)             !##INTEGER8   |	       call __BROADCAST_LOCAL_8B(nodelist,nstring)           
+        call PSND8(r_f,27*nforced)			      |	        call __BROADCAST_LOCAL_8B(r_f,27*nforced)
+        if (qorient.and.qdiffrot) call PSND8(r_o,27*norient)  |	        if (qorient.and.qdiffrot) call __BROADCAST_LOCAL_8B(r
+       call PSND4(mestring,1)             !##.not.INTEGER8    |	       call __BROADCAST_LOCAL_4B(mestring,1)             !__C
+       call PSND8(mestring,1)             !##INTEGER8	      |	       call __BROADCAST_LOCAL_8B(mestring,1)             !__C
+##ENDIF							      |	__CHARMM_ONLY##ENDIF
+##ENDIF							      |	__CHARMM_ONLY##ENDIF

@@ -619,17 +619,19 @@
 !
        end function atoiv
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-       function atof(a)
+       function atof(a,invalid)
        use output, only: warning
-       real*8 :: atof
+       real*8, optional, intent(in) :: invalid
+       real*8 :: atof, missing
        real*8 :: f
        integer :: i, l, j, k, sgn, base
-       character*(*) :: a
-       character*200 :: b
+       character(len=*) :: a
+       character(len=len(a)) :: b
        character*4, parameter :: whoami = 'ATOF'
        logical :: fraction
        integer :: flag(10)
 ! convert string to floating point number
+       if (present(invalid)) then ; missing=invalid ; else ; missing=-99999. ; endif
        f=0;
        fraction=.false.
 !
@@ -639,10 +641,13 @@
        if (l.ge.1) then
         if (b(1:1).eq.hyphen) then
          sgn=-1
-         b(1:l-1)=b(2:l); l=l-1
+         b(1:l-1)=b(2:l); l=l-1;
+         if (l.eq.0) f = -missing ; ! only a hyphen present : will multiply by -1 and quit
         else
          sgn=1
         endif
+       else
+        f=missing; sgn=1
        endif ! l.ge.1
 !
        base=0
@@ -650,7 +655,7 @@
         if (b(j:j).eq.decimal) then
          if (fraction) then ! two decimal points are invalid
           call warning(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO REAL.',-1)
-          f=-99999; sgn=1;
+          f=missing; sgn=1;
           exit
          else
           fraction=.true.
@@ -663,7 +668,7 @@
          where(digits2.eq.b(j:j)); flag=1 ; elsewhere; flag=0 ; endwhere; k=sum(maxloc(flag))-1
          if (all(flag.eq.0)) then
           call warning(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO REAL.',-1)
-          f=-99999; sgn=1;
+          f=missing; sgn=1;
           exit
          else
           f=f+1.0d0*(10.0d0**base)*k
