@@ -869,7 +869,7 @@ write(0,*) 'WARNING FROM: ','LINEAR_INTERP',': ','SOURCE ARRAY LENGTH IS ZERO. W
 ! smoothing function; the endpoints are modified!
 ! uses the linear interpolation subroutine
       implicit none
- character(len=80) :: msg__
+ character(len=80) :: msg___
       integer :: delta
       real*8 :: t(:), x(:)
 ! locals
@@ -899,11 +899,11 @@ write(0,*) 'WARNING FROM: ','LINEAR_INTERP',': ','SOURCE ARRAY LENGTH IS ZERO. W
 
       if (delta.gt.nx) then
        delta=max(1,floor(1.0d0*nx/3.0d0))
-write(msg__,*)'FILTER WIDTH TOO LARGE. SETTING TO ',delta,'.';write(0,*) 'WARNING FROM: ','SMOOTH2',': ',msg__
+write(msg___,*)'FILTER WIDTH TOO LARGE. SETTING TO ',delta,'.';write(0,*) 'WARNING FROM: ','SMOOTH2',': ',msg___
 !
       elseif (delta.le.0) then
        delta=max(1,floor(1.0d0*nx/3.0d0))
-write(msg__,*)'FILTER WIDTH ZERO. SETTING TO ',delta,'.';write(0,*) 'WARNING FROM: ','SMOOTH2',': ',msg__
+write(msg___,*)'FILTER WIDTH ZERO. SETTING TO ',delta,'.';write(0,*) 'WARNING FROM: ','SMOOTH2',': ',msg___
       endif
 !
       do i=1, delta

@@ -543,6 +543,8 @@
        elseif (comm_name(1:6).eq.'GLOBAL') then
         c=MPI_COMM_GLOBAL; s=SIZE_GLOBAL; m=ME_GLOBAL;
         l=6
+       elseif (comm_name(1:5).eq.'ENSBL') then !!**CHARMM_ONLY**!##ENSEMBLE
+        c=MPI_COMM_ENSBL; s=SIZE_ENSBL; m=ME_ENSBL; !!**CHARMM_ONLY**!##ENSEMBLE
        elseif (comm_name(1:5).eq.'STRNG') then !!**CHARMM_ONLY**!##STRINGM
         c=MPI_COMM_STRNG; s=SIZE_STRNG; m=ME_STRNG; !!**CHARMM_ONLY**!##STRINGM
        else
@@ -651,6 +653,8 @@
            elseif (comm_name(1:5).eq.'GROUP') then ! for backward compatibility
             MPI_COMM_LOCAL=c; SIZE_LOCAL=s; ME_LOCAL=m;
 !
+           elseif (comm_name(1:5).eq.'ENSBL') then !!**CHARMM_ONLY**!##ENSEMBLE
+            MPI_COMM_ENSBL=c; SIZE_ENSBL=s; ME_ENSBL=m !!**CHARMM_ONLY**!##ENSEMBLE
 !
            elseif (comm_name(1:5).eq.'STRNG') then !!**CHARMM_ONLY**!##STRINGM
             MPI_COMM_STRNG=c; SIZE_STRNG=s; ME_STRNG=m !!**CHARMM_ONLY**!##STRINGM
@@ -683,6 +687,8 @@
          elseif (comm_name(1:5).eq.'GROUP') then ! for compatibility with older scripts
           MPI_COMM_LOCAL=c; SIZE_LOCAL=s; ME_LOCAL=m;
 !
+         elseif (comm_name(1:5).eq.'ENSBL') then !!**CHARMM_ONLY**!##ENSEMBLE
+          MPI_COMM_ENSBL=c; SIZE_ENSBL=s; ME_ENSBL=m !!**CHARMM_ONLY**!##ENSEMBLE
 !
          elseif (comm_name(1:5).eq.'STRNG') then !!**CHARMM_ONLY**!##STRINGM
           MPI_COMM_STRNG=c; SIZE_STRNG=s; ME_STRNG=m !!**CHARMM_ONLY**!##STRINGM

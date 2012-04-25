@@ -26,7 +26,7 @@
 !
       character(len=8) :: keyword
       character(len=9) :: whoami
- character(len=80) :: msg__
+ character(len=80) :: msg___
 !
       data whoami /' SM_MAIN>'/
 !
@@ -49,7 +49,7 @@
         call sm_close(comlyn, comlen) ! close a file on each replica
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       else
-            write(msg__,*)'UNRECOGNIZED SUBCOMMAND: ',keyword;write(0,*) 'WARNING FROM: ',whoami,': ',msg__
+            write(msg___,*)'UNRECOGNIZED SUBCOMMAND: ',keyword;write(0,*) 'WARNING FROM: ',whoami,': ',msg___
       endif
 !
       end subroutine sm_main

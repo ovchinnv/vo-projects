@@ -10,6 +10,7 @@ INCLUDES=-I $(ROOT)/modules
 
 include $(ROOT)/Makefile.inc
 
+all : $(OBJS) modules
 multicom.o:multicom_aux.o output ivector parser parselist
 output:
 	$(MAKE) -C $(ROOT)/output all modules
