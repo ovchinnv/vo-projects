@@ -1,0 +1,148 @@
+! **********************************************************************!
+! This source file was was generated automatically from a master source !
+! code tree, which may or may not be distributed with this code, !
+! because it is up to the distributor, and not up to me. !
+! If you edit this file (rather than the master source file) !
+! your changes will be lost if another pull from the master tree occurs.!
+! In case you are wondering why, this approach makes it possible for !
+! me to have the same master source code interfaced with different !
+! applications (some of which are written in a way that is quite far !
+! from being object-oriented) at the source level. !
+! **********************************************************************!
+module timer
+    use ivector_list
+    use output, only: warning
+    use parser, only: itoa
+!
+    implicit none
+    private
+!
+    public timer_init
+    public timer_start ! start a timer and return its handle
+    public timer_stamp ! add a timestamp to a timer, and return time difference from the previous stamp
+    public timer_elapsed ! check time elapsed since previous stamp without stamping
+    public timer_elapsed_total ! check time elapsed since timer was started without stamping
+    public timer_erase ! erase a timer
+    public timer_done ! free memory
+    type (int_vlist) :: times
+    logical :: timer_initialized=.false.
+    integer :: icount, irate, imax
+    integer, parameter :: one=1
+    integer, parameter :: badhandle=ishftc(one,-1)
+    integer :: nexthandle=badhandle
+    integer, parameter :: firsthandle=1
+!
+    contains
+!############################################################################
+    subroutine timer_init()
+     if (.not.timer_initialized) then
+      call int_vlist_init(times,10)
+      timer_initialized=times%initialized
+     endif
+     if (.not.timer_initialized) then
+      call warning('TIMER_INITIALIZE','Could not initialize timer list.',-1)
+     else
+      nexthandle=firsthandle
+     endif
+    end subroutine timer_init
+!############################################################################
+    subroutine timer_done()
+     if (timer_initialized) then
+      call int_vlist_done(times)
+      timer_initialized=times%initialized
+     endif
+     if (timer_initialized) then
+      call warning('TIMER_DONE','Could not deallocate timer list.',-1)
+     else
+      nexthandle=badhandle
+     endif
+    end subroutine timer_done
+!############################################################################
+    function timer_start() result(handle)
+     integer :: i, handle
+     if (timer_initialized) then
+     call system_clock(icount, irate, imax)
+      handle=nexthandle
+      i=int_vlist_uadd(times, handle, icount)
+      nexthandle=nexthandle+1
+     else
+      handle=badhandle
+      call warning('TIMER_START','Timer not initialized.',-1)
+     endif
+    end function timer_start
+!############################################################################
+    function timer_stamp(handle) result(timediff)
+     integer :: handle
+     integer :: idiff
+     real*8 :: timediff
+     integer :: i
+     if (timer_initialized) then
+      i=int_vlist_getind(times,handle)
+      if (i.gt.0) then ! make sure handle is valid
+       call system_clock(icount, irate, imax)
+       idiff=icount-int_vector_getlast(times%v(i))
+       i=int_vector_add(times%v(i), icount)
+       if (idiff.lt.0) idiff=idiff+imax
+       timediff=1d0*idiff/irate
+      else
+       call warning('TIMER_STAMP','Handle '//itoa(handle)//' does not correspond to an existing timer.',-1)
+      endif
+     else
+      call warning('TIMER_STAMP','Timer not initialized.',-1)
+     endif
+    end function timer_stamp
+!############################################################################
+    function timer_elapsed(handle) result(timediff) ! useful for waiting for an event
+     integer :: handle
+     integer :: idiff, i
+     real*8 :: timediff
+     if (timer_initialized) then
+      i=int_vlist_getind(times,handle)
+      if (i.gt.0) then ! make sure handle is valid
+       call system_clock(icount, irate, imax)
+       idiff=icount-int_vector_getlast(times%v(i))
+       if (idiff.lt.0) idiff=idiff+imax
+       timediff=1d0*idiff/irate
+      else
+       call warning('TIMER_CHECK_ELAPSED','Handle '//itoa(handle)//' does not correspond to an existing timer.',-1)
+      endif
+     else
+      call warning('TIMER_CHECK_ELAPSED','Timer not initialized.',-1)
+     endif
+    end function timer_elapsed
+!############################################################################
+    function timer_elapsed_total(handle) result(timediff) ! useful for waiting for an event
+     integer :: handle
+     integer :: idiff, i
+     real*8 :: timediff
+     if (timer_initialized) then
+      i=int_vlist_getind(times,handle)
+      if (i.gt.0) then ! make sure handle is valid
+       call system_clock(icount, irate, imax)
+       idiff=icount-times%v(i)%i(1)
+       if (idiff.lt.0) idiff=idiff+imax
+       timediff=1d0*idiff/irate
+      else
+       call warning('TIMER_CHECK_ELAPSED','Handle '//itoa(handle)//' does not correspond to an existing timer.',-1)
+      endif
+     else
+      call warning('TIMER_CHECK_ELAPSED','Timer not initialized.',-1)
+     endif
+    end function timer_elapsed_total
+!############################################################################
+    subroutine timer_erase(handle)
+     integer, intent(inout) :: handle
+     logical :: ok
+     if (timer_initialized) then
+       ok=int_vlist_delete(times,handle)
+       if (.not.ok) then
+        call warning('TIMER_ERASE','Handle '//itoa(handle)//' does not correspond to an existing timer.',-1)
+       else
+        handle=badhandle
+       endif
+     else
+      call warning('TIMER_ERASE','Timer not initialized.',-1)
+     endif
+    end subroutine timer_erase
+!
+end module timer

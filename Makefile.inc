@@ -1,4 +1,8 @@
 SHELL=/bin/sh
+#
+CC=gcc
+CFLAGS =-O3 -fno-math-errno -c
+#
 FC=ifort
 FFLAGS=-O3 -fast -finline -fp-model fast=2 -xhost -ipo -fno-math-errno -no-inline-factor -no-inline-min-size -c
 #FFLAGS= -O3 -c -check-all -extend-source -fast -fno-math-errno -finline -fp-model fast=2 -xhost -ipo  #-ipo 
@@ -46,9 +50,9 @@ FPP=cpp -P
 FPPFLAGS = -C
 
 .SUFFIXES:
-.SUFFIXES: .o .F90 .a .H .h
+.SUFFIXES: .o .F90 .a .H .h .c .f .F
 
-default : all modules
+default : all
 all: $(OBJS)
 ########################### OBJECTS ##########################
 %.o:%.F90 $(LIBDEPS)
@@ -57,6 +61,8 @@ all: $(OBJS)
 	$(FC) $(FFLAGS) $(DEFS) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $<
 %.o:%.F $(LIBDEPS)
 	$(FC) $(FFLAGS) $(DEFS) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $<
+%.o:%.c $(CLIBDEPS)
+	$(CC) $(CFLAGS) $<
 %.a:
 	$(AR) $(AFLAGS) $@ $(OBJS)
 ########################## SOURCE CODE #######################
