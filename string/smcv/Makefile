@@ -1,5 +1,5 @@
 ROOT=../..
-OBJS=ftsm_var.o ftsm_rex.o ftsm.o
+OBJS=cv_types.o cv_common.o
 
 COMMON=..
 INCLUDES= -I $(COMMON) -I $(ROOT)/modules
@@ -9,9 +9,7 @@ LOCALDEPS=source.defs ../source.defs
 
 include $(ROOT)/Makefile.inc
 
-ftsm.o: ftsm_var.o ftsm_rex.o
-ftsm_var.o: sm_common_vars
-ftsm_rex.o: constants ivector ftsm_var.o
+cv_common.o: constants ivector sm_common_vars
 
 sm_common_vars:
 	$(MAKE) -C $(COMMON) sm_var.o sm_config.o 
@@ -22,7 +20,13 @@ constants:
 ivector:
 	$(MAKE) -C $(ROOT)/vectors all modules
 
+multidiag:
+	$(MAKE) -C $(ROOT)/multidiag modules
+
+lu:
+	$(MAKE) -C $(ROOT)/lu modules
+
 charmm: $(CHARMM_SOURCES)
 
 
-.PHONY : sm_common_vars constants ivector
+.PHONY : sm_common_vars constants ivector multidiag lu

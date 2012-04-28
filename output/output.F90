@@ -104,6 +104,18 @@ module output
 !
  end subroutine message
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+ subroutine plainmessage(msg)
+! write message without ay other info.
+  character*(*) :: msg
+!
+  if (.not.output_initialized) call output_init()
+!
+  if (qprint) then
+   write(fout,'(4A)') msg
+  endif
+!
+ end subroutine plainmessage
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 !
  subroutine output_init(filename)
  character*(*), optional :: filename

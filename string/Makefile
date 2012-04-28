@@ -8,10 +8,12 @@ INCLUDES=-I $(ROOT)/modules
 
 include $(ROOT)/Makefile.inc
 
-sm_util.o:multicom_aux
+sm_util.o:multicom_aux multidiag
 multicom_aux:
 	$(MAKE) -C $(ROOT)/multicom multicom_aux.o modules
+multidiag:
+	$(MAKE) -C $(ROOT)/multidiag multidiag.o modules
 
 charmm: $(CHARMM_SOURCES)
 
-.PHONY : multicom_aux
+.PHONY : multicom_aux multidiag

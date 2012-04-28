@@ -1003,9 +1003,9 @@
 !
       use multicom_aux
       use mpi
-      __DEP_MULTIDIAG ! tridiagonal inversion
+      use multidiag ! tridiagonal inversion
 !
-      implicit none
+     
 !
       integer :: n
       real*8 :: rin(n), rout(n), wgt(n)
@@ -1031,7 +1031,7 @@
      & s_count(SIZE_STRNG), r_count(SIZE_STRNG) ! have to declare these as integer*4 -- it's a problem!
 !
       real*8 :: r0, r1, wrs, err, dum
-      real*8, parameter :: errtol = 1e-8
+      real*8, parameter :: errtol = 1d-8
       integer , parameter :: max_iterations = 200
 !
 
@@ -1340,7 +1340,7 @@
        use output
        use mpi
 !
-       implicit none
+      
 !
        real*8 :: x(:), y(:), z(:), mass(:)
        logical, optional :: min_rmsd
@@ -1584,7 +1584,7 @@
       use mpi
       use multicom_aux
 !
-       implicit none
+     
 !
        real*8 :: x(:), y(:), z(:), mass(:)
        integer, optional :: ind ! frame index
@@ -1812,7 +1812,7 @@ character(len=80) :: msg___
       use mpi
       use multicom_aux
 !
-      implicit none
+     
 !
       real*8 :: message(*)
       integer :: size, type, rank, error, comm
