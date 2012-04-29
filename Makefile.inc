@@ -75,6 +75,22 @@ all: $(OBJS)
 ######################### OTHER RULES ########################
 source: $(SOURCES)
 #$(OBJS):$(SOURCES)
+$(DIRS): force_look
+	$(MAKE) -C $@ modules
+
+output:
+	$(MAKE) -C $(ROOT)/output modules
+parser:
+	$(MAKE) -C $(ROOT)/parser modules
+ivector:
+	$(MAKE) -C $(ROOT)/vectors modules
+vectors:
+	$(MAKE) -C $(ROOT)/vectors modules
+files:
+	$(MAKE) -C $(ROOT)/files modules
+constants:
+	$(MAKE) -C $(ROOT)/constants modules
+
 
 force_look:
 	true
@@ -89,3 +105,5 @@ libraries: $(OBJS) lib
 .SILENT : force_look clean modules mod
 clean: 
 	rm -f *.mod $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(EXE)
+
+.PHONY : parser output vectors files constants clean

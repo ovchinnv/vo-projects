@@ -16,16 +16,16 @@
 !
 ! define a derived type to store simulation parameters
       type params
-       character*200, dimension(:), pointer :: tag, val
+       character(len=200), dimension(:), pointer :: tag, val
        integer, dimension(:), pointer :: tlen, vlen
        integer :: length ! length of the vector
        integer :: last ! index of last element
        logical :: initialized=.false. ! has the vector been initialized
       end type params
 !
-       character*26, parameter :: lower='abcdefghijklmnopqrstuvwxyz'
-       character*26, parameter :: upper='ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-       character*10, parameter :: digits='0123456789'
+       character(len=26), parameter :: lower='abcdefghijklmnopqrstuvwxyz'
+       character(len=26), parameter :: upper='ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+       character(len=10), parameter :: digits='0123456789'
        integer :: i
        character, parameter :: lower2(26)=(/ (lower(i:i),i=1,26)/)
        character, parameter :: upper2(26)=(/ (upper(i:i),i=1,26)/)
@@ -41,7 +41,7 @@
        character, parameter :: equals(1) = (/'='/)
        character, parameter :: vector_open(1)=(/'('/)
        character, parameter :: vector_close(1)=(/')'/)
-       character*200, parameter :: allowed=upper//lower//digits//decimal//underscore//hyphen//slash//tilde
+       character(len=200), parameter :: allowed=upper//lower//digits//decimal//underscore//hyphen//slash//tilde
 !
       integer, parameter, private :: expand_incr=100
 !
@@ -51,7 +51,7 @@
       public atoi ! convert string to integer
       public atof ! convert string to double
       public atol ! convert string to logical
-      public atoiv ! convert string to a vector of integers
+      public atoiv ! convert string to a vector of ints
       public atofv ! convert string to a vector of double
 ! public atolv ! convert string to a vector of logical (not yet)
       private params_getval ! return tag value
@@ -101,7 +101,7 @@
        subroutine params_expand( v )
        type (params) :: v
        integer :: newlength
-       character*200, dimension(:), pointer :: ntag, nval
+       character(len=200), dimension(:), pointer :: ntag, nval
        integer, dimension(:), pointer :: ntlen, nvlen
 !
        if (.not.v%initialized) then
@@ -122,7 +122,7 @@
        use output
        type (params) :: v
        integer :: params_add, ltag, lval
-       character*(*) :: newtag, newval
+       character(len=*) :: newtag, newval
        integer :: j
 !
        if (.not.v%initialized) call params_init(v)
@@ -140,7 +140,7 @@
        use output, only: warning
        type (params) :: v
        integer :: j, params_uadd, ltag, lval
-       character*(*) :: newtag, newval
+       character(len=*) :: newtag, newval
 !
        if (.not.v%initialized) call params_init(v)
        do j=1,v%last
@@ -161,8 +161,8 @@
 !
        function params_getval( v,atag )
        type (params) :: v
-       character*200 :: params_getval
-       character*(*) :: atag
+       character(len=200) :: params_getval
+       character(len=*) :: atag
        integer :: j
 !
        if (.not.parser_initialized) call parser_init()
@@ -183,8 +183,8 @@
 !
        function params_getval_nocase( v,atag )
        type (params) :: v
-       character*200 :: params_getval_nocase, tag1, tag2
-       character*(*) :: atag
+       character(len=200) :: params_getval_nocase, tag1, tag2
+       character(len=*) :: atag
        integer :: j
 !
        if (.not.parser_initialized) call parser_init()
@@ -206,10 +206,10 @@
 !
        end function params_getval_nocase
 !****************************************** end of data routines **************************************
-       character*(200) function getval(atag)
+       character(len=200) function getval(atag)
        use output, only: warning
-       character*200 :: value
-       character*(*) :: atag
+       character(len=200) :: value
+       character(len=*) :: atag
 !
        value=params_getval(parameters,atag)
        if (len_trim(value).eq.0) call warning('GETVAL','Parameter "'//trim(atag)//'" not found.',-1)
@@ -217,10 +217,10 @@
 !
        end function getval
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-       character*(200) function getval_nocase(atag)
+       character(len=200) function getval_nocase(atag)
        use output, only: warning
-       character*200 :: value
-       character*(*) :: atag
+       character(len=200) :: value
+       character(len=*) :: atag
 !
        value=params_getval_nocase(parameters,atag)
        if (len_trim(value).eq.0) call warning('GETVAL_NOCASE','Parameter "'//trim(atag)//'" not found.',-1)
@@ -228,10 +228,10 @@
 !
        end function getval_nocase
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-       character*(200) function getval_nocase_upper(atag)
+       character(len=200) function getval_nocase_upper(atag)
        use output, only: warning
-       character*200 :: value
-       character*(*) :: atag
+       character(len=200) :: value
+       character(len=*) :: atag
 !
        value=params_getval_nocase(parameters,atag)
        if (len_trim(value).eq.0) call warning('GETVAL_NOCASE_UPPER','Parameter "'//trim(atag)//'" not found.',-1)
@@ -243,8 +243,8 @@
        function existtag(atag)
        use output, only: error
        logical :: existtag
-       character*200 :: value
-       character*(*) :: atag
+       character(len=200) :: value
+       character(len=*) :: atag
 !
        existtag=.false.
        if (.not.parser_initialized) call parser_init()
@@ -255,8 +255,8 @@
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        function existtag_nocase(atag)
        logical :: existtag_nocase
-       character*200 :: value
-       character*(*) :: atag
+       character(len=200) :: value
+       character(len=*) :: atag
 !
        existtag_nocase=.false.
        if (.not.parser_initialized) call parser_init()
@@ -278,14 +278,16 @@
        end subroutine parser_done
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 !
-       subroutine parse_file(fid)
+       subroutine parse_file(fid &
+     & )
        use output
 !
-       integer :: fid ! input file handle
-       integer*4 :: communicator, me
+       implicit none
 !
+!
+       integer :: fid ! input file handle
        integer :: i, j
-       character*10, parameter :: whoami = 'PARSE_FILE'
+       character(len=10), parameter :: whoami = 'PARSE_FILE'
 !
        integer :: allowed_len, lower_len, upper_len, digits_len
        character :: allowed2(200),c
@@ -294,14 +296,16 @@
 !
        integer :: ioerr, ierr
        integer :: l=0, ltag=0, lval=0
-       character*400 :: cmdline
-       character*200 :: tag, val
+       character(len=400) :: cmdline
+       character(len=200) :: tag, val
 !
        allowed_len=len_trim(allowed)
        do i=1,allowed_len
         allowed2(i)=allowed(i:i)
        enddo
 !
+
+
 ! do work
 !
        qvector=.false.
@@ -309,8 +313,17 @@
        if (.not. parser_initialized) call parser_init()
        call message(whoami, 'Reading input file.')
        do while (.true.)
-        if (me.le.0) read(fid,'(A)',IOSTAT=ioerr) cmdline ! if running in parallel, then only the root node is passed a valid handle
+
+
+
+
+        read(fid,'(A)',IOSTAT=ioerr) cmdline ! if running in parallel, then only the root node is passed a valid handle
+
+!
         if (ioerr.eq.0) then
+
+
+
 ! write(0,*) cmdline
 ! read from the line
          call adjustleft(cmdline)
@@ -320,6 +333,7 @@
          if (l.lt.200) l=l+1
          cmdline(l:l)='*'
          if (any(comment.eq.cmdline(1:1))) l=1 ! skip lines that are comments
+
          i=0
          qtag=.true. ; ltag=0 ! each line is required to begin with a tag
          qval=.false.; lval=0
@@ -522,6 +536,7 @@
 !
 
 
+
        if (qerror) then
          call warning(whoami, 'ERROR(S) FOUND IN INPUT.',0)
        else
@@ -530,23 +545,33 @@
 !
        end subroutine parse_file
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-       subroutine list_params(me)
+       subroutine list_params( &
+
+
+
+       & )
 !
        use output
-       character*11, parameter :: whoami = 'LIST_PARAMS'
+       character(len=11), parameter :: whoami = 'LIST_PARAMS'
        integer :: i
-       integer*4 :: me
+
+
+
 !
        if (.not.parser_initialized) call parser_init()
 !
-       if (me.le.0) then
+
+
+
         call message(whoami,'THE FOLLOWING PARAMETERS ARE DEFINED')
         call message(whoami,'====================================')
         do i=1,parameters%last
          call message(whoami,tab//parameters%tag(i)(1:parameters%tlen(i))//' = "'//parameters%val(i)(1:parameters%vlen(i))//'"')
         enddo
         call message(whoami,'====================================')
-       endif
+
+
+
        end subroutine list_params
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 ! auxiliary functions (they need not be part of this module)
@@ -557,7 +582,7 @@
        integer :: atoi, i, l, j, k, sgn, base, missing
        character(len=*), intent(in) :: a
        character(len=len(a)) :: b
-       character*4, parameter :: whoami = 'ATOI'
+       character(len=4), parameter :: whoami = 'ATOI'
        integer :: flag(10)
 ! convert string to integer
        if (present(invalid)) then ; missing=invalid ; else ; missing=-999 ; endif
@@ -627,7 +652,7 @@
        integer :: i, l, j, k, sgn, base
        character(len=*) :: a
        character(len=len(a)) :: b
-       character*4, parameter :: whoami = 'ATOF'
+       character(len=4), parameter :: whoami = 'ATOF'
        logical :: fraction
        integer :: flag(10)
 ! convert string to floating point number
@@ -708,9 +733,9 @@
        function atol(a)
        use output, only: error
        logical :: atol
-       character*(*) :: a
-       character*200 :: b
-       character*4, parameter :: whoami = 'ATOL'
+       character(len=*) :: a
+       character(len=200) :: b
+       character(len=4), parameter :: whoami = 'ATOL'
        integer :: l
 !
        b=a
@@ -731,8 +756,8 @@
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
    function itoa(i)
    integer :: i
-   character*((ceiling(log10(1.0*abs(i)+1.)))+1) :: itoa
-   character*(80) :: b
+   character(len=((ceiling(log10(1.0*abs(i)+1.)))+1)) :: itoa
+   character(len=80) :: b
    write(b,*) i
    b=adjustl(b)
    itoa=b(1:len_trim(b))
@@ -751,7 +776,7 @@
    end function ltoa
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        subroutine toupper(a)
-       character*(*) :: a
+       character(len=*) :: a
        integer :: i,j
 !
        do j=1, len_trim(a)
@@ -761,7 +786,7 @@
        end subroutine toupper
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        subroutine tolower(a)
-       character*(*) :: a
+       character(len=*) :: a
        integer :: i,j
 !
        do j=1, len_trim(a)
@@ -772,7 +797,7 @@
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 ! this subroutine uses a custom definition of white space
        subroutine adjustleft(a, space)
-        character*(*) :: a
+        character(len=*) :: a
         character, optional :: space(:)
         integer :: l, i, j
         l=len(a)
@@ -799,9 +824,9 @@
        end subroutine adjustleft
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
   function numword(a) ! returns the number of blank-separated words in a string
-   character*(*) :: a
+   character(len=*) :: a
    character, parameter :: tab=char(9)
-   character*2, parameter :: space = ' '//tab
+   character(len=2), parameter :: space = ' '//tab
    character, parameter :: space2(2) = (/' ',tab/)
    integer :: n, numword,i,j,l
 
@@ -826,10 +851,10 @@
   end function numword
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
   function pop_string(a,n) result(b) ! returns the next white-space-delimited word in a string, and removes it from the string
-   character*(*) :: a
+   character(len=*) :: a
    character(len=len(a)) :: b
    character, parameter :: tab=char(9)
-   character*2, parameter :: space = ' '//tab
+   character(len=2), parameter :: space = ' '//tab
    character, parameter :: space2(2) = (/' ',tab/)
    integer, optional, intent(inout) :: n
    integer :: j,l
@@ -853,7 +878,7 @@
   character(len=len(a)) :: b, right
   character(len=len(tag)) :: copy
 !
-  character*2, parameter :: space = ' '//tab
+  character(len=2), parameter :: space = ' '//tab
   character, parameter :: space2(2) = (/' ',tab/)
 !
   b=''
@@ -880,7 +905,7 @@
   integer :: ltag, j, l
   character(len=len(tag)) :: copy
 !
-  character*2, parameter :: space = ' '//tab
+  character(len=2), parameter :: space = ' '//tab
   character, parameter :: space2(2) = (/' ',tab/)
 !
   copy=tag; call adjustleft(copy,space2); ltag=len_trim(copy)
