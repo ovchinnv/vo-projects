@@ -26,7 +26,7 @@ module rng
  random_initialized=.true.
  end subroutine random_reinit
 !
-!% generate Gaussian random numbers using Box-Muller scheme
+! generate Gaussian random numbers using Box-Muller scheme
 !
  subroutine randomg_vector(a, n, chan)
  use constants

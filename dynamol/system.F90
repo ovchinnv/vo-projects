@@ -45,10 +45,10 @@ module system
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  subroutine system_read_parameters(filename) ! read parameter file
  implicit none
- character(len=(*) :: filename
- character(len=80 :: fname
- character(len=10 :: paramtype
- character(len=22 , parameter :: whoami='SYSTEM_READ_PARAMETERS'
+ character(len=*) :: filename
+ character(len=80) :: fname
+ character(len=10) :: paramtype
+ character(len=22) , parameter :: whoami='SYSTEM_READ_PARAMETERS'
  integer :: flen
  integer :: fid=-1
 !
@@ -85,8 +85,8 @@ module system
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  subroutine system_list_parameters()
  implicit none
- character(len=10 :: paramtype
- character(len=22 , parameter :: whoami='SYSTEM_LIST_PARAMETERS'
+ character(len=10) :: paramtype
+ character(len=22) , parameter :: whoami='SYSTEM_LIST_PARAMETERS'
 !
  paramtype=getval('paramtype')
  call toupper(paramtype)
@@ -104,8 +104,8 @@ module system
  implicit none
  character(len=*), intent(in) :: filename
  character(len=len(filename)) :: fname
- character(len=10 :: paramtype
- character(len=21 , parameter :: whoami='SYSTEM_READ_STRUCTURE'
+ character(len=10) :: paramtype
+ character(len=21) , parameter :: whoami='SYSTEM_READ_STRUCTURE'
  integer :: flen
  integer :: fid=-1
 !
@@ -148,23 +148,28 @@ module system
  end subroutine system_read_structure
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  subroutine system_read_coordinates(filename)
- use SIZE, only: me, communicator
  use charmmio
  use freeio
  use pdbio
  use files
+!
  implicit none
 !
+
+
 
 !
  character(len=*), intent(in) :: filename
  character(len=len(filename)) :: fname
- character(len=10 :: coortype
- character(len=23, parameter :: whoami='SYSTEM_READ_COORDINATES'
+ character(len=10) :: coortype
+ character(len=23), parameter :: whoami='SYSTEM_READ_COORDINATES'
  integer :: flen
  integer :: fid=-1
  real*8 :: unknown = -99999999
-
+!
+ integer*4 :: me
+ me=0
+!
  fname=filename
  call adjustleft(fname)
  flen=len_trim(fname)
@@ -216,7 +221,6 @@ module system
     call warning(whoami, 'PQR format lacks SEGID identifier. This may cause coordinate errors.',0)
 
 
-
 ! call coor_check()
    case default
     call error(whoami, 'UNKNOWN COORDINATE FILE FORMAT. ABORT.',-1)
@@ -230,20 +234,25 @@ module system
  end subroutine system_read_coordinates
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  subroutine system_write_coordinates(filename, which)
- use SIZE, only: me, communicator
  use charmmio
  use freeio
  use parser
+
+
+
  implicit none
 !
- character(len=(*) :: filename, which
- character(len=(len(which)) :: which2
- character(len=80 :: fname, tag
- character(len=10 :: coortype
- character(len=24 , parameter :: whoami='SYSTEM_WRITE_COORDINATES'
+ character(len=*) :: filename, which
+ character(len=len(which)) :: which2
+ character(len=80) :: fname, tag
+ character(len=10) :: coortype
+ character(len=24) , parameter :: whoami='SYSTEM_WRITE_COORDINATES'
  integer :: flen
  integer :: fid=100, l
  real*8, pointer :: rout(:,:)
+!
+ integer*4 :: me
+ me=0
 !
  which2=which
  call toupper(which2)
@@ -292,27 +301,32 @@ module system
  end subroutine system_write_coordinates
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  subroutine system_write_dcd(fid,addheader)
- use SIZE, only: me
  use charmmio
+
+
  implicit none
  integer :: fid
  logical :: addheader
- character(len=16 , parameter :: whoami='SYSTEM_WRITE_DCD'
+ character(len=16), parameter :: whoami='SYSTEM_WRITE_DCD'
+!
+ integer*4 :: me
+ me=0
+!
  if (me.le.0) call dcd_write(fid,r,addheader)
  end subroutine
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  subroutine system_read_velocities(fname)
  implicit none
- character(len=(*) :: fname
+ character(len=*) :: fname
  end subroutine system_read_velocities
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  subroutine system_init_velocities()
  use rng
  use output
- __DEP_CONSTnts
+ use constants
  implicit none
- character(len=22 , parameter :: whoami='SYSTEM_INIT_VELOCITIES'
- character(len=20 :: keyword
+ character(len=22), parameter :: whoami='SYSTEM_INIT_VELOCITIES'
+ character(len=20) :: keyword
  real*8 :: itemp
  integer :: i, l
  integer :: c=9 ! random channel
@@ -349,10 +363,10 @@ module system
  use tlist
  use psfatom, only: unknown
  implicit none
- character(len=8 :: a1, a2, a3, a4
+ character(len=8) :: a1, a2, a3, a4
  integer :: i, j, i1, i2, i3, i4, j1, j2, j3, j4, k, l
  integer, pointer :: jj(:)
- character(len=12 , parameter :: whoami='SYSTEM_CHECK'
+ character(len=12) , parameter :: whoami='SYSTEM_CHECK'
 !
  if (.not.system_parameters_initialized) then
    call error(whoami, 'Parameters not initialized. Cannot proceed.',-1)
@@ -537,7 +551,7 @@ module system
  implicit none
  integer :: i, j, i1
 !
- character(len=20 , parameter :: whoami='SYSTEM_GET_VW_RADIUS'
+ character(len=20) , parameter :: whoami='SYSTEM_GET_VW_RADIUS'
 !
  if (.not.system_parameters_initialized) then
    call error(whoami, 'Parameters not initialized. Cannot proceed.',-1)
@@ -580,7 +594,7 @@ module system
  implicit none
  logical, optional :: forces
  logical :: f
- character(len=14 , parameter :: whoami='SYSTEM_COMPUTE'
+ character(len=14) , parameter :: whoami='SYSTEM_COMPUTE'
 !
  include 'interface.h'
 !
@@ -607,7 +621,7 @@ module system
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  subroutine system_done()
  implicit none
- character(len=10 :: paramtype
+ character(len=10) :: paramtype
  system_ok=.false.
 !
  if (system_parameters_initialized) then
@@ -647,17 +661,24 @@ module system
  use output, only: fout, message
  use parser, only: tab
  use stats
+
+
  implicit none
- character(len=13 , parameter :: whoami='SYSTEM_PRINTE'
+ character(len=13) , parameter :: whoami='SYSTEM_PRINTE'
+!
+ integer*4 :: me
+ me=0
 !
  KinE=calcKE(vr,m)
- call message(whoami, '');
- write(fout,'(A)') tab//'=================== ENERGY ==================';
- write(fout,'(1(A,F10.5))') tab//'TotalE: ', BondE+AngleE+DiheE+ImprE+KinE(1) 
- write(fout,'(2(A,F10.5))') tab//'BondE: ', BondE, tab//'AngleE: ', AngleE 
- write(fout,'(2(A,F10.5))') tab//'DiheE: ', DiheE, tab//' ImprE: ', ImprE 
- write(fout,'(2(A,F10.5))') tab//'KinE: ', KinE(1), tab//'Temp: ', KinE(2) 
- write(fout,'(A)') tab//'=============================================';
+ if (me.eq.0) then
+  call message(whoami, '');
+  write(fout,'(A)') tab//'=================== ENERGY ==================';
+  write(fout,'(1(A,F10.5))') tab//'TotalE: ', BondE+AngleE+DiheE+ImprE+KinE(1) 
+  write(fout,'(2(A,F10.5))') tab//'BondE: ', BondE, tab//'AngleE: ', AngleE 
+  write(fout,'(2(A,F10.5))') tab//'DiheE: ', DiheE, tab//' ImprE: ', ImprE 
+  write(fout,'(2(A,F10.5))') tab//'KinE: ', KinE(1), tab//'Temp: ', KinE(2) 
+  write(fout,'(A)') tab//'=============================================';
+ endif
 !
  end subroutine system_printe
 end module system

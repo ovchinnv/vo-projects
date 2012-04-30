@@ -1,12 +1,14 @@
-! This source file was was generated automatically from a master source
-! code tree, which may or may not be distributed with this code,
-! because it is up to the distributor, and not up to me.
-! If you edit this file (rather than the master source file)
-! your changes will be lost if another pull from the master tree occurs.
-! In case you are wondering why, this approach makes it possible for
-! me to have the same master source code interfaced with different
-! applications (some of which are written in a way that is quite far
-! from being object-oriented) at the source level
+! **********************************************************************!
+! This source file was was generated automatically from a master source !
+! code tree, which may or may not be distributed with this code, !
+! because it is up to the distributor, and not up to me. !
+! If you edit this file (rather than the master source file) !
+! your changes will be lost if another pull from the master tree occurs.!
+! In case you are wondering why, this approach makes it possible for !
+! me to have the same master source code interfaced with different !
+! applications (some of which are written in a way that is quite far !
+! from being object-oriented) at the source level. !
+! **********************************************************************!
 ! 2008 Victor Ovchinnikov; Harvard/MIT
 ! module to perform superposition of two structures
 ! An alternative to FROTU, the module also computes derivatives
@@ -21,7 +23,7 @@
 !
   module bestfit
       !
-      use const, only: ERRTOL
+      use constants, only: ERRTOL
       !
       private
       !

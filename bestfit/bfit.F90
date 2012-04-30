@@ -1,7 +1,7 @@
  program bfit
 
  use bestfit
- use const
+ use constants
 
  float :: A(3,3)
  

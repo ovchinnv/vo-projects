@@ -1,20 +1,28 @@
+! **********************************************************************!
+! This source file was was generated automatically from a master source !
+! code tree, which may or may not be distributed with this code, !
+! because it is up to the distributor, and not up to me. !
+! If you edit this file (rather than the master source file) !
+! your changes will be lost if another pull from the master tree occurs.!
+! In case you are wondering why, this approach makes it possible for !
+! me to have the same master source code interfaced with different !
+! applications (some of which are written in a way that is quite far !
+! from being object-oriented) at the source level. !
+! **********************************************************************!
 module sysmanip
  use output
  use system
-
- bool :: loud=.true.
- 
+ logical :: loud=.true.
  contains
   subroutine sysmanip_translate(dr,ind)
   implicit none
 !
-  character*19, parameter :: whoami='SYSMANIP_TRANSLATE'
+  character(len=19), parameter :: whoami='SYSMANIP_TRANSLATE'
 !
-  int :: ind(:) ! indices of atoms (selection) whose properties to calculate; if first entry < 1, apply to all
-  float :: dr(ndim)
-  int :: i, n
-  
-  if (.not. system_coordinates_initialized) then 
+  integer :: ind(:) ! indices of atoms (selection) whose properties to calculate; if first entry < 1, apply to all
+  real*8 :: dr(ndim)
+  integer :: i, n
+  if (.not. system_coordinates_initialized) then
    call error(whoami, ' SYSTEM COORDINATES NOT INITIALIZED. ABORT.',0)
    return
   endif
@@ -36,29 +44,29 @@ module sysmanip
   endif
 !
   end subroutine sysmanip_translate
-!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
-  subroutine sysmanip_align_pc(qmass,ialign,imove)! align the principal components of the molecule with the Cartesian vectors  
-  use bestfit, only: eig3s
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+  subroutine sysmanip_align_pc(qmass,ialign,imove)! align the principal components of the molecule with the Cartesian vectors
+  use bestfit
   use constants
   use parser, only: ftoa, itoa
   implicit none
 !
-  bool :: qmass
-  int, dimension(:) :: ialign, imove
+  logical :: qmass
+  integer, dimension(:) :: ialign, imove
 !
-  character*17, parameter :: whoami='SYSMANIP_ALIGN_PC'
+  character(len=17), parameter :: whoami='SYSMANIP_ALIGN_PC'
 !
-  int :: i, j, n1, n2
-  float :: corr(3,3), rcom(3), evec(3,3), eval(3)
-  float :: mass(natom), rnew(3,natom)
-  float :: a, b, c, d, x, y, z, w
-!  
-  if (ndim.lt.3) then 
+  integer :: i, j, n1, n2
+  real*8 :: corr(3,3), rcom(3), evec(3,3), eval(3)
+  real*8 :: mass(natom), rnew(3,natom)
+  real*8 :: a, b, c, d, x, y, z, w
+!
+  if (ndim.lt.3) then
    call warning(whoami, ' ORIENTATION REQUIRES A 3D OBJECT. ABORT.',-1)
    return
   endif
 !
-  if (.not. system_coordinates_initialized) then 
+  if (.not. system_coordinates_initialized) then
    call error(whoami, ' SYSTEM COORDINATES NOT INITIALIZED. ABORT.',-1)
    return
   endif
@@ -75,18 +83,18 @@ module sysmanip
    return
   endif
 !
-  if (qmass) then ; mass=m ; else ; mass=1d0 ; endif ; d=sum(mass); if (d.gt.ERRTOL()) then ; d=1d0/d; else ; d=1d0 ; endif 
+  if (qmass) then ; mass=m ; else ; mass=1d0 ; endif ; d=sum(mass); if (d.gt.ERRTOL()) then ; d=1d0/d; else ; d=1d0 ; endif
   corr=0d0; rcom=0d0
   if (ialign(1).lt.0) then ! take all atom indices
    do i=1,natom
     x=r(1,i); y=r(2,i); z=r(3,i); w=mass(i)*d
 !
     a=x*w; b=y*w; c=z*w;
-    rcom(1)=rcom(1)+a;   rcom(2)=rcom(2)+b;   rcom(3)=rcom(3)+c;
+    rcom(1)=rcom(1)+a; rcom(2)=rcom(2)+b; rcom(3)=rcom(3)+c;
 !
-    corr(1,1)=corr(1,1)+x*a;   corr(1,2)=corr(1,2)+x*b;    corr(1,3)=corr(1,3)+x*c;   
-                               corr(2,2)=corr(2,2)+y*b;    corr(2,3)=corr(2,3)+y*c; 
-                                                           corr(3,3)=corr(3,3)+z*c; 
+    corr(1,1)=corr(1,1)+x*a; corr(1,2)=corr(1,2)+x*b; corr(1,3)=corr(1,3)+x*c;
+                               corr(2,2)=corr(2,2)+y*b; corr(2,3)=corr(2,3)+y*c;
+                                                           corr(3,3)=corr(3,3)+z*c;
    enddo
 !
   else ! ialign
@@ -95,23 +103,23 @@ module sysmanip
     x=r(1,i); y=r(2,i); z=r(3,i); w=mass(i)*d
 !
     a=x*w; b=y*w; c=z*w;
-    rcom(1)=rcom(1)+a;   rcom(2)=rcom(2)+b;   rcom(3)=rcom(3)+c;
+    rcom(1)=rcom(1)+a; rcom(2)=rcom(2)+b; rcom(3)=rcom(3)+c;
 !
-    corr(1,1)=corr(1,1)+x*a;   corr(1,2)=corr(1,2)+x*b;    corr(1,3)=corr(1,3)+x*c;   
-                               corr(2,2)=corr(2,2)+y*b;    corr(2,3)=corr(2,3)+y*c; 
-                                                           corr(3,3)=corr(3,3)+z*c; 
+    corr(1,1)=corr(1,1)+x*a; corr(1,2)=corr(1,2)+x*b; corr(1,3)=corr(1,3)+x*c;
+                               corr(2,2)=corr(2,2)+y*b; corr(2,3)=corr(2,3)+y*c;
+                                                           corr(3,3)=corr(3,3)+z*c;
    enddo
 !
   endif ! ialign
 !
-  do i=1,3; do j=i,3;    corr(i,j)=corr(i,j)-rcom(i)*rcom(j) ;       enddo; enddo;
+  do i=1,3; do j=i,3; corr(i,j)=corr(i,j)-rcom(i)*rcom(j) ; enddo; enddo;
   corr(2,1)=corr(1,2);
   corr(3,1)=corr(1,3);
-  corr(3,2)=corr(2,3); 
+  corr(3,2)=corr(2,3);
 !
   call eig3s(corr,eval,evec)
 !
-  if (loud) then 
+  if (loud) then
    call message(whoami,'\t\t================== CENTER OF MASS ==================')
    call message(whoami,'   \t'//ftoa(rcom(1))//' '//ftoa(rcom(2))//' '//ftoa(rcom(3)))
    call message(whoami,'\t\t================= PRINCIPAL VECTORS ================')
@@ -132,6 +140,6 @@ module sysmanip
    do i=1,3 ; r(i,imove)=r(i,imove)+rcom(i); enddo ! move to zero COM
   endif
 !
-  end subroutine sysmanip_align_pc 
-! 
+  end subroutine sysmanip_align_pc
+!
 end module sysmanip

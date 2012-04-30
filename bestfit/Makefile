@@ -1,10 +1,12 @@
 ROOT=..
-SOURCES=bestfit.F90 const.F90
-OBJS=bestfit.o const.o bfit.o
+OBJS=bestfit.o
 CHARMM_SOURCES=bestfit.src
 
 LOCALMACROS=-include source.defs
 LOCALDEPS=source.defs
+
+# additional objects for linnking
+LINKOBJECTS=constants.o
 
 include $(ROOT)/Makefile.inc
 
@@ -12,13 +14,16 @@ EXE=bfit
 
 default: all $(GLOBALDEPS) $(LOCALDEPS)
 all: $(EXE)
-$(EXE): $(OBJS)
-	$(LD) $(LDFLAGS) $(OBJS) $(LIBS) -o $(EXE)
+$(EXE): $(OBJS) bfit.o
+	$(LD) $(LDFLAGS) $(OBJS) $(LIBS) bfit.o -o $(EXE)
 
-bfit.o    : bestfit.o const.o
-bestfit.o : bestfit.F90 const.o
+bfit.o    : bestfit.o constants
+bestfit.o : constants
 
 charmm: $(CHARMM_SOURCES)
 
+lib: force_look
+	/bin/sh -c 'for file in "bestfit.o"; do  ln -fs `pwd`/$$file ${ROOT}/lib/$$file; done'
+
 clean: 
-	rm -f *.mod $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(EXE)
+	rm -f *.mod $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(EXE) bfit.o

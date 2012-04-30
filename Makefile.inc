@@ -12,7 +12,9 @@ FFLAGS=-O3 -fast -finline -fp-model fast=2 -xhost -ipo -fno-math-errno -no-inlin
 #FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-132 -ffree-line-length-132 -fno-math-errno -fbounds-check -frange-check #-fopenmp 
 #FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-132 -ffree-line-length-132 -fno-math-errno #-fbounds-check -frange-check 
 #
-DEFS=-D int=integer -D float=real*8 -D bool=logical -D int4mpi=integer*4 -D mpiint=MPI_INTEGER -D mpifloat=MPI_REAL -D mpichar=MPI_CHARACTER -D mpiint4=MPI_INTEGER4
+DEFS=-D int=integer -D float=real*8 -D bool=logical -D int4mpi=integer*4 -D mpiint=MPI_INTEGER -D mpifloat=MPI_REAL -D mpichar=MPI_CHARACTER -D mpiint4=MPI_INTEGER4\
+     -D __DMOL
+
 # ! note: the VEC routines are probably slower
 
 # note : for single precision define
@@ -43,6 +45,11 @@ MPI_HOME=/usr/local/mpich2-intel
 MPI_INCLUDE=-I $(MPI_HOME)/include
 MPI_LIB=-L $(MPI_HOME)/lib
 
+INCLUDES+=-I $(ROOT)/include
+LIBS+=-L $(ROOT)/lib
+OBJDIR=$(ROOT)/lib
+LOBJS=$(addprefix $(OBJDIR)/,$(LINKOBJS))
+
 SOURCES=$(OBJS:%.o=%.F90)
 CHARMM_SOURCES=$(OBJS:%.o=%.src)
 
@@ -52,7 +59,7 @@ FPPFLAGS = -C
 .SUFFIXES:
 .SUFFIXES: .o .F90 .a .H .h .c .f .F
 
-default : all
+default : all libraries
 all: $(OBJS)
 ########################### OBJECTS ##########################
 %.o:%.F90 $(LIBDEPS)
@@ -79,31 +86,37 @@ $(DIRS): force_look
 	$(MAKE) -C $@ modules
 
 output:
-	$(MAKE) -C $(ROOT)/output modules
+	$(MAKE) -C $(ROOT)/output modules libraries
 parser:
-	$(MAKE) -C $(ROOT)/parser modules
-ivector:
-	$(MAKE) -C $(ROOT)/vectors modules
+	$(MAKE) -C $(ROOT)/parser modules libraries
+ivector: vectors
 vectors:
-	$(MAKE) -C $(ROOT)/vectors modules
+	$(MAKE) -C $(ROOT)/vectors modules libraries
 files:
-	$(MAKE) -C $(ROOT)/files modules
+	$(MAKE) -C $(ROOT)/files modules libraries
 constants:
-	$(MAKE) -C $(ROOT)/constants modules
+	$(MAKE) -C $(ROOT)/constants modules libraries
+multicom_aux:
+	$(MAKE) -C $(ROOT)/multicom modules libraries
+random:
+	$(MAKE) -C $(ROOT)/random modules libraries
+bestfit:
+	$(MAKE) -C $(ROOT)/bestfit modules libraries
 
 
 force_look:
 	true
 mod:
-	/bin/sh -c 'for file in `ls *.mod 2>/dev/null`; do  ln -fs `pwd`/$$file ${ROOT}/modules/$$file; done'
+	/bin/sh -c 'for file in `ls *.mod *.h 2>/dev/null`; do  ln -fs `pwd`/$$file ${ROOT}/include/$$file; done'
 modules: $(OBJS) mod
 	for d in $(DIRS); do (cd $$d; $(MAKE) modules); done
 lib: force_look
-	/bin/sh -c 'for file in `ls *.a 2>/dev/null`; do  ln -fs `pwd`/$$file ${ROOT}/lib/$$file; done'
+	/bin/sh -c 'for file in `ls *.a *.o 2>/dev/null`; do  ln -fs `pwd`/$$file ${ROOT}/lib/$$file; done'
+libs : libraries
 libraries: $(OBJS) lib
 	for d in $(DIRS); do (cd $$d; $(MAKE) libraries); done
 .SILENT : force_look clean modules mod
 clean: 
-	rm -f *.mod $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(EXE)
+	rm -f *.mod *.h $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(EXE)
 
-.PHONY : parser output vectors files constants clean
+.PHONY : parser output vectors ivector files constants clean random multicom_aux
