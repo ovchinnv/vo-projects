@@ -1,6 +1,6 @@
 ! **********************************************************************!
 ! This source file was was generated automatically, (specifically for   !
-! the CHARMM) from a master source code tree, using a preprocessor.     !
+! CHARMM) from a master source code tree, using a preprocessor.         !
 ! If you edit this file (rather than the master source file)            !
 ! your changes will be lost if another pull from the master tree occurs.!
 ! In case you are wondering why, this approach makes it possible for    !

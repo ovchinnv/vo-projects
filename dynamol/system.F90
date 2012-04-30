@@ -19,6 +19,7 @@ module system
  integer, public, save :: natom =-1
  integer, public, parameter :: ndim=3 ! number of dimensions
  real*8, public, pointer, save, dimension(:,:) :: r, vr, fr ! positions, velocities, forces
+ real*8, public, pointer, save, dimension(:,:) :: rcomp ! auxiliary position set
  real*8, public, pointer, save, dimension(:) :: m, q, radius ! mass, charges & radii (duplicated from structure & topology files)
  real*8, public, pointer, save, dimension(:) :: bfactor, occupancy
  real*8, public, save :: BondE, AngleE, DiheE, ImprE, KinE(2)! , CmapE, ElecE, VdWE, PotE, KinE, AuxE ! energy terms
@@ -40,6 +41,8 @@ module system
  public system_read_velocities
  public system_init_velocities
  public system_compute
+ public system_getind ! return the set of atomic indices that match a valid selection
+ public system_getind_charmm ! selection routine with charmm-compatible syntax
  public system_done
  contains
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -153,6 +156,8 @@ module system
  use pdbio
  use files
 !
+
+
  implicit none
 !
 
@@ -195,10 +200,15 @@ module system
 !
  natom=atoms%last
  allocate(r(ndim,natom), vr(ndim, natom), fr(ndim, natom), m(natom), q(natom), radius(natom), bfactor(natom), occupancy(natom))
+ allocate(rcomp(ndim,natom))
+
  m=atoms%mass(1:natom)
  q=atoms%charge(1:natom)
 ! initialize coordinates
  r=unknown; vr=unknown; fr=0d0
+
+ rcomp=unknown
+
  occupancy=unknown;
  bfactor=unknown;
 !
@@ -219,6 +229,7 @@ module system
     call message(whoami, 'Reading coordinates in PQR format from file "'//fname(1:flen)//'".')
     if (me.le.0) call PQR_read(fid,r,q,radius)
     call warning(whoami, 'PQR format lacks SEGID identifier. This may cause coordinate errors.',0)
+
 
 
 ! call coor_check()
@@ -652,6 +663,8 @@ module system
 ! coordinates
  natom=-1
  deallocate(r,vr,fr,m,q,radius,bfactor,occupancy)
+ deallocate(rcomp)
+
  system_coordinates_initialized=.false.
  system_velocities_initialized=.false.
 !
@@ -661,6 +674,7 @@ module system
  use output, only: fout, message
  use parser, only: tab
  use stats
+
 
 
  implicit none
@@ -681,4 +695,29 @@ module system
  endif
 !
  end subroutine system_printe
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+ function system_getind(selection) result(ind)
+ use output
+ use parser
+ implicit none
+!
+ character(len=*), intent(in) :: selection
+ integer, pointer :: ind(:)
+
+ end function system_getind
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+ function system_getind_charmm(selection,l) result(ind)
+ use output
+ use parser
+ implicit none
+!
+ character(len=*), intent(inout) :: selection
+ integer, intent(inout) :: l
+ integer, pointer :: ind(:)
+
+ end function system_getind_charmm
+
+
+
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 end module system

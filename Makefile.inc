@@ -13,7 +13,7 @@ FFLAGS=-O3 -fast -finline -fp-model fast=2 -xhost -ipo -fno-math-errno -no-inlin
 #FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-132 -ffree-line-length-132 -fno-math-errno #-fbounds-check -frange-check 
 #
 DEFS=-D int=integer -D float=real*8 -D bool=logical -D int4mpi=integer*4 -D mpiint=MPI_INTEGER -D mpifloat=MPI_REAL -D mpichar=MPI_CHARACTER -D mpiint4=MPI_INTEGER4\
-     -D __DMOL
+     -D __DMOL -D __RCOMP
 
 # ! note: the VEC routines are probably slower
 
@@ -75,9 +75,9 @@ all: $(OBJS)
 ########################## SOURCE CODE #######################
 %.h:%.H $(LOCALDEPS) $(GLOBALDEPS)
 	$(FPP) $(FPPFLAGS) $(DEFS) $(LOCALDEFS) $< > $@
-%.F90:%.ftn $(LOCALDEPS) $(GLOBALDEPS)
+%.F90:%.ftn $(LOCALDEPS) $(GLOBALDEPS) $(ROOT)/source.msg
 	$(FPP) $(FPPFLAGS) $(DEFS) -U__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(MSG) -P $< > $@
-%.src:%.ftn $(LOCALDEPS) $(GLOBALDEPS) 
+%.src:%.ftn $(LOCALDEPS) $(GLOBALDEPS) $(ROOT)/charmm.msg
 	$(FPP) $(FPPFLAGS)         -D__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(CHMSG) -P $< > $@
 ######################### OTHER RULES ########################
 source: $(SOURCES)
@@ -85,6 +85,8 @@ source: $(SOURCES)
 $(DIRS): force_look
 	$(MAKE) -C $@ modules
 
+multidiag:
+	$(MAKE) -C $(ROOT)/multidiag modules libraries
 output:
 	$(MAKE) -C $(ROOT)/output modules libraries
 parser:
@@ -102,6 +104,10 @@ random:
 	$(MAKE) -C $(ROOT)/random modules libraries
 bestfit:
 	$(MAKE) -C $(ROOT)/bestfit modules libraries
+lu:
+	$(MAKE) -C $(ROOT)/lu modules libraries
+psf:
+	$(MAKE) -C $(ROOT)/dynamol/struc psf.o modules
 
 
 force_look:
@@ -119,4 +125,4 @@ libraries: $(OBJS) lib
 clean: 
 	rm -f *.mod *.h $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(EXE)
 
-.PHONY : parser output vectors ivector files constants clean random multicom_aux
+.PHONY : parser output vectors ivector files constants clean random multicom_aux multidiag psf

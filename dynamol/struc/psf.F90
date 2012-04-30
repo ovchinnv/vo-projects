@@ -98,7 +98,7 @@
 
 
 
-        read(fid,'(A)',IOSTAT=ioerr) cmdline ! if running in parallel, then only the root node is passed a valid handle
+        read(fid,'(A)',IOSTAT=ioerr) cmdline
 
         if (ioerr.eq.0) then
 

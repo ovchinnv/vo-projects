@@ -1,5 +1,6 @@
 ROOT=../..
-OBJS=cv_types.o cv_common.o
+CVOBJ=cv_posi_com.o cv_dist_com.o cv_angle_com.o cv_anglvec.o cv_dihe_com.o cv_rmsd.o cv_drmsd.o cv_proj.o cv_quaternion.o cv_qcomp.o
+OBJS=cv_types.o cv_common.o cv_frames.o cv_cvrms.o $(CVOBJ)
 
 COMMON=..
 INCLUDES= -I $(COMMON) -I $(ROOT)/modules
@@ -9,24 +10,21 @@ LOCALDEPS=source.defs ../source.defs
 
 include $(ROOT)/Makefile.inc
 
-cv_common.o: constants ivector sm_common_vars
+cv_common.o cv_frames.o: sm_common_vars output vectors
+
+$(CVOBJ) cv_cvrms.o : cv_types.o cv_common.o multicom_aux psf
+
+cv_posi_com.o cv_quaternion.o: cv_frames.o 
+cv_frames.o : bestfit multicom_aux multicom_aux
+cv_common.o cv_dihe_com.o cv_cvrms.o: constants
+cv_rmsd.o cv_drmsd.o cv_proj.o: bestfit
+cv_proj.o : cv_drmsd.o
+cv_qcomp.o : cv_quaternion.o
+cv_cvrms.o : $(CVOBJ)
 
 sm_common_vars:
 	$(MAKE) -C $(COMMON) sm_var.o sm_config.o 
 
-constants:
-	$(MAKE) -C $(ROOT)/constants all modules 
+charmm : $(CHARMM_SOURCES)
 
-ivector:
-	$(MAKE) -C $(ROOT)/vectors all modules
-
-multidiag:
-	$(MAKE) -C $(ROOT)/multidiag modules
-
-lu:
-	$(MAKE) -C $(ROOT)/lu modules
-
-charmm: $(CHARMM_SOURCES)
-
-
-.PHONY : sm_common_vars constants ivector multidiag lu
+.PHONY : sm_common_vars
