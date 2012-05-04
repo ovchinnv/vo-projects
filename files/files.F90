@@ -96,7 +96,7 @@ module files
  end subroutine files_open
 !******************************************************************
  subroutine files_initialize()
- character*16, parameter :: whoami='FILES_INITIALIZE'
+ character(len=16), parameter :: whoami='FILES_INITIALIZE'
  if (files_initialized) call files_done()
  call int_vector_init(handles)
  if (.not.handles%initialized) then
@@ -112,7 +112,7 @@ module files
  integer :: handle_
  integer :: i
  logical :: opened_, ok
- character*11, parameter :: whoami='FILES_CLOSE'
+ character(len=11), parameter :: whoami='FILES_CLOSE'
 !
  if (.not.files_initialized) call files_initialize()
 !
@@ -146,7 +146,7 @@ module files
  function files_assign_handle()
  integer :: files_assign_handle
  logical :: opened_
- character*19, parameter :: whoami='FILES_ASSIGN_HANDLE'
+ character(len=19), parameter :: whoami='FILES_ASSIGN_HANDLE'
 !
  if (.not.files_initialized) call files_initialize()
  do

@@ -1,23 +1,22 @@
 module output
- implicit none  
+ __IMPNONE
  int, save :: fout=-1
  bool, save :: output_initialized=.false.
  bool, save :: qprint = .true.
  bool, private, save :: loud = .true.
- character(LEN=80) :: msg__ ! buffer for output (see message.src) macro
- character(LEN=10), public, parameter :: realfmt = 'ES20.7E3'
+ character(len=80) :: msg__ ! buffer for output (see message.src) macro
+ character(len=10), public, parameter :: realfmt = 'ES20.7E3'
 !
- int, private, parameter :: minerrorlev=0, minwarnlev=0
+ int, private, parameter :: minerrorlev=0, minwarnlev=0, minmessagelev=0
  int, private :: l
  int, private, save :: warnlev, errorlev ! last warning/error levels
- character*9, private :: stat
-   
+ character(len=9), private :: stat
  contains
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  subroutine error(whoami,msg,level)
   int :: level
-  character*(*) :: whoami, msg
-!  
+  character(len=*) :: whoami, msg
+!
   if (.not.output_initialized) call output_init()
   if (level.lt.minerrorlev) then
    stat=' FATAL'; l=6
@@ -34,8 +33,8 @@ module output
  end subroutine error
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  subroutine terminate(whoami)
-  character*(*) :: whoami
-!  
+  character(len=*) :: whoami
+!
   if (.not.output_initialized) call output_init()
 !
   if (qprint) then
@@ -48,8 +47,8 @@ module output
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  subroutine warning(whoami,msg,level)
   int :: level
-  character*(*) :: whoami, msg
-!  
+  character(len=*) :: whoami, msg
+!
   if (.not.output_initialized) call output_init()
   if (level.lt.minwarnlev) then
    stat=' FATAL'; l=6
@@ -67,76 +66,83 @@ module output
 !
  end subroutine warning
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
- function fatal_warning(comm)
- int4mpi :: comm ! communicator
+ function fatal_warning(             &
+#ifdef __PARALLEL
+ &                      communicator &
+#endif
+ &                          )
+!
+!
+#ifdef __PARALLEL
+ __DEP__MPI
+ int4mpi, optional :: communicator
+ int4mpi :: comm
+#endif
  int :: level, bug
  bool :: fatal_warning
-!
-#ifdef __PARALLEL
- include 'mpif.h'
-#endif
-!
 ! compute the maximum value of errorcodes across all nodes; then decice whether to terminate
 !
- level=warnlev ! current value of the error level
-!
 #ifdef __PARALLEL
- call mpi_allreduce(warnlev,level,1,mpi_int,MPI_MIN,comm,bug)
+ if (present(communicator)) then ; comm=communicator ; else ; comm=MPI_COMM_WORLD ; endif
+ call mpi_allreduce(warnlev, level, 1, mpiint, MPI_MAX, comm, bug)
+#else
+ level=warnlev ! current value of the error level
 #endif
+!
 !
  fatal_warning=(level.lt.minerrorlev)
 !
  end function fatal_warning
 !
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
- subroutine message(whoami,msg)
-  character*(*) :: whoami, msg
-!  
+ subroutine message(whoami,msg,level)
+  character(len=*) :: whoami, msg
+  int, optional :: level
+!
   if (.not.output_initialized) call output_init()
 !
   if (qprint) then
-   write(fout,'(4A)') ' MESSAGE (',whoami,'): ', msg
+   if (level.gt.minmessagelev) write(fout,'(4A)') ' MESSAGE (',whoami,'): ', msg
   endif
 !
  end subroutine message
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
- subroutine plainmessage(msg)
+ subroutine plainmessage(msg,level)
 ! write message without ay other info.
-  character*(*) :: msg
-!  
+  character(len=*) :: msg
+  int, optional :: level
+!
   if (.not.output_initialized) call output_init()
 !
   if (qprint) then
-   write(fout,'(4A)') msg
+   if (level.gt.minmessagelev) write(fout,'(4A)') msg
   endif
 !
  end subroutine plainmessage
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-! 
+!
  subroutine output_init(filename)
- character*(*), optional :: filename
- character*400 :: fname
+ character(len=*), optional :: filename
+ character(len=len(filename)) :: fname
  int :: flen
- 
  call output_done()
 !
  if (present(filename)) then
   fname=adjustl(filename)
   flen=len_trim(fname)
   fout=987
-  if (qprint) &
-&   open(unit=fout,file=fname(1:flen),form='FORMATTED',status='UNKNOWN')
+  open(unit=fout,file=fname(1:flen),form='FORMATTED',status='UNKNOWN')
  else
   fout=6
  endif
-! 
- output_initialized=.true. 
+!
+ output_initialized=.true.
  end subroutine output_init
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 !
  subroutine output_done()
  if (output_initialized) then
-  if (qprint.and.fout.ne.0.and.fout.ne.6.and.fout.ne.5) close(fout)
+  if (fout.ne.0.and.fout.ne.6.and.fout.ne.5) close(fout)
   output_initialized=.false.
   fout=-1
  endif

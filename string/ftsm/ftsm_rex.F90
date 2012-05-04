@@ -9,12 +9,10 @@
 ! applications (some of which are written in a way that is quite far !
 ! from being object-oriented) at the source level. !
 ! **********************************************************************!
-!CHARMM Element source/stringm/ftsm_rex.mod $Revision: 0 $
 !
 ! FTSM_REX.MOD
 !
 ! REPLICA EXCHANGE MODULE FOR THE FINITE TEMPERATURE STRING METHOD
-!**CHARMM_ONLY**!##IF PARALLEL
 !**CHARMM_ONLY**!##IF STRINGM
 !
       module ftsm_rex
@@ -149,6 +147,7 @@
        integer, allocatable, dimension(:) :: rex_log_all
        integer :: ierror, type
        logical :: qroot
+!
 ! do work
 ! gather all data on root
        qroot=MPI_COMM_STRNG.ne.MPI_COMM_NULL
@@ -198,5 +197,4 @@
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       end module ftsm_rex
 !
-!**CHARMM_ONLY**!##ENDIF
 !**CHARMM_ONLY**!##ENDIF

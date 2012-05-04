@@ -13,13 +13,13 @@
 ! reparametrize string
 ! open file for iput/output
 !
-!**CHARMM_ONLY**!##IF STRINGM
+__CHARMM_ONLY__CHARMM_ONLY##IF STRINGM
 !
       subroutine compute_work_fd(x,xbc0,xbc1,f,n,work)
       use multicom_aux
       use mpi
 !
-      implicit none
+     
       integer :: n
       real*8 :: x(n), f(n)
       real*8 :: work(:)
@@ -112,7 +112,7 @@
       use multicom_aux
       use mpi
 !
-      implicit none
+     
 !
       integer n
       real*8 :: rin(n), rout(n), wgt(n)
@@ -290,7 +290,7 @@
       use multicom_aux
       use mpi
 !
-      implicit none
+     
 !
       integer :: n
       real*8 :: rin(n), rout(n), wgt(n)
@@ -343,7 +343,7 @@
 !
       interface ! to linear interpolation routine
        subroutine linear_interp(xin,yin,nin,xout,yout,nout,dydxout)
-       implicit none
+      
        integer :: nin, nout
        real*8 :: xin(nin), yin(nin), xout(nout), yout(nout)
        real*8, optional :: dydxout(nout) ! tangent computation
@@ -657,7 +657,7 @@
       use multicom_aux
       use mpi
 !
-      implicit none
+     
 !
       integer :: n
       real*8 :: rin(n), rout(n), wgt(n)
@@ -1198,7 +1198,7 @@
 !
       use multicom_aux
       use mpi
-      implicit none
+     
 !
       integer :: n
       real*8 :: rin(n), drout(n), wgt(n)
@@ -1330,7 +1330,7 @@
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 ! frames align moved here from cv_frames modules because of circular dependency problem
       subroutine frames_align_string(x,y,z,mass,min_rmsd,ind)
-       use cv_common, only: cv, priv_ptr, main, comp, cv_base_rmsd
+       use cv_common, only: cv, priv_ptr, main, comp, cv_common_rmsd
        use cv_frames, only : frames, frames_reset_calculate, &
      & frames_calc, frames_initialized
        use smcv_master, only : smcv_fill ! used for rmsd test
@@ -1465,19 +1465,19 @@
 ! complicated.
          if (qrmsd) then
           call smcv_fill(x,y,z,mass,comp) ! fill (overwrite) comparison array
-          rmsd1=cv_base_rmsd(main,comp) ! note that I am assuming that the main column has the "CORRECT" z
+          rmsd1=cv_common_rmsd(main,comp) ! note that I am assuming that the main column has the "CORRECT" z
 !ccc calculate rmsd's for all frames
           frames%r(:,:,i)=A2;
           call smcv_fill(x,y,z,mass,comp)
-          rmsd2=cv_base_rmsd(main,comp)
+          rmsd2=cv_common_rmsd(main,comp)
 !
           frames%r(:,:,i)=A3;
           call smcv_fill(x,y,z,mass,comp)
-          rmsd3=cv_base_rmsd(main,comp)
+          rmsd3=cv_common_rmsd(main,comp)
 !
           frames%r(:,:,i)=A4;
           call smcv_fill(x,y,z,mass,comp)
-          rmsd4=cv_base_rmsd(main,comp)
+          rmsd4=cv_common_rmsd(main,comp)
 !
 ! write(600+mestring,*) rmsd1, rmsd2, rmsd3, rmsd4
 ! close(600+mestring)
@@ -1576,7 +1576,7 @@
 ! calculate optimal frame axes, based on resulting RMSD between known CV and instantaneous CV
 ! this is a much simpler version of frames_align_string; currently used only in the SMCV interpolation routine
 ! note that I assume that the main array has the (preset) CV values
-       use cv_base, only: cv, main, comp, cv_base_rmsd
+       use cv_common, only: cv, main, comp, cv_common_rmsd
        use cv_frames, only : frames, frames_reset_calculate, &
      & frames_calc, frames_initialized
        use smcv_master, only : smcv_fill ! used for rmsd test
@@ -1638,19 +1638,19 @@
          A4(:,1)= A1(:,1); A4(:,2)=-A1(:,2); A4(:,3)=-A1(:,3);
 !
          call smcv_fill(x,y,z,mass,comp) ! fill (overwrite) comparison array
-         rmsd1=cv_base_rmsd(main,comp) ! note that I am assuming that the main column has the "CORRECT" z
+         rmsd1=cv_common_rmsd(main,comp) ! note that I am assuming that the main column has the "CORRECT" z
 !ccc calculate rmsd's for all frames
          frames%r(:,:,i)=A2;
          call smcv_fill(x,y,z,mass,comp)
-         rmsd2=cv_base_rmsd(main,comp)
+         rmsd2=cv_common_rmsd(main,comp)
 !
          frames%r(:,:,i)=A3;
          call smcv_fill(x,y,z,mass,comp)
-         rmsd3=cv_base_rmsd(main,comp)
+         rmsd3=cv_common_rmsd(main,comp)
 !
          frames%r(:,:,i)=A4;
          call smcv_fill(x,y,z,mass,comp)
-         rmsd4=cv_base_rmsd(main,comp)
+         rmsd4=cv_common_rmsd(main,comp)
 !
 ! write(600+mestring,*) rmsd1, rmsd2, rmsd3, rmsd4
 ! close(600+mestring)
@@ -1705,7 +1705,8 @@
 !
        use output
 !
-       implicit none
+      
+!
        real*8 :: x(:), y(:), z(:), mass(:)
        integer, optional :: ind ! frame index
 !
@@ -1848,4 +1849,4 @@ character(len=80) :: msg___
 !
       end subroutine hypercube_allgatherv
 !
-!**CHARMM_ONLY**!##ENDIF
+__CHARMM_ONLY__CHARMM_ONLY##ENDIF

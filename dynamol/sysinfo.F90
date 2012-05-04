@@ -14,6 +14,7 @@ module sysinfo
  use system
 ! routines to obtain various properties of the simulation system belong here
  public sysinfo_dimens ! return molecule dimensions: coordinates of center, minimum and maximum coordinate values
+!
  contains
 !***************************************************************************************************
   function sysinfo_dimens(qmass,ind)

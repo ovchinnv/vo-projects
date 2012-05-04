@@ -28,7 +28,8 @@ module constants
  real*8, parameter :: half=0.5d0
  real*8, parameter :: quarter=0.25d0
  real*8, parameter :: third=1d0/3d0
- real*8, parameter :: unknownf=1d0*(not(ishftc(1,-1))) ! smallest representable integer
+ integer, parameter :: unknowni=not(ishftc(1,-1)) ! smallest representable integer
+ real*8, parameter :: unknownf=1d0*unknowni
 !
 ! real*8, parameter :: DTOL = 1.0e-14
 ! real*8, parameter :: FTOL = 1.0e-7

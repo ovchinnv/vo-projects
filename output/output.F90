@@ -15,18 +15,18 @@ module output
  logical, save :: output_initialized=.false.
  logical, save :: qprint = .true.
  logical, private, save :: loud = .true.
- character(LEN=80) :: msg__ ! buffer for output (see message.src) macro
- character(LEN=10), public, parameter :: realfmt = 'ES20.7E3'
+ character(len=80) :: msg__ ! buffer for output (see message.src) macro
+ character(len=10), public, parameter :: realfmt = 'ES20.7E3'
 !
- integer, private, parameter :: minerrorlev=0, minwarnlev=0
+ integer, private, parameter :: minerrorlev=0, minwarnlev=0, minmessagelev=0
  integer, private :: l
  integer, private, save :: warnlev, errorlev ! last warning/error levels
- character*9, private :: stat
+ character(len=9), private :: stat
  contains
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  subroutine error(whoami,msg,level)
   integer :: level
-  character*(*) :: whoami, msg
+  character(len=*) :: whoami, msg
 !
   if (.not.output_initialized) call output_init()
   if (level.lt.minerrorlev) then
@@ -44,7 +44,7 @@ module output
  end subroutine error
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  subroutine terminate(whoami)
-  character*(*) :: whoami
+  character(len=*) :: whoami
 !
   if (.not.output_initialized) call output_init()
 !
@@ -58,7 +58,7 @@ module output
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  subroutine warning(whoami,msg,level)
   integer :: level
-  character*(*) :: whoami, msg
+  character(len=*) :: whoami, msg
 !
   if (.not.output_initialized) call output_init()
   if (level.lt.minwarnlev) then
@@ -77,15 +77,17 @@ module output
 !
  end subroutine warning
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
- function fatal_warning(comm)
- integer*4 :: comm ! communicator
+ function fatal_warning( &
+ & )
+!
+!
  integer :: level, bug
  logical :: fatal_warning
-!
-!
 ! compute the maximum value of errorcodes across all nodes; then decice whether to terminate
 !
+
  level=warnlev ! current value of the error level
+
 !
 !
  fatal_warning=(level.lt.minerrorlev)
@@ -93,33 +95,35 @@ module output
  end function fatal_warning
 !
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
- subroutine message(whoami,msg)
-  character*(*) :: whoami, msg
+ subroutine message(whoami,msg,level)
+  character(len=*) :: whoami, msg
+  integer, optional :: level
 !
   if (.not.output_initialized) call output_init()
 !
   if (qprint) then
-   write(fout,'(4A)') ' MESSAGE (',whoami,'): ', msg
+   if (level.gt.minmessagelev) write(fout,'(4A)') ' MESSAGE (',whoami,'): ', msg
   endif
 !
  end subroutine message
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
- subroutine plainmessage(msg)
+ subroutine plainmessage(msg,level)
 ! write message without ay other info.
-  character*(*) :: msg
+  character(len=*) :: msg
+  integer, optional :: level
 !
   if (.not.output_initialized) call output_init()
 !
   if (qprint) then
-   write(fout,'(4A)') msg
+   if (level.gt.minmessagelev) write(fout,'(4A)') msg
   endif
 !
  end subroutine plainmessage
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 !
  subroutine output_init(filename)
- character*(*), optional :: filename
- character*400 :: fname
+ character(len=*), optional :: filename
+ character(len=len(filename)) :: fname
  integer :: flen
  call output_done()
 !
@@ -127,8 +131,7 @@ module output
   fname=adjustl(filename)
   flen=len_trim(fname)
   fout=987
-  if (qprint) &
-& open(unit=fout,file=fname(1:flen),form='FORMATTED',status='UNKNOWN')
+  open(unit=fout,file=fname(1:flen),form='FORMATTED',status='UNKNOWN')
  else
   fout=6
  endif
@@ -139,7 +142,7 @@ module output
 !
  subroutine output_done()
  if (output_initialized) then
-  if (qprint.and.fout.ne.0.and.fout.ne.6.and.fout.ne.5) close(fout)
+  if (fout.ne.0.and.fout.ne.6.and.fout.ne.5) close(fout)
   output_initialized=.false.
   fout=-1
  endif

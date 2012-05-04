@@ -120,7 +120,7 @@
           write(0,*) 'WARNING FROM: ',whoami,': ',' COULD NOT ADD COMMUNICATOR.'
          else
           write(msg___,222) whoami, newcomm;
-          write(0,'(A)') msg___ ! print if verbosity >= 3
+          call plainmessage(msg___,3) ! print if verbosity >= 3
          endif
         endif
         call int_vector_done(list)

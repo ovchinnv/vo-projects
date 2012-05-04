@@ -33,6 +33,7 @@ module system
  public system_get_vw_radius  ! populate radius array (above) from nonbonded parameters
  public system_printe
  public system_read_coordinates
+ public system_init_mol_scalar_nocase
  public system_write_dcd
  public system_write_coordinates
  public system_read_velocities
@@ -333,6 +334,7 @@ module system
  subroutine system_init_velocities() 
  use rng
  use output
+ use mol_formats
  __DEP_CONST
  __IMPNONE
  character(len=22), parameter :: whoami='SYSTEM_INIT_VELOCITIES'
@@ -351,13 +353,13 @@ module system
  elseif (existtag('temperature')) then
   keyword=getval('temperature')
  else
-  call error(whoami, 'INITIALIZATION TEMPERATURE NOT SPECIFIED. ABORT.',0)
+  call warning(whoami, 'INITIALIZATION TEMPERATURE NOT SPECIFIED. ABORT.',0)
   return
  endif
  itemp=atof(keyword)
  l=len_trim(keyword)
 ! 
- call message(whoami, 'Initializing velocities at temperature '//keyword(1:l)//' K.')
+ call message(whoami, 'Initializing velocities at temperature '//keyword(1:l)//' Kelvin.')
  call randomg_vector(vr, ndim*natom, c)
  itemp=sqrt(kboltzmann*itemp)
  do i=1,3
@@ -367,7 +369,188 @@ module system
  system_velocities_initialized=.true.
  end subroutine system_init_velocities 
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
-! NOTE: need to take into account generic params (X)
+ function system_init_mol_scalar_nocase(tag) result(s)
+ use mol_formats
+ __DEP_CONST
+#ifdef __PARALLEL
+ __DEP_MULTICOM
+#endif
+ __IMPNONE
+ float, pointer :: s(:)
+ float, pointer :: otemp(:), btemp(:), rtemp(:,:)
+ character(len=*), intent(in) :: tag
+ character(len=len(tag)) :: tag2
+ character(len=400) :: filename, file_format
+ character(len=20) :: column
+ character(len=22), parameter :: whoami='SYSTEM_INIT_MOL_SCALAR'
+ int :: l, flen, j, ifmt, icol=-1, fid
+!
+!
+#include "multicom_def.src"
+!
+ tag2=tag; call adjustleft(tag2); l=len_trim(tag2)
+!
+ nullify(s);
+!
+ if (.not.system_structure_initialized) then
+  call warning(whoami, 'Structure not initialized. Cannot proceed.',-1)
+  if (fatal_warning()) return
+ endif
+!
+!%%%%%%%%%% check whether the tag exists %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+ if (existtag_nocase(tag2)) then
+   select case(getval_nocase_upper(tag2))
+    case('CONST','CONSTANT')
+     if     (existtag_nocase(tag2(1:l)//'_constant')) then
+      allocate(s(natom)) ; s=atof(getval_nocase(tag2(1:l)//'_constant'))
+     elseif (existtag_nocase(tag2(1:l)//'_const'   )) then
+      allocate(s(natom)) ; s=atof(getval_nocase(tag2(1:l)//'_const'   ))
+     else
+      call warning(whoami, 'Initialization constant for '//tag2(1:l)//' not specified.',-1)
+     endif
+!-------------------------------------------------------------------------
+    case('FILE')
+     if (existtag_nocase(tag2(1:l)//'_file')) then
+      filename=getval_nocase(tag2(1:l)//'_file')
+      call adjustleft(filename)
+      flen=len_trim(filename)
+      call message(whoami, 'Will initialize variable '//tag2(1:l)//' from file "'//filename(1:flen)//'"')
+!
+      if (existtag_nocase(tag2(1:l)//'_filetype')) then
+        file_format=getval_nocase_upper(tag2(1:l)//'_FILETYPE')
+        ifmt=unknowni
+        do j=1,num_mol_format
+         if (file_format.eq.mol_format_name(j)) then 
+          ifmt=j
+          exit
+         endif
+        enddo
+      endif
+!
+      if (ifmt.ne.unknowni) then
+       call message(whoami,mol_format_name(ifmt)(1:len_trim(mol_format_name(ifmt)))//' format will be used');
+!
+       icol=-1
+       if (existtag_nocase(tag2(1:l)//'_column')) then
+        column=getval_nocase_upper(tag2(1:l)//'_column')
+        select case(column)
+!**********************************************************
+         case('OCCUPANCY', 'O');
+          if ( all(ifmt.ne.(/pdb,pqr/))) then
+           call warning(whoami,'Column "'//column(1:len_trim(column))//'" is invalid for this file type',-1)
+          else
+           icol=ocol
+          endif
+!**********************************************************
+         case('BETA', 'BFACTOR', 'DEBYE','DEBYEWALLER','DEBYE-WALLER','DEBYE_WALLER','TEMPERATURE','TFACTOR','T_FACTOR','T-FACTOR',&
+     &'TEMPERATURE-FACTOR','TEMPERATURE_FACTOR','T','TEMPERATUREFACTOR','TFACT','T_FACT','T-FACT','TEMP','TEMPFACTOR','B_FACTOR',&
+     &'TEMP-FACTOR','TEMP_FACTOR','TEMP-FACT','TEMP_FACT','TEMPFACT','B','BVAL','BCOL','BFACT','B-FACT','B_FACT','B-FACTOR');
+         if ( all(ifmt.ne.(/pdb,pqr/))) then
+          call warning(whoami,'Column "'//column(1:len_trim(column))//'" is invalid for this file type',-1)
+         else
+          icol=bcol
+         endif
+!**********************************************************
+         case('WMAIN', 'W', 'WGT','WEIGHT');
+          if ( all(ifmt.ne.(/charmm/) ) ) then
+           call warning(whoami,'Column "'//column(1:len_trim(column))//'" is invalid for this file type',-1)
+          else
+           icol=wcol
+          endif
+!**********************************************************
+         case('X','XCOMP','XCOR','XCOOR','X-COR','X-COOR','X_COR','X_COOR',&
+     &        'XCOORDINATE','X-COORDINATE','X_COORDINATE',&
+     &        'XCOORD','X-COORD','X_COORD',&
+     &        'XCRD','X-CRD','X_CRD',&
+     &        'XVAL','X-VAL','X_VAL',&
+     &        'XVALUE','X-VALUE','X_VALUE'); icol=xcol
+!**********************************************************
+         case('Y','YCOMP','YCOR','YCOOR','Y-COR','Y-COOR','Y_COR','Y_COOR',&
+     &        'YCOORDINATE','Y-COORDINATE','Y_COORDINATE',&
+     &        'YCOORD','Y-COORD','Y_COORD',&
+     &        'YCRD','Y-CRD','Y_CRD',&
+     &        'YVAL','Y-VAL','Y_VAL',&
+     &        'YVALUE','Y-VALUE','Y_VALUE'); icol=ycol
+!**********************************************************
+         case('Z','ZCOMP','ZCOR','ZCOOR','Z-COR','Z-COOR','Z_COR','Z_COOR',&
+     &        'ZCOORDINATE','Z-COORDINATE','Z_COORDINATE',&
+     &        'ZCOORD','Z-COORD','Z_COORD',&
+     &        'ZCRD','Z-CRD','Z_CRD',&
+     &        'ZVAL','Z-VAL','Z_VAL',&
+     &        'ZVALUE','Z-VALUE','Z_VALUE'); icol=zcol
+!**********************************************************
+         case default
+          call warning(whoami,'Column "'//column(1:len_trim(column))//'" is invalid for this file type',-1)
+        end select
+!
+        if (icol.ge.0) then
+!
+         if (me.le.0) then
+          column=mol_col_name(icol)
+          call message(whoami, &
+ &'Reading data for variable "'//tag2(1:l)//'" from column '//column(1:len_trim(column))//' of file '//filename(1:flen))
+          call files_open(fid, name_=filename(1:flen), form_='FORMATTED', action_='READ')
+          if (fid.ge.0) then
+           allocate(rtemp(ndim,natom), otemp(natom), btemp(natom))
+           select case(ifmt)
+            case(pdb);   call pdb_read(fid, rtemp, otemp, btemp)
+            case(pqr);   call pqr_read(fid, rtemp, otemp, btemp)
+            case(charmm);call ch_coor_read(fid, rtemp, btemp)
+            case(free);  call atomid_coor_read(fid, rtemp)
+           end select
+!
+           if (.not.fatal_warning()) then
+            call files_close(fid)
+            allocate(s(natom))
+            select case(icol)
+             case(bcol);   s=btemp
+             case(ocol);   s=otemp
+             case(wcol);   s=btemp
+             case(xcol);   s=rtemp(1,:)
+             case(ycol);   s=rtemp(2,:)
+             case(zcol);   s=rtemp(3,:)
+            end select
+!
+           endif ! fatal_warning
+           deallocate(otemp,btemp,rtemp)
+!
+          else ! problem opening file
+           call warning(whoami, 'Cannot open file. Abort.',-1)
+          endif
+          if (associated(s)) then ; j=size(s) ; else ; j=0 ; endif
+         endif ! me=0
+! broadcast data *****************************************************************
+#ifdef __PARALLEL 
+         call mpi_bcast(j, 1, mpiint, 0, communicator, ierror)
+         if (j.gt.0) then 
+          if (me.ne.0) allocate(s(j))
+          call mpi_bcast(s, j, mpifloat, 0, communicator, ierror)
+         endif
+! broadcast data *****************************************************************
+#endif
+!
+        endif ! icol<0 : invalid column
+!
+       else ! unspecified column
+        call warning(whoami,'File column for variable"'//tag2(1:l)//'" not specified',-1)
+       endif
+      else ! unknown format
+       call warning(whoami,'Format "'//file_format(1:len_trim(file_format))//'" is not recognized',-1)
+      endif
+     else ! invalid initialization file
+      call warning(whoami, 'Initialization file for variable "'//tag2(1:l)//'" not specified',-1)
+     endif
+!-------------------------------------------------------------------------
+    case default
+     call warning(whoami, 'No valid initialization option for variable "'//tag2(1:l)//'" found',-1)
+   end select
+ else ! tag was not found
+  call warning(whoami, 'Parameter "'//tag2(1:l)//'" not found',-1)
+ endif 
+!
+ end function system_init_mol_scalar_nocase
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
+! NOTE: need to take into account generic params (Z)
  subroutine system_check()
  use ivector
  use tlist

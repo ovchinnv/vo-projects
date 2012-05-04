@@ -1,5 +1,5 @@
 ROOT=..
-OBJS=stats.o sysinfo.o system.o sysmanip.o
+OBJS=stats.o sysinfo.o system.o sysmanip.o verlet.o
 INCLUDES=-I $(ROOT)/include
 DIRS=param struc coor compute
 
@@ -15,6 +15,7 @@ include $(ROOT)/Makefile.inc
 
 sysinfo.o sysmanip.o : system.o output
 system.o: stats.o parser output vectors files multicom_aux random bestfit multicom_def.src $(DIRS)
+verlet.o: system.o parser output constants random
 
 libraries : libdynamol.a
 libdynamol.a: $(OBJS)  force_look                      #force relinking

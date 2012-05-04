@@ -10,3 +10,5 @@ clcg.o : clcg.f clcg.h
 
 mod:
 	/bin/sh -c 'for file in "rng.mod"; do  ln -fs `pwd`/$$file ${ROOT}/include/$$file; done'
+clean: 
+	rm -f *.mod $(SOURCES) $(OBJS)

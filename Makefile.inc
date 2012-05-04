@@ -13,7 +13,7 @@ FFLAGS=-O3 -fast -finline -fp-model fast=2 -xhost -ipo -fno-math-errno -no-inlin
 #FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-132 -ffree-line-length-132 -fno-math-errno #-fbounds-check -frange-check 
 #
 DEFS=-D int=integer -D float=real*8 -D bool=logical -D int4mpi=integer*4 -D mpiint=MPI_INTEGER -D mpifloat=MPI_REAL -D mpichar=MPI_CHARACTER -D mpiint4=MPI_INTEGER4\
-     -D __DMOL -D __RCOMP
+     -D mpibool=MPI_LOGICAL -D __DMOL -D __RCOMP
 
 # ! note: the VEC routines are probably slower
 

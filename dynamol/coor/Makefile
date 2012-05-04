@@ -1,12 +1,10 @@
 ROOT=../..
 
-OBJS = charmmio.o freeio.o pdbio.o
+OBJS = mol_formats.o charmmio.o freeio.o pdbio.o
 
 INCLUDES=-I $(ROOT)/modules
 
 include $(ROOT)/Makefile.inc
 
-$(OBJS): parser output psf
+charmmio.o freeio.o pdbio.o : parser output psf
 
-psf:
-	$(MAKE) -C $(ROOT)/dynamol/struc psf.o modules
