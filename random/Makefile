@@ -5,7 +5,7 @@ INCLUDES=-I $(ROOT)/modules
 
 include $(ROOT)/Makefile.inc
 
-rng.o : clcg.o constants output
+rng.o : clcg.o constants output parser
 clcg.o : clcg.f clcg.h
 
 mod:

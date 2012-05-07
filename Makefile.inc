@@ -54,7 +54,7 @@ SOURCES=$(OBJS:%.o=%.F90)
 CHARMM_SOURCES=$(OBJS:%.o=%.src)
 
 FPP=cpp -P
-FPPFLAGS = -C
+FPPFLAGS = -C -I $(ROOT)
 
 .SUFFIXES:
 .SUFFIXES: .o .F90 .a .H .h .c .f .F
@@ -108,6 +108,8 @@ lu:
 	$(MAKE) -C $(ROOT)/lu modules libraries
 psf:
 	$(MAKE) -C $(ROOT)/dynamol/struc psf.o modules
+dynamol:
+	$(MAKE) -C $(ROOT)/dynamol molsim.o modules
 
 
 force_look:

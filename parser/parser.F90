@@ -506,7 +506,7 @@
             if (qtag) then
              if (all(lower2(1:26).ne.c).and.all(upper2(1:26).ne.c)) then
               if (ltag.eq.0) then
-               call warning(whoami, 'PARAMETER NAMES MUST START WITH A LETTER. SKIPPING LINE.',0)
+               call warning(whoami, 'Parameter names must start with a letter. Skipping line.',0)
                qerror=.true.; exit
               elseif (all(digits2(1:10).ne.c).and.underscore.ne.c) then
                call warning(whoami, 'Illegal character in parameter name. Skipping line.',0)

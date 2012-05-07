@@ -1,5 +1,5 @@
 ROOT=..
-OBJS=stats.o sysinfo.o system.o sysmanip.o verlet.o
+OBJS=stats.o sysinfo.o system.o sysmanip.o verlet.o molsim.o
 INCLUDES=-I $(ROOT)/include
 DIRS=param struc coor compute
 
@@ -10,6 +10,9 @@ LINKOBJS=constants.o output.o files.o parser.o multicom_aux.o            \
      psf.o psfatom.o tlist.o                                                \
      charmmio.o pdbio.o freeio.o                                            \
      angles.o bonds.o dihedrals.o
+
+LOCALMACROS=-include source.defs
+LOCALDEPS=source.defs multicom_def.src
 
 include $(ROOT)/Makefile.inc
 

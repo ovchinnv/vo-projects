@@ -78,7 +78,7 @@ module system
     call message(whoami, 'Reading parameters in CHARMM format.')
     call parse_ch_param(fid)
    case default
-    call error(whoami, 'Unknown parameter file format. Abort.',-1)
+    call warning(whoami, 'Unknown parameter file format. Abort.',-1)
     return
   end select
 !
@@ -98,7 +98,7 @@ module system
    case('CHARMM','XPLOR')
     call list_ch_params()
    case default
-    call error(whoami, 'Unknown parameter file format. Abort.',-1)
+    call warning(whoami, 'Unknown parameter file format. Abort.',-1)
   end select
 !
  end subroutine system_list_parameters
@@ -123,7 +123,7 @@ module system
     return
    endif
  else
-  call error(whoami, 'Structure file name not specified. Abort.',-1)
+  call warning(whoami, 'Structure file name not specified. Abort.',-1)
   return
  endif
 ! call parser
@@ -140,7 +140,7 @@ module system
     call psf_info()
 ! call psf_print()
    case default;
-    call error(whoami, 'Unknown structure file format. Abort.',-1)
+    call warning(whoami, 'Unknown structure file format. Abort.',-1)
     return
   end select
 !
@@ -193,7 +193,7 @@ module system
  endif
 !
  if (.not.system_structure_initialized) then
-  call error(whoami, 'Structure not initialized. Cannot proceed.',-1)
+  call warning(whoami, 'Structure not initialized. Cannot proceed.',-1)
   return
  endif
 !
@@ -235,7 +235,7 @@ module system
 
 ! call coor_check()
    case default
-    call error(whoami, 'UNKNOWN COORDINATE FILE FORMAT. ABORT.',-1)
+    call warning(whoami, 'UNKNOWN COORDINATE FILE FORMAT. ABORT.',-1)
     return
   end select
 !
@@ -254,66 +254,78 @@ module system
 
  implicit none
 !
- character(len=*) :: filename, which
- character(len=len(which)) :: which2
+ character(len=*) :: filename
+ character(len=*), optional :: which
+ character(len=20) :: which2
  character(len=80) :: fname, tag
  character(len=10) :: coortype
  character(len=24) , parameter :: whoami='SYSTEM_WRITE_COORDINATES'
  integer :: flen
- integer :: fid=100, l
+ integer :: fid=-1, l
  real*8, pointer :: rout(:,:)
 !
  integer*4 :: me
  me=0
 !
- which2=which
+ if (present(which)) then ; which2=which ; else ; which2='COOR' ; endif
  call toupper(which2)
  select case(which2)
   case('COOR','CORD','C','COORDINATES','COORD'); tag='coordinates'; rout=>r
   case('VEL','V','VELO','VELOCITIES'); tag='velocities'; rout=>vr
   case('FC','F','FORCE','FORCES'); tag='forces'; rout=>fr
   case default;
-   call error(whoami, 'INVALID ARRAY REQUESTED FOR OUTPUT. ABORT.',0)
-   return
+   call warning(whoami, 'INVALID ARRAY REQUESTED FOR OUTPUT. ABORT.',-1)
  end select
+!
+ if (fatal_warning()) return
+!
  l=len_trim(tag)
 !
  fname=filename
  call adjustleft(fname)
  flen=len_trim(fname)
  if (flen.gt.0) then
-  if (me.le.0) open(fid, file=fname(1:flen), status='UNKNOWN', form='FORMATTED')
+  if (me.le.0) then
+   call files_open(fid, name_=fname(1:flen), form_='FORMATTED', action_='WRITE')
+   if (fid.le.0) call warning(whoami, 'Cannot open input file. Abort.',-1)
+  endif ! me
  else
-  call error(whoami, 'FILE NAME NOT SPECIFIED. ABORT.',-1)
-  return
+  call warning(whoami, 'File name not specified. Abort.',-1)
  endif
 !
  if (.not.system_structure_initialized) then
-  call error(whoami, 'STRUCTURE NOT INITIALIZED. CANNOT PROCEED.',-1)
-  return
+  call warning(whoami, 'Structure not initialized. Cannot proceed.',-1)
  endif
 !
+ if (fatal_warning()) return
 ! call parser
  coortype=getval('coortype')
  call toupper(coortype)
   select case(coortype)
    case('CHARMM')
     call message(whoami, 'Writing '//tag(1:l)//' in CHARMM format to file "'//fname(1:flen)//'".')
+! note: future parallelization may require that coordinates be gethered prior to write
     if (me.le.0) call ch_coor_write(fid,rout)
    case('ATOMID')
     call message(whoami, 'Writing '//tag(1:l)//' in free format by atomid to file "'//fname(1:flen)//'".')
-! if (me.eq.0) call atomid_coor_write(fid,rout)
+    if (me.eq.0) call atomid_coor_write(fid,rout)
    case default
-    call error(whoami, 'UNKNOWN FILE FORMAT. ABORT.',-1)
-    return
+    call warning(whoami, 'Unknown file format. Abort.',-1)
   end select
 !
- close(fid)
+ if (me.le.0) call files_close(fid)
 !
  end subroutine system_write_coordinates
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+ subroutine system_write_velocities(f); implicit none; character(len=*) :: f; call system_write_coordinates(f,'VEL')
+ end subroutine system_write_velocities
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+ subroutine system_write_forces(f); implicit none; character(len=*) :: f; call system_write_coordinates(f,'FC')
+ end subroutine system_write_forces
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  subroutine system_write_dcd(fid,addheader)
  use charmmio
+
 
 
  implicit none
@@ -323,6 +335,8 @@ module system
 !
  integer*4 :: me
  me=0
+!
+! in parallel, will need to gather coordinates
 !
  if (me.le.0) call dcd_write(fid,r,addheader)
  end subroutine
@@ -345,7 +359,7 @@ module system
  integer :: c=9 ! random channel
 !
  if (.not.system_structure_initialized) then ! masses may not be available
-  call error(whoami, 'STRUCTURE NOT INITIALIZED. CANNOT PROCEED.',-1)
+  call warning(whoami, 'STRUCTURE NOT INITIALIZED. CANNOT PROCEED.',-1)
   return
  endif
 ! call parser
@@ -562,12 +576,12 @@ module system
  character(len=12) , parameter :: whoami='SYSTEM_CHECK'
 !
  if (.not.system_parameters_initialized) then
-   call error(whoami, 'Parameters not initialized. Cannot proceed.',-1)
+   call warning(whoami, 'Parameters not initialized. Cannot proceed.',-1)
   return
  endif
 !
  if (.not.system_structure_initialized) then
-   call error(whoami, 'Structure not initialized. Cannot proceed.',-1)
+   call warning(whoami, 'Structure not initialized. Cannot proceed.',-1)
   return
  endif
 !
@@ -583,7 +597,7 @@ module system
     endif
    enddo
    if (atoms%type(i).eq.unknown) then
-    call error(whoami, 'Invalid type_id '//itoa(i1)//' (Missing parameters?)',0)
+    call warning(whoami, 'Invalid type_id '//itoa(i1)//' (Missing parameters?)',0)
     return
    endif
   endif
@@ -602,11 +616,11 @@ module system
   enddo
 !
   if (a1.eq.'') then
-   call error(whoami, 'NO TYPE FOR ATOM '//itoa(j1)//' (THIS IS STRANGE)',0)
+   call warning(whoami, 'NO TYPE FOR ATOM '//itoa(j1)//' (THIS IS STRANGE)',0)
    return
   endif
   if (a2.eq.'') then
-   call error(whoami, 'NO TYPE FOR ATOM '//itoa(j2)//' (THIS IS STRANGE)',0)
+   call warning(whoami, 'NO TYPE FOR ATOM '//itoa(j2)//' (THIS IS STRANGE)',0)
    return
   endif
 ! now look the bond parameter list for a match to a1 -- a2
@@ -631,15 +645,15 @@ module system
   enddo
 !
   if (a1.eq.'') then
-   call error(whoami, 'NO TYPE FOR ATOM '//itoa(j1)//' (THIS IS STRANGE)',0)
+   call warning(whoami, 'NO TYPE FOR ATOM '//itoa(j1)//' (THIS IS STRANGE)',0)
    return
   endif
   if (a2.eq.'') then
-   call error(whoami, 'NO TYPE FOR ATOM '//itoa(j2)//' (THIS IS STRANGE)',0)
+   call warning(whoami, 'NO TYPE FOR ATOM '//itoa(j2)//' (THIS IS STRANGE)',0)
    return
   endif
   if (a3.eq.'') then
-   call error(whoami, 'NO TYPE FOR ATOM '//itoa(j2)//' (THIS IS STRANGE)',0)
+   call warning(whoami, 'NO TYPE FOR ATOM '//itoa(j2)//' (THIS IS STRANGE)',0)
    return
   endif
 ! now look up the angle parameter list for a match to a1 -- a2 -- a3
@@ -663,19 +677,19 @@ module system
   enddo
 !
   if (a1.eq.'') then
-   call error(whoami, 'NO TYPE FOR ATOM '//itoa(i1)//' (THIS IS STRANGE)',0)
+   call warning(whoami, 'NO TYPE FOR ATOM '//itoa(i1)//' (THIS IS STRANGE)',0)
    return
   endif
   if (a2.eq.'') then
-   call error(whoami, 'NO TYPE FOR ATOM '//itoa(i2)//' (THIS IS STRANGE)',0)
+   call warning(whoami, 'NO TYPE FOR ATOM '//itoa(i2)//' (THIS IS STRANGE)',0)
    return
   endif
   if (a3.eq.'') then
-   call error(whoami, 'NO TYPE FOR ATOM '//itoa(i3)//' (THIS IS STRANGE)',0)
+   call warning(whoami, 'NO TYPE FOR ATOM '//itoa(i3)//' (THIS IS STRANGE)',0)
    return
   endif
   if (a4.eq.'') then
-   call error(whoami, 'NO TYPE FOR ATOM '//itoa(i4)//' (THIS IS STRANGE)',0)
+   call warning(whoami, 'NO TYPE FOR ATOM '//itoa(i4)//' (THIS IS STRANGE)',0)
    return
   endif
 ! now look up the dihedral parameter list for a match to a1 -- a2 -- a3 -- a4
@@ -706,19 +720,19 @@ module system
   enddo
 !
   if (a1.eq.'') then
-   call error(whoami, 'NO TYPE FOR ATOM '//itoa(i1)//' (THIS IS STRANGE)',0)
+   call warning(whoami, 'NO TYPE FOR ATOM '//itoa(i1)//' (THIS IS STRANGE)',0)
    return
   endif
   if (a2.eq.'') then
-   call error(whoami, 'NO TYPE FOR ATOM '//itoa(i2)//' (THIS IS STRANGE)',0)
+   call warning(whoami, 'NO TYPE FOR ATOM '//itoa(i2)//' (THIS IS STRANGE)',0)
    return
   endif
   if (a3.eq.'') then
-   call error(whoami, 'NO TYPE FOR ATOM '//itoa(i3)//' (THIS IS STRANGE)',0)
+   call warning(whoami, 'NO TYPE FOR ATOM '//itoa(i3)//' (THIS IS STRANGE)',0)
    return
   endif
   if (a4.eq.'') then
-   call error(whoami, 'NO TYPE FOR ATOM '//itoa(i4)//' (THIS IS STRANGE)',0)
+   call warning(whoami, 'NO TYPE FOR ATOM '//itoa(i4)//' (THIS IS STRANGE)',0)
    return
   endif
 ! now look up the dihedral parameter list for a match to a1 -- a2 -- a3 -- a4
@@ -747,17 +761,17 @@ module system
  character(len=20) , parameter :: whoami='SYSTEM_GET_VW_RADIUS'
 !
  if (.not.system_parameters_initialized) then
-   call error(whoami, 'Parameters not initialized. Cannot proceed.',-1)
+   call warning(whoami, 'Parameters not initialized. Cannot proceed.',-1)
   return
  endif
 !
  if (.not.system_structure_initialized) then
-   call error(whoami, 'Structure not initialized. Cannot proceed.',-1)
+   call warning(whoami, 'Structure not initialized. Cannot proceed.',-1)
   return
  endif
 !
  if (.not.system_coordinates_initialized) then
-   call error(whoami, 'Coordinates not initialized. Cannot proceed.',-1)
+   call warning(whoami, 'Coordinates not initialized. Cannot proceed.',-1)
   return
  endif
 !
@@ -773,7 +787,7 @@ module system
     endif
    enddo
    if (atoms%type(i).eq.unknown) then
-    call error(whoami, 'Invalid type_id '//itoa(i1)//' (Missing parameters?)',0)
+    call warning(whoami, 'Invalid type_id '//itoa(i1)//' (Missing parameters?)',0)
     return
    endif
   endif
@@ -792,7 +806,7 @@ module system
  include 'interface.h'
 !
  if (.not.system_ok) then
-   call error(whoami, 'SYSTEM NOT INITIALIZED. ABORT.',0)
+   call warning(whoami, 'SYSTEM NOT INITIALIZED. ABORT.',0)
   return
  endif
 !
@@ -854,13 +868,15 @@ module system
  end subroutine system_done
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  subroutine system_printe()
- use output, only: fout, message
+ use output
  use parser, only: tab
  use stats
 
 
 
  implicit none
+ character(len=80) :: msg___
+!
  character(len=13) , parameter :: whoami='SYSTEM_PRINTE'
 !
  integer*4 :: me
@@ -869,12 +885,18 @@ module system
  KinE=calcKE(vr,m)
  if (me.eq.0) then
   call message(whoami, '');
-  write(fout,'(A)') tab//'=================== ENERGY ==================';
-  write(fout,'(1(A,F10.5))') tab//'TotalE: ', BondE+AngleE+DiheE+ImprE+KinE(1) 
-  write(fout,'(2(A,F10.5))') tab//'BondE: ', BondE, tab//'AngleE: ', AngleE 
-  write(fout,'(2(A,F10.5))') tab//'DiheE: ', DiheE, tab//' ImprE: ', ImprE 
-  write(fout,'(2(A,F10.5))') tab//'KinE: ', KinE(1), tab//'Temp: ', KinE(2) 
-  write(fout,'(A)') tab//'=============================================';
+  write(msg___,'(A)') tab//'=================== ENERGY =================='
+  ; call plainmessage(msg___)
+  write(msg___,'(1(A,F10.5))') tab//'TotalE: ', BondE+AngleE+DiheE+ImprE+KinE(1)
+  ; call plainmessage(msg___)
+  write(msg___,'(2(A,F10.5))') tab//'BondE: ', BondE, tab//'AngleE: ', AngleE
+  ; call plainmessage(msg___)
+  write(msg___,'(2(A,F10.5))') tab//'DiheE: ', DiheE, tab//' ImprE: ', ImprE
+  ; call plainmessage(msg___)
+  write(msg___,'(2(A,F10.5))') tab//'KinE: ', KinE(1), tab//'Temp: ', KinE(2)
+  ; call plainmessage(msg___)
+  write(msg___,'(A)') tab//'============================================='
+  ; call plainmessage(msg___)
  endif
 !
  end subroutine system_printe

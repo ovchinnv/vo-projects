@@ -11,6 +11,8 @@
 ! **********************************************************************!
       module freeio
 !
+       character, parameter, private :: comment(4) = (/'*', '#', '%', '!'/)
+!
        contains
 !
        subroutine atomid_coor_read(fid,r) ! read coordinates in list-directed format
@@ -23,7 +25,6 @@
 !
        integer :: i, j
        character(len=16), parameter :: whoami = 'ATOMID_COOR_READ'
-       character, parameter :: comment(4) = (/'*', '#', '%', '!'/)
 !
        integer :: ioerr
        integer :: l=0, atomid, natom
@@ -48,8 +49,8 @@
          if (l.eq.0) cycle
 !
          if (numword(cmdline(1:l)).lt.4) then
-          call error(whoami, cmdline(1:l),0)
-          call error(whoami, 'LINE TOO SHORT. SKIPPING.',0)
+          call warning(whoami, cmdline(1:l),0)
+          call warning(whoami, 'LINE TOO SHORT. SKIPPING.',0)
           cycle
          endif
 !
@@ -100,4 +101,29 @@
        call message(whoami, 'Coordinate file read.')
 !
        end subroutine atomid_coor_read
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+       subroutine atomid_coor_write(fid,r)
+       use psf
+       use output, only: warning, message
+       implicit none
+       integer :: fid
+       real*8 :: r(:,:)
+       integer :: natom, i
+       character(len=13), parameter :: fmt='(I10,3E25.15)'
+       character(len=17), parameter :: whoami = 'ATOMID_COOR_WRITE'
+!
+       natom=size(r,2)
+!
+       if (natom.ne.atoms%last) then
+        call error(whoami, 'COORDINATE ARRAY HAS INCORRECT DIMENSIONS. ABORT.',-1)
+       else
+        write(fid,'(A)') '* FREE FORMAT COORDINATE FILE WRITTEN BY DYNAMO PROGRAM'
+        do i=1, natom
+         write(fid, fmt) atoms%atomid(i), r(1:3,i), atoms%segid(i)
+        enddo
+        call message(whoami, 'Coordinate file writen.')
+       endif
+!
+       end subroutine atomid_coor_write
+!
       end module freeio

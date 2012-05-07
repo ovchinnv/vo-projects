@@ -1,0 +1,243 @@
+module molsim
+! contains setu and details of molecular simulation
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+ use parser
+ use output
+ use system
+ use stats
+ use verlet
+ use rng
+ use files
+
+ __IMPNONE
+
+ int, save :: num_iterations
+ int, save :: iteration_count                               ! number of MD iterations (persistent)
+ int, parameter :: nfreq=5
+ int, parameter :: printf=1, outf=2, trajf=3, resf=4, statf=5
+ int :: outfreq(nfreq)                                ! frequency array for writing output
+!
+! output options persistent in case use runs sequential simulations but wants to kep same files
+ character(len=200), save :: trajectoryoutname, restartoutname, statisticsoutname
+ int, save :: trajectoryfid=-1, statisticsfid=-1
+!
+ bool, save :: restart, verbose=.false.
+ bool, save :: molsim_initialized=.false.
+!
+ contains
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+ subroutine molsim_init()
+ character(len=80) :: keyword
+ int :: i
+!
+ character(len=10), parameter :: whoami='MOLSIM_INIT'
+ character(len=100) :: parmfilename, structfilename, coorfilename, velfilename
+!
+ __GET_OPT_PAR_B('verbose',verbose,.false.)
+!%%%%%%%%%%%%%%%%%%% read parameter file(s)%%%%%%%%%%%%%%%%%%%%%%%%
+ parmfilename=getval('parameters')       ! parameter file(s)
+ call system_read_parameters(parmfilename)
+ i=2
+ do
+  write(keyword,*) i
+  call adjustleft(keyword)
+  if (existtag('parameters'//keyword(1:len_trim(keyword)))) then
+   parmfilename=getval('parameters'//keyword(1:len_trim(keyword)))
+   call system_read_parameters(parmfilename)
+   i=i+1
+  else
+   exit
+  endif
+ enddo
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+ if (verbose) call system_list_parameters()
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+ structfilename=getval_nocase('structure')     ! structure file
+ coorfilename=getval_nocase('coordinates')     ! coordinate file
+!
+ call system_read_structure(structfilename)
+ call system_read_coordinates(coorfilename)
+!
+ call system_check()     ! check that all parameters are known and whether coordinates/velocities are defined 
+ call random_init()      ! initialize random number generator
+ call verlet_init()      ! initialize verlet integrator
+!
+! note that there is no mechanism for restarts -- to be added !
+!
+ if (existtag_nocase('velocities')) then
+  velfilename=getval_nocase('velocities')      ! velocity file
+  call system_read_velocities(velfilename)
+ else
+  call system_init_velocities()
+ endif
+!
+ if (verbose) then
+  call system_compute() ! if langevin on, already computed; ignore for now
+  call system_printe()
+ endif
+!
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% request a few parameters from parser %%%%%%%%%%%%%%%%%%%%%%%%%%%%
+#define __INT
+#define __MINUSERR
+#define __WHOAMI whoami
+#define __BUFFER keyword
+#ifdef __WARNIFMISSING
+#undef __WARNIFMISSING
+#endif
+!
+#define __VAR	outfreq(printf)
+#define __TAG	printfreq
+#define __NAME	Print frequency
+#include "input_macros.src"
+!
+#define __VAR	outfreq(outf)
+#define __TAG	outputfreq
+#define __NAME	Output frequency
+#include "input_macros.src"
+!
+#define __VAR	outfreq(trajf)
+#define __TAG	trajectoryfreq
+#define __NAME	Trajectory output frequency
+#include "input_macros.src"
+!
+#define __VAR	outfreq(resf)
+#define __TAG	restartfreq
+#define __NAME	Restart file output frequency
+#include "input_macros.src"
+!
+#define __VAR	outfreq(statf)
+#define __TAG	statisticsfreq
+#define __NAME	Statistics output frequency
+#include "input_macros.src"
+!
+ if (outfreq(trajf).gt.0) then 
+  if (existtag_nocase('trajectoryfile')) then
+   trajectoryoutname=getval_nocase('trajectoryfile')
+  else
+   call warning(whoami,'Trajectory output file name not specified.',-1)
+  endif
+ endif
+!
+ if (outfreq(resf).gt.0) then 
+  if (existtag_nocase('restartfile')) then
+   restartoutname=getval_nocase('restartfile')
+  else
+   call warning(whoami,'Restart file name not specified.',-1)
+  endif
+ endif
+!
+ if (outfreq(statf).gt.0) then 
+  if (existtag_nocase('statisticsfile')) then
+   statisticsoutname=getval_nocase('statisticsfile')
+  else
+   call warning(whoami,'Statistics output file name not specified.',-1)
+  endif
+ endif
+!
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+ if (fatal_warning()) then 
+  call system_done()
+ else
+!
+  iteration_count=0
+  molsim_initialized=.true.
+!
+ endif
+!
+ end subroutine molsim_init
+!
+!%%%%%%%%%%%%%%%%%%%%%%% integrate %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+ subroutine molsim_integrate(numiter)
+ int, optional :: numiter ! optional number of integraion steps
+ int :: minfreq, iterations, ncycles, i
+ bool :: addheader
+!
+ character(len=16), parameter :: whoami='MOLSIM_INTEGRATE'
+ __DECLARE_MSGBUF
+#include "multicom_def.src"
+!
+ if (present(numiter)) then ; num_iterations=numiter ;
+ else
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%% get number of iterations from input file %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+#define __INT
+#define __MINUSERR
+#ifndef  __WARNIFMISSING
+#define  __WARNIFMISSING
+#endif
+#define __WHOAMI whoami
+#ifdef __BUFFER
+#undef __BUFFER
+#endif
+#define __BUFFER _MSGBUF
+!
+#define __VAR	num_iterations
+#define __TAG	iterations
+#define __NAME	Number of simulation steps
+#include "input_macros.src"
+!
+ endif ! numiter
+!%%%%%%%%%%%%%%%%%%%%%%%%%%% get number of iterations from input file %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+!
+ if (any(outfreq>0)) then ; minfreq=minval(outfreq,1,outfreq>0); else; minfreq=num_iterations; endif ! minimum frequency
+ if (minfreq.ne.0) then
+  if (sum(mod(outfreq,minfreq)).gt.0) &
+ & call warning(whoami, 'One of the frequency values must divide the others.',-1)
+ else
+  minfreq=1 ! in this case, niter nust be zero (see above), so ncycle will be zero below
+ endif
+ ncycles=num_iterations/minfreq+min(mod(num_iterations,minfreq),1)
+!
+ do i=1, ncycles
+  iterations=min(minfreq,num_iterations-iteration_count)
+  call verlet_integrate(iterations)
+  iteration_count=iteration_count+iterations 
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+  if (outfreq(printf).gt.0) then;if (mod(iteration_count,outfreq(printf)).eq.0) call system_printe(); endif
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+  if (outfreq(resf).gt.0) then;if (mod(iteration_count,outfreq(resf)).eq.0) call system_write_restart(restartoutname); endif
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+  if (outfreq(statf).gt.0) then; 
+   if (mod(iteration_count,outfreq(statf)).eq.0) then 
+    if (me.le.0) then
+     if (statisticsfid.le.0) then
+      call files_open(statisticsfid, name_=statisticsoutname, form_='FORMATTED', action_='WRITE')
+      if (statisticsfid.le.0) call warning(whoami, 'Cannot open input file. Abort.',-1)
+     endif ! open statistics file
+    endif ! me
+!
+!    call system_statistics(statisticsfid); ! must be parallel-aware; must call fatal_warning
+!
+   endif ! mod
+  endif ! outfreq
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+  if (outfreq(trajf).gt.0) then; 
+   if (mod(iteration_count,outfreq(trajf)).eq.0) then 
+    if (me.le.0) then
+!
+! note: in the future should close and reopen traj. file with APPEND option to protect from crashes
+!
+     if (trajectoryfid.le.0) then
+      addheader=.true.;
+      call files_open(trajectoryfid, name_=trajectoryoutname, form_='UNFORMATTED', action_='WRITE')
+      if (trajectoryfid.le.0) call warning(whoami, 'Cannot open input file. Abort.',-1)
+     endif ! open trajectory file
+    endif ! me
+!
+    call system_write_dcd(trajectoryfid,addheader); ! must be parallel-aware; must call fatal_warning
+    addheader=.false.;
+!
+   endif ! mod
+  endif ! outfreq
+!
+  if (fatal_warning()) exit
+!
+ enddo ! ncycles
+! final restart file
+ if (outfreq(resf).gt.0) call system_write_restart(restartoutname)
+!optional coordinate/and/or/velocity files
+ if (existtag_nocase('finalcoordinates')) call system_write_coordinates(getval_nocase('finalcoordinates'))
+ if (existtag_nocase('finalvelocities'))  call system_write_velocities(getval_nocase('finalvelocities'))
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+ end subroutine molsim_integrate
+
+end module molsim

@@ -109,7 +109,7 @@ module files
  end subroutine files_initialize
 !******************************************************************
  subroutine files_close(handle_)
- integer :: handle_
+ integer, intent(inout) :: handle_
  integer :: i
  logical :: opened_, ok
  character(len=11), parameter :: whoami='FILES_CLOSE'
@@ -124,6 +124,7 @@ module files
   else
    call message(whoami,'Closing unit '//itoa(handle_))
    close(handle_)
+   handle_=-1
   endif
   ok=int_vector_delete(handles, i)
   if (.not.ok) call warning(whoami,'Cannot close unit '//itoa(handle_)//' (internal error).',-1)

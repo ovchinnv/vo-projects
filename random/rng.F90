@@ -13,17 +13,52 @@ module rng
  implicit none
  logical :: random_initialized=.false.
  contains
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  subroutine random_init(seeds)
- integer :: seeds(4)
- if (random_initialized) return
- call clcginit(seeds)
- random_initialized=.true.
- end subroutine random_init
+ use parser
+ use output
 !
+ integer, optional :: seeds(4)
+ integer :: s(4)
+ if (random_initialized) return
+!
+ if (present(seeds)) then ; s=seeds ;
+ else
+!
+  if (existtag_nocase('random_seeds')) then ;
+   s=atofv(getval_nocase('random_seeds'),4);
+  endif
+ endif ! seeds
+!
+ if (.not.fatal_warning()) then
+  call clcginit(seeds)
+  random_initialized=.true.
+ else
+  random_initialized=.false.
+ endif
+!
+ end subroutine random_init
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  subroutine random_reinit(seeds)
- integer :: seeds
- call clcginit(seeds)
- random_initialized=.true.
+ use parser
+ use output
+!
+ integer, optional :: seeds
+ integer :: s(4)
+!
+ if (present(seeds)) then ; s=seeds ;
+ else
+!
+  if (existtag_nocase('random_seeds')) then ;
+   s=atofv(getval_nocase('random_seeds'),4);
+  endif
+ endif ! seeds
+!
+ if (.not.fatal_warning()) then
+  call clcginit(seeds)
+  random_initialized=.true.
+ endif
+!
  end subroutine random_reinit
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  function randomu(channel)
@@ -43,7 +78,7 @@ module rng
  if (random_initialized) then
   randomu=random(chan)
  else
-  call error(whoami, 'RNG NOT INTIALIZED. ABORT',-1)
+  call warning(whoami, 'RNG NOT INTIALIZED. ABORT',-1)
   randomu = -1d0
  endif
 !
@@ -70,7 +105,7 @@ module rng
   do i=1,n ; a(i)=random(chan) ; enddo
 !
  else
-  call error(whoami, 'RNG NOT INTIALIZED. ABORT',-1)
+  call warning(whoami, 'RNG NOT INTIALIZED. ABORT',-1)
  endif
 !
  end subroutine randomu_vector
