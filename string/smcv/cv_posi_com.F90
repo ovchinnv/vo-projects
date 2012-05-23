@@ -29,7 +29,7 @@
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 ! this function does the job for x, y, and z positions
        function cv_posi_com_add(type,atom_list,k,gamma,weight,frame)
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       
        character(len=80) :: msg___
 !
@@ -356,7 +356,7 @@ write(msg___,*)' POSITION_COM_',pos,' CV ALREADY PRESENT. NOTHING DONE.';write(0
        end subroutine cv_posi_com_calc
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_posi_com_list(i)
-      use output
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       use multicom_aux
       use mpi
       use psf, only : atoms

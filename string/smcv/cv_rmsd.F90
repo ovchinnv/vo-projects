@@ -29,7 +29,7 @@
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        function cv_rmsd_add(ind_o,ind_f,r_o,r_f,ow,fw,k,gamma,weight) ! note: i is the atom index in the PSF
        use cv_types
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       
 !
        real*8 :: k, gamma, weight
@@ -426,7 +426,7 @@
        use multicom_aux
        use mpi
        use psf, only : atoms
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       
 !
  character(len=80) :: msg___

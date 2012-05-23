@@ -113,7 +113,7 @@
        end subroutine quat_done
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        function quat_add(fr1, fr2)
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       
 !
        integer :: fr1, fr2
@@ -212,7 +212,7 @@
        end function quat_add
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine quat_list(i)
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
        use multicom_aux
        use mpi
 !
@@ -241,7 +241,7 @@
        end subroutine quat_list
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine quat_calc(i,x,y,z,mass,deriv)
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       
 !
        integer :: i ! which quaternion to calculate
@@ -811,7 +811,7 @@
        subroutine quat_print_local(iunit)
 ! assume that unit is prepared
 ! NOTE that this is a local print!
-! use output
+! use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
        use multicom_aux
        use mpi
       
@@ -833,7 +833,7 @@
        subroutine quat_print_global(iunit)
 ! assume that unit is prepared
 ! NOTE that this is a global print!
-! use output
+! use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
 !
        use multicom_aux
        use mpi
@@ -875,7 +875,7 @@
        end subroutine quat_print_global
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine quat_reset_calculate(grad,i)
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       
        integer, optional :: i
        logical :: grad

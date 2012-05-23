@@ -31,7 +31,7 @@
       contains
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        function cv_dihe_com_add(atom_list,k,gamma,weight) ! note: i is the atom index in the PSF
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       
        real*8 :: k, gamma, weight
        type (int_vector), dimension(4) :: atom_list
@@ -659,7 +659,7 @@
        end subroutine cv_dihe_com_dcv_dot_grad
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_dihe_com_list(i)
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
        use multicom_aux
        use mpi
        use psf, only : atoms

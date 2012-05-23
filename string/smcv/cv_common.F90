@@ -318,7 +318,7 @@
        end subroutine cv_common_done
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        function cv_common_add(k,gamma,weight,type)
-      use output
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       use constants
      
 !
@@ -379,7 +379,7 @@
        end function cv_common_add
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_fill(i,val,c)
-      use output
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
      
        integer :: i
        real*8 :: val
@@ -445,7 +445,7 @@
        subroutine cv_common_compute_wgt()
 ! compute weight array from M matrix
 ! assume that M is valid on each node
-      use output
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       use multicom_aux
       use mpi
      
@@ -487,7 +487,7 @@
        end subroutine cv_common_compute_wgt
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_print_wgt(iunit,fmt)
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       
 ! only root process must call
        integer iunit
@@ -508,7 +508,7 @@
        end subroutine cv_common_print_wgt
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_read_wgt(iunit)
-      use output
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       use multicom_aux
       use mpi
      
@@ -541,7 +541,7 @@
        end subroutine cv_common_read_wgt
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_compute_k()
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       
        integer :: i
        character(len=20) :: whoami
@@ -651,7 +651,7 @@
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_repa(interp_method, def, iterations, dst_c)
        use sm_var, only: nstring
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
        use multicom_aux
        use mpi
       
@@ -778,7 +778,7 @@
        subroutine cv_common_evolve_smcv(dt)
 ! not parallelized (yet?) because it should be cheaper to execute locally than to broadcast info
 ! in the future, may compute on roots, then broadcast
-      use output
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       use constants
      
 ! the timestep can be specified optionally
@@ -840,7 +840,7 @@
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_evolve_sd(dt) ! steepest descent evolution (no M) with temp; compare with cv_common_evolve_smcv
 ! temperature not added yet
-      use output
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       use constants
      
 ! the timestep can be specified optionally
@@ -893,7 +893,7 @@
        end subroutine cv_common_evolve_sd
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        function cv_common_add_hist()
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       
        integer :: cv_common_add_hist
        real*8 :: t
@@ -922,7 +922,7 @@
 ! nskip (the number of history elements to skip when computing the average) is also optional
 ! this algorithm is entirely heuristic
 !
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
        use constants
       
 !
@@ -993,7 +993,7 @@
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_print_hist_local(iunit, nskip) ! not used in regular SMCV
 ! assume that unit is prepared
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       
        integer :: iunit
        integer, optional :: nskip
@@ -1020,7 +1020,7 @@
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_print_hist_global(iunit, nskip) ! not used in regular SMCV
 ! assume that unit is prepared
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
        use mpi
        use multicom_aux
       
@@ -1089,7 +1089,7 @@
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_evolve_expo(a,nskip)
 ! evolve CV using equation: z(n+1)=a * z(n) + (1-a) * <theta(x)>
-      use output
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       use constants
 !
      
@@ -1212,7 +1212,7 @@
 ! assume that unit is prepared
 ! NOTE that this is a local print!
 ! does not print fixed BC
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       
        integer iunit
        integer, optional :: col
@@ -1234,7 +1234,7 @@
        subroutine cv_common_print_global(iunit,col,print_bc)
 ! assume that unit is prepared
 ! NOTE that this is a global print!
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
        use multicom_aux
        use mpi
 !
@@ -1317,7 +1317,7 @@
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_unwrap_angles(col,ind)
        use sm_var, only: nstring, mestring ! all cpus need to know string length
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
        use multicom_aux
        use constants
        use mpi
@@ -1389,7 +1389,7 @@
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_compute_fe_fd()
        use sm_var, only: nstring
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
        use multicom_aux
        use mpi
       
@@ -1449,7 +1449,7 @@
        subroutine cv_common_read_local(iunit,col)
 ! assume that unit is prepared
 ! for parallel, broadcast to slaves done by calling routine
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       
        integer :: iunit
        integer, optional :: col
@@ -1475,7 +1475,7 @@
 ! assume that unit is prepared
        use sm_var, only : nstring
        use parser
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
        use multicom_aux
        use constants
        use mpi
@@ -1596,7 +1596,7 @@
 ! read data for a particular specified replica from a global file
 ! caller needs to provide number of replicas in the file (# cols)
 ! assume that unit is prepared
-      use output
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       use parser
       use multicom_aux
       use constants
@@ -1755,7 +1755,7 @@ write(msg___,*)'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.';w
        end subroutine cv_common_set_active
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_set_kpara(k)
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       
        real*8 :: k
 !
@@ -1768,7 +1768,7 @@ write(msg___,*)'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.';w
        end subroutine cv_common_set_kpara
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_set_kperp(k)
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       
        real*8 :: k
 !
@@ -1803,7 +1803,7 @@ write(msg___,*)'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.';w
        end subroutine cv_common_set_w
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_set_r(i,z,col1)
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       
 !
        integer :: i
@@ -1870,7 +1870,7 @@ write(msg___,*)'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.';w
        end subroutine cv_common_swap
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        function cv_common_rmsd(col1, col2)
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
        use constants
       
        integer, optional :: col1, col2
@@ -1999,7 +1999,7 @@ write(msg___,*)'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.';w
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_rex_print_map(iunit,fmt)
        use sm_var, only: nstring
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       
 ! only root process should call
        integer :: iunit
@@ -2026,7 +2026,7 @@ write(msg___,*)'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.';w
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_rex_read_map(iunit)
        use sm_var, only: nstring
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
        use multicom_aux
        use mpi
       
@@ -2059,7 +2059,7 @@ write(msg___,*)'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.';w
        subroutine cv_common_rex_print_log(iunit, fmt)
 ! assume that unit is prepared
 ! NOTE that this is a global print!
-      use output
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       use multicom_aux
       use mpi
 !
@@ -2171,7 +2171,7 @@ write(msg___,*)'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.';w
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_print_voro_map(iunit,fmt)
        use sm_var, only: nstring
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       
        use multicom_aux
        use mpi
@@ -2206,7 +2206,7 @@ write(msg___,*)'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.';w
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_read_voro_map(iunit)
        use sm_var, only: nstring
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
        use multicom_aux
        use mpi
       
@@ -2300,7 +2300,7 @@ write(msg___,*)'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.';w
        subroutine cv_common_voronoi_smart_update(rnew, rold, m_iter)
        use sm_var, only: nstring, mestring, smcv_initialized
        use cv_types
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
 ! cv%rall(:,:) is expected to have values from previous update that
 ! are consistent with rtemp; if this is not true, the routine
 ! just does a regular update and exits
@@ -2576,7 +2576,7 @@ write(msg___,*)'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.';w
        use cv_types
        use sm_var, only: nstring, mestring
        use sm_config, only: calc_voronoi_para
-      use output
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       use multicom_aux
       use constants
       use mpi
@@ -2707,7 +2707,7 @@ write(msg___,*)'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.';w
        use sm_var, only: nstring
 ! assume that unit is prepared
 ! NOTE that this is a global print!
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
        use multicom_aux
        use mpi
 !
@@ -2956,7 +2956,7 @@ write(msg___,*)'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.';w
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_interpolate(ifile, ofile, num_rep_in, &
      & num_rep_out, interp_method)
-      use output
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
 ! assume that both units ifile/ofile are prepared
       use multicom_aux
       use constants

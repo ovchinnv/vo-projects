@@ -10,7 +10,11 @@
 ! from being object-oriented) at the source level. !
 ! **********************************************************************!
 module molsim
-! contains setu and details of molecular simulation
+! contains setup and details of molecular simulation
+! I view this module as a "wrapper" around other modules
+! The problem, of course, is that no physics problem is
+! truly fully object-oriented, and this is reflected in the
+! design/code
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  use parser
  use output
@@ -20,6 +24,8 @@ module molsim
  use rng
  use files
  implicit none
+ public molsim_init
+ public molsim_integrate
  integer, save :: num_iterations
  integer, save :: iteration_count ! number of MD iterations (persistent)
  integer, parameter :: nfreq=5

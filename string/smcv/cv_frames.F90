@@ -123,7 +123,7 @@
        end subroutine frames_done
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        function frames_add(atom_list)
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       
 !
        type (int_vector) :: atom_list
@@ -183,7 +183,7 @@
        end function frames_add
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine frames_list()
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
        use multicom_aux
        use parser
        use mpi
@@ -232,7 +232,7 @@ character(len=80) :: msg___
        subroutine frames_calc(i,x,y,z,mass,deriv)
        use sm_var, only: mestring
        use bestfit
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       
 !
        integer :: i ! which frame to calculate
@@ -636,7 +636,7 @@ character(len=80) :: msg___
        subroutine frames_print_local(iunit)
 ! assume that unit is prepared
 ! NOTE that this is a local print!
-! use output
+! use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
        use multicom_aux
        use mpi
 !
@@ -659,7 +659,7 @@ character(len=80) :: msg___
        subroutine frames_print_global(iunit)
 ! assume that unit is prepared
 ! NOTE that this is a global print!
-! use output
+! use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
        use multicom_aux
        use mpi
       
@@ -702,7 +702,7 @@ character(len=80) :: msg___
        subroutine frames_read_local(iunit)
 ! assume that unit is prepared
 ! NOTE that this is a local read!
-! use output
+! use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
 !
       use multicom_aux
       use mpi
@@ -724,7 +724,7 @@ character(len=80) :: msg___
        subroutine frames_read_global(iunit)
 ! assume that unit is prepared
 ! NOTE that this is a global read!
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
        use multicom_aux
        use mpi
 !
@@ -761,7 +761,7 @@ character(len=80) :: msg___
        end subroutine frames_read_global
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine frames_reset_calculate(grad,i)
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       
        integer, optional :: i
        logical :: grad
@@ -800,7 +800,7 @@ character(len=80) :: msg___
        subroutine frames_calc_align_comp(i,x,y,z, &
      & xcomp,ycomp,zcomp,mass,d)
        use bestfit
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       
 ! vars
        integer :: i

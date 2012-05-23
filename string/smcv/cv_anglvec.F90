@@ -38,7 +38,7 @@
       contains
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        function cv_anglvec_add(atom_list,p,fr1,fr2,k,gamma,weight) ! note: i is the atom index in the PSF
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       
        integer :: fr1, fr2
        real*8 :: k, gamma, weight
@@ -608,7 +608,7 @@
        end subroutine cv_anglvec_calc
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_anglvec_list(i)
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
        use multicom_aux
        use mpi
        use psf, only : atoms

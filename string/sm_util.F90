@@ -286,7 +286,7 @@ __CHARMM_ONLY__CHARMM_ONLY##IF STRINGM
      & drout, & ! optional computation of tangent
      & r_bc_0, r_bc_1) ! provide additional arrays for fixed bc
 !
-      use output
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       use multicom_aux
       use mpi
 !
@@ -653,7 +653,7 @@ __CHARMM_ONLY__CHARMM_ONLY##IF STRINGM
      & drout, & ! optional computation of tangent
      & r_bc_0, r_bc_1) ! provide additional arrays for fixed bc
 !
-      use output
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       use multicom_aux
       use mpi
 !
@@ -1337,7 +1337,7 @@ __CHARMM_ONLY__CHARMM_ONLY##IF STRINGM
        use smcv_var, only : nstring, mestring
 !
        use multicom_aux
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
        use mpi
 !
       
@@ -1703,7 +1703,7 @@ __CHARMM_ONLY__CHARMM_ONLY##IF STRINGM
        use smcv_master, only : smcv_voronoi_whereami ! used for rmsd test
        use sm_var, only : mestring
 !
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
 !
       
 !

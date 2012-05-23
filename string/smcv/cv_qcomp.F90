@@ -29,7 +29,7 @@
       contains
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        function cv_qcomp_add(type,fr1,fr2,k,gamma,weight) ! note: i is the atom index in the PSF
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       
  character(len=80) :: msg___
        integer :: type, fr1, fr2
@@ -233,7 +233,7 @@
       end subroutine cv_qcomp_calc
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_qcomp_list(i)
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
        use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
        use mpi
       

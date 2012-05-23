@@ -29,7 +29,7 @@
       contains
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        function cv_dist_com_add(atom_list,k,gamma,weight) ! note: i is the atom index in the PSF
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       
        real*8 :: k, gamma, weight
        type (int_vector), dimension(2) :: atom_list
@@ -292,7 +292,7 @@
        end subroutine cv_dist_com_calc
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_dist_com_list(i)
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
        use multicom_aux
        use mpi
        use psf, only : atoms

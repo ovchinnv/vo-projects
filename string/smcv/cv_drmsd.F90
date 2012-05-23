@@ -34,7 +34,7 @@
      & ow,fw,k,gamma,weight,qprojection) ! note: i is the atom index in the PSF
        use cv_types, only: proj, drmsd
        use bestfit ! for computing one over rmsd between two target structures
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       
  character(len=80) :: msg___
        real*8 :: k, gamma, weight
@@ -525,7 +525,7 @@
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_drmsd_list(i, qprojection)
        use cv_types, only: proj, drmsd
-       use output
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
        use multicom_aux
        use mpi
        use psf, only : atoms
