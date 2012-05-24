@@ -30,6 +30,7 @@
       public psf_done
       public psf_info ! list parameters
       public psf_print
+      public psf_natom ! return number of atoms
 !
       contains
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -546,4 +547,15 @@
 ! other interactions are currently ignored
        end subroutine psf_info
 !
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+       function psf_natom result(natom)
+       implicit none
+       integer :: natom
+       if (psf_initialized) then
+        natom=atoms%last
+       else
+        natom=0
+       endif
+       end function psf_natom
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
       end module psf

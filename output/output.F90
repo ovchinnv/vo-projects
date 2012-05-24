@@ -18,6 +18,7 @@ module output
  character(len=80) :: msg__ ! buffer for output (see message.src) macro
  character(len=10), public, parameter :: realfmt = 'ES20.7E3'
 !
+ integer, parameter, private :: reserved_streams(3)=(/0, 5, 6/)
  integer, private, parameter :: minerrorlev=0, minwarnlev=0, minmessagelev=0
  integer, private :: l
  integer, private, save :: warnlev, errorlev ! last warning/error levels
@@ -142,7 +143,7 @@ module output
 !
  subroutine output_done()
  if (output_initialized) then
-  if (fout.ne.0.and.fout.ne.6.and.fout.ne.5) close(fout)
+  if (all(fout.ne.reserved_streams)) close(fout)
   output_initialized=.false.
   fout=-1
  endif

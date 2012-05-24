@@ -59,10 +59,11 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_MPI 
       __DEP_SELECT
       __DEP_COORDINATES
+      __DEP_SIZE
 !
-      use exfunc 
-      use dimens_fcm 
+#ifdef __CHARMM
       use ctitla 
+#endif
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       __IMPNONE
 !
@@ -76,14 +77,24 @@ __CHARMM_ONLY##IF STRINGM
       character(len=80) :: fname
       character(len=6) :: whoami
       float :: zval, k, step
-      int :: ifile, c1, c2, qcor, qdcd, oldiol, flen,                   &
-     &           num_ave_samples, irep, iselct(natom), i, imode,        &
+      int :: ifile, c1, c2, qcor, qdcd, flen,            &
+     &           num_ave_samples, irep, i, imode,        &
      &           iorie, irmsd, isele
+#ifdef __CHARMM
+      int :: oldiol
+      int ::  iselct(natom)
+#else
+      int :: ierror ! for __DMOL
+      int, pointer :: iselct
+      int :: natom
+#endif
       float, pointer :: fd_error(:,:)
 !
       bool :: qroot, qslave, qprint, qcomp
 !
  __DECLARE_MSGBUF
+!
+#include "../mpitype.def"
 !
       data whoami /' FTSM>'/
 !
@@ -386,7 +397,7 @@ __CHARMM_ONLY##IF STRINGM
           write(_MSGBUF,7003) whoami, zval, whoami ; __PRINT(_MSGBUF)
          else
           write(_MSGBUF,7004) whoami, zval, whoami ; __PRINT(_MSGBUF)
-          call wrndie(-1,whoami,'FINITE DERIVATIVE TEST FAILED.')
+          __WRN(whoami,'FINITE DERIVATIVE TEST FAILED.')
          endif ! report test result
  7003 format(/A, ' THE MAXIMUM GRADIENT ERROR IS ',F15.9,', ',          &
      &       /A, ' WHICH IS SMALLER THAN STEP. TEST PASSED.')
@@ -431,7 +442,7 @@ __CHARMM_ONLY##IF STRINGM
           write(_MSGBUF,7007) whoami, zval, whoami, parallel_tolerance ; __PRINT(_MSGBUF)
          else
           write(_MSGBUF,7008) whoami, zval, whoami, parallel_tolerance ; __PRINT(_MSGBUF)
-          call wrndie(-1,whoami,'PARALLEL COMPUTATION TEST FAILED.')
+          __WRN(,whoami,'PARALLEL COMPUTATION TEST FAILED.')
          endif ! report test result
  7007 format(/A, ' THE MAXIMUM ERROR IS ',E10.5,', ',                   &
      &       /A, ' WHICH IS SMALLER THAN ',E10.5,'. TEST PASSED.')
@@ -487,24 +498,28 @@ __CHARMM_ONLY##IF STRINGM
 !        note: FNAME will be UPPER CASE
 !---------------------------------- OPEN FILE --------------------------------
        if (qroot) then
+#ifdef __CHARMM
         oldiol=iolev
+#endif
         if (qdcd.eq.0) then ! no dcd -- local write
+#ifdef __CHARMM
          iolev=1 ! open file on all nodes
-         if (flen.GT.0) __OPEN_FILE(ifile,fname,'FORMATTED','WRITE')
-        elseif (qprint) then
-        if (flen.GT.0)  __OPEN_FILE(ifile,fname,'UNFORMATTED','WRITE') ! open binary fle for DCD
+#endif
+         if (flen.gt.0) __OPEN_FILE(ifile,fname,'FORMATTED','WRITE')
+        elseif (qprint) then ! write one dcd file (root does this)
+         if (flen.gt.0)  __OPEN_FILE(ifile,fname,'UNFORMATTED','WRITE') ! open binary fle for DCD
         endif
-        if (ifile .EQ. -1 .and. qdcd.eq.0 ) ifile=outu ! write to output stream
+        if (ifile .eq. -1 .and. qdcd .eq. 0 ) ifile=__OSTREAM ! write to output stream (rather dirty, but keep for now)
 !---------------------------- assume file is open, write -------------------------
 !     check for column spec
         c1=__GET_RM_I(comlyn, comlen, 'COL', -1)
         if (c1.gt.0) then
-         if (qprint) write(_MSGBUF,6679) whoami, c1
+         if (qprint) then ; write(_MSGBUF,6679) whoami, c1 ; __PRINT(_MSGBUF) ; endif
  6679 format(/A,' WRITING COORDINATES FROM COLUMN ',I3)
          if (qdcd.gt.0) then ; call ftsm_write_dcd(IFILE=ifile,COL=c1) ;
          else ; call ftsm_write_cor(ifile,c1) ; endif
         else
-         if (qprint) write(_MSGBUF,6689) whoami
+         if (qprint) then ; write(_MSGBUF,6689) whoami ; __PRINT(_MSGBUF) ; endif
  6689 format(/A,' WRITING COORDINATES FROM DEFAULT COLUMN.')
          if (qdcd.gt.0) then ; call ftsm_write_dcd(IFILE=ifile) ;
          else ; call ftsm_write_cor(ifile) ; endif
@@ -512,7 +527,9 @@ __CHARMM_ONLY##IF STRINGM
         if (qdcd.eq.0.or.qprint) then
          if (flen.gt.0) __CLOSE_FILE(ifile,'KEEP',error)
         endif
+#ifdef __CHARMM
         iolev=oldiol
+#endif
        endif ! qroot
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       elseif (__STRNCMP(keyword,'READ',4)) then
@@ -522,39 +539,44 @@ __CHARMM_ONLY##IF STRINGM
        qdcd=__INDX_RM(comlyn,comlen,'DCD'); qdcd = min(qdcd,1)
 !
        if ((qcor+qdcd) .gt. 1) then
-        __WRN( whoami,                                          &
-     &    ' MORE THAN ONE INPUT FORMAT REQUESTED. WILL USE DCD.')
+        __WRN( whoami,'MORE THAN ONE INPUT FORMAT REQUESTED. WILL USE DCD.')
         qcor=0; qdcd=1;
        endif
 !
 !      prepare file
        ifile=__GET_RM_I(comlyn,comlen,'UNIT',-1)
-       CALL GTRMWD(COMLYN,COMLEN,'NAME',4,FNAME,80,FLEN)
+       __GET_RM_A(COMLYN,COMLEN,'NAME',4,FNAME,80,FLEN)
 !        note: flen will be UPPER CASE
 !     check for column spec (which coordinate set to read into)
        c1=__GET_RM_I(comlyn, comlen, 'COL', 0)
 !cccccccccccccccccccccccccccc OPEN FILE ccccccccccccccccccccccc
        if (qroot) then
+#ifdef __CHARMM
         oldiol=iolev
+#endif
         if (qdcd.eq.0) then
+#ifdef __CHARMM
          iolev=1 ! open file on all processors
-         if (flen.GT.0) __OPEN_FILE(ifile,fname,'FORMATTED','READ')
+#endif
+         if (flen.gt.0) __OPEN_FILE(ifile,fname,'FORMATTED','READ')
         elseif (qprint) then ! binary dcd file
-         if (flen.GT.0) __OPEN_FILE(ifile,fname,'UNFORMATTED','READ') ! open binary fle for DCD
+         if (flen.gt.0) __OPEN_FILE(ifile,fname,'UNFORMATTED','READ') ! open binary fle for DCD
         endif
-        IF(Ifile .EQ. -1 .and. qdcd.eq.0 ) then
-         ifile=istrm ! read from input file
+        if(ifile .eq. -1 .and. qdcd.eq.0 ) then
+         ifile=__ISTREAM ! read from input file
+#ifdef __CHARMM
          call rdtitl(titleb,ntitlb,ifile,0) ! 0 = card format
+#endif
         endif
        endif ! qroot
 !cccccccccccccccccc assume file is open, read ccccccccccccccccccc
        if (c1.gt.0) then ! column spec
-         if (qprint) write(_MSGBUF,6699) whoami, c1
+         if (qprint) then ; write(_MSGBUF,6699) whoami, c1 ; __PRINT(_MSGBUF) ; endif
  6699 format(A,' READING COORDINATES INTO COLUMN ',I3)
          if (qdcd.gt.0) then ; if (qroot) call ftsm_read_dcd(ifile, c1);
          else; call ftsm_read_cor(ifile,c1) ;  endif
        else
-         if (qprint) write(_MSGBUF,6709) whoami
+         if (qprint) then ; write(_MSGBUF,6709) whoami ; __PRINT(_MSGBUF) ; endif
  6709 format(A,' READING COORDINATES INTO DEFAULT COLUMN.')
          if (qdcd.gt.0) then ; if (qroot) call ftsm_read_dcd(ifile);
          else ; call ftsm_read_cor(ifile) ; endif
@@ -564,7 +586,9 @@ __CHARMM_ONLY##IF STRINGM
         if (qdcd.eq.0.or.qprint) then
          if (flen.gt.0) __CLOSE_FILE(ifile,'KEEP',error)
         endif ! qdcd
+#ifdef __CHARMM
         iolev=oldiol
+#endif
        endif ! qroot
 !
 !     broadcast to slaves (although cread routine will send coords to slaves, too)
@@ -579,8 +603,18 @@ __CHARMM_ONLY##IF STRINGM
         endif
        else
         if (MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.SIZE_LOCAL.gt.1) then
-         call __BROADCAST_LOCAL_8B(r_f(:,:,c1), 3*nforced) ! forcing coordinates
-         if (qdiffrot) call __BROADCAST_LOCAL_8B(r_o(:,:,c1), 3*norient) ! send orientation coordinates (only if distinct from forcing)
+#ifdef __CHARMM
+         __BROADCAST_LOCAL_8B(r_f(:,:,c1), 3*nforced) ! forcing coordinates
+#else
+         __BROADCAST_LOCAL(r_f(:,:,c1), 3*nforced, mpifloat) ! forcing coordinates
+#endif
+         if (qdiffrot) then 
+#ifdef __CHARMM
+          __BROADCAST_LOCAL_8B(r_o(:,:,c1), 3*norient) ! send orientation coordinates (only if distinct from forcing)
+#else
+          __BROADCAST_LOCAL(r_o(:,:,c1), 3*norient, mpifloat) ! send orientation coordinates (only if distinct from forcing)
+#endif
+         endif
         endif
        endif
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -588,7 +622,7 @@ __CHARMM_ONLY##IF STRINGM
 !       read column spec
         c1=__NEXTI(comlyn, comlen)
         c2=__NEXTI(comlyn, comlen)
-        if (qprint) write(_MSGBUF,6729) whoami, c1, c2
+        if (qprint) then ; write(_MSGBUF,6729) whoami, c1, c2 ; __PRINT(_MSGBUF) ; endif
  6729 format(/A,' WILL SWAP COLUMNS ',I3,' AND ',I3,' ')
         call ftsm_swap(c1, c2)
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -596,7 +630,7 @@ __CHARMM_ONLY##IF STRINGM
 !       read column spec
         c1=__NEXTI(comlyn, comlen)
         c2=__NEXTI(comlyn, comlen)
-        if (qprint) write(_MSGBUF,6739) whoami, c1, c2
+        if (qprint) then ; write(_MSGBUF,6739) whoami, c1, c2 ; __PRINT(_MSGBUF) ; endif
  6739 format(/A,' WILL COPY COLUMN ',I3,' TO ',I3,' ')
         call ftsm_copy(c1,c2)
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -611,15 +645,15 @@ __CHARMM_ONLY##IF STRINGM
          isele=__INDX(comlyn, comlen, 'SELE' ,4)
          if (isele.ge.iorie) then
 !
+#ifdef __CHARMM
           iselct=0
 ! process selection
-#ifdef __CHARMM
           IMODE=0
           CALL SELRPN(COMLYN,COMLEN,iselct,NATOM,1,IMODE,               &
      &      .FALSE.,1,' ',0,RESID,RES,IBASE,SEGID,NICTOT,NSEG,          &
      &      .TRUE.,X,Y,Z,.TRUE.,1,WMAIN)
           IF(IMODE.NE.0) THEN
-           CALL WRNDIE(0,whoami,'ORIENTATION ATOMS SELECTION ERROR')
+           __WRN(0,whoami,'ORIENTATION ATOMS SELECTION ERROR')
            RETURN
           ENDIF
 #elif defined(__DMOL)
@@ -627,11 +661,12 @@ __CHARMM_ONLY##IF STRINGM
           _MSGBUF=comlyn(isele+5:klen) ! extract selection
           if (klen.gt.isele) comlyn=(comlyn(1:isele-1)//comlyn(klen+5:comlen)
           comlen=len(len_trim(comlyn))
-          iselct=system_getind(_MSGBUF)
+          nullify(iselct)
+          iselct=>system_getind(_MSGBUF)
 #endif
 #endif
 !
-          norient=count( iselct(1:natom).gt.0 )
+          if (associated(iselct) then ; norient=count( iselct.gt.0 ) ; else ; norient=0 ; endif
 !
 ! currently we require at least three atoms for orientation
 !
@@ -654,12 +689,19 @@ __CHARMM_ONLY##IF STRINGM
 !    build index array
           norient=0
 !
+#ifndef __CHARMM
+ natom=__NATOM
+#endif
           do i=1,natom
            if (iselct(i).gt.0) then
             norient=norient+1
             iatom_o(norient)=i
            endif
           enddo
+!
+#ifndef __CHARMM
+ if (associated(iselct)) deallocate(iselct)
+#endif
 !    determine whether the new orientation set is the same as the existing forcing set
           qdiffrot=.not. ( norient .eq. nforced )
           if (.not.qdiffrot)  qdiffrot=.not.(associated(iatom_f))
@@ -709,7 +751,7 @@ __CHARMM_ONLY##IF STRINGM
      &      .FALSE.,1,' ',0,RESID,RES,IBASE,SEGID,NICTOT,NSEG,          &
      &      .TRUE.,X,Y,Z,.TRUE.,1,WMAIN)
           IF(IMODE.NE.0) THEN
-           CALL WRNDIE(0,whoami,'RMSD ATOMS SELECTION ERROR')
+           __WRN(0,whoami,'RMSD ATOMS SELECTION ERROR')
            RETURN
           ENDIF
 #elif defined(__DMOL)
@@ -717,14 +759,14 @@ __CHARMM_ONLY##IF STRINGM
           _MSGBUF=comlyn(isele+5:klen) ! extract selection
           if (klen.gt.isele) comlyn=(comlyn(1:isele-1)//comlyn(klen+5:comlen)
           comlen=len(len_trim(comlyn))
-          iselct=system_getind(_MSGBUF)
+          iselct=>system_getind(_MSGBUF)
 #endif
 #endif
 !
-          nforced=count( iselct(1:natom).gt.0 )
+          if (associated(nforced)) then ; nforced=count( iselct.gt.0 ) ; else ; nforced=0 ; endif
 !
           if (nforced.le.0) then
-           __WRN(whoami, ' NO RMSD ATOMS SELECTED. ABORT.')
+           __WRN(whoami, 'NO RMSD ATOMS SELECTED. ABORT.')
            return
           endif
 !
@@ -741,12 +783,19 @@ __CHARMM_ONLY##IF STRINGM
 !    build index array
           nforced=0
 !
+#ifndef __CHARMM
+ natom=__NATOM
+#endif
           do i=1,natom
            if (iselct(i).gt.0) then
             nforced=nforced+1
             iatom_f(nforced)=i
            endif
           enddo
+!
+#ifndef __CHARMM
+ if (associated(iselct)) deallocate(iselct)
+#endif
 !    determine whether the new orientation set is the same as the existing forcing set
           qdiffrot=.not. ( norient .eq. nforced )
           if (.not.qdiffrot)  qdiffrot=.not.(associated(iatom_o))
@@ -760,20 +809,19 @@ __CHARMM_ONLY##IF STRINGM
           endif
 ! print summary
           if (qprint) then
-            write(_MSGBUF,104) whoami, nforced
+            write(_MSGBUF,104) whoami, nforced ; __PRINT(_MSGBUF)
  104  format(A,' WILL APPLY FORCES TO ',i5,                             &
      & ' ATOMS')
-            write(_MSGBUF,105) whoami
+            write(_MSGBUF,105) whoami ; __PRINT(_MSGBUF)
  105  format(A,' FORCING WEIGHTS UNIFORM.')
             if (qdiffrot) then
-             write(_MSGBUF,102) whoami
+             write(_MSGBUF,102) whoami ; __PRINT(_MSGBUF)
             else
-             write(_MSGBUF,103) whoami
+             write(_MSGBUF,103) whoami ;__PRINT(_MSGBUF)
             endif
           endif ! qprint
          else
-          __WRN(whoami,                                         &
-     &    'ATOM SELECTION MUST BE SPECIFIED AFTER RMSD.')
+          __WRN(whoami,'ATOM SELECTION MUST BE SPECIFIED AFTER RMSD.')
           return
          endif
 !*************************************************************
@@ -782,10 +830,10 @@ __CHARMM_ONLY##IF STRINGM
           k=gtrmf(comlyn,comlen,'KPAR',-1d0)
           if (k.ge.0d0) then
            kpara=k
-           if (qprint) write(_MSGBUF,6756) whoami, k
+           if (qprint) then ; write(_MSGBUF,6756) whoami, k ; __PRINT(_MSGBUF) ; endif
  6756 format(A,' SETTING PARALLEL RESTRAINT FORCE CONSTANT TO ',F11.5)
           else
-           if (qprint) write(_MSGBUF,6757) whoami, k
+           if (qprint) then ; write(_MSGBUF,6757) whoami, k ; __PRINT(_MSGBUF) ; endif
  6757 format(A,' INVALID FORCE CONSTANT SPECIFIED: ',F11.5)
           endif
 !*************************************************************
@@ -794,40 +842,43 @@ __CHARMM_ONLY##IF STRINGM
           k=gtrmf(comlyn,comlen,'KPRP',-1d0)
           if (k.ge.0d0) then
            kperp=k
-           if (qprint) write(_MSGBUF,6746) whoami, k
+           if (qprint) then  ; write(_MSGBUF,6746) whoami, k ; __PRINT(_MSGBUG) ; endif
  6746 format(A,' SETTING PERPENDICULAR RESTRAINT FORCE CONSTANT TO '    &
      &       ,F11.5)
           else
-           if (qprint) write(_MSGBUF,6757) whoami, k
+           if (qprint) then ; write(_MSGBUF,6757) whoami, k ; __PRINT(_MSGBUF) ; endif
           endif
 !**************************************************************
         elseif (indx(comlyn,comlen,'KRMS',4).gt.0) then
           k=gtrmf(comlyn,comlen,'KRMS',-1d0)
           if (k.ge.0d0) then
            krms=k
-           if (qprint) write(_MSGBUF,6752) whoami, k
+           if (qprint) then ; write(_MSGBUF,6752) whoami, k ; __PRINT(_MSGBUF) ; endif
  6752 format(A,' SETTING RMSD RESTRAINT FORCE CONSTANT TO '             &
      &       ,F11.5)
           else
-           if (qprint) write(_MSGBUF,6757) whoami, k
+           if (qprint) then ; write(_MSGBUF,6757) whoami, k ; __PRINT(_MSGBUF) ; endif
           endif
 !***************************************************************
         elseif (__INDX_RM(comlyn,comlen,'MASS').gt.0) then ! mass-weighting
           keyword=__NEXTA(comlyn, comlen)
           klen=len(keyword)
-          call __TRIMA(keyword,klen)
+          __TRIMA(keyword,klen)
+#ifndef __CHARMM
+ natom=__NATOM
+#endif
           select case(keyword(1:klen))
            case('YES','ON','TRUE','T','yes','on','true','t')
-            if (qprint) write(_MSGBUF,8001) whoami, 'SET FROM ATOM MASSES'
+            if (qprint) then ; write(_MSGBUF,8001) whoami, 'SET FROM ATOM MASSES' ; __PRINT(_MSGBUF) ; endif
             call ftsm_set_weights(amass, natom) ! send masses
            case('NO','OFF','FALSE','F','no','off','false','f')
-            if (qprint) write(_MSGBUF,8001) whoami, 'WILL BE UNIFORM'
+            if (qprint) then ; write(_MSGBUF,8001) whoami, 'WILL BE UNIFORM' ; __PRINT(_MSGBUF) ; endif
             call ftsm_set_weights( (/ (1d0, i=1,natom) /), natom) ! uniform
            case('WMAIN', 'wmain')
-            if (qprint) write(_MSGBUF,8001) whoami, 'SET FROM WMAIN ARRAY'
+            if (qprint) then ; write(_MSGBUF,8001) whoami, 'SET FROM WMAIN ARRAY' ; __PRINT(_MSGBUF) ; endif
             call ftsm_set_weights(wmain, natom) ! send masses
            case('WCOMP', 'wcomp')
-            if (qprint) write(_MSGBUF,8001) whoami, 'SET FROM WCOMP ARRAY'
+            if (qprint) then ; write(_MSGBUF,8001) whoami, 'SET FROM WCOMP ARRAY' ; __PRINT(_MSGBUF) ; endif
             call ftsm_set_weights(wcomp, natom) ! send masses
            case default
             __WRN(whoami,'UNKNOWN OPTION SPECIFIED')
@@ -837,17 +888,17 @@ __CHARMM_ONLY##IF STRINGM
         elseif (__INDX_RM(comlyn,comlen,'PROJ').gt.0) then ! mass-weighting
           keyword=__NEXTA(comlyn, comlen)
           klen=len(keyword)
-          call __TRIMA(keyword,klen)
+          __TRIMA(keyword,klen)
           select case(keyword(1:klen))
            case('YES','ON','TRUE','T','yes','on','true','t')
             proj_on=.true.
-            if (qprint)  write (_MSGBUF,'(2A)') whoami,                    &
-     & ' WILL RESTRAIN SYSTEM TO PLANE PERPENDICULAR TO PATH.'
+            if (qprint) then ; write (_MSGBUF,'(2A)') whoami,                    &
+     & ' WILL RESTRAIN SYSTEM TO PLANE PERPENDICULAR TO PATH.' ; __PRINT(_MSGBUF) ; endif
            case('NO','OFF','FALSE','F','no','off','false','f')
             proj_on=.false.
-            if (qprint) write (_MSGBUF,'(2A)') whoami,                     &
+            if (qprint) then ; write (_MSGBUF,'(2A)') whoami,                     &
      & ' WILL RESTRAIN SYSTEM TO PATH IMAGE.'//                         &
-     & ' (FE/MFPT CANNOT BE COMPUTED).'
+     & ' (FE/MFPT CANNOT BE COMPUTED).' ; __PRINT(_MSGBUF) ; endif
            case default
             __WRN(whoami,'UNKNOWN OPTION SPECIFIED')
           end select
@@ -857,10 +908,10 @@ __CHARMM_ONLY##IF STRINGM
 !    check replica spec
           irep=__GET_RM_I(comlyn, comlen, 'REP', -1)
           if (irep.lt.0.or.irep.ge.nstring) then
-           if (qprint) write(_MSGBUF, 6773) whoami, whoami, zval
+           if (qprint) then ; write(_MSGBUF, 6773) whoami, whoami, zval ; __PRINT(_MSGBUF) ; endif
            dpar0=zval
           else
-           if (qprint) write(_MSGBUF,6774) whoami, irep, zval
+           if (qprint) then ; write(_MSGBUF,6774) whoami, irep, zval ; __PRINT(_MSGBUF) ; endif
            if (mestring.eq.irep) dpar0=zval ! note: permitting any value
           endif ! irep
  6773 format(A,' REPLICA NUMBER INVALID OR UNSPECIFIED.',               &
@@ -875,10 +926,10 @@ __CHARMM_ONLY##IF STRINGM
 !    check replica spec
           irep=__GET_RM_I(comlyn, comlen, 'REP', -1)
           if (irep.lt.0.or.irep.ge.nstring) then
-           if (qprint) write(_MSGBUF, 6776) whoami, whoami, zval
+           if (qprint) then ; write(_MSGBUF, 6776) whoami, whoami, zval ; __PRINT(_MSGBUF) ; endif
            dperp0=zval
           else
-           if (qprint) write(_MSGBUF,6775) whoami, irep, zval
+           if (qprint) then ; write(_MSGBUF,6775) whoami, irep, zval ; __PRINT(_MSGBUF) ; endif
            if (mestring.eq.irep) dperp0=zval ! note: permitting any value
           endif ! irep
  6776 format(A,' REPLICA NUMBER INVALID OR UNSPECIFIED.',               &
@@ -892,10 +943,10 @@ __CHARMM_ONLY##IF STRINGM
 !    check replica spec
           irep=__GET_RM_I(comlyn, comlen, 'REP', -1)
           if (irep.lt.0.or.irep.ge.nstring) then
-           if (qprint) write(_MSGBUF, 6777) whoami, whoami, zval
+           if (qprint) then ; write(_MSGBUF, 6777) whoami, whoami, zval ; __PRINT(_MSGBUF) ; endif
            drms0=zval
           else
-           if (qprint) write(_MSGBUF,6778) whoami, irep, zval
+           if (qprint) then ; write(_MSGBUF,6778) whoami, irep, zval ; __PRINT(_MSGBUF) ; endif
            if (mestring.eq.irep) drms0=zval ! note: permitting any value
           endif ! irep
  6777 format(A,' REPLICA NUMBER INVALID OR UNSPECIFIED.',               &
@@ -908,13 +959,12 @@ __CHARMM_ONLY##IF STRINGM
 !      done with 'SET' parsing
 !cccccccccccccccccccccccccccccccccccc CV WEIGHTS cccccccccccccccccccccccccccccccccccc
       elseif (__STRNCMP(keyword,'LIST',4)) then ! list forcing and orientation atoms
-       if (qprint) write(_MSGBUF,6762) whoami
+       if (qprint) then ; write(_MSGBUF,6762) whoami ; __PRINT(_MSGBUF) ; endif
  6762 format(/A,' WILL LIST REPLICA ATOMS.')
        call ftsm_list_atoms()
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       else
-            CALL WRNDIE(0, whoami,                                      &
-     &       'UNRECOGNIZED SUBCOMMAND: '//keyword)
+            __WARN(whoami,'UNRECOGNIZED SUBCOMMAND: ',keyword)
       endif
 !
       end subroutine ftsm_parse
@@ -923,24 +973,24 @@ __CHARMM_ONLY##IF STRINGM
 !      __DEP_OUTPUT
       __DEP_PARSER 
       __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
-      use parallel 
       __DEP_MPI 
 !
       __IMPNONE
-      int :: error
+#include "../mpitype.def"
+      int :: ierror
       bool :: qroot, qslave
-      character(len=11 :: whoami
+      character(len=11) :: whoami
 !
       data whoami /' FTSM_INIT>'/
 !
 !      do a basic communicator check:
       if (ME_LOCAL.eq.0.and.ME_STRNG.eq.MPI_UNDEFINED) then
-        write(_MSGBUF, 111) whoami, ME_GLOBAL, whoami
+        write(_MSGBUF, 111) whoami, ME_GLOBAL, whoami ; __PRINT(_MSGBUF)
  111  FORMAT(A, ' WORLD REPLICA ',I5, ' HAS ZERO GROUP ID',             &
      & /,A,' BUT INVALID STRING ID (MAY BE OK).')
       elseif (ME_STRNG.ne.MPI_UNDEFINED.and.                            &
      &  (ME_LOCAL.ne.0.or.MPI_COMM_LOCAL.eq.MPI_COMM_NULL)) then
-        write(_MSGBUF, 112) whoami, ME_GLOBAL, whoami
+        write(_MSGBUF, 112) whoami, ME_GLOBAL, whoami ; __PRINT(_MSGBUF)
  112  FORMAT(A, ' WORLD REPLICA ',I5, ' HAS A VALID STRING ID',         &
      & /,A,' BUT A NONZERO GROUP ID. ABORTING.')
        return
@@ -953,7 +1003,7 @@ __CHARMM_ONLY##IF STRINGM
        if (qroot) then
         if (ME_STRNG.eq.0) then
           write(_MSGBUF,'(2A)')                                            &
-     &    whoami, ' FTSM ALREADY INITIALIZED. CALL "DONE" TO CLEAN UP.'
+     &    whoami, ' FTSM ALREADY INITIALIZED. CALL "DONE" TO CLEAN UP.' ; __PRINT(_MSGBUF);
         endif ! ME_STRNG
        endif ! qroot
        return
@@ -966,17 +1016,25 @@ __CHARMM_ONLY##IF STRINGM
         nstring=SIZE_STRNG
         mestring=ME_STRNG
       endif
+#ifdef __CHARMM
 !      broadcast string size to all slave nodes
-      call psnd4(nstring, 1)
-      call psnd4(mestring, 1)
+      __BROADCAST_LOCAL_8B(nstring, 1)    !##INTEGER8
+      __BROADCAST_LOCAL_8B(mestring, 1)   !##INTEGER8
+!
+      __BROADCAST_LOCAL_4B(nstring, 1)    !##.not.INTEGER8
+      __BROADCAST_LOCAL_4B(mestring, 1)   !##.not.INTEGER8
 !      set envorinment variable
       call setmsi('NSTRING',nstring)
       call setmsi('MESTRING',mestring)
+#else
+      __BROADCAST_LOCAL(nstring, 1, mpiint)
+      __BROADCAST_LOCAL(mestring, 1, mpiint)
+#endif
 !
       if (qroot) then
         if (ME_STRNG.eq.0) then
           write(_MSGBUF,'(2A,I5, A)')                                      &
-     &    whoami, ' FOUND ',nstring,' REPLICAS.'
+     &    whoami, ' FOUND ',nstring,' REPLICAS.' ; __PRINT(_MSGBUF)
         endif
       endif
 !
@@ -1021,12 +1079,16 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_PARSER 
       __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
       __DEP_MPI 
-      character(len=11 :: whoami
+!
+ __DECLARE_MSGBUF
+!
+      character(len=11) :: whoami
 !
       data whoami /' FTSM_DONE>'/
 !
-      if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.ME_STRNG.eq.0)            &
-     &  write(_MSGBUF,'(2A,I5, A)') whoami, ' CLEANING UP.'
+      if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.ME_STRNG.eq.0) then 
+       write(_MSGBUF,'(2A,I5, A)') whoami, ' CLEANING UP.' ; __PRINT(_MSGBUF)
+      endif
 !
       nstring=-1
       mestring=-1
@@ -1087,9 +1149,11 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_MPI 
       __IMPNONE
 !
-      CHARACTER*(*) :: COMLYN
+ __DECLARE_MSGBUF
+!
+      CHARACTER(LEN=*) :: COMLYN
       INTEGER :: COMLEN
-      character(len=16 :: whoami
+      character(len=16) :: whoami
       bool :: qprint, qroot
 !
       data whoami /' FTSM_REPA_INIT>'/
@@ -1097,7 +1161,7 @@ __CHARMM_ONLY##IF STRINGM
       qroot=MPI_COMM_STRNG.ne.MPI_COMM_NULL
       qprint=qroot.and.ME_STRNG.eq.0
 !
-      if (qprint) write(_MSGBUF,8002) whoami
+      if (qprint) then ; write(_MSGBUF,8002) whoami ; __PRINT(_MSGBUF) ; endif
       call smcv_repa_init(comlyn, comlen)
 !
  8002 format(/A,' USING SMCV INITIALIZATION ROUTINE')
@@ -1108,12 +1172,12 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_PARSER 
       __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
       __DEP_MPI 
-      use chutil, only : atomid
+      __DEP_ATOMID
 !
       __IMPNONE
-      int :: j, iatom
-      character(len=8 :: sid, rid, ren, ac
-      character(len=17 :: whoami
+      int :: j
+      character(len=8) :: sid, rid, ren, ac
+      character(len=17) :: whoami
 !
       data whoami /' FTSM_LIST_ATOMS>'/
 !
@@ -1123,18 +1187,18 @@ __CHARMM_ONLY##IF STRINGM
 !
        write(_MSGBUF,'(A)') '\t ORIENTATION ATOMS:'
         do j=1, norient;
-         call atomid(iatom_o(j), sid, rid, ren, ac)
-         write(_MSGBUF,667) '\t',j, iatom, sid, rid, ren, ac
+         __ATOMID(iatom_o(j), sid, rid, ren, ac)
+         write(_MSGBUF,667) '\t',j, iatom_o(j), sid, rid, ren, ac
         enddo
 !
         if (qdiffrot) then
          write(_MSGBUF,'(A)') '\t FORCING ATOMS'
          do j=1, nforced;
-          call atomid(iatom_f(j), sid, rid, ren, ac)
-          write(_MSGBUF,667) '\t',j, iatom, sid, rid, ren, ac
+          __ATOMID(iatom_f(j), sid, rid, ren, ac)
+          write(_MSGBUF,667) '\t',j, iatom_f(j), sid, rid, ren, ac ; __PRINT(_MSGBUF)
          enddo
         else
-        write(_MSGBUF,'(A)')'\t FORCING AND ORIENTATION ATOMS ARE THE SAME'
+         write(_MSGBUF,'(A)') '\t FORCING AND ORIENTATION ATOMS ARE THE SAME' ; __PRINT(_MSGBUF)
         endif
       endif ! ME_STRING
 !
@@ -1147,19 +1211,21 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_NUMBER 
       __DEP_PARSER 
       __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
-      use parallel 
 !
       __IMPNONE
       float :: w(n), a
-      character(len=18 :: whoami
+      character(len=18) :: whoami
       int :: i, j, n
+!
+ __DECLARE_MSGBUF
 !
       data whoami /' FTSM_SET_WEIGHTS>'/
 !
-      if (ME_STRNG.eq.0.and.ME_LOCAL.eq.0)                              &
-     & write(_MSGBUF,668)                                                  &
+      if (ME_STRNG.eq.0.and.ME_LOCAL.eq.0) then
+       write(_MSGBUF,668)                                               &
      & whoami,' A CHANGE IN THE ORIENTATION WEIGHTS REQUIRES ',         &
-     & whoami,' REDEFINING IMAGES (e.g. USING FILL)'
+     & whoami,' REDEFINING IMAGES (e.g. USING FILL)' ; __PRINT(_MSGBUF)
+      endif
  668  format(/2A,/2A)
 !
       if (norient.eq.0.and.nforced.eq.0) then
@@ -1183,8 +1249,7 @@ __CHARMM_ONLY##IF STRINGM
        a=sum(orientWeights);
        if (a.gt.RSMALL) then ; orientWeights=orientWeights/a;
        else
-        __WRN(whoami,                                           &
-     &   ' SUM OF ORIENTATION WEIGHTS IS VERY SMALL. ABORT.')
+        __WRN(whoami,'SUM OF ORIENTATION WEIGHTS IS VERY SMALL. ABORT.')
         return
        endif
 !
@@ -1206,8 +1271,7 @@ __CHARMM_ONLY##IF STRINGM
        a=sum(forcedWeights);
        if (a.gt.RSMALL) then ; forcedWeights=forcedWeights/a;
        else
-        __WRN(whoami,                                           &
-     &   ' SUM OF FORCING WEIGHTS IS VERY SMALL. ABORT.')
+        __WRN(whoami,'SUM OF FORCING WEIGHTS IS VERY SMALL. ABORT.')
         return
        endif
 !
@@ -1221,7 +1285,7 @@ __CHARMM_ONLY##IF STRINGM
       __IMPNONE
       int :: c1, c2
       float :: com(3)
-      character(len=11 :: whoami
+      character(len=11) :: whoami
       int :: i,j
 !
       data whoami /' FTSM_SWAP>'/
@@ -1604,7 +1668,7 @@ __CHARMM_ONLY##IF STRINGM
       qgrp=(MPI_COMM_LOCAL.ne.MPI_COMM_NULL)                            &
      & .and.(SIZE_LOCAL.gt.1)
       if (.not. qgrp) then ! quit if cannot run in parallel
-       call wrndie(whoami,'CANNOT PERFORM TEST ON 1-PROCESSOR GROUPS',0)
+       __WRN(whoami,'CANNOT PERFORM TEST ON 1-PROCESSOR GROUPS')
        return
       endif
 ! save values & force a serial calculation
@@ -1690,8 +1754,8 @@ __CHARMM_ONLY##ENDIF
 !    will use fixed atom arrays to print only the path atoms
 !
       __IMPNONE
-      character(len=16 :: whoami
-      character(len=80 :: title(maxtit)
+      character(len=16) :: whoami
+      character(len=80) :: title(maxtit)
       float :: r(natom,3)
       int :: stringatoms(natom), string_inds(natom), i, j, k, ncv
       int :: ifile
@@ -2655,6 +2719,8 @@ __CHARMM_ONLY##ENDIF
 !
       __IMPNONE
 !
+      __DECLARE_MSGBUF
+!
       float :: x(:), y(:), z(:),                                       &
      &          fx(:), fy(:), fz(:)
       int :: iteration ! MD iteration
@@ -2697,8 +2763,8 @@ __CHARMM_ONLY##ENDIF
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        if (update_on.and.update_freq.gt.0) then
         if (mod(iteration,update_freq).eq.0) then
-         if (prnlev.ge.3.and..not.string_noprint) then 
-          write(_MSGBUF,'(2A)') whoami,' UPDATING STRING.' ; __PRINT(_MSGBUF)
+         if (.not.string_noprint) then 
+          write(_MSGBUF,'(2A)') whoami,' UPDATING STRING.' ; __PRINTL(_MSGBUF,3)
          endif
 !
          if (proj_on) then
@@ -2711,8 +2777,8 @@ __CHARMM_ONLY##ENDIF
           endif
 !    see if reparametrization requested
           if (repa_on) then
-            if (prnlev.ge.3.and..not.string_noprint) then 
-             write(_MSGBUF,'(2A)') whoami,' REPARAMETRIZING IMAGES.' ; __PRINT(_MSGBUF)
+            if (.not.string_noprint) then 
+             write(_MSGBUF,'(2A)') whoami,' REPARAMETRIZING IMAGES.' ; __PRINTL(_MSGBUF,3)
             endif
             call ftsm_repa(.false.) ! reparametrize string, do not broadcast to slaves; removes COM
           else
@@ -2720,15 +2786,15 @@ __CHARMM_ONLY##ENDIF
            call ftsm_save_com()
           endif ! repa_on
 !    update reference coordinates
-          if (prnlev.ge.3.and..not.string_noprint) then 
-           write(_MSGBUF,'(2A)') whoami,' UPDATING NEIGHBOR IMAGES.' ; __PRINT(_MSGBUF)
+          if (.not.string_noprint) then 
+           write(_MSGBUF,'(2A)') whoami,' UPDATING NEIGHBOR IMAGES.' ; __PRINT(_MSGBUF,3)
           endif
           call ftsm_swap_bc(.false.)
 !------------------------------------------------------------------------
          else ! not proj_on
 !    save old reference coordinates and switch to new reference coordinates
-          if (prnlev.ge.3.and..not.string_noprint) then 
-           write(_MSGBUF,'(2A)') whoami,' UPDATING REFERENCE IMAGES.' ; __PRINT(_MSGBUF)
+          if (.not.string_noprint) then 
+           write(_MSGBUF,'(2A)') whoami,' UPDATING REFERENCE IMAGES.' ; __PRINTL(_MSGBUF,3)
           endif
           r_f(:,:,center_old)=r_f(:,:,center)
           r_f(:,:,center)=r_f(:,:,center_new)
@@ -2741,8 +2807,8 @@ __CHARMM_ONLY##ENDIF
 !
 !    see if reparametrization requested
           if (repa_on) then
-            if (prnlev.ge.3.and..not.string_noprint) then 
-             write(_MSGBUF,'(2A)') whoami,' REPARAMETRIZING IMAGES.' ; __PRINT(_MSGBUF)
+            if (.not.string_noprint) then 
+             write(_MSGBUF,'(2A)') whoami,' REPARAMETRIZING IMAGES.' ; __PRINTL(_MSGBUF,3)
             endif
             call ftsm_repa(.true.) ! reparametrize string and broadcast to slaves
 !    recompute centers of mass (which will change due to repa or regular evolution)
@@ -2761,8 +2827,8 @@ __CHARMM_ONLY##ENDIF
 !
        if (repl_x_on.and.repl_x_freq.gt.0) then
         if (mod(iteration, repl_x_freq).eq.0) then
-         if (prnlev.ge.3.and..not.string_noprint) then 
-          write(_MSGBUF,'(2A)') whoami,' ATTEMPTING EXCHANGE OF NEIGHBORING REPLICAS.' ; __PRINT(_MSGBUF)
+         if (.not.string_noprint) then 
+          write(_MSGBUF,'(2A)') whoami,' ATTEMPTING EXCHANGE OF NEIGHBORING REPLICAS.' ; __PRINTL(_MSGBUF,3)
          endif
          call ftsm_repl_exchange(x, y, z, iteration)
         endif
@@ -2770,9 +2836,7 @@ __CHARMM_ONLY##ENDIF
 !
        if (stat_on.and.stat_freq.gt.0) then
          if (mod(iteration,stat_freq).eq.0) then
-           if (prnlev.ge.3) then 
-            write(_MSGBUF,'(2A)') whoami,' CALLING STRING STATISTICS.' ; __PRINT(_MSGBUF)
-           endif
+           write(_MSGBUF,'(2A)') whoami,' CALLING STRING STATISTICS.' ; __PRINTL(_MSGBUF,3)
            call ftsm_stat() ! output statistics
          endif
        endif ! stat_on
