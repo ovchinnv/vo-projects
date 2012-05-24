@@ -204,6 +204,7 @@ endif
  integer, optional :: numiter ! optional number of integraion steps
  integer :: minfreq, iterations, ncycles, i
  logical :: addheader
+ character(len=6) :: action
 !
  character(len=16), parameter :: whoami='MOLSIM_INTEGRATE'
  character(len=80) :: msg___
@@ -253,13 +254,14 @@ endif
   if (outfreq(statf).gt.0) then;
    if (mod(iteration_count,outfreq(statf)).eq.0) then
     if (me.le.0) then
-     if (statisticsfid.le.0) then
-      call files_open(statisticsfid, name_=statisticsoutname, form_='FORMATTED', action_='WRITE')
-      if (statisticsfid.le.0) call warning(whoami, 'Cannot open input file. Abort.',-1)
-     endif ! open statistics file
+     if (statisticsfid.le.0) then ; action='write' ; else ; action='append'; endif
+     call files_open(statisticsfid, name_=statisticsoutname, form_='FORMATTED', action_=action)
+     if (statisticsfid.le.0) call warning(whoami, 'Cannot open input file. Abort.',-1)
     endif ! me
 !
 ! call system_statistics(statisticsfid); ! must be parallel-aware; must call fatal_warning
+!
+    call files_close(statisticsfid)
 !
    endif ! mod
   endif ! outfreq
@@ -270,15 +272,13 @@ endif
 !
 ! note: in the future should close and reopen traj. file with APPEND option to protect from crashes
 !
-     if (trajectoryfid.le.0) then
-      addheader=.true.;
-      call files_open(trajectoryfid, name_=trajectoryoutname, form_='UNFORMATTED', action_='WRITE')
-      if (trajectoryfid.le.0) call warning(whoami, 'Cannot open input file. Abort.',-1)
-     endif ! open trajectory file
+     if (trajectoryfid.le.0) then ; addheader=.true.; action='write'; else ; addheader=.false.; action='append'; endif
+     call files_open(trajectoryfid, name_=trajectoryoutname, form_='UNFORMATTED', action_=action)
+     if (trajectoryfid.le.0) call warning(whoami, 'Cannot open input file. Abort.',-1)
     endif ! me
 !
     call system_write_dcd(trajectoryfid,addheader); ! must be parallel-aware; must call fatal_warning
-    addheader=.false.;
+    call files_close(trajectoryfid)
 !
    endif ! mod
   endif ! outfreq

@@ -34,7 +34,7 @@ module files
  character(len=len(action_)) :: action__
  character(len=132) :: name__
  character(len=7) :: msg__, stat_
- logical :: exist_, opened_, qread, qwrite
+ logical :: exist_, opened_, qread, qwrite, qappend
  character*10, parameter :: whoami='FILES_OPEN'
  integer :: ahandle, ioerr, i
 !
@@ -43,10 +43,11 @@ module files
 ! access checks
  call toupper(form__)
  call toupper(action__)
- qread=.false.; qwrite=.false.;
+ qread=.false.; qwrite=.false.; qappend=.false.
 !
  if (action__.eq.'READ') then ; qread=.true. ; msg__='reading' ; stat_='OLD'
  elseif (action__.eq.'WRITE') then ; qwrite=.true.; msg__='writing'; stat_='UNKNOWN'
+ elseif (action__.eq.'APPEND') then ; qappend=.true.; msg__='appending'; stat_='OLD'
  endif
 !
 ! write(0,*) handle_
@@ -56,7 +57,7 @@ module files
  if (.not.files_initialized) call files_initialize()
 ! check that file exists
  inquire(file=name_,exist=exist_, opened=opened_, number=ahandle)
- if (.not.exist_.and.qread) then
+ if (.not.exist_.and.(qread.or.qappend)) then
   call warning(whoami,'Cannot find file '//name_(1:len_trim(name_)),0)
   handle_=-1
  else ! file exists, or we are writing
@@ -68,7 +69,7 @@ module files
   if (any(reserved_handles.eq.handle_)) then ; call warning(whoami, 'Invalid file handle requested',0); handle_=-1
   elseif(.not. (form__.eq.'FORMATTED'.or.form__.eq.'UNFORMATTED')) then
    call warning(whoami,'File format '//form__(1:len_trim(form__))//' is not allowed.',0); handle_=-1
-  elseif(.not.(qread.or.qwrite)) then
+  elseif(.not.(qread.or.qwrite.or.qappend)) then
    call warning(whoami,'File access '//action__(1:len_trim(action__))//' is not allowed.',0); handle_=-1
   elseif (handle_.lt.0) then ; handle_=files_assign_handle()
   else ! default: check
@@ -83,7 +84,13 @@ module files
  if (handle_.gt.-1) then
 ! open file
    call message(whoami, 'Opening '//form__(1:len_trim(form__))//' file "'//name_(1:len_trim(name_))//'" for '//msg__//'.')
-   open(unit=handle_, file=name_, form=form__, status=stat_, iostat=ioerr, action=action__)
+!
+   if (qappend) then
+    open(unit=handle_, file=name_, form=form__, status=stat_, iostat=ioerr, action='WRITE', position=action__)
+   else
+    open(unit=handle_, file=name_, form=form__, status=stat_, iostat=ioerr, action=action__)
+   endif
+!
    if (ioerr.ne.0) then
     call warning(whoami, 'File open failed with error code '//itoa(ioerr),0)
     handle_=-1

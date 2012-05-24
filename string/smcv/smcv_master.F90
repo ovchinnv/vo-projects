@@ -906,7 +906,7 @@
 !
 ! determine exchange partner
       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then
-       if (ME_STRNG.eq.0) which=integer(randomu()*2d0) ! either 0 or 1
+       if (ME_STRNG.eq.0) which=INT(randomu()*2d0) ! either 0 or 1
        call MPI_BCAST(which, 1, MPI_INTEGER, 0, MPI_COMM_STRNG, ierror) ! string root broadcasts to all replicas
 ! determine whether swapping w. left (-1) or w. right (+1) neighbor & calculate rank of neighbor
        which=ME_STRNG + (mod(ME_STRNG + which, 2)*2 - 1)
@@ -984,6 +984,9 @@
 ! & iuncrd, new_fnames(2)
 ! close(600+ME_STRNG)
 ! assuming that the restart file is formatted (might change this later)
+        trajectoryoutname=new_fnames(1)
+        restartoutname =new_fnames(2)
+        statisticsoutname=new_fnames(3)
 !
 ! iolev=oldiol
 ! done with swap output file info
@@ -1860,7 +1863,7 @@
      & .and.ME_STRNG.eq.0
 !
       do i=1, cv%num_cv
-       if (qprint) write(msg___,666) whoami,i ; write(0,'(A)') msg___
+       if (qprint) then ; write(msg___,666) whoami,i ; write(0,'(A)') msg___ ; endif
  666 format(A,' CV # ',I8,':')
        select case (cv%type(i))
          case (posi_com_x, posi_com_y, posi_com_z);

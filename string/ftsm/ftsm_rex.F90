@@ -77,7 +77,7 @@
        end subroutine ftsm_rex_set_temp
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine ftsm_rex_print_map(iunit,fmt)
-      use output
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
 ! only root process should call
        integer :: iunit
        character(len=*), optional :: fmt
@@ -102,7 +102,7 @@
        end subroutine ftsm_rex_print_map
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine ftsm_rex_read_map(iunit)
-      use output
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
       use multicom_aux
       use mpi
        integer :: iunit, ierror

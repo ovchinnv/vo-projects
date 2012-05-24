@@ -13,7 +13,7 @@
 ! reparametrize string
 ! open file for iput/output
 !
-__CHARMM_ONLY__CHARMM_ONLY##IF STRINGM
+!**CHARMM_ONLY**!##IF STRINGM
 !
       subroutine compute_work_fd(x,xbc0,xbc1,f,n,work)
       use multicom_aux
@@ -1334,7 +1334,7 @@ __CHARMM_ONLY__CHARMM_ONLY##IF STRINGM
        use cv_frames, only : frames, frames_reset_calculate, &
      & frames_calc, frames_initialized
        use smcv_master, only : smcv_fill ! used for rmsd test
-       use smcv_var, only : nstring, mestring
+       use sm_var, only : nstring, mestring
 !
        use multicom_aux
        use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
@@ -1849,4 +1849,4 @@ character(len=80) :: msg___
 !
       end subroutine hypercube_allgatherv
 !
-__CHARMM_ONLY__CHARMM_ONLY##ENDIF
+!**CHARMM_ONLY**!##ENDIF
