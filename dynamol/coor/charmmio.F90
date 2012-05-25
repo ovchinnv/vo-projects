@@ -209,23 +209,35 @@ module charmmio
 !
  end subroutine ch_coor_write
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
- subroutine dcd_write(fid, r, addheader)
- use output, only: message
+ subroutine dcd_write_frame(fid, r, addheader, freeatoms)
+ use output, only: message, warning
  implicit none
  integer :: fid
  integer :: natom, i
  real*8 :: r(:,:)
  logical :: addheader
- character(len=8), parameter :: whoami = 'DCD_WRITE'
+ integer, optional :: freeatoms(:)
+ character(len=5), parameter :: whoami = 'DCD_WRITE_FRAME'
 !
  integer*4, parameter :: ntitle=1
  character(len=80) :: title(ntitle)='*'
- integer*4 :: n
+ integer*4 :: n, nfree
  integer*4 :: idum(20)=0
  character(len=4) :: header='CORD'
 !
  natom=size(r,2)
  n=natom
+!
+ if (present(freeatoms)) then
+  if ( any(freeatoms.gt.n.or.freeatoms.lt.1) ) then
+   call warning(whoami, 'Some free atom indices are out of range. Will use all atoms. Abort.',0)
+   return
+  else
+   nfree=size(freeatoms)
+  endif
+ else
+  nfree=n
+ endif
 !
  idum(1)=1
  if (addheader) then
@@ -233,13 +245,113 @@ module charmmio
   title(1)='* DCD TRAJECTORY FILE WRITTEN BY DYNAMO PROGRAM'
   write(fid) ntitle, (title(i), i=1,ntitle)
   write(fid) n
+  if (nfree.ne.n) write(fid) freeatoms
+  write(fid) real(r(1,:))
+  write(fid) real(r(2,:))
+  write(fid) real(r(3,:))
+ else
+  if (nfree.ne.n) then
+   write(fid) real(r(1,freeatoms))
+   write(fid) real(r(2,freeatoms))
+   write(fid) real(r(3,freeatoms))
+  else
+   write(fid) real(r(1,:))
+   write(fid) real(r(2,:))
+   write(fid) real(r(3,:))
+  endif ! nfree
  endif
 !
- write(fid) real(r(1,:))
- write(fid) real(r(2,:))
- write(fid) real(r(3,:))
 !
  call message(whoami, 'DCD frame written.')
 !
- end subroutine dcd_write
+ end subroutine dcd_write_frame
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+ subroutine dcd_read_frame(fid, r, readheader, freeatoms)
+ use output, only: message, warning
+ use parser, only: itoa
+ implicit none
+ integer :: fid
+ real*8 :: r(:,:)
+ logical :: readheader
+ integer, pointer :: freeatoms(:)
+!
+ real*8, pointer :: r4(:,:)
+ integer :: natom, i
+ character(len=14), parameter :: whoami = 'DCD_READ_FRAME'
+!
+ integer, parameter :: maxtitle=100
+ integer*4 :: ntitle
+ character(len=132) :: title(maxtitle)
+ integer*4 :: n, nfree, nfixed
+ integer*4 :: idum(20)=0
+ character(len=4) :: header
+!
+ natom=size(r,2)
+!
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+ if (readheader) then
+!
+  read(fid) header, idum
+  read(fid) ntitle, (title(i), i=1,min(ntitle,maxtitle))
+  read(fid) n
+  if (n.lt.natom) then
+   call warning(whoami, 'Number of atoms in trajectory file ('//itoa(n)//') is smaller than the array size. Abort.',0)
+   return
+  elseif (n.gt.natom) then
+   call warning(whoami, 'Number of atoms in trajectory file ('//itoa(n)//') is larger than the array size. Abort.',0)
+   return
+  endif
+!
+  nfixed=idum(9)
+  if (nfixed.lt.0.or.nfixed.gt.natom) then
+   call warning(whoami, 'Number of fixed atoms ('//itoa(nfixed)//') is invalid. Abort.',0)
+   return
+! nfixed=max(min(natom,nfixed),0)
+  endif
+  nfree=natom-nfixed
+  if (nfree.ne.n) then
+   if (associated(freeatoms)) deallocate(freeatoms)
+   allocate(freeatoms(nfree)) ; read(fid) freeatoms
+  endif
+!
+! read 4-byte coordinates
+  allocate(r4(3,natom))
+  read(fid) r4(1,:)
+  read(fid) r4(2,:)
+  read(fid) r4(3,:)
+  r=r4
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+ else ! readheader
+! check for fixed atoms
+  if (associated(freeatoms)) then
+   if ( any(freeatoms.gt.natom.or.freeatoms.lt.1) ) then
+    call warning(whoami, 'Some free atom indices are out of range. Abort.',0)
+    return
+   else
+    nfree=size(freeatoms)
+   endif
+  else ! associated
+   nfree=natom
+  endif ! associated
+!
+  allocate(r4(3,natom))
+  if (nfree.ne.natom) then
+   read(fid) r4(1,freeatoms)
+   read(fid) r4(2,freeatoms)
+   read(fid) r4(3,freeatoms)
+   r(:,freeatoms)=r4(:,freeatoms)
+  else
+   read(fid) r4(1,:)
+   read(fid) r4(2,:)
+   read(fid) r4(3,:)
+   r=r4
+  endif ! nfree
+ endif
+!
+ if (associated(r4)) deallocate(r4)
+!
+ call message(whoami, 'DCD frame read.')
+!
+ end subroutine dcd_read_frame
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 end module charmmio
