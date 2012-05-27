@@ -510,27 +510,33 @@ __CHARMM_ONLY##IF STRINGM
         elseif (qprint) then ! write one dcd file (root does this)
          if (flen.gt.0) __OPEN_FILE(ifile,fname,'UNFORMATTED','WRITE') ! open binary fle for DCD
         endif
-        if (ifile .eq. -1 .and. qdcd .eq. 0 ) ifile=__OSTREAM ! write to output stream (rather dirty, but keep for now)
+#ifdef __CHARMM
+        if (ifile .eq. -1) then
+         if (qdcd .eq. 0 ) ifile=__OSTREAM ! write to output stream (rather dirty, but keep for now)
+        endif
+#endif
+        if (ifile.ge.0) then
 !---------------------------- assume file is open, write -------------------------
 !     check for column spec
-        c1=__GET_RM_I(comlyn, comlen, 'COL', -1)
-        if (c1.gt.0) then
-         if (qprint) then ; write(_MSGBUF,6679) whoami, c1 ; __PRINT(_MSGBUF) ; endif
+         c1=__GET_RM_I(comlyn, comlen, 'COL', -1)
+         if (c1.gt.0) then
+          if (qprint) then ; write(_MSGBUF,6679) whoami, c1 ; __PRINT(_MSGBUF) ; endif
  6679 format(/A,' WRITING COORDINATES FROM COLUMN ',I3)
-         if (qdcd.gt.0) then ; call ftsm_write_dcd(IFILE=ifile,COL=c1) ;
-         else ; call ftsm_write_cor(ifile,c1) ; endif
-        else
-         if (qprint) then ; write(_MSGBUF,6689) whoami ; __PRINT(_MSGBUF) ; endif
+          if (qdcd.gt.0) then ; call ftsm_write_dcd(IFILE=ifile,COL=c1) ;
+          else ; call ftsm_write_cor(ifile,c1) ; endif
+         else
+          if (qprint) then ; write(_MSGBUF,6689) whoami ; __PRINT(_MSGBUF) ; endif
  6689 format(/A,' WRITING COORDINATES FROM DEFAULT COLUMN.')
-         if (qdcd.gt.0) then ; call ftsm_write_dcd(IFILE=ifile) ;
-         else ; call ftsm_write_cor(ifile) ; endif
-        endif ! c1
-        if (qdcd.eq.0.or.qprint) then
-         if (flen.gt.0) __CLOSE_FILE(ifile,'KEEP',error)
-        endif
+          if (qdcd.gt.0) then ; call ftsm_write_dcd(IFILE=ifile) ;
+          else ; call ftsm_write_cor(ifile) ; endif
+         endif ! c1
+         if (qdcd.eq.0.or.qprint) then
+          if (flen.gt.0) __CLOSE_FILE(ifile,'KEEP',error)
+         endif
 #ifdef __CHARMM
-        iolev=oldiol
+         iolev=oldiol
 #endif
+        endif ! ifile
        endif ! qroot
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       elseif (__STRNCMP(keyword,'READ',4)) then
@@ -563,15 +569,18 @@ __CHARMM_ONLY##IF STRINGM
         elseif (qprint) then ! binary dcd file
          if (flen.gt.0) __OPEN_FILE(ifile,fname,'UNFORMATTED','READ') ! open binary fle for DCD
         endif
-        if(ifile .eq. -1 .and. qdcd.eq.0 ) then
-         ifile=__ISTREAM ! read from input file
 #ifdef __CHARMM
-         call rdtitl(titleb,ntitlb,ifile,0) ! 0 = card format
+        if(ifile .le. -1 ) then 
+         if (qdcd.eq.0 ) then
+          ifile=__ISTREAM ! read local files from input file
+          call rdtitl(titleb,ntitlb,ifile,0) ! 0 = card format
+         endif ! qdcd
+        endif ! ifile
 #endif
-        endif
        endif ! qroot
 !cccccccccccccccccc assume file is open, read ccccccccccccccccccc
-       if (c1.gt.0) then ! column spec
+       if (ifile.ge.0) then
+        if (c1.gt.0) then ! column spec
          if (qprint) then ; write(_MSGBUF,6699) whoami, c1 ; __PRINT(_MSGBUF) ; endif
  6699 format(A,' READING COORDINATES INTO COLUMN ',I3)
          if (qdcd.gt.0) then ; if (qroot) call ftsm_read_dcd(ifile, c1);
@@ -581,6 +590,7 @@ __CHARMM_ONLY##IF STRINGM
  6709 format(A,' READING COORDINATES INTO DEFAULT COLUMN.')
          if (qdcd.gt.0) then ; if (qroot) call ftsm_read_dcd(ifile);
          else ; call ftsm_read_cor(ifile) ; endif
+        endif ! c1
        endif
 !cccccccccccccccc close file ccccccccccccccccccccccccccccccccccccc
        if (qroot) then
@@ -1743,12 +1753,12 @@ __CHARMM_ONLY##IF STRINGM
       subroutine ftsm_write_dcd(ifile, col, ibeg, iend)
 !
 #ifdef __CHARMM
-      __DEP_COORDINATES
       use ctitla 
       use cveloci_mod      !##CVELOCI
 #endif
 !
       __DEP_SIZE
+      __DEP_COORDINATES
       __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
       __DEP_PARSER 
       __DEP_COORIO
@@ -1761,6 +1771,9 @@ __CHARMM_ONLY##IF STRINGM
 #ifdef __CHARMM
       character(len=80) :: title(maxtit)
       int :: ntitle
+#endif
+#ifndef __CHARMM
+      int :: natom
 #endif
       float, pointer :: r3(:,:)  ! coordinates
       int, pointer :: stringatoms(:), string_inds(:)
@@ -1798,15 +1811,15 @@ __CHARMM_ONLY##IF STRINGM
       nullify(stringatoms, string_inds, r3)
 !
       if (qroot) then
-
-      if (ME_STRNG.eq.0) then
 !
-       allocate(stringatoms(natom), string_inds(natom))
-       stringatoms=0
+      if (ME_STRNG.eq.0) then
 !
 #ifndef __CHARMM
  natom=__NATOM
 #endif
+!
+       allocate(stringatoms(natom), string_inds(natom))
+       stringatoms=0
 !
        stringatoms(iatom_f)=1
        if (qdiffrot) stringatoms(iatom_o)=1
@@ -1840,7 +1853,7 @@ __CHARMM_ONLY##IF STRINGM
      &  string_inds, k, ibg, ibg, 3*k, 0d0, 1, ie, title,ntitle,ifile,  &
      &  .false., .false., stringatoms(1:20), .false., r3(:,1))       ! whew...
 #elif defined(__DMOL)
-       call dcd_write(ifile,r3,.true.,FREEATOMS=string_inds(1:k))
+       call dcd_write_frame(ifile,r3,.true.,FREEATOMS=string_inds(1:k))
 #endif
 !from dynio.src
 !      SUBROUTINE WRITCV(X,Y,Z,
@@ -1878,7 +1891,7 @@ __CHARMM_ONLY##IF STRINGM
      &   string_inds, k, ibg, ibg+i-1, 3*k, 0d0, 1, ie, title, 1, ifile,&
      &   .false., .false., stringatoms(1:20), .false., r3(:,1))
 #elif defined(__DMOL)
-       call dcd_write(ifile,r3,.false.,FREEATOMS=string_inds(1:k))
+       call dcd_write_frame(ifile,r3,.false.,FREEATOMS=string_inds(1:k))
 #endif
        enddo
 !
@@ -1914,20 +1927,25 @@ __CHARMM_ONLY##IF STRINGM
 !
       __IMPNONE
       character(len=15) :: whoami
-      character(len=80) :: title(maxtit)
-      float :: r(natom,3)
-      real*4 :: trash4(natom) ! scratch array for ugly routine
-      float :: trash8(natom) ! scratch array for ugly routine
-      int :: stringatoms(natom), string_inds(natom), i, j, k,       &
-     &           ind, ifile
+      float, pointer :: r3(:,:)
+      int, pointer :: stringatoms(:), string_inds(:)
+      int :: i, j, k, ind, ifile
       int, optional :: col
       int :: c, ierror, stat(MPI_STATUS_SIZE)
       int :: rtype=MPI_DOUBLE_PRECISION
-! some dummy vars for coordinate read
+!
+#ifdef __CHARMM
+      character(len=80) :: title(maxtit)
+      real*4 :: trash4(natom) ! scratch array for ugly routine
+      float :: trash8(natom) ! scratch array for ugly routine
+!     some dummy vars for coordinate read
       int :: nfile, istep, istats, ndof, begin_, stop_,             &
      &           skip_, nsavv_, satoms, ntitle
       float :: delta
       bool :: qdim4, qcg
+#else
+      int :: natom
+#endif
 !
       data whoami /' FTSM_READ_DCD>'/
 !
@@ -1938,20 +1956,23 @@ __CHARMM_ONLY##IF STRINGM
        return
       endif
 !
-      r=0d0; stringatoms=0
+#ifndef __CHARMM
+ natom=__NATOM
+#endif
+!
+      allocate(r3(natom,3))
+      allocate(stringatoms(natom), string_inds(natom))
+!
+      r3=0d0; stringatoms=0
 !
       stringatoms(iatom_f)=1
       if (qdiffrot) stringatoms(iatom_o)=1
       k=0
-      begin_=1
-      skip_=1
-      stop_=nstring
 !
       do i = 1, natom
        if (stringatoms(i).gt.0) then ; k=k+1 ; string_inds(k)=i ; endif ! need this array for dcd reader below
       enddo
 !
-      ntitle=0
       if (ME_STRNG.eq.0) then
        istats=1
        qcg=.false.
@@ -1960,13 +1981,19 @@ __CHARMM_ONLY##IF STRINGM
 !    call trajectory reader
 !
 #ifdef __CHARMM
-       call readcv(r(:,1), r(:,2), r(:,3),                              &
+       begin_=1
+       skip_=1
+       stop_=nstring
+       ntitle=0
+!
+       call readcv(r3(:,1), r3(:,2), r3(:,3),                              &
      &  trash8, qcg,                                                    & !__CHARMM_ONLY##CHEQ
      &  trash4, natom,                                                  &
      &  stringatoms, satoms, ifile, 1, ifile, nfile,                    &
      &  istep, istats, ndof, delta, begin_, stop_, skip_,               &
      &  nsavv_, 'CORD', 'CORD', title, ntitle, qdim4, trash8, .false.)
 #elif defined(__DMOL)
+       call dcd_read_frame(ifile, r3, .true., FREEATOMS=stringatoms)
 #endif
 !
        if (satoms.eq.k) then
@@ -2010,76 +2037,87 @@ __CHARMM_ONLY##IF STRINGM
 !
 !
        do j=1, nforced
-        ind=iatom_f(j);   r_f(j,:,c)=r(ind,:)
+        ind=iatom_f(j);   r_f(j,:,c)=r3(ind,:)
        enddo
 !
        if (qdiffrot) then
         do j=1, norient
-         ind=iatom_o(j);  r_o(j,:,c)=r(ind,:)
+         ind=iatom_o(j);  r_o(j,:,c)=r3(ind,:)
         enddo
        endif
 !
 !    repeat a few times to read entire string
        do i=2, nstring
 #ifdef __CHARMM
-        call readcv(r(:,1), r(:,2), r(:,3),                             &
+        call readcv(r3(:,1), r3(:,2), r3(:,3),                          &
      &   trash8, qcg,                                                   & !__CHARMM_ONLY##CHEQ
      &   trash4, natom,                                                 &
      &   stringatoms, satoms, ifile, 1, ifile, nfile,                   &
      &   istep, istats, ndof, delta, begin_, stop_, skip_,              &
      &   nsavv_, 'CORD', 'CORD', title, ntitle, qdim4, trash8, .false.)
 #elif defined (__DMOL)
+        call dcd_read_frame(ifile, r3, .true., FREEATOMS=stringatoms)
 #endif
 !
-        call MPI_SEND(r,3*natom,rtype,i-1,i-1,                          &
+        call MPI_SEND(r3,3*natom,rtype,i-1,i-1,                          &
      &                      MPI_COMM_STRNG, ierror)
-       enddo
+       enddo ! i
 !
-      else
-       call MPI_RECV(r,3*natom,rtype,0,ME_STRNG,                        &
+      else ! me_string == 0
+!
+       call MPI_RECV(r3,3*natom,rtype,0,ME_STRNG,                        &
      &                MPI_COMM_STRNG,stat,ierror)
 !
        do j=1, nforced
-         ind=iatom_f(j);   r_f(j,:,c)=r(ind,:)
+         ind=iatom_f(j);   r_f(j,:,c)=r3(ind,:)
        enddo
 !
        if (qdiffrot) then
         do j=1, norient
-          ind=iatom_o(j);  r_o(j,:,c)=r(ind,:)
+          ind=iatom_o(j);  r_o(j,:,c)=r3(ind,:)
         enddo
        endif
       endif
 !
       call ftsm_save_com(c) ! compute and remove center of mass
 !
+      if (associated(stringatoms)) deallocate(stringatoms)
+      if (associated(string_inds)) deallocate(string_inds)
+      if (associated(r3)) deallocate(r3)
+!
       end subroutine ftsm_read_dcd
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine ftsm_write_cor(ifile, col)
-      use dimens_fcm 
-      use psf 
-      use coord 
-      __DEP_PARSER 
-      use ctitla 
-      use coorio_mod, only : cwrite
+#ifdef__CHARMM
+      __DEP PSF 
+#endif
+      __DEP_COORDINATES
+      __DEP_SIZE
+      __DEP_PARSER
 !
       __IMPNONE
-      character(len=16 :: whoami
-      character(len=80 :: title(maxtit)
-      float :: r(natom,3)
-      int :: stringatoms(natom), i, j, k, ind
-      int, optional :: col
-      int :: c, ifile
+      character(len=16) :: whoami
+#ifdef __CHARMM
+      character(len=80) :: title(maxtit)
       int :: ntitle
-!
 !     compatibility variables for coordinate reading/writing
       float :: wdum(natom+1)
-!
       int :: icntrl(20)=0, modew
+#else
+      int :: natom
+#endif
+      float, pointer :: r3(:,:)
+      int, pointer :: stringatoms(:) 
+      int :: i, j, k, ind
+      int, optional :: col
+      int :: c, ifile
 !
       data whoami /' FTSM_WRITE_COR>'/
 !
+#ifdef __CHARMM
       ntitle = 1
       title(1) = '* FINITE TEMPERATURE STRING IMAGE FILE'
+#endif
 !
       if (.not. ftsm_check(qorient)) return
       if (present(col)) then ; c=col; else; c=center; endif
@@ -2088,7 +2126,12 @@ __CHARMM_ONLY##IF STRINGM
        return
       endif
 !
-      r=0d0; stringatoms=0
+#ifndef __CHARMM
+ natom=__NATOM
+#endif
+!
+      allocate(r3(natom,3),stringatoms(natom))
+      r3=0d0; stringatoms=0
 !
       stringatoms(iatom_f)=1
       if (qdiffrot) stringatoms(iatom_o)=1
@@ -2096,50 +2139,64 @@ __CHARMM_ONLY##IF STRINGM
 !
       call ftsm_update_overlap_coor(1)
       do j=1, nforced
-       ind=iatom_f(j);   r(ind,:)=r_f(j,:,c)
+       ind=iatom_f(j);   r3(ind,:)=r_f(j,:,c)
       enddo
 !
       if (qdiffrot) then
        do j=1, norient
-        ind=iatom_o(j);   r(ind,:)=r_o(j,:,c)
+        ind=iatom_o(j);   r3(ind,:)=r_o(j,:,c)
        enddo
       endif
 !
+#ifdef __CHARMM
 !    call writer
 !    formatted coor card files
       modew=2
       wdum=0d0
 !
       call cwrite(ifile,title,ntitle,icntrl,                            &
-     &              r(:,1),r(:,2),r(:,3),wdum,                          &
+     &              r3(:,1),r3(:,2),r3(:,3),wdum,                       &
      &              res,atype,ibase,                                    &
      &              nres,natom,stringatoms,modew,0,0,.false.)
+#elif defined (__DMOL)
+      call ch_coor_write(ifile, r3, MASK=stringatoms)
+#endif
+!
+      if (associated(stringatoms)) deallocate(stringatoms)
+      if (associated(r3)) deallocate(r3)
 !
       end subroutine ftsm_write_cor
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine ftsm_read_cor(ifile, col)
-      use dimens_fcm 
-      use psf 
-      use coord 
+!
+      __DEP_SIZE 
+      __DEP_COORDINATES
       __DEP_PARSER 
+!
+#ifdef __CHARMM
+      __DEP_PSF 
       use ctitla 
+#endif
       __DEP_NUMBER 
-      use coorio_mod, only : cread
+      __DEP_COORIO
 !
       __IMPNONE
-      character(len=15 :: whoami
-      character(len=80 :: title(maxtit), cdummy=''
-      float :: r(natom,3)
-      int :: stringatoms(natom), i, j, k, ind
+      character(len=15) :: whoami
+      float, pointer :: r3(:,:)
+      int, pointer :: stringatoms(:) 
+      int :: i, j, k, ind
       int, optional :: col
       int :: c, ifile
 !
+#ifdef __CHARMM
+      character(len=80) :: title(maxtit), cdummy=''
 !     compatibility variables for coordinate reading/writing
       float :: xdum(natom+1), ydum(natom+1), zdum(natom+1),            &
      &          wdum(natom+1)
 !
       int :: icntrl(20), moder, ntitle=0
       int :: ifree(natom)
+#endif
 !
       data whoami /' FTSM_READ_COR>'/
 !
@@ -2150,20 +2207,26 @@ __CHARMM_ONLY##IF STRINGM
        return
       endif
 !
-      r=0d0; stringatoms=0
+#ifndef __CHARMM
+ natom=__NATOM
+#endif
+!
+      allocate(r3(natom,3),stringatoms(natom))
+      r3=0d0; stringatoms=0
 !
       stringatoms(iatom_f)=1
       if (qdiffrot) stringatoms(iatom_o)=1
 !      k=sum(stringatoms)
 !    call reader
 !    formatted coor card files
+#ifdef __CHARMM
       moder=1
       xdum=anum; ydum=anum; zdum=anum; wdum=anum
 !
       call cread(ifile, title, ntitle, icntrl,                          &
-     &        r(1,1), r(1,2), r(1,3),                                   & ! pass by reference ?
-     &        wdum, natom, moder, stringatoms,        &
-     &        0, res, nres, atype, ibase, 1, ifree,                &
+     &        r3(1,1), r3(1,2), r3(1,3),                                & ! pass by reference ?
+     &        wdum, natom, moder, stringatoms,                          &
+     &        0, res, nres, atype, ibase, 1, ifree,                     &
      &        segid, resid, nictot, nseg, .false., .false.,             &
      &        cdummy, 80, 0, .false.)
 !
@@ -2174,17 +2237,24 @@ __CHARMM_ONLY##IF STRINGM
 !     &  IFILE,FREEAT,SEGID,RESID,NICTOT,NSEG,LRSID,LFREE,LYN,MXLEN,
 !     &  MODEL,OFFICIAL)
 !
+#elif defined(__DMOL)
+      call ch_coor_read(ifile, r3, MASK=stringatoms)
+#endif
+!
       do j=1, nforced
-         ind=iatom_f(j);   r_f(j,:,c)=r(ind,:)
+         ind=iatom_f(j);   r_f(j,:,c)=r3(ind,:)
       enddo
 !
       if (qdiffrot) then
         do j=1, norient
-          ind=iatom_o(j);  r_o(j,:,c)=r(ind,:)
+          ind=iatom_o(j);  r_o(j,:,c)=r3(ind,:)
         enddo
       endif
 !
       call ftsm_save_com(c) ! compute remove center of mass
+!
+      if (associated(stringatoms)) deallocate(stringatoms)
+      if (associated(r3)) deallocate(r3)
 !
       end subroutine ftsm_read_cor
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -2476,7 +2546,12 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_MPI 
 !
       __IMPNONE
-      int :: i, k, fmt_len, oldiol
+      int :: i, k, fmt_len
+!
+#ifdef __CHARMM
+      int :: oldiol
+#endif
+!
       character(len=80) :: fmt_real, fmt_int, fmt
       float :: r_com(3)
       float :: u (3,3)= RESHAPE( (/1,0,0,0,1,0,0,0,1/), (/3,3/) ) ! rotation matrix
@@ -2492,8 +2567,11 @@ __CHARMM_ONLY##IF STRINGM
       qprint=qroot.and.ME_STRNG.eq.0
       qgrp=MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.SIZE_LOCAL.gt.1
 !
-!     ad hoc fix for REX
+#ifdef __CHARMM
+!     ad hoc fix for REX :
+!     when string ranks are permuted, it might happen that a new root is silent
       if (qprint) then ; oldiol=iolev; iolev=0; endif
+#endif
 !ccccccccccccccccccccccc begin ccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 ! check if the user has made an initialization call
       if (.not.ftsm_initialized) call ftsm_init()
@@ -2525,7 +2603,7 @@ __CHARMM_ONLY##IF STRINGM
      &                ,rmsd0_all,1,MPI_DOUBLE_PRECISION,0,              &
      &                 MPI_COMM_STRNG, error)
           if (qprint) then ! root writes
-           if (rmsd0_funit.eq.outu) then
+           if (rmsd0_funit.eq.__OSTREAM) then
             fmt='("RMSD0> '//fmt_int(1:5)//' ",'                        &
      &                //fmt_real(1:fmt_len)//real_format//')'
            else
@@ -2537,7 +2615,7 @@ __CHARMM_ONLY##IF STRINGM
            endif
            write(rmsd0_funit,fmt) (rmsd0_all(i),i=1,nstring)
 !
-           if (rmsd0_funit.ne.outu) then
+           if (rmsd0_funit.ne.__OSTREAM) then
             __CLOSE_FILE(rmsd0_funit, 'KEEP', error)
            endif
           endif ! qprint
@@ -2548,7 +2626,7 @@ __CHARMM_ONLY##IF STRINGM
        if (qprint) then
         if (repa_initialized) then ! proceed only if arclength defined
 !
-         if (s_funit.eq.outu) then
+         if (s_funit.eq.__OSTREAM) then
           fmt='("ARCL> '//fmt_int(1:5)//' ",'                           &
      &                //fmt_real(1:fmt_len)//real_format//')'
          else
@@ -2561,7 +2639,7 @@ __CHARMM_ONLY##IF STRINGM
 !
          write(s_funit, fmt) ds
 !     flush unit: close and reopen later
-         if (s_funit.ne.outu) then
+         if (s_funit.ne.__OSTREAM) then
           __CLOSE_FILE(s_funit, 'KEEP', error)
          endif
         else ! repa
@@ -2588,7 +2666,7 @@ __CHARMM_ONLY##IF STRINGM
 !
          write(s_funit, fmt) curv
 !     flush unit: close and reopen later
-         if (c_funit.ne.outu) then
+         if (c_funit.ne.__OSTREAM) then
           __CLOSE_FILE(c_funit, 'KEEP', error)
          endif
         else
@@ -2602,7 +2680,7 @@ __CHARMM_ONLY##IF STRINGM
 !    compute free energy
        call ftsm_compute_fe_fd()
        if (qprint) then
-         if (fe_funit.eq.outu) then
+         if (fe_funit.eq.__OSTREAM) then
           fmt='("FE> '//fmt_int(1:5)//' ",'                             &
      &                //fmt_real(1:fmt_len)//real_format//')'
          else
@@ -2616,7 +2694,7 @@ __CHARMM_ONLY##IF STRINGM
 !    print
          write(fe_funit, fmt) fe
 !     flush unit: close and reopen later
-         if (fe_funit.ne.outu) then
+         if (fe_funit.ne.__OSTREAM) then
           __CLOSE_FILE(fe_funit, 'KEEP', error)
          endif
        endif ! qprint
@@ -2684,7 +2762,7 @@ __CHARMM_ONLY##IF STRINGM
 !
         fmt='('//fmt_real(1:fmt_len)//real_format//')'
         if (qprint) then
-         if (forces_funit.eq.outu) then
+         if (forces_funit.eq.__OSTREAM) then
           write(forces_funit,'("FORCES> ",I8)') stat_iteration_counter ! % is a MATLAB comment
          else
           forces_funit=-1
@@ -2698,7 +2776,7 @@ __CHARMM_ONLY##IF STRINGM
          write(forces_funit, fmt) fc_all(2,:) ! perpendicular forces
 !
 !     flush unit: close and reopen later
-         if (forces_funit.ne.outu)                                      &
+         if (forces_funit.ne.__OSTREAM)                                      &
      &     __CLOSE_FILE(forces_funit, 'KEEP', error)
         endif ! qprint
         fform='APPEND'
@@ -2706,8 +2784,10 @@ __CHARMM_ONLY##IF STRINGM
 !
       endif ! output_force
 !
+#ifdef __CHARMM
 !     ad hoc fix for REX
       if (qprint) iolev=oldiol
+#endif
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 !    reset force averages -- relevant for f.e.
       num_force_samples=0
@@ -4182,8 +4262,10 @@ __CHARMM_ONLY##IF STRINGM
 !
 !********************************************************************************************
 !     swap restart & traj file info; otherwise restart files will correspond to wrong replica
+!#ifdef __CHARMM
 !        oldiol=iolev
 !        iolev=1 ! so that vinqre works
+!#endif
 !
 #ifndef __DMOL
         nfiles=2

@@ -1,15 +1,18 @@
 module charmmio
  contains
  
- subroutine ch_coor_read(fid,r,wgt)
+ subroutine ch_coor_read(fid,r,wgt,mask)
  use psf
- use parser, only: atoi, numword, adjustleft
+ use parser, only: atoi, itoa, numword, adjustleft
  use output, only: error, warning, message
  __IMPNONE
  character, parameter :: comment(1)=(/'*'/)
  int :: fid
- float :: r(:,:)
+ float :: r(:,:)          ! output coordinate array
+ float :: rtemp(size(r,1),size(r,2))  ! temporary coordinate array
  float, optional :: wgt(:)
+ int, optional :: mask(:)
+ float :: wtemp(size(r,1))        ! temporary weight array
  character(len=12), parameter :: whoami = 'CH_COOR_READ'
  character(len=200) :: cmdline
  character(len=8) :: keyword
@@ -22,17 +25,30 @@ module charmmio
  character(len=8) :: aname, resname, segid, resid
  bool :: flags(atoms%last)
  bool :: found=.false.
- bool :: qw
+ bool :: qw, qm
  float :: w
 !
  natom=size(r,2)
  flags=.false.
+! keep old coordinates in case new are undefined:
+ rtemp=r
 !
  qw=present(wgt)
+ qm=present(mask)
 !
  if (qw) then 
   if (size(wgt).ne.natom) then 
-    call error(whoami, 'INCONSISTENT SIZE OF WEIGHT ARRAY',-1)
+   call warning(whoami, 'INCONSISTENT SIZE OF WEIGHT ARRAY',-1)
+   return
+  else
+   wtemp=wgt
+  endif
+ endif
+!
+ if (qm) then 
+  if (size(mask).ne.natom) then 
+   call warning(whoami, 'INCONSISTENT SIZE OF SELECTION ARRAY',-1)
+   return
   endif
  endif
 !
@@ -43,7 +59,7 @@ module charmmio
    if (any(comment.eq.cmdline(1:1))) cycle
    exit
   else
-   call error(whoami, 'UNEXPECTED END OF FILE',-1)
+   call warning(whoami, 'UNEXPECTED END OF FILE',-1)
    return
   endif
  enddo
@@ -59,8 +75,8 @@ module charmmio
    if (keyword.eq.'EXT') then
     fext=.true.
    else
-    call error(whoami, 'UNRECOGNIZED STRING IN COORDINATE FILE',0)
-    call error(whoami, cmdline,-1)
+    call warning(whoami, 'UNRECOGNIZED STRING IN COORDINATE FILE.',0)
+    call warning(whoami, cmdline,-1)
     return
    endif
   endif
@@ -71,14 +87,14 @@ module charmmio
    fmt='(I5,5X,2(1X,A4),3F10.5,1X,A4,1X,A4,F10.5)'
   endif
  else ! eof
-  call error(whoami, 'UNEXPECTED END OF FILE. SOME COORDINATES UNDEFINED',0)
+  call warning(whoami, 'UNEXPECTED END OF FILE. SOME COORDINATES MAY BE UNDEFINED.',0)
   return
  endif
 !
  if (n.gt.-1) then ! number of atoms not specified in file
   read(fid,'(A)',IOSTAT=ioerr) cmdline 
   if (ioerr.ne.0) then
-   call error(whoami, 'UNEXPECTED END OF FILE. SOME COORDINATES UNDEFINED',0)
+   call warning(whoami, 'UNEXPECTED END OF FILE. SOME COORDINATES MAY BE UNDEFINED.',0)
    return
   endif
  endif
@@ -95,7 +111,173 @@ module charmmio
 ! match atom coordinate entry with structure
   if (atomid.lt.1) then
    call warning(whoami, cmdline(1:len_trim(cmdline)),0)
-   call warning(whoami, 'NEGATIVE ATOM ID READ. ABORT. SOME COORDINATES UNDEFINED',0)
+   call warning(whoami, 'NEGATIVE ATOM ID READ. ABORT. SOME COORDINATES MAY BE UNDEFINED.',0)
+  elseif (natom.lt.atomid) then
+   call warning(whoami, 'COORDINATE ARRAY HAS INCORRECT DIMENSIONS. ABORT.',-1)
+   return
+  endif
+! find index
+  found=.false.
+  do j=atomid, atoms%last
+   if (atoms%atomid(j).eq.atomid) then
+    found=.true.
+    exit
+   endif
+  enddo
+  if (.not.found) then
+   do j=atomid-1, 1
+    if (atoms%atomid(j).eq.atomid) then
+     found=.true.
+     exit
+    endif
+   enddo
+  endif
+!
+  if (.not.found.or.((atoms%segid(j).ne.segid).or.(atoms%resid(j).ne.resid).or.&
+&         (atoms%resname(j).ne.resname).or.(atoms%aname(j).ne.aname))) then
+   call warning(whoami, cmdline(1:len_trim(cmdline)),0)
+   call warning(whoami, 'CANNOT FIND CORRESPONDING ENTRY IN STRUCTURE FILE. SKIPPING LINE.',0)
+  else
+   rtemp(:,j)=(/x,y,z/);
+   wtemp(j)=w; ! main weight array
+   flags(j)=.true.
+  endif
+!
+  i=i+1 ! increment atom count
+  if (n.gt.-1.and.i.gt.n) exit
+! try to read next line
+  read(fid,'(A)',IOSTAT=ioerr) cmdline 
+  if (ioerr.ne.0) exit
+!
+ enddo ! while(.true.)
+!
+!%%%%%%%%% deal with atom selection, if present %%%%%%%%%%
+ if (qm) then 
+  do j=1,natom
+   if (mask(j).gt.0) then
+    r(:,j)=rtemp(:,j)
+    if (qw) wgt(j)=wtemp(j)
+   else
+    flags(j)=.true. ! set the flags corresponding to unneeded atoms to true
+   endif
+  enddo
+ else ! no mask	
+  r=rtemp
+  if (qw) wgt=wtemp
+ endif
+!
+ if (n.eq.-1) n=i-1
+ if (n.ne.atoms%last) call warning(whoami, 'NUMBER OF ATOMS IN COORDINATE FILE INCONSISTENT WITH STRUCTURE.',0)
+ if (.not.all(flags)) call warning(whoami, 'SOME COORDINATES WERE MISSING.',0)
+!
+ call message(whoami, 'Coordinate file read.')
+!
+ end subroutine ch_coor_read
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+! atom selection spesified as an array of atomid's 
+ subroutine ch_coor_read_selection(fid,r,wgt,selection)
+ use psf
+ use parser, only: atoi, itoa, numword, adjustleft
+ use output, only: error, warning, message
+ __IMPNONE
+ character, parameter :: comment(1)=(/'*'/)
+ int :: fid
+ float :: r(:,:)          ! output coordinate array
+ float :: rtemp(size(r,1),size(r,2))  ! temporary coordinate array
+ float, optional :: wgt(:)
+ int, optional :: selection(:)
+ float :: wtemp(size(r,1))        ! temporary weight array
+ character(len=22), parameter :: whoami = 'CH_COOR_READ_SELECTION'
+ character(len=200) :: cmdline
+ character(len=8) :: keyword
+ int :: n=-1
+ int :: natom
+ bool :: fext=.false.
+ character(len=100) :: fmt
+ int :: atomid, i, ioerr, j, k
+ float :: x,y,z
+ character(len=8) :: aname, resname, segid, resid
+ int :: invmap(atoms%last)
+ bool :: found=.false.
+ bool :: qw
+ float :: w
+!
+ natom=size(r,2)
+ invmap=-1
+! keep old coordinates in case new are undefined:
+ rtemp=r
+!
+ qw=present(wgt)
+!
+ if (qw) then 
+  if (size(wgt).ne.natom) then 
+   call warning(whoami, 'INCONSISTENT SIZE OF WEIGHT ARRAY',-1)
+   wtemp=0d0
+  else
+   wtemp=wgt
+  endif
+ endif
+!
+! remove comments at the beginning, if any
+ do while (.true.)
+  read(fid,'(A)',IOSTAT=ioerr) cmdline
+  if (ioerr.eq.0) then 
+   if (any(comment.eq.cmdline(1:1))) cycle
+   exit
+  else
+   call warning(whoami, 'UNEXPECTED END OF FILE',-1)
+   return
+  endif
+ enddo
+!
+ if (ioerr.eq.0) then
+! guess whether the number of atoms is present
+  if ((numword(cmdline)).eq.1) then 
+   read(cmdline,*) n
+   if (n.gt.100000) fext=.true.
+  elseif ((numword(cmdline)).eq.2) then 
+   read(cmdline,*) n, keyword
+   call adjustleft(keyword)
+   if (keyword.eq.'EXT') then
+    fext=.true.
+   else
+    call warning(whoami, 'UNRECOGNIZED STRING IN COORDINATE FILE.',0)
+    call warning(whoami, cmdline,-1)
+    return
+   endif
+  endif
+!
+  if (fext) then
+   fmt='(I10,10X,2(2X,A8),3F20.10,2X,A8,2X,A8,F20.10)'
+  else
+   fmt='(I5,5X,2(1X,A4),3F10.5,1X,A4,1X,A4,F10.5)'
+  endif
+ else ! eof
+  call error(whoami, 'UNEXPECTED END OF FILE. SOME COORDINATES MAY BE UNDEFINED.',0)
+  return
+ endif
+!
+ if (n.gt.-1) then ! number of atoms not specified in file
+  read(fid,'(A)',IOSTAT=ioerr) cmdline 
+  if (ioerr.ne.0) then
+   call error(whoami, 'UNEXPECTED END OF FILE. SOME COORDINATES MAY BE UNDEFINED.',0)
+   return
+  endif
+ endif
+!
+ i=1
+ do while (.true.)
+! process command line
+  read(cmdline,fmt) atomid, resname, aname, x, y, z, segid, resid, w ! ignoring residue number
+  call adjustleft(cmdline)
+  call adjustleft(segid)
+  call adjustleft(resid)
+  call adjustleft(resname)
+  call adjustleft(aname)
+! match atom coordinate entry with structure
+  if (atomid.lt.1) then
+   call warning(whoami, cmdline(1:len_trim(cmdline)),0)
+   call warning(whoami, 'NEGATIVE ATOM ID READ. ABORT. SOME COORDINATES MAY BE UNDEFINED.',0)
   elseif (natom.lt.atomid) then
    call error(whoami, 'COORDINATE ARRAY HAS INCORRECT DIMENSIONS. ABORT.',-1)
    return
@@ -122,9 +304,9 @@ module charmmio
    call warning(whoami, cmdline(1:len_trim(cmdline)),0)
    call warning(whoami, 'CANNOT FIND CORRESPONDING ENTRY IN STRUCTURE FILE. SKIPPING LINE.',0)
   else
-   r(:,j)=(/x,y,z/);
-   if (qw) wgt(j)=w; ! main weight array
-   flags(atomid)=.true.
+   rtemp(:,j)=(/x,y,z/);
+   wtemp(j)=w; ! main weight array
+   invmap(atomid)=j ! "inverse" map between atom IDs and psf indices
   endif
 !
   i=i+1 ! increment atom count
@@ -135,39 +317,77 @@ module charmmio
 !
  enddo ! while(.true.)
 !
- if (n.eq.-1) n=i-1
- if (n.ne.atoms%last) call warning(whoami, 'NUMBER OF ATOMS IN COORDINATE FILE INCONSISTENT WITH STRUCTURE.',0)
- if (.not.all(flags)) call warning(whoami, 'SOME COORDINATES WERE MISSING.',0)
+!%%%%%%%%% deal with atom selection, if present %%%%%%%%%%
+ found=.true.
+ if (present(selection)) then 
+  do j=1, size(selection)
+   k=selection(j)
+   if (k.gt.0.and.k.le.atoms%last) then
+    k=invmap(k) ! index in psf
+    if (k.gt.0.and.k.le.atoms%last) then
+     r(:,k)=rtemp(:,k)
+     if (qw) wgt(k)=wtemp(k)
+    else
+     call warning(whoami, 'NO COORDINATES FOR ATOM IN FILE (ATOMID='//itoa(selection(j))//').',0)
+     found=.false.
+    endif ! k
+   else
+    call warning(whoami, 'ATOMID '//itoa(selection(j))//' OUT OF BOUNDS.',0)
+   endif ! k
+  enddo ! j
+!
+  if (.not.found) call warning(whoami, 'SOME COORDINATES WERE MISSING.',0)
+!
+ else ! no selection
+  r=rtemp
+  if (qw) wgt=wtemp
+!
+  if (n.eq.-1) n=i-1
+  if (n.ne.atoms%last) call warning(whoami, 'NUMBER OF ATOMS IN COORDINATE FILE INCONSISTENT WITH STRUCTURE.',0)
+  if (.not.all(invmap.gt.0)) call warning(whoami, 'SOME COORDINATES WERE MISSING.',0)
+ endif
+!
 !
  call message(whoami, 'Coordinate file read.')
 !
- end subroutine ch_coor_read
+ end subroutine ch_coor_read_selection
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
- subroutine ch_coor_write(fid, r, wgt)
+ subroutine ch_coor_write(fid, r, wgt, mask)
  use psf
  use output, only: error, message
  __IMPNONE
  int :: fid
  float :: r(:,:)
  float, optional :: wgt(:)
+ int, optional :: mask(:)
  int :: natom, i, resnum
  character(len=100) :: fmt
  character(len=13), parameter :: whoami = 'CH_COOR_WRITE'
- bool :: qw
+ bool :: qw, qm
  float :: w
 !
  natom=size(r,2)
 !
  qw=present(wgt)
+ qm=present(mask)
 !
  if (qw) then 
   if (size(wgt).ne.natom) then 
-    call error(whoami, 'INCONSISTENT SIZE OF WEIGHT ARRAY',-1)
+   call warning(whoami, 'INCONSISTENT SIZE OF WEIGHT ARRAY',-1)
+   return
+  endif
+ endif
+!
+ if (qm) then 
+  if (size(mask).ne.natom) then 
+   call warning(whoami, 'INCONSISTENT SIZE OF SELECTION ARRAY',-1)
+   return
   endif
  endif
 !
  if (natom.ne.atoms%last) then 
-   call error(whoami, 'COORDINATE ARRAY HAS INCORRECT DIMENSIONS. ABORT.',-1)
+   call warning(whoami, 'COORDINATE ARRAY HAS INCORRECT DIMENSIONS. ABORT.',-1)
+   return
  else
   write(fid,'(A)') '* CHARMM COORDINATE FILE WRITTEN BY DYNAMO PROGRAM'
   if (natom.gt.100000) then
@@ -178,22 +398,38 @@ module charmmio
    write(fid,'(I5)') natom
   endif
 !
-  if (qw) then
-   do i=1, natom
-    read(atoms%resid(i),*) resnum ! set residue numbers to resid (ad-hoc, but we do not store any info on them)
-    write(fid, fmt) atoms%atomid(i), resnum, atoms%resname(i), atoms%aname(i), r(1:3,i), atoms%segid(i), atoms%resid(i), wgt(i)
-   enddo
+  if (qm) then
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+   if (qw) then
+    do i=1, natom
+     if (mask(i).lt.1) cycle
+     read(atoms%resid(i),*) resnum ! set residue numbers to resid (ad-hoc, but we do not store any info on them)
+     write(fid, fmt) atoms%atomid(i), resnum, atoms%resname(i), atoms%aname(i), r(1:3,i), atoms%segid(i), atoms%resid(i), wgt(i)
+    enddo
+   else
+    do i=1, natom
+     if (mask(i).lt.1) cycle
+     read(atoms%resid(i),*) resnum ! set residue numbers to resid (ad-hoc, but we do not store any info on them)
+     write(fid, fmt) atoms%atomid(i), resnum, atoms%resname(i), atoms%aname(i), r(1:3,i), atoms%segid(i), atoms%resid(i), 0d0
+    enddo
+   endif ! qw
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+  else ! qm
+   if (qw) then
+    do i=1, natom
+     read(atoms%resid(i),*) resnum ! set residue numbers to resid (ad-hoc, but we do not store any info on them)
+     write(fid, fmt) atoms%atomid(i), resnum, atoms%resname(i), atoms%aname(i), r(1:3,i), atoms%segid(i), atoms%resid(i), wgt(i)
+    enddo
+   else
+    do i=1, natom
+     read(atoms%resid(i),*) resnum ! set residue numbers to resid (ad-hoc, but we do not store any info on them)
+     write(fid, fmt) atoms%atomid(i), resnum, atoms%resname(i), atoms%aname(i), r(1:3,i), atoms%segid(i), atoms%resid(i), 0d0
+    enddo
+   endif ! qw
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+  endif ! qm
 !
-  else
-!
-   do i=1, natom
-    read(atoms%resid(i),*) resnum ! set residue numbers to resid (ad-hoc, but we do not store any info on them)
-    write(fid, fmt) atoms%atomid(i), resnum, atoms%resname(i), atoms%aname(i), r(1:3,i), atoms%segid(i), atoms%resid(i), 0d0
-   enddo
-!
-  endif
-!
- endif
+ endif ! natom
 !
  call message(whoami, 'Coordinate file writen.')
 !
