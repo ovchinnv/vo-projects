@@ -1,3 +1,9 @@
+/*
+#ifdef __IMPNONE
+#undef __IMPNONE
+#endif
+#define __IMPNONE
+*/
 ! **********************************************************************!
 ! This source file was was generated automatically from a master source !
 ! code tree, which may or may not be distributed with this code, !
@@ -54,7 +60,7 @@
       integer, save, allocatable :: rex_map(:)
       logical, save :: stat_initialized=.false.
 !
-      character(len=80), save :: cv_fname='',forces_fname='', &
+      character(len=200), save :: cv_fname='',forces_fname='', &
      & rmsd0_fname='', dsdt_fname='', s_fname='', fe_fname='', &
      & rmsd_ave_fname='', voronoi_fname='', c_fname='', &
      & work_fname='', wgt_fname='', M_fname='', &

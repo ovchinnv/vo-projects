@@ -1,3 +1,9 @@
+/*
+#ifdef __IMPNONE
+#undef __IMPNONE
+#endif
+#define __IMPNONE
+*/
 ! **********************************************************************!
 ! This source file was was generated automatically from a master source !
 ! code tree, which may or may not be distributed with this code, !
@@ -15,7 +21,6 @@
 ! documentation will be provided in stringm.doc
 !
 !**CHARMM_ONLY**!##IF STRINGM
-!**CHARMM_ONLY**!##IF PARALLEL
 !
       module ftsm ! finite-temperature string method
       use ftsm_var
@@ -63,22 +68,18 @@
 !----------------------------------------------------------------------
 ! command parser for the finite temperature string
 !----------------------------------------------------------------------
-      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
       use parser
       use constants
       use multicom_aux
       use constants
       use mpi
-!
-      use exfunc
-      use dimens_fcm
-      use coord
-      use coordc
+      use system, only : system_getind
+      use system, only : r, rcomp
       use psf
-      use ctitla
-      use select, only : selrpn, nselct
+!
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-     
+      implicit none
 !
       character(len=*) :: comlyn
       integer :: comlen
@@ -90,14 +91,19 @@
       character(len=80) :: fname
       character(len=6) :: whoami
       real*8 :: zval, k, step
-      integer :: ifile, c1, c2, qcor, qdcd, oldiol, flen, &
-     & num_ave_samples, irep, iselct(natom), i, imode, &
+      integer :: ifile, c1, c2, qcor, qdcd, flen, &
+     & num_ave_samples, irep, i, imode, &
      & iorie, irmsd, isele
+!
+      integer :: ierror ! for 1
+      integer :: natom
+      integer, pointer :: iselct(:)
       real*8, pointer :: fd_error(:,:)
 !
       logical :: qroot, qslave, qprint, qcomp
 !
  character(len=80) :: msg___
+!
 !
       data whoami /' FTSM>'/
 !
@@ -142,6 +148,9 @@
       elseif (( keyword(1:4).eq.'DYNA'(1:4) )) then
 
 
+
+
+
 !ccccccccccccccc PARSE OTHER DYNAMICS OPTIONS
 ! reset internal interation counter for ftsm_master
        olditeration=0
@@ -150,7 +159,7 @@
        if (update_on) then
         update_freq=atoi(get_remove_parameter(comlyn, 'UPDF', comlen), 0)
         if (update_freq.le.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ',' UPDATE FREQUENCY INVALID OR UNSPECIFIED. WILL NOT UPDATE.'
+         write(0,*) 'WARNING FROM: ',whoami,': ','UPDATE FREQUENCY INVALID OR UNSPECIFIED. WILL NOT UPDATE.'
          update_on=.false.
         else
          repa_on=(remove_tag(comlyn,'REPA',comlen).gt.0)
@@ -161,7 +170,7 @@
        if (stat_on) then
         stat_freq=atoi(get_remove_parameter(comlyn, 'STAF', comlen), 0)
         if (stat_freq.le.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ',' STATISTICS FREQUENCY INVALID OR UNSPECIFIED.'
+         write(0,*) 'WARNING FROM: ',whoami,': ','STATISTICS FREQUENCY INVALID OR UNSPECIFIED.'
          stat_on=.false.
         endif
        endif ! stat_on
@@ -170,7 +179,7 @@
        if (evolve_ftsm_on) then
         evolve_freq=atoi(get_remove_parameter(comlyn, 'EVOF', comlen), 0)
         if (evolve_freq.le.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ',' EVOLUTION FREQUENCY INVALID OR UNSPECIFIED. WILL NOT EVOLVE.'
+         write(0,*) 'WARNING FROM: ',whoami,': ','EVOLUTION FREQUENCY INVALID OR UNSPECIFIED. WILL NOT EVOLVE.'
          evolve_ftsm_on=.false.
         endif
        endif ! evolve_ftsm_on
@@ -182,7 +191,7 @@
 !
         evolve_expo_on=(remove_tag(comlyn,'EXPO',comlen).gt.0) ! use exponential convolution
         if (evolve_expo_on) then
-         evolve_expo_mem=gtrmf(comlyn,comlen,'MEMO',0.999d0)
+         evolve_expo_mem=atof(get_remove_parameter(comlyn, 'MEMO', comlen), 0.999d0)
         endif
 !
         evolve_aver_on=(remove_tag(comlyn,'AVER',comlen).gt.0) ! r_ref=mean(r_inst)
@@ -190,21 +199,21 @@
          num_evolve_samples=0
          max_evolve_samples=0
 ! setting this large will dampen initial fluctuations
-         if (indx(comlyn, comlen,'NAVE' ,4).gt.0) then
+         if (index(comlyn(1:min(comlen,len(comlyn))),'NAVE'(1:min(4,len('NAVE')))).gt.0) then
           num_ave_samples=atoi(get_remove_parameter(comlyn, 'NAVE', comlen), -1)
           if (num_ave_samples.gt.0) then
             num_evolve_samples=num_ave_samples
           else
-           write(0,*) 'WARNING FROM: ',whoami,': ',' INVALID NUMBER OF SAMPLES SPECIFIED. WILL SET TO ZERO.'
+           write(0,*) 'WARNING FROM: ',whoami,': ','INVALID NUMBER OF SAMPLES SPECIFIED. WILL SET TO ZERO.'
           endif ! num_samples
          endif ! NAVE
 !
-         if (indx(comlyn, comlen,'MAXAVE',6).gt.0) then
+         if (index(comlyn(1:min(comlen,len(comlyn))),'MAXAVE'(1:min(6,len('MAXAVE')))).gt.0) then
           num_ave_samples=atoi(get_remove_parameter(comlyn, 'MAXAVE', comlen), -1)
           if (num_ave_samples.gt.0) then
             max_evolve_samples=num_ave_samples
           else
-  write(0,*) 'WARNING FROM: ',whoami,': ',' INVALID MAXIMUM NUMBER OF SAMPLES SPECIFIED. WILL SET TO ZERO.'
+  write(0,*) 'WARNING FROM: ',whoami,': ','INVALID MAXIMUM NUMBER OF SAMPLES SPECIFIED. WILL SET TO ZERO.'
           endif ! num_samples
          endif ! MAXAVE
         endif ! evolve_aver
@@ -214,20 +223,20 @@
         if (evolve_aver_on) i=i+1
 !
         if (i.gt.1) then
-         write(0,*) 'WARNING FROM: ',whoami,': ',' MORE THAN ONE EVOLUTION SCHEME REQUESTED. WILL USE EXPO.'
+         write(0,*) 'WARNING FROM: ',whoami,': ','MORE THAN ONE EVOLUTION SCHEME REQUESTED. WILL USE EXPO.'
          evolve_expo_on=.true.
          evolve_aver_on=.false.
         endif
 !
         if (i.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ',' EVOLUTION SCHEME UNSPECIFIED. WILL USE EXPO.'
+         write(0,*) 'WARNING FROM: ',whoami,': ','EVOLUTION SCHEME UNSPECIFIED. WILL USE EXPO.'
          evolve_expo_on=.true.
          evolve_aver_on=.false.
         endif
        endif ! evolve_ftsm_on
 !
        if (update_on.and..not.(evolve_ftsm_on.or.repa_on)) then
-        write(0,*) 'WARNING FROM: ',whoami,': ',' EVOLUTION AND REPARAMETRIZATION DISABLED. UPDATE IS OFF.'
+        write(0,*) 'WARNING FROM: ',whoami,': ','EVOLUTION AND REPARAMETRIZATION DISABLED. UPDATE IS OFF.'
         update_on=.false.
        endif
 !
@@ -240,13 +249,13 @@
        repl_x_on=(remove_tag(comlyn,'REX',comlen).gt.0)
        if (repl_x_on) then
         repl_x_freq=atoi(get_remove_parameter(comlyn, 'REXF', comlen), 0)
-        repl_x_temp=gtrmf(comlyn,comlen,'REXT',0d0)
+        repl_x_temp=atof(get_remove_parameter(comlyn, 'REXT', comlen), 0d0)
 !
         if (repl_x_freq.le.0) then
-          write(0,*) 'WARNING FROM: ',whoami,': ',' MUST SPECIFY POSITIVE REXF. REPLICA EXCHANGE IS OFF.'
+          write(0,*) 'WARNING FROM: ',whoami,': ','MUST SPECIFY POSITIVE REXF. REPLICA EXCHANGE IS OFF.'
           repl_x_on=.false.
         elseif (repl_x_temp.le.0) then
-          write(0,*) 'WARNING FROM: ',whoami,': ',' MUST SPECIFY POSITIVE REXT. REPLICA EXCHANGE IS OFF.'
+          write(0,*) 'WARNING FROM: ',whoami,': ','MUST SPECIFY POSITIVE REXT. REPLICA EXCHANGE IS OFF.'
           repl_x_on=.false.
         else
           call ftsm_rex_set_temp(repl_x_temp)
@@ -268,7 +277,7 @@
      & evolve_freq,' ITERATIONS.'; write(0,'(A)') msg___
             WRITE (msg___,'(2A,I7,A)') &
      & whoami, ' THE FIRST', evolve_nskip, &
-     & ' ITERATIONS WILL NOT CONTRIBUTE TO AVERAGES.'; write(0,'(A)') __MSGBUF
+     & ' ITERATIONS WILL NOT CONTRIBUTE TO AVERAGES.'; write(0,'(A)') msg___
             if (evolve_expo_on) then
                write(msg___,671) whoami, whoami, evolve_expo_mem ; write(0,'(A)') msg___
  671 format(A,' STRING EVOLUTION WILL BE OF THE FORM:',/, &
@@ -389,7 +398,7 @@
           write(msg___,7003) whoami, zval, whoami ; write(0,'(A)') msg___
          else
           write(msg___,7004) whoami, zval, whoami ; write(0,'(A)') msg___
-          call wrndie(-1,whoami,'FINITE DERIVATIVE TEST FAILED.')
+          write(0,*) 'WARNING FROM: ',whoami,': ','FINITE DERIVATIVE TEST FAILED.'
          endif ! report test result
  7003 format(/A, ' THE MAXIMUM GRADIENT ERROR IS ',F15.9,', ', &
      & /A, ' WHICH IS SMALLER THAN STEP. TEST PASSED.')
@@ -434,12 +443,12 @@
           write(msg___,7007) whoami, zval, whoami, parallel_tolerance ; write(0,'(A)') msg___
          else
           write(msg___,7008) whoami, zval, whoami, parallel_tolerance ; write(0,'(A)') msg___
-          call wrndie(-1,whoami,'PARALLEL COMPUTATION TEST FAILED.')
+          write(0,*) 'WARNING FROM: ',whoami,': ','PARALLEL COMPUTATION TEST FAILED.'
          endif ! report test result
- 7007 format(/A, ' THE MAXIMUM ERROR IS ',E10.5,', ', &
-     & /A, ' WHICH IS SMALLER THAN ',E10.5,'. TEST PASSED.')
- 7008 format(/A, ' THE MAXIMUM ERROR IS ',E10.5,', ', &
-     & /A, ' WHICH IS NO SMALLER THAN ',E10.5,'. TEST FAILED.')
+ 7007 format(/A, ' THE MAXIMUM ERROR IS ',E12.5,', ', &
+     & /A, ' WHICH IS SMALLER THAN ',E12.5,'. TEST PASSED.')
+ 7008 format(/A, ' THE MAXIMUM ERROR IS ',E12.5,', ', &
+     & /A, ' WHICH IS NO SMALLER THAN ',E12.5,'. TEST FAILED.')
          if (associated(fd_error)) deallocate(fd_error) ! pointer to an array of abs errors
         endif
        endif ! para
@@ -479,8 +488,7 @@
        qdcd=remove_tag(comlyn,'DCD',comlen); qdcd = min(qdcd,1)
 !
        if ((qcor+qdcd) .gt. 1) then
-        write(0,*) 'WARNING FROM: ',whoami,': ',& & ' MORE THAN ONE OUTPUT FORMAT REQUESTED. WILL USE DCD.'
-
+        write(0,*) 'WARNING FROM: ',whoami,': ',' MORE THAN ONE OUTPUT FORMAT REQUESTED. WILL USE DCD.'
         qcor=0; qdcd=1;
        endif
 !
@@ -491,84 +499,96 @@
 ! note: FNAME will be UPPER CASE
 !---------------------------------- OPEN FILE --------------------------------
        if (qroot) then
-        oldiol=iolev
+
+
+
         if (qdcd.eq.0) then ! no dcd -- local write
-         iolev=1 ! open file on all nodes
-         if (flen.GT.0) call __OPEN_FILE(ifile,fname,'FORMATTED','WRITE')
-        elseif (qprint) then
-        if (flen.GT.0) call __OPEN_FILE(ifile,fname,'UNFORMATTED','WRITE') ! open binary fle for DCD
+
+
+
+         if (flen.gt.0) call files_open(ifile, fname, 'FORMATTED', 'WRITE')
+        elseif (qprint) then ! write one dcd file (root does this)
+         if (flen.gt.0) call files_open(ifile, fname, 'UNFORMATTED', 'WRITE') ! open binary fle for DCD
         endif
-        if (ifile .EQ. -1 .and. qdcd.eq.0 ) ifile=outu ! write to output stream
+
+
+
+
+
+        if (ifile.ge.0) then
 !---------------------------- assume file is open, write -------------------------
 ! check for column spec
-        c1=atoi(get_remove_parameter(comlyn, 'COL', comlen), -1)
-        if (c1.gt.0) then
-         if (qprint) write(msg___,6679) whoami, c1
+         c1=atoi(get_remove_parameter(comlyn, 'COL', comlen), -1)
+         if (c1.gt.0) then
+          if (qprint) then ; write(msg___,6679) whoami, c1 ; write(0,'(A)') msg___ ; endif
  6679 format(/A,' WRITING COORDINATES FROM COLUMN ',I3)
-         if (qdcd.gt.0) then ; call ftsm_write_dcd(IFILE=ifile,COL=c1) ;
-         else ; call ftsm_write_cor(ifile,c1) ; endif
-        else
-         if (qprint) write(msg___,6689) whoami
+          if (qdcd.gt.0) then ; call ftsm_write_dcd(IFILE=ifile,COL=c1) ;
+          else ; call ftsm_write_cor(ifile,c1) ; endif
+         else
+          if (qprint) then ; write(msg___,6689) whoami ; write(0,'(A)') msg___ ; endif
  6689 format(/A,' WRITING COORDINATES FROM DEFAULT COLUMN.')
-         if (qdcd.gt.0) then ; call ftsm_write_dcd(IFILE=ifile) ;
-         else ; call ftsm_write_cor(ifile) ; endif
-        endif ! c1
-        if (qdcd.eq.0.or.qprint) then
-         if (flen.gt.0) call __CLOSE_FILE(ifile,'KEEP',error)
-        endif
-        iolev=oldiol
+          if (qdcd.gt.0) then ; call ftsm_write_dcd(IFILE=ifile) ;
+          else ; call ftsm_write_cor(ifile) ; endif
+         endif ! c1
+         if (qdcd.eq.0.or.qprint) then
+          if (flen.gt.0) call files_close(ifile)
+         endif
+
+
+
+        endif ! ifile
        endif ! qroot
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-      elseif (__STRNCMP) then
+      elseif (( keyword(1:4).eq.'READ'(1:4) )) then
 ! can read from both coordinate files and a global dcd file (see above)
 ! can also read a frame in the DCD: specify FRAM for frame;
        qcor=remove_tag(comlyn,'COR',comlen); qcor = min(qcor,1)
        qdcd=remove_tag(comlyn,'DCD',comlen); qdcd = min(qdcd,1)
 !
        if ((qcor+qdcd) .gt. 1) then
-        write(0,*) 'WARNING FROM: ',whoami,': ',& & ' MORE THAN ONE INPUT FORMAT REQUESTED. WILL USE DCD.'
-
+        write(0,*) 'WARNING FROM: ',whoami,': ','MORE THAN ONE INPUT FORMAT REQUESTED. WILL USE DCD.'
         qcor=0; qdcd=1;
        endif
 !
 ! prepare file
        ifile=atoi(get_remove_parameter(comlyn, 'UNIT', comlen), -1)
-       CALL GTRMWD(COMLYN,COMLEN,'NAME',4,FNAME,80,FLEN)
+       FNAME=get_remove_parameter(COMLYN,'NAME',COMLEN); FLEN=len_trim(FNAME)
 ! note: flen will be UPPER CASE
 ! check for column spec (which coordinate set to read into)
        c1=atoi(get_remove_parameter(comlyn, 'COL', comlen), 0)
 !cccccccccccccccccccccccccccc OPEN FILE ccccccccccccccccccccccc
        if (qroot) then
-        oldiol=iolev
+
+
+
         if (qdcd.eq.0) then
-         iolev=1 ! open file on all processors
-         if (flen.GT.0) call __OPEN_FILE(ifile,fname,'FORMATTED','READ')
+
+
+
+         if (flen.gt.0) call files_open(ifile, fname, 'FORMATTED', 'READ')
         elseif (qprint) then ! binary dcd file
-         if (flen.GT.0) call __OPEN_FILE(ifile,fname,'UNFORMATTED','READ') ! open binary fle for DCD
-        endif
-        IF(Ifile .EQ. -1 .and. qdcd.eq.0 ) then
-         ifile=istrm ! read from input file
-         call rdtitl(titleb,ntitlb,ifile,0) ! 0 = card format
+         if (flen.gt.0) call files_open(ifile, fname, 'UNFORMATTED', 'READ') ! open binary fle for DCD
         endif
        endif ! qroot
 !cccccccccccccccccc assume file is open, read ccccccccccccccccccc
-       if (c1.gt.0) then ! column spec
-         if (qprint) write(msg___,6699) whoami, c1
+       if (ifile.ge.0) then
+        if (c1.gt.0) then ! column spec
+         if (qprint) then ; write(msg___,6699) whoami, c1 ; write(0,'(A)') msg___ ; endif
  6699 format(A,' READING COORDINATES INTO COLUMN ',I3)
          if (qdcd.gt.0) then ; if (qroot) call ftsm_read_dcd(ifile, c1);
          else; call ftsm_read_cor(ifile,c1) ; endif
        else
-         if (qprint) write(msg___,6709) whoami
+         if (qprint) then ; write(msg___,6709) whoami ; write(0,'(A)') msg___ ; endif
  6709 format(A,' READING COORDINATES INTO DEFAULT COLUMN.')
          if (qdcd.gt.0) then ; if (qroot) call ftsm_read_dcd(ifile);
          else ; call ftsm_read_cor(ifile) ; endif
+        endif ! c1
        endif
 !cccccccccccccccc close file ccccccccccccccccccccccccccccccccccccc
        if (qroot) then
         if (qdcd.eq.0.or.qprint) then
-         if (flen.gt.0) call __CLOSE_FILE(ifile,'KEEP',error)
+         if (flen.gt.0) call files_close(ifile)
         endif ! qdcd
-        iolev=oldiol
        endif ! qroot
 !
 ! broadcast to slaves (although cread routine will send coords to slaves, too)
@@ -583,34 +603,30 @@
         endif
        else
         if (MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.SIZE_LOCAL.gt.1) then
-         call call mpi_bcast(r_f(:,:,c1),3*nforced,MPI_INTEGER8,0,MPI_COMM_LOCAL,ierror) ! forcing coordinates
-         if (qdiffrot) call call mpi_bcast(r_o(:,:,c1),3*norient,MPI_INTEGER8,0,MPI_COMM_LOCAL,ierror) ! send orientation coordinates (only if distinct from forcing)
+         call mpi_bcast(r_f(:,:,c1),3*nforced,MPI_REAL,0,MPI_COMM_LOCAL,ierror) ! forcing coordinates
+         if (qdiffrot) then
+          call mpi_bcast(r_o(:,:,c1),3*norient,MPI_REAL,0,MPI_COMM_LOCAL,ierror) ! send orientation coordinates (only if distinct from forcing)
+         endif
         endif
        endif
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-      elseif (__STRNCMP) then ! swap two columns
+      elseif (( keyword(1:4).eq.'SWAP'(1:4) )) then ! swap two columns
 ! read column spec
-        klen=len(keyword)
-        call __NEXTA
-        c1=atoi(keyword(1:strl))
-        call __NEXTA
-        c2=atoi(keyword(1:strl))
-        if (qprint) write(msg___,6729) whoami, c1, c2
+        c1=atoi(pop_string(comlyn,comlen)) ; comlen=len_trim(comlyn)
+        c2=atoi(pop_string(comlyn,comlen)) ; comlen=len_trim(comlyn)
+        if (qprint) then ; write(msg___,6729) whoami, c1, c2 ; write(0,'(A)') msg___ ; endif
  6729 format(/A,' WILL SWAP COLUMNS ',I3,' AND ',I3,' ')
         call ftsm_swap(c1, c2)
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-      elseif (__STRNCMP) then ! copy form c1 to c2
+      elseif (( keyword(1:4).eq.'COPY'(1:4) )) then ! copy form c1 to c2
 ! read column spec
-        klen=len(keyword)
-        call __NEXTA
-        c1=atoi(keyword(1:strl))
-        call __NEXTA
-        c2=atoi(keyword(1:strl))
-        if (qprint) write(msg___,6739) whoami, c1, c2
+        c1=atoi(pop_string(comlyn,comlen)) ; comlen=len_trim(comlyn)
+        c2=atoi(pop_string(comlyn,comlen)) ; comlen=len_trim(comlyn)
+        if (qprint) then ; write(msg___,6739) whoami, c1, c2 ; write(0,'(A)') msg___ ; endif
  6739 format(/A,' WILL COPY COLUMN ',I3,' TO ',I3,' ')
         call ftsm_copy(c1,c2)
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-      elseif (__STRNCMP) then ! modify k, etc
+      elseif (( keyword(1:4).eq.'SET '(1:4) )) then ! modify k, etc
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
         iorie=remove_tag(comlyn,'ORIE',comlen)
         irmsd=remove_tag(comlyn,'RMSD',comlen)
@@ -618,27 +634,28 @@
         if (iorie.gt.0) then
 ! process orientation atom selection
 ! determine whether a selection keyword follows orie
-         isele=indx(comlyn, comlen, 'SELE' ,4)
+         isele=index(comlyn(1:min(comlen,len(comlyn))),'SELE'(1:min(4,len('SELE'))))
          if (isele.ge.iorie) then
 !
-          iselct=0
-          IMODE=0
-          CALL SELRPN(COMLYN,COMLEN,iselct,NATOM,1,IMODE, &
-     & .FALSE.,1,' ',0,RESID,RES,IBASE,SEGID,NICTOT,NSEG, &
-     & .TRUE.,X,Y,Z,.TRUE.,1,WMAIN)
-          IF(IMODE.NE.0) THEN
-           CALL WRNDIE(0,whoami,'ORIENTATION ATOMS SELECTION ERROR')
-           RETURN
-          ENDIF
-!
-          norient=count( iselct(1:natom).gt.0 )
+          i=index(comlyn(isele:comlen),' END') ! location of selection termination
+          i=i-1+isele ! index into comlyn starting from 1
+          msg___=comlyn(isele:i) ! part of string that begins with the selection and ends before ' END'
+          keyword=pop_string(msg___) ! remove first word (which we know is 'SELE*') from msg___
+! process selection:
+          nullify(iselct)
+          iselct=>system_getind(msg___)
+          if (associated(iselct)) then ; norient=size(iselct) ; else ; norient=0 ; endif
+! remove selection string from command line:
+          msg___=comlyn(i:comlen) ! command line starting with 'END' (see above)
+          keyword=pop_string(msg___) ! remove 'END*' e.g. 'ENDING' is ok too
+          comlyn(isele:isele)=' ';
+          comlyn(isele+1:)=msg___ ! selection has been removed from command
+          comlen=len_trim(comlyn)
 !
 ! currently we require at least three atoms for orientation
 !
           if (norient.lt.3) then
-           write(0,*) 'WARNING FROM: ',whoami,': ',& & ' FEWER THAN THREE ATOMS SELECTED FOR ORIENTATION.'/*          &*/ & ' ABORT.'
-
-
+           write(0,*) 'WARNING FROM: ',whoami,': ',' FEWER THAN THREE ATOMS SELECTED FOR ORIENTATION. ABORT.'
            return
           endif
 !
@@ -656,13 +673,11 @@
 ! build index array
           norient=0
 !
-          do i=1,natom
-           if (iselct(i).gt.0) then
-            norient=norient+1
-            iatom_o(norient)=i
-           endif
-          enddo
+          iatom_o=iselct
+          if (associated(iselct)) deallocate(iselct)
+!
 ! determine whether the new orientation set is the same as the existing forcing set
+!
           qdiffrot=.not. ( norient .eq. nforced )
           if (.not.qdiffrot) qdiffrot=.not.(associated(iatom_f))
           if (.not.qdiffrot) qdiffrot=any(iatom_f.ne.iatom_o)
@@ -679,22 +694,20 @@
 !
 ! print summary
           if (qprint) then
-            write(msg___,100) whoami, norient
- 100 format(A,' WILL ORIENT STRUCTURES BASED ON ',i5, &
-     & ' ATOMS')
-            write(msg___,101) whoami
+            write(msg___,100) whoami, norient ; write(0,'(A)') msg___
+ 100 format(A,' WILL ORIENT STRUCTURES BASED ON ',i5,' ATOMS')
+            write(msg___,101) whoami ; ; write(0,'(A)') msg___
  101 format(A,' ORIENTATION WEIGHTS UNIFORM.')
             if (qdiffrot) then
-             write(msg___,102) whoami
+             write(msg___,102) whoami ; write(0,'(A)') msg___
             else
-             write(msg___,103) whoami
+             write(msg___,103) whoami ; write(0,'(A)') msg___
             endif
  102 format (A, ' ORIENTATION AND FORCING ATOMS ARE DIFFERENT')
  103 format (A, ' ORIENTATION AND FORCING ATOMS ARE IDENTICAL')
           endif ! qprint
          else
-          write(0,*) 'WARNING FROM: ',whoami,': ',& & 'ATOM SELECTION MUST BE SPECIFIED AFTER ORIE.'
-
+          write(0,*) 'WARNING FROM: ',whoami,': ',' ATOM SELECTION MUST BE SPECIFIED AFTER ORIE.'
           return
          endif
          call ftsm_define_rtmd_type()
@@ -702,24 +715,26 @@
         elseif (irmsd.gt.0) then
 ! process forcing atom selection
 ! determine whether a selection keyword follows 'rmsd'
-         isele=indx(comlyn, comlen, 'SELE' ,4)
+         isele=index(comlyn(1:min(comlen,len(comlyn))),'SELE'(1:min(4,len('SELE'))))
          if (isele.gt.irmsd) then
 !
-          iselct=0
-          IMODE=0
-          CALL SELRPN(COMLYN,COMLEN,iselct,NATOM,1,IMODE, &
-     & .FALSE.,1,' ',0,RESID,RES,IBASE,SEGID,NICTOT,NSEG, &
-     & .TRUE.,X,Y,Z,.TRUE.,1,WMAIN)
-          IF(IMODE.NE.0) THEN
-           CALL WRNDIE(0,whoami,'RMSD ATOMS SELECTION ERROR')
-           RETURN
-          ENDIF
-!
-          nforced=count( iselct(1:natom).gt.0 )
+          i=index(comlyn(isele:comlen),' END') ! same code as above
+          i=i-1+isele
+          msg___=comlyn(isele:i)
+          keyword=pop_string(msg___)
+! process selection:
+          nullify(iselct)
+          iselct=>system_getind(msg___)
+          if (associated(iselct)) then ; nforced=size(iselct) ; else ; norient=0 ; endif
+! remove selection string from command line:
+          msg___=comlyn(i:comlen)
+          keyword=pop_string(msg___)
+          comlyn(isele:isele)=' '
+          comlyn(isele+1:)=msg___
+          comlen=len_trim(comlyn)
 !
           if (nforced.le.0) then
-           write(0,*) 'WARNING FROM: ',whoami,': ',& & ' NO RMSD ATOMS SELECTED. ABORT.'
-
+           write(0,*) 'WARNING FROM: ',whoami,': ','NO RMSD ATOMS SELECTED. ABORT.'
            return
           endif
 !
@@ -736,13 +751,11 @@
 ! build index array
           nforced=0
 !
-          do i=1,natom
-           if (iselct(i).gt.0) then
-            nforced=nforced+1
-            iatom_f(nforced)=i
-           endif
-          enddo
+          iatom_f=iselct
+          if (associated(iselct)) deallocate(iselct)
+!
 ! determine whether the new orientation set is the same as the existing forcing set
+!
           qdiffrot=.not. ( norient .eq. nforced )
           if (.not.qdiffrot) qdiffrot=.not.(associated(iatom_o))
           if (.not.qdiffrot) qdiffrot=any(iatom_f.ne.iatom_o)
@@ -755,20 +768,19 @@
           endif
 ! print summary
           if (qprint) then
-            write(msg___,104) whoami, nforced
+            write(msg___,104) whoami, nforced ; write(0,'(A)') msg___
  104 format(A,' WILL APPLY FORCES TO ',i5, &
      & ' ATOMS')
-            write(msg___,105) whoami
+            write(msg___,105) whoami ; write(0,'(A)') msg___
  105 format(A,' FORCING WEIGHTS UNIFORM.')
             if (qdiffrot) then
-             write(msg___,102) whoami
+             write(msg___,102) whoami ; write(0,'(A)') msg___
             else
-             write(msg___,103) whoami
+             write(msg___,103) whoami ;write(0,'(A)') msg___
             endif
           endif ! qprint
          else
-          write(0,*) 'WARNING FROM: ',whoami,': ',& & 'ATOM SELECTION MUST BE SPECIFIED AFTER RMSD.'
-
+          write(0,*) 'WARNING FROM: ',whoami,': ','ATOM SELECTION MUST BE SPECIFIED AFTER RMSD.'
           return
          endif
 !*************************************************************
@@ -777,10 +789,10 @@
           k=gtrmf(comlyn,comlen,'KPAR',-1d0)
           if (k.ge.0d0) then
            kpara=k
-           if (qprint) write(msg___,6756) whoami, k
+           if (qprint) then ; write(msg___,6756) whoami, k ; write(0,'(A)') msg___ ; endif
  6756 format(A,' SETTING PARALLEL RESTRAINT FORCE CONSTANT TO ',F11.5)
           else
-           if (qprint) write(msg___,6757) whoami, k
+           if (qprint) then ; write(msg___,6757) whoami, k ; write(0,'(A)') msg___ ; endif
  6757 format(A,' INVALID FORCE CONSTANT SPECIFIED: ',F11.5)
           endif
 !*************************************************************
@@ -789,40 +801,41 @@
           k=gtrmf(comlyn,comlen,'KPRP',-1d0)
           if (k.ge.0d0) then
            kperp=k
-           if (qprint) write(msg___,6746) whoami, k
+           if (qprint) then ; write(msg___,6746) whoami, k ; write(0,'(A)') msg___ ; endif
  6746 format(A,' SETTING PERPENDICULAR RESTRAINT FORCE CONSTANT TO ' &
      & ,F11.5)
           else
-           if (qprint) write(msg___,6757) whoami, k
+           if (qprint) then ; write(msg___,6757) whoami, k ; write(0,'(A)') msg___ ; endif
           endif
 !**************************************************************
         elseif (indx(comlyn,comlen,'KRMS',4).gt.0) then
           k=gtrmf(comlyn,comlen,'KRMS',-1d0)
           if (k.ge.0d0) then
            krms=k
-           if (qprint) write(msg___,6752) whoami, k
+           if (qprint) then ; write(msg___,6752) whoami, k ; write(0,'(A)') msg___ ; endif
  6752 format(A,' SETTING RMSD RESTRAINT FORCE CONSTANT TO ' &
      & ,F11.5)
           else
-           if (qprint) write(msg___,6757) whoami, k
+           if (qprint) then ; write(msg___,6757) whoami, k ; write(0,'(A)') msg___ ; endif
           endif
 !***************************************************************
         elseif (remove_tag(comlyn,'MASS',comlen).gt.0) then ! mass-weighting
           keyword=pop_string(comlyn,comlen) ; comlen=len_trim(comlyn)
           klen=len(keyword)
-          call klen=min(max(0,klen),len(keyword));keyword(klen+1:)='';call adjustleft(keyword,(/' ',tab/));klen=len_trim(keyword)
+          klen=min(max(0,klen),len(keyword));keyword(klen+1:)='';call adjustleft(keyword,(/' ',tab/));klen=len_trim(keyword)
+ natom=psf_natom()
           select case(keyword(1:klen))
            case('YES','ON','TRUE','T','yes','on','true','t')
-            if (qprint) write(msg___,8001) whoami, 'SET FROM ATOM MASSES'
+            if (qprint) then ; write(msg___,8001) whoami, 'SET FROM ATOM MASSES' ; write(0,'(A)') msg___ ; endif
             call ftsm_set_weights(amass, natom) ! send masses
            case('NO','OFF','FALSE','F','no','off','false','f')
-            if (qprint) write(msg___,8001) whoami, 'WILL BE UNIFORM'
+            if (qprint) then ; write(msg___,8001) whoami, 'WILL BE UNIFORM' ; write(0,'(A)') msg___ ; endif
             call ftsm_set_weights( (/ (1d0, i=1,natom) /), natom) ! uniform
            case('WMAIN', 'wmain')
-            if (qprint) write(msg___,8001) whoami, 'SET FROM WMAIN ARRAY'
+            if (qprint) then ; write(msg___,8001) whoami, 'SET FROM WMAIN ARRAY' ; write(0,'(A)') msg___ ; endif
             call ftsm_set_weights(wmain, natom) ! send masses
            case('WCOMP', 'wcomp')
-            if (qprint) write(msg___,8001) whoami, 'SET FROM WCOMP ARRAY'
+            if (qprint) then ; write(msg___,8001) whoami, 'SET FROM WCOMP ARRAY' ; write(0,'(A)') msg___ ; endif
             call ftsm_set_weights(wcomp, natom) ! send masses
            case default
             write(0,*) 'WARNING FROM: ',whoami,': ','UNKNOWN OPTION SPECIFIED'
@@ -832,17 +845,17 @@
         elseif (remove_tag(comlyn,'PROJ',comlen).gt.0) then ! mass-weighting
           keyword=pop_string(comlyn,comlen) ; comlen=len_trim(comlyn)
           klen=len(keyword)
-          call klen=min(max(0,klen),len(keyword));keyword(klen+1:)='';call adjustleft(keyword,(/' ',tab/));klen=len_trim(keyword)
+          klen=min(max(0,klen),len(keyword));keyword(klen+1:)='';call adjustleft(keyword,(/' ',tab/));klen=len_trim(keyword)
           select case(keyword(1:klen))
            case('YES','ON','TRUE','T','yes','on','true','t')
             proj_on=.true.
-            if (qprint) write (msg___,'(2A)') whoami, &
-     & ' WILL RESTRAIN SYSTEM TO PLANE PERPENDICULAR TO PATH.'
+            if (qprint) then ; write (msg___,'(2A)') whoami, &
+     & ' WILL RESTRAIN SYSTEM TO PLANE PERPENDICULAR TO PATH.' ; write(0,'(A)') msg___ ; endif
            case('NO','OFF','FALSE','F','no','off','false','f')
             proj_on=.false.
-            if (qprint) write (msg___,'(2A)') whoami, &
+            if (qprint) then ; write (msg___,'(2A)') whoami, &
      & ' WILL RESTRAIN SYSTEM TO PATH IMAGE.'//                         &
-     & ' (FE/MFPT CANNOT BE COMPUTED).'
+     & ' (FE/MFPT CANNOT BE COMPUTED).' ; write(0,'(A)') msg___ ; endif
            case default
             write(0,*) 'WARNING FROM: ',whoami,': ','UNKNOWN OPTION SPECIFIED'
           end select
@@ -852,10 +865,10 @@
 ! check replica spec
           irep=atoi(get_remove_parameter(comlyn, 'REP', comlen), -1)
           if (irep.lt.0.or.irep.ge.nstring) then
-           if (qprint) write(msg___, 6773) whoami, whoami, zval
+           if (qprint) then ; write(msg___, 6773) whoami, whoami, zval ; write(0,'(A)') msg___ ; endif
            dpar0=zval
           else
-           if (qprint) write(msg___,6774) whoami, irep, zval
+           if (qprint) then ; write(msg___,6774) whoami, irep, zval ; write(0,'(A)') msg___ ; endif
            if (mestring.eq.irep) dpar0=zval ! note: permitting any value
           endif ! irep
  6773 format(A,' REPLICA NUMBER INVALID OR UNSPECIFIED.', &
@@ -870,27 +883,27 @@
 ! check replica spec
           irep=atoi(get_remove_parameter(comlyn, 'REP', comlen), -1)
           if (irep.lt.0.or.irep.ge.nstring) then
-           if (qprint) write(msg___, 6776) whoami, whoami, zval
+           if (qprint) then ; write(msg___, 6776) whoami, whoami, zval ; write(0,'(A)') msg___ ; endif
            dperp0=zval
           else
-           if (qprint) write(msg___,6775) whoami, irep, zval
+           if (qprint) then ; write(msg___,6775) whoami, irep, zval ; write(0,'(A)') msg___ ; endif
            if (mestring.eq.irep) dperp0=zval ! note: permitting any value
           endif ! irep
  6776 format(A,' REPLICA NUMBER INVALID OR UNSPECIFIED.', &
      & /A,' WILL SET OFFSET DISTANCE FOR PERPENDICULAR RESTRAINT', &
-     & ' TO ',E9.3,' ON ALL REPLICAS.')
+     & ' TO ',E10.3,' ON ALL REPLICAS.')
  6775 format(A,' WILL SET OFFSET DISTANCE FOR PERPENDICULAR RESTRAINT ',&
-     & 'ON REPLICA ',I5,' TO ',E9.3,'.')
+     & 'ON REPLICA ',I5,' TO ',E10.3,'.')
 !********************************************************************
         elseif (indx(comlyn,comlen,'DRMS',4).gt.0) then ! RMS distance between simulation and reference structure
           zval=gtrmf(comlyn, comlen, 'DRMS', -1.0d0)
 ! check replica spec
           irep=atoi(get_remove_parameter(comlyn, 'REP', comlen), -1)
           if (irep.lt.0.or.irep.ge.nstring) then
-           if (qprint) write(msg___, 6777) whoami, whoami, zval
+           if (qprint) then ; write(msg___, 6777) whoami, whoami, zval ; write(0,'(A)') msg___ ; endif
            drms0=zval
           else
-           if (qprint) write(msg___,6778) whoami, irep, zval
+           if (qprint) then ; write(msg___,6778) whoami, irep, zval ; write(0,'(A)') msg___ ; endif
            if (mestring.eq.irep) drms0=zval ! note: permitting any value
           endif ! irep
  6777 format(A,' REPLICA NUMBER INVALID OR UNSPECIFIED.', &
@@ -902,40 +915,39 @@
 !
 ! done with 'SET' parsing
 !cccccccccccccccccccccccccccccccccccc CV WEIGHTS cccccccccccccccccccccccccccccccccccc
-      elseif (__STRNCMP) then ! list forcing and orientation atoms
-       if (qprint) write(msg___,6762) whoami
+      elseif (( keyword(1:4).eq.'LIST'(1:4) )) then ! list forcing and orientation atoms
+       if (qprint) then ; write(msg___,6762) whoami ; write(0,'(A)') msg___ ; endif
  6762 format(/A,' WILL LIST REPLICA ATOMS.')
        call ftsm_list_atoms()
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       else
-            CALL WRNDIE(0, whoami, &
-     & 'UNRECOGNIZED SUBCOMMAND: '//keyword)
+            write(msg___,*)'UNRECOGNIZED SUBCOMMAND: ',keyword;write(0,*) 'WARNING FROM: ',whoami,': ',msg___
       endif
 !
       end subroutine ftsm_parse
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine ftsm_init()
-! use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
+! use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
       use parser
       use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
-      use parallel
       use mpi
 !
-     
-      integer :: error
+      implicit none
+ character(len=80) :: msg___
+      integer :: ierror
       logical :: qroot, qslave
-      character(len=11 :: whoami
+      character(len=11) :: whoami
 !
       data whoami /' FTSM_INIT>'/
 !
 ! do a basic communicator check:
       if (ME_LOCAL.eq.0.and.ME_STRNG.eq.MPI_UNDEFINED) then
-        write(msg___, 111) whoami, ME_GLOBAL, whoami
+        write(msg___, 111) whoami, ME_GLOBAL, whoami ; write(0,'(A)') msg___
  111 FORMAT(A, ' WORLD REPLICA ',I5, ' HAS ZERO GROUP ID', &
      & /,A,' BUT INVALID STRING ID (MAY BE OK).')
       elseif (ME_STRNG.ne.MPI_UNDEFINED.and. &
      & (ME_LOCAL.ne.0.or.MPI_COMM_LOCAL.eq.MPI_COMM_NULL)) then
-        write(msg___, 112) whoami, ME_GLOBAL, whoami
+        write(msg___, 112) whoami, ME_GLOBAL, whoami ; write(0,'(A)') msg___
  112 FORMAT(A, ' WORLD REPLICA ',I5, ' HAS A VALID STRING ID', &
      & /,A,' BUT A NONZERO GROUP ID. ABORTING.')
        return
@@ -948,7 +960,7 @@
        if (qroot) then
         if (ME_STRNG.eq.0) then
           write(msg___,'(2A)') &
-     & whoami, ' FTSM ALREADY INITIALIZED. CALL "DONE" TO CLEAN UP.'
+     & whoami, ' FTSM ALREADY INITIALIZED. CALL "DONE" TO CLEAN UP.' ; write(0,'(A)') msg___;
         endif ! ME_STRNG
        endif ! qroot
        return
@@ -961,17 +973,13 @@
         nstring=SIZE_STRNG
         mestring=ME_STRNG
       endif
-! broadcast string size to all slave nodes
-      call psnd4(nstring, 1)
-      call psnd4(mestring, 1)
-! set envorinment variable
-      call setmsi('NSTRING',nstring)
-      call setmsi('MESTRING',mestring)
+      call mpi_bcast(nstring,1,MPI_INTEGER,0,MPI_COMM_LOCAL,ierror)
+      call mpi_bcast(mestring,1,MPI_INTEGER,0,MPI_COMM_LOCAL,ierror)
 !
       if (qroot) then
         if (ME_STRNG.eq.0) then
           write(msg___,'(2A,I5, A)') &
-     & whoami, ' FOUND ',nstring,' REPLICAS.'
+     & whoami, ' FOUND ',nstring,' REPLICAS.' ; write(0,'(A)') msg___
         endif
       endif
 !
@@ -984,7 +992,6 @@
       if (allocated(curv)) deallocate(curv)
       allocate(fe(nstring), feav(nstring), &
      & ds(nstring-1), curv(nstring-2))
-
       fe=0d0; feav=0d0; avforce=0d0; ds=0d0; curv=0d0
 !
       num_evolve_samples=0
@@ -1016,20 +1023,19 @@
       use parser
       use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
       use mpi
-      character(len=11 :: whoami
+!
+ character(len=80) :: msg___
+!
+      character(len=11) :: whoami
 !
       data whoami /' FTSM_DONE>'/
 !
-      if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.ME_STRNG.eq.0) &
-     & write(msg___,'(2A,I5, A)') whoami, ' CLEANING UP.'
+      if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.ME_STRNG.eq.0) then
+       write(msg___,'(2A,I5, A)') whoami, ' CLEANING UP.' ; write(0,'(A)') msg___
+      endif
 !
       nstring=-1
       mestring=-1
-
-
-
-
-
 !
 ! deallocate arrays
 !
@@ -1080,11 +1086,13 @@
       use parser
       use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
       use mpi
-     
+      implicit none
 !
-      CHARACTER*(*) :: COMLYN
+ character(len=80) :: msg___
+!
+      CHARACTER(LEN=*) :: COMLYN
       INTEGER :: COMLEN
-      character(len=16 :: whoami
+      character(len=16) :: whoami
       logical :: qprint, qroot
 !
       data whoami /' FTSM_REPA_INIT>'/
@@ -1092,7 +1100,7 @@
       qroot=MPI_COMM_STRNG.ne.MPI_COMM_NULL
       qprint=qroot.and.ME_STRNG.eq.0
 !
-      if (qprint) write(msg___,8002) whoami
+      if (qprint) then ; write(msg___,8002) whoami ; write(0,'(A)') msg___ ; endif
       call smcv_repa_init(comlyn, comlen)
 !
  8002 format(/A,' USING SMCV INITIALIZATION ROUTINE')
@@ -1103,12 +1111,14 @@
       use parser
       use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
       use mpi
-      use chutil, only : atomid
+      use psf, only : atoms
 !
-     
-      integer :: j, iatom
-      character(len=8 :: sid, rid, ren, ac
-      character(len=17 :: whoami
+      implicit none
+ character(len=80) :: msg___
+!
+      integer :: j
+      character(len=8) :: sid, rid, ren, ac
+      character(len=17) :: whoami
 !
       data whoami /' FTSM_LIST_ATOMS>'/
 !
@@ -1118,18 +1128,18 @@
 !
        write(msg___,'(A)') '\t ORIENTATION ATOMS:'
         do j=1, norient;
-         call atomid(iatom_o(j), sid, rid, ren, ac)
-         write(msg___,667) '\t',j, iatom, sid, rid, ren, ac
+         sid=atoms%segid(iatom_o(j)); rid=atoms%resid(iatom_o(j)); ren=atoms%resname(iatom_o(j)); ac=atoms%aname(iatom_o(j));
+         write(msg___,667) '\t',j, iatom_o(j), sid, rid, ren, ac
         enddo
 !
         if (qdiffrot) then
          write(msg___,'(A)') '\t FORCING ATOMS'
          do j=1, nforced;
-          call atomid(iatom_f(j), sid, rid, ren, ac)
-          write(msg___,667) '\t',j, iatom, sid, rid, ren, ac
+          sid=atoms%segid(iatom_f(j)); rid=atoms%resid(iatom_f(j)); ren=atoms%resname(iatom_f(j)); ac=atoms%aname(iatom_f(j));
+          write(msg___,667) '\t',j, iatom_f(j), sid, rid, ren, ac ; write(0,'(A)') msg___
          enddo
         else
-        write(msg___,'(A)')'\t FORCING AND ORIENTATION ATOMS ARE THE SAME'
+         write(msg___,'(A)') '\t FORCING AND ORIENTATION ATOMS ARE THE SAME' ; write(0,'(A)') msg___
         endif
       endif ! ME_STRING
 !
@@ -1138,23 +1148,25 @@
       end subroutine ftsm_list_atoms
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine ftsm_set_weights(w,n)
-! use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
+! use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
       use constants
       use parser
       use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
-      use parallel
 !
-     
+      implicit none
       real*8 :: w(n), a
-      character(len=18 :: whoami
+      character(len=18) :: whoami
       integer :: i, j, n
+!
+ character(len=80) :: msg___
 !
       data whoami /' FTSM_SET_WEIGHTS>'/
 !
-      if (ME_STRNG.eq.0.and.ME_LOCAL.eq.0) &
-     & write(msg___,668) &
+      if (ME_STRNG.eq.0.and.ME_LOCAL.eq.0) then
+       write(msg___,668) &
      & whoami,' A CHANGE IN THE ORIENTATION WEIGHTS REQUIRES ', &
-     & whoami,' REDEFINING IMAGES (e.g. USING FILL)'
+     & whoami,' REDEFINING IMAGES (e.g. USING FILL)' ; write(0,'(A)') msg___
+      endif
  668 format(/2A,/2A)
 !
       if (norient.eq.0.and.nforced.eq.0) then
@@ -1176,10 +1188,9 @@
        enddo
 !
        a=sum(orientWeights);
-       if (a.gt.RSMALL) then ; orientWeights=orientWeights/a;
+       if (a.gt.errtol()) then ; orientWeights=orientWeights/a;
        else
-        write(0,*) 'WARNING FROM: ',whoami,': ',& & ' SUM OF ORIENTATION WEIGHTS IS VERY SMALL. ABORT.'
-
+        write(0,*) 'WARNING FROM: ',whoami,': ','SUM OF ORIENTATION WEIGHTS IS VERY SMALL. ABORT.'
         return
        endif
 !
@@ -1199,10 +1210,9 @@
        enddo
 !
        a=sum(forcedWeights);
-       if (a.gt.RSMALL) then ; forcedWeights=forcedWeights/a;
+       if (a.gt.errtol()) then ; forcedWeights=forcedWeights/a;
        else
-        write(0,*) 'WARNING FROM: ',whoami,': ',& & ' SUM OF FORCING WEIGHTS IS VERY SMALL. ABORT.'
-
+        write(0,*) 'WARNING FROM: ',whoami,': ','SUM OF FORCING WEIGHTS IS VERY SMALL. ABORT.'
         return
        endif
 !
@@ -1212,11 +1222,11 @@
 !
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine ftsm_swap(c1,c2)
-! use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
-     
+! use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
+      implicit none
       integer :: c1, c2
       real*8 :: com(3)
-      character(len=11 :: whoami
+      character(len=11) :: whoami
       integer :: i,j
 !
       data whoami /' FTSM_SWAP>'/
@@ -1247,9 +1257,9 @@
       subroutine ftsm_copy(c1,c2)
       use constants
 !
-     
+      implicit none
       integer :: c1, c2
-      character(len=11 :: whoami
+      character(len=11) :: whoami
       integer :: i,j
 !
       data whoami /' FTSM_COPY>'/
@@ -1273,10 +1283,10 @@
       use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
       use mpi
 !
-     
+      implicit none
 !
       real*8 :: x(:), y(:), z(:)
-      character(len=11 :: whoami
+      character(len=11) :: whoami
       integer :: i,j,n
       logical :: qroot, qslave
       real*8, pointer, dimension(:,:) :: rl, rc, rr
@@ -1292,8 +1302,7 @@
       if (.not.ftsm_check(qorient)) return
 !
       if (any(x.eq.anum).or.any(y.eq.anum).or.any(z.eq.anum)) then
-       write(0,*) 'WARNING FROM: ',whoami,': ',& & 'COORDINATE SET HAS UNDEFINED VALUES. NOTHING DONE.'
-
+       write(0,*) 'WARNING FROM: ',whoami,': ','COORDINATE SET HAS UNDEFINED VALUES. NOTHING DONE.'
        return
       else ! if (qroot) then
        do i=1,nforced
@@ -1303,7 +1312,7 @@
          r_f(i,2,center)=y(j)
          r_f(i,3,center)=z(j)
         else
-      write(0,*) 'WARNING FROM: ',whoami,': ','COORDINATE ARRAY BOUNDS EXCEEDED. ABORT.'
+         write(0,*) 'WARNING FROM: ',whoami,': ','COORDINATE ARRAY BOUNDS EXCEEDED. ABORT.'
          return
         endif
        enddo
@@ -1316,7 +1325,7 @@
           r_o(i,2,center)=y(j)
           r_o(i,3,center)=z(j)
          else
-      write(0,*) 'WARNING FROM: ',whoami,': ','COORDINATE ARRAY BOUNDS EXCEEDED. ABORT.'
+          write(0,*) 'WARNING FROM: ',whoami,': ','COORDINATE ARRAY BOUNDS EXCEEDED. ABORT.'
           return
          endif
         enddo
@@ -1346,7 +1355,7 @@
 !
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine ftsm_compute_overlap_ind() ! compute overlap indices in iatom_both
-     
+      implicit none
       integer :: i, j
       integer, allocatable :: temp(:,:)
 !
@@ -1354,8 +1363,7 @@
 !
       if (associated(iatom_both)) deallocate(iatom_both)
       nboth=0
-      if ( .not. ( qorient .and. qdiffrot .and. ftsm_check(qorient))) &
-     & return
+      if ( .not. ( qorient .and. qdiffrot .and. ftsm_check(qorient))) return
 !
       i=1; j=1
       allocate(temp(2,max(nforced, norient)))
@@ -1384,7 +1392,7 @@
       use sm_config, only: sizeofreal
       use mpi
 !
-     
+      implicit none
 !
       integer :: error
       integer(kind=MPI_ADDRESS_KIND) :: lb, extent
@@ -1411,7 +1419,7 @@
       end subroutine ftsm_define_rtmd_type
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       function ftsm_test_grad_fd(x,y,z,h) result(error)
-     
+      implicit none
       real*8 :: x(:), y(:), z(:)
       real*8 :: h
       real*8, pointer :: error(:,:)
@@ -1419,7 +1427,7 @@
       real*8 :: d, ap, am, bp, bm
       real*8 :: s
 !
-      character(len=19 :: whoami
+      character(len=19) :: whoami
       data whoami /' FTSM_TEST_GRAD_FD>'/
 !
       allocate(error(2,3))
@@ -1579,7 +1587,7 @@
       function ftsm_test_parallel(x,y,z) result(error)
       use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
       use mpi
-     
+      implicit none
 !
       real*8 :: x(:), y(:), z(:)
       real*8, pointer :: error(:,:)
@@ -1589,7 +1597,7 @@
       logical :: qpara
       logical :: qgrp
 !
-      character(len=20 :: whoami
+      character(len=20) :: whoami
       data whoami /' FTSM_TEST_PARALLEL>'/
       allocate(error(2,4)) ! first column contains the CV values; then maximum derivative error (x,y,z)
       error(2,:)=0d0; error(1,:)=9999d0
@@ -1599,7 +1607,7 @@
       qgrp=(MPI_COMM_LOCAL.ne.MPI_COMM_NULL) &
      & .and.(SIZE_LOCAL.gt.1)
       if (.not. qgrp) then ! quit if cannot run in parallel
-       call wrndie(whoami,'CANNOT PERFORM TEST ON 1-PROCESSOR GROUPS',0)
+       write(0,*) 'WARNING FROM: ',whoami,': ','CANNOT PERFORM TEST ON 1-PROCESSOR GROUPS'
        return
       endif
 ! save values & force a serial calculation
@@ -1669,38 +1677,33 @@
       end function ftsm_test_parallel
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine ftsm_write_dcd(ifile, col, ibeg, iend)
-      use dimens_fcm
+!
+!
       use psf
-      use coord
+      use system, only : r, rcomp
       use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
-      use parallel
       use parser
-      use ctitla
-!**CHARMM_ONLY**!##IF CVELOCI
-      use cveloci_mod
-!**CHARMM_ONLY**!##ENDIF
+      use charmmio
       use mpi
-      use cvio, only : writcv
 !
 ! will use fixed atom arrays to print only the path atoms
 !
-     
-      character(len=16 :: whoami
-      character(len=80 :: title(maxtit)
-      real*8 :: r(natom,3)
-      integer :: stringatoms(natom), string_inds(natom), i, j, k, ncv
+      implicit none
+      character(len=16) :: whoami
+      integer :: natom
+      real*8, pointer :: r3(:,:) ! coordinates
+      integer, pointer :: stringatoms(:), string_inds(:)
+      integer :: i, j, k
       integer :: ifile
       integer, optional :: col, ibeg, iend
-      integer :: c, ierr, stat(MPI_STATUS_SIZE), ibg, ie, ind
-      integer :: rtype=MPI_DOUBLE_PRECISION, ntitle
+      integer :: c, ierror, stat(MPI_STATUS_SIZE), ibg, ie, ind
+      integer :: rtype=MPI_DOUBLE_PRECISION
       logical :: qroot
 !
       data whoami /' FTSM_WRITE_DCD>'/
 !
       qroot=MPI_COMM_STRNG.ne.MPI_COMM_NULL
 !
-      title(1) = '* FINITE TEMPERATURE STRING IMAGE FILE'
-      ntitle=1
 !
       if (.not. ftsm_check(qorient)) return
       if (present(col)) then ; c=col; else; c=center; endif
@@ -1708,8 +1711,6 @@
        write(0,*) 'WARNING FROM: ',whoami,': ','INVALID COLUMN. ABORT.'
        return
       endif
-!
-      r=0d0; stringatoms=0
 !
       if (present(ibeg)) then ; ibg=ibeg; else; ibg=1; endif
       if (present(iend)) then ; ie=iend; else; ie=nstring; endif
@@ -1719,9 +1720,16 @@
        return
       endif
 !
+      nullify(stringatoms, string_inds, r3)
+!
       if (qroot) then
-
+!
       if (ME_STRNG.eq.0) then
+!
+ natom=psf_natom()
+!
+       allocate(stringatoms(natom), string_inds(natom))
+       stringatoms=0
 !
        stringatoms(iatom_f)=1
        if (qdiffrot) stringatoms(iatom_o)=1
@@ -1729,23 +1737,19 @@
        do i = 1, natom
         if (stringatoms(i).gt.0) then; k=k+1; string_inds(k)=i; endif ! need this array for dcd writer below
        enddo
-       ncv=ncvel ; ncvel=0 !!**CHARMM_ONLY**!##CVELOCI ! exclude constant velocity atoms also
 ! for first frame, output all coordinates: take from instantaneous set
-       r(:,1)=x(1:natom)-rcom(1,c) ! bring all coordinates to the same COM for convenience
-       r(:,2)=y(1:natom)-rcom(2,c)
-       r(:,3)=z(1:natom)-rcom(3,c)
+       allocate(r3(natom,3)) ; r3=0d0
+       r3(:,1)=r(:,1)-rcom(1,c)
+       r3(:,2)=r(:,2)-rcom(2,c)
+       r3(:,3)=r(:,3)-rcom(3,c)
 !
        call ftsm_update_overlap_coor(1)
-       do j=1,nforced;ind=iatom_f(j);r(ind,:)=r_f(j,:,c);enddo
+       do j=1,nforced;ind=iatom_f(j);r3(ind,:)=r_f(j,:,c);enddo
        if (qdiffrot) then
-       do j=1,norient;ind=iatom_o(j);r(ind,:)=r_o(j,:,c);enddo
+       do j=1,norient;ind=iatom_o(j);r3(ind,:)=r_o(j,:,c);enddo
        endif
 ! call trajectory writer
-       call writcv(r(:,1), r(:,2), r(:,3), &
-     & r(:,1), .false., & !!**CHARMM_ONLY**!##CHEQ
-     & natom, &
-     & string_inds, k, ibg, ibg, 3*k, 0d0, 1, ie, title,ntitle,ifile, &
-     & .false., .false., stringatoms(1:20), .false., r(:,1)) ! whew...
+       call dcd_write_frame(ifile,r3,.true.,FREEATOMS=string_inds(1:k))
 !from dynio.src
 ! SUBROUTINE WRITCV(X,Y,Z,
 ! $ CG,QCG, !!**CHARMM_ONLY**!##CHEQ
@@ -1763,65 +1767,54 @@
 !
 ! repeat a few times to write out entire string
        do i=2, nstring
-
         call MPI_RECV(r_f(:,:,dummy),3*nforced,rtype,i-1,i-1, &
-     & MPI_COMM_STRNG,stat,ierr)
+     & MPI_COMM_STRNG,stat,ierror)
         if (qdiffrot.and.qorient) &
      & call MPI_RECV(r_o(:,:,dummy),3*norient,rtype,i-1,i-1, &
-     & MPI_COMM_STRNG,stat,ierr)
+     & MPI_COMM_STRNG,stat,ierror)
 ! extract coordinates
-        do j=1, nforced; ind=iatom_f(j); r(ind,:)=r_f(j,:,dummy); enddo
+        do j=1, nforced; ind=iatom_f(j); r3(ind,:)=r_f(j,:,dummy); enddo
         if (qdiffrot.and.qorient) then
-         do j=1, norient; ind=iatom_o(j); r(ind,:)=r_o(j,:,dummy);enddo
+         do j=1, norient; ind=iatom_o(j); r3(ind,:)=r_o(j,:,dummy);enddo
         endif
 ! write next frame
-        call writcv(r(:,1), r(:,2), r(:,3), &
-     & r(:,1), .false., & !!**CHARMM_ONLY**!##CHEQ
-     & natom, &
-     & string_inds, k, ibg, ibg+i-1, 3*k, 0d0, 1, ie, title, 1, ifile,&
-     & .false., .false., stringatoms(1:20), .false., r(:,1))
+       call dcd_write_frame(ifile,r3,.false.,FREEATOMS=string_inds(1:k))
        enddo
 !
-       ncvel=ncv !!**CHARMM_ONLY**!##CVELOCI
       else
        call MPI_SEND(r_f(:,:,c),3*nforced,rtype,0,ME_STRNG, &
-     & MPI_COMM_STRNG, ierr)
+     & MPI_COMM_STRNG, ierror)
        if (qdiffrot.and.qorient) &
      & call MPI_SEND(r_o(:,:,c),3*norient,rtype,0,ME_STRNG, &
-     & MPI_COMM_STRNG, ierr)
+     & MPI_COMM_STRNG, ierror)
       endif
 !
       endif ! qroot
 !
+      if (associated(stringatoms)) deallocate(stringatoms)
+      if (associated(string_inds)) deallocate(string_inds)
+      if (associated(r3)) deallocate(r3)
+!
       end subroutine ftsm_write_dcd
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine ftsm_read_dcd(ifile, col)
-      use dimens_fcm
       use psf
-      use coord
+      use system, only : r, rcomp
       use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
-      use parallel
       use parser
-      use ctitla
       use mpi
-      use cvio, only : readcv
+      use charmmio
 !
-     
-      character(len=15 :: whoami
-      character(len=80 :: title(maxtit)
-      real*8 :: r(natom,3)
-      real*4 :: trash4(natom) ! scratch array for ugly routine
-      real*8 :: trash8(natom) ! scratch array for ugly routine
-      integer :: stringatoms(natom), string_inds(natom), i, j, k, &
-     & ind, ifile
+      implicit none
+      character(len=15) :: whoami
+      real*8, pointer :: r3(:,:)
+      integer, pointer :: stringatoms(:), string_inds(:)
+      integer :: i, j, k, ind, ifile
       integer, optional :: col
-      integer :: c, ierr, stat(MPI_STATUS_SIZE)
+      integer :: c, ierror, stat(MPI_STATUS_SIZE)
       integer :: rtype=MPI_DOUBLE_PRECISION
-! some dummy vars for coordinate read
-      integer :: nfile, istep, istats, ndof, begin_, stop_, &
-     & skip_, nsavv_, satoms, ntitle
-      real*8 :: delta
-      logical :: qdim4, qcg
+!
+      integer :: natom
 !
       data whoami /' FTSM_READ_DCD>'/
 !
@@ -1832,41 +1825,33 @@
        return
       endif
 !
-      r=0d0; stringatoms=0
+ natom=psf_natom()
+!
+      allocate(r3(natom,3))
+      allocate(stringatoms(natom), string_inds(natom))
+!
+      r3=0d0; stringatoms=0
 !
       stringatoms(iatom_f)=1
       if (qdiffrot) stringatoms(iatom_o)=1
       k=0
-      begin_=1
-      skip_=1
-      stop_=nstring
 !
       do i = 1, natom
        if (stringatoms(i).gt.0) then ; k=k+1 ; string_inds(k)=i ; endif ! need this array for dcd reader below
       enddo
 !
-      ntitle=0
       if (ME_STRNG.eq.0) then
-       istats=1
-       qcg=.false.
-       qdim4=.false.
 !
 ! call trajectory reader
 !
-       call readcv(r(:,1), r(:,2), r(:,3), &
-     & trash8, qcg, & !!**CHARMM_ONLY**!##CHEQ
-     & trash4, natom, &
-     & stringatoms, satoms, ifile, 1, ifile, nfile, &
-     & istep, istats, ndof, delta, begin_, stop_, skip_, &
-     & nsavv_, 'CORD', 'CORD', title, ntitle, qdim4, trash8, .false.)
+       if (associated(stringatoms)) deallocate(stringatoms)
+       call dcd_read_frame(ifile, r3, .true., FREEATOMS=stringatoms)
 !
-       if (satoms.eq.k) then
+       if (size(stringatoms).eq.k) then
         if ( any(stringatoms(1:k).ne.string_inds(1:k)) ) &
-     & write(0,*) 'WARNING FROM: ',whoami,': ',& & ' INVALID STRING ATOM INDICES. BEWARE.'
-
+     & write(0,*) 'WARNING FROM: ',whoami,': ','INVALID STRING ATOM INDICES. BEWARE.'
        else
-        write(0,*) 'WARNING FROM: ',whoami,': ',& & ' INCORRECT NUMBER OF STRING ATOMS. BEWARE.'
-
+        write(0,*) 'WARNING FROM: ',whoami,': ','INCORRECT NUMBER OF STRING ATOMS. BEWARE.'
        endif
 !
 !
@@ -1903,73 +1888,64 @@
 !
 !
        do j=1, nforced
-        ind=iatom_f(j); r_f(j,:,c)=r(ind,:)
+        ind=iatom_f(j); r_f(j,:,c)=r3(ind,:)
        enddo
 !
        if (qdiffrot) then
         do j=1, norient
-         ind=iatom_o(j); r_o(j,:,c)=r(ind,:)
+         ind=iatom_o(j); r_o(j,:,c)=r3(ind,:)
         enddo
        endif
 !
 ! repeat a few times to read entire string
        do i=2, nstring
-        call readcv(r(:,1), r(:,2), r(:,3), &
-     & trash8, qcg, & !!**CHARMM_ONLY**!##CHEQ
-     & trash4, natom, &
-     & stringatoms, satoms, ifile, 1, ifile, nfile, &
-     & istep, istats, ndof, delta, begin_, stop_, skip_, &
-     & nsavv_, 'CORD', 'CORD', title, ntitle, qdim4, trash8, .false.)
+        call dcd_read_frame(ifile, r3, .true., FREEATOMS=stringatoms)
 !
-        call MPI_SEND(r,3*natom,rtype,i-1,i-1, &
-     & MPI_COMM_STRNG, ierr)
-       enddo
+        call MPI_SEND(r3,3*natom,rtype,i-1,i-1, &
+     & MPI_COMM_STRNG, ierror)
+       enddo ! i
 !
-      else
-       call MPI_RECV(r,3*natom,rtype,0,ME_STRNG, &
-     & MPI_COMM_STRNG,stat,ierr)
+      else ! me_string == 0
+!
+       call MPI_RECV(r3,3*natom,rtype,0,ME_STRNG, &
+     & MPI_COMM_STRNG,stat,ierror)
 !
        do j=1, nforced
-         ind=iatom_f(j); r_f(j,:,c)=r(ind,:)
+         ind=iatom_f(j); r_f(j,:,c)=r3(ind,:)
        enddo
 !
        if (qdiffrot) then
         do j=1, norient
-          ind=iatom_o(j); r_o(j,:,c)=r(ind,:)
+          ind=iatom_o(j); r_o(j,:,c)=r3(ind,:)
         enddo
        endif
       endif
 !
       call ftsm_save_com(c) ! compute and remove center of mass
 !
+      if (associated(stringatoms)) deallocate(stringatoms)
+      if (associated(string_inds)) deallocate(string_inds)
+      if (associated(r3)) deallocate(r3)
+!
       end subroutine ftsm_read_dcd
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine ftsm_write_cor(ifile, col)
-      use dimens_fcm
+      use system, only : r, rcomp
       use psf
-      use coord
       use parser
-      use ctitla
-      use coorio_mod, only : cwrite
+      use charmmio
 !
-     
-      character(len=16 :: whoami
-      character(len=80 :: title(maxtit)
-      real*8 :: r(natom,3)
-      integer :: stringatoms(natom), i, j, k, ind
+      implicit none
+      character(len=16) :: whoami
+      integer :: natom
+      real*8, pointer :: r3(:,:)
+      integer, pointer :: stringatoms(:)
+      integer :: i, j, k, ind
       integer, optional :: col
       integer :: c, ifile
-      integer :: ntitle
-!
-! compatibility variables for coordinate reading/writing
-      real*8 :: wdum(natom+1)
-!
-      integer :: icntrl(20)=0, modew
 !
       data whoami /' FTSM_WRITE_COR>'/
 !
-      ntitle = 1
-      title(1) = '* FINITE TEMPERATURE STRING IMAGE FILE'
 !
       if (.not. ftsm_check(qorient)) return
       if (present(col)) then ; c=col; else; c=center; endif
@@ -1978,7 +1954,10 @@
        return
       endif
 !
-      r=0d0; stringatoms=0
+ natom=psf_natom()
+!
+      allocate(r3(natom,3),stringatoms(natom))
+      r3=0d0; stringatoms=0
 !
       stringatoms(iatom_f)=1
       if (qdiffrot) stringatoms(iatom_o)=1
@@ -1986,50 +1965,40 @@
 !
       call ftsm_update_overlap_coor(1)
       do j=1, nforced
-       ind=iatom_f(j); r(ind,:)=r_f(j,:,c)
+       ind=iatom_f(j); r3(ind,:)=r_f(j,:,c)
       enddo
 !
       if (qdiffrot) then
        do j=1, norient
-        ind=iatom_o(j); r(ind,:)=r_o(j,:,c)
+        ind=iatom_o(j); r3(ind,:)=r_o(j,:,c)
        enddo
       endif
 !
-! call writer
-! formatted coor card files
-      modew=2
-      wdum=0d0
+      call ch_coor_write(ifile, r3, MASK=stringatoms)
 !
-      call cwrite(ifile,title,ntitle,icntrl, &
-     & r(:,1),r(:,2),r(:,3),wdum, &
-     & res,atype,ibase, &
-     & nres,natom,stringatoms,modew,0,0,.false.)
+      if (associated(stringatoms)) deallocate(stringatoms)
+      if (associated(r3)) deallocate(r3)
 !
       end subroutine ftsm_write_cor
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine ftsm_read_cor(ifile, col)
-      use dimens_fcm
-      use psf
-      use coord
-      use parser
-      use ctitla
-      use constants
-      use coorio_mod, only : cread
 !
-     
-      character(len=15 :: whoami
-      character(len=80 :: title(maxtit), cdummy=''
-      real*8 :: r(natom,3)
-      integer :: stringatoms(natom), i, j, k, ind
+      use psf
+      use system, only : r, rcomp
+      use parser
+!
+      use constants
+      use charmmio
+!
+      implicit none
+      character(len=15) :: whoami
+      real*8, pointer :: r3(:,:)
+      integer, pointer :: stringatoms(:)
+      integer :: i, j, k, ind
       integer, optional :: col
       integer :: c, ifile
 !
-! compatibility variables for coordinate reading/writing
-      real*8 :: xdum(natom+1), ydum(natom+1), zdum(natom+1), &
-     & wdum(natom+1)
-!
-      integer :: icntrl(20), moder, ntitle=0
-      integer :: ifree(natom)
+      integer :: natom
 !
       data whoami /' FTSM_READ_COR>'/
 !
@@ -2040,41 +2009,32 @@
        return
       endif
 !
-      r=0d0; stringatoms=0
+ natom=psf_natom()
+!
+      allocate(r3(natom,3),stringatoms(natom))
+      r3=0d0; stringatoms=0
 !
       stringatoms(iatom_f)=1
       if (qdiffrot) stringatoms(iatom_o)=1
 ! k=sum(stringatoms)
 ! call reader
 ! formatted coor card files
-      moder=1
-      xdum=anum; ydum=anum; zdum=anum; wdum=anum
-!
-      call cread(ifile, title, ntitle, icntrl, &
-     & r(1,1), r(1,2), r(1,3), & ! pass by reference ?
-     & wdum, natom, moder, stringatoms, &
-     & 0, res, nres, atype, ibase, 1, ifree, &
-     & segid, resid, nictot, nseg, .false., .false., &
-     & cdummy, 80, 0, .false.)
-!
-!
-! from coor.io
-! SUBROUTINE CREAD(IUNIT,TITLE,NTITL,ICNTRL,X,Y,Z,WMAIN,NATOM,
-! & NINPUT,ISLCT,IOFFS,RES,NRES,TYPE,IBASE,
-! & IFILE,FREEAT,SEGID,RESID,NICTOT,NSEG,LRSID,LFREE,LYN,MXLEN,
-! & MODEL,OFFICIAL)
+      call ch_coor_read(ifile, r3, MASK=stringatoms)
 !
       do j=1, nforced
-         ind=iatom_f(j); r_f(j,:,c)=r(ind,:)
+         ind=iatom_f(j); r_f(j,:,c)=r3(ind,:)
       enddo
 !
       if (qdiffrot) then
         do j=1, norient
-          ind=iatom_o(j); r_o(j,:,c)=r(ind,:)
+          ind=iatom_o(j); r_o(j,:,c)=r3(ind,:)
         enddo
       endif
 !
       call ftsm_save_com(c) ! compute remove center of mass
+!
+      if (associated(stringatoms)) deallocate(stringatoms)
+      if (associated(r3)) deallocate(r3)
 !
       end subroutine ftsm_read_cor
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -2082,38 +2042,37 @@
 !
       use ftsm_var
       use ftsm_rex, only: ftsm_rex_read_map
-      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
-      use exfunc
-      use dimens_fcm
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
+      use psf
       use parser
       use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
-      use parallel
       use mpi
 !cccccccccccccccccccccccccccccccccccccccccccccccccc
-     
+      implicit none
 !
-      CHARACTER*(*) COMLYN
-      INTEGER COMLEN
+ character(len=80) :: msg___
 !
-      character(len=80 :: rex_fname_old
+      CHARACTER(LEN=*) :: COMLYN
+      INTEGER :: COMLEN
+!
+      character(len=80) :: rex_fname_old
       integer :: rex_flen_old, oldiol, error
 !
-      character(len=8 keyword
-      character(len=16 whoami
+      character(len=8) :: keyword
+      character(len=16) :: whoami
       data whoami/' FTSM_STAT_INIT>'/
 !
       logical :: qroot, qprint
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       qroot=MPI_COMM_STRNG.ne.MPI_COMM_NULL
       qprint=qroot.and.ME_STRNG.eq.0
-      if (qprint) then; oldiol=iolev; iolev=0; endif
 ! begin
 ! reset iteration counter
 ! did the user specify it?
       stat_iteration_counter=atoi(get_remove_parameter(comlyn, 'COUN', comlen), -1)
       stat_iteration_counter=max(stat_iteration_counter,0)
       if (stat_iteration_counter.gt.0) then
-       if (qprint) write(msg___,639) whoami, stat_iteration_counter
+       if (qprint) then ; write(msg___,639) whoami, stat_iteration_counter ; write(0,'(A)') msg___ ; endif
  639 format(A,' SETTING ITERATION COUNTER TO ',I7)
       endif
 !
@@ -2144,11 +2103,10 @@
 !!!!!!!!!!!!!! RMSD from static structure in comp (zts/fts)
       if (remove_tag(comlyn,'RMSD',comlen).gt.0) then ! request for RMSD
        output_rmsd0=.true.
-       CALL GTRMWA(COMLYN,COMLEN,'RNAM',4,rmsd0_fname,80,rmsd0_flen)
+       rmsd0_fname=get_remove_parameter(COMLYN,'RNAM',COMLEN); rmsd0_flen=len_trim(rmsd0_fname)
        if (rmsd0_flen.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ',& & 'NO RMSD FILE NAME SPECIFIED. WILL WRITE TO STDOUT.'
-
-         rmsd0_funit=outu
+         write(0,*) 'WARNING FROM: ',whoami,': ','NO RMSD FILE NAME SPECIFIED. WILL WRITE TO STDOUT.'
+         rmsd0_funit=fout
        else
          if (remove_tag(comlyn,'RAPP',comlen).gt.0) then ! APPEND?
            rform='APPEND'
@@ -2159,9 +2117,9 @@
 !cccccccccccc print summary
        if (qprint) then
          if (rmsd0_flen.gt.0) then
-          write(msg___,660 ) whoami,rmsd0_fname(1:rmsd0_flen)
+          write(msg___,660 ) whoami,rmsd0_fname(1:rmsd0_flen) ; write(0,'(A)') msg___
          else
-          write(msg___,661 ) whoami
+          write(msg___,661 ) whoami ; write(0,'(A)') msg___
          endif
        endif
  660 format(A,' WILL WRITE STRING RMSD TO FILE ',A)
@@ -2171,11 +2129,10 @@
 !!!!!!!!!!!!!! ARCLENGTH
       if (remove_tag(comlyn,'ARCL',comlen).gt.0) then
         output_arclength=.true.
-        CALL GTRMWA(COMLYN,COMLEN,'ANAM',4,s_fname,80,s_flen)
+        s_fname=get_remove_parameter(COMLYN,'ANAM',COMLEN); s_flen=len_trim(s_fname)
         if (s_flen.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ',& & 'STRING LENGTH FILE NAME NOT SPECIFIED. WILL WRITE TO STDOUT.'
-
-         s_funit=outu
+         write(0,*) 'WARNING FROM: ',whoami,': ','STRING LENGTH FILE NAME NOT SPECIFIED. WILL WRITE TO STDOUT.'
+         s_funit=fout
         else
          if (remove_tag(comlyn,'AAPP',comlen).gt.0) then ! APPEND?
            sform='APPEND'
@@ -2186,9 +2143,9 @@
 !ccccccccccc print summary
         if (qprint) then
          if (s_flen.gt.0) then
-          write(msg___,652) whoami,s_fname(1:s_flen)
+          write(msg___,652) whoami,s_fname(1:s_flen) ; write(0,'(A)') msg___
          else
-          write(msg___,653) whoami
+          write(msg___,653) whoami ; write(0,'(A)') msg___
          endif
         endif
  652 format(A,' WILL WRITE STRING LENGTH TO FILE ',A)
@@ -2198,11 +2155,10 @@
 !!!!!!!!!!!!!! CURVATURE
       if (remove_tag(comlyn,'CURV',comlen).gt.0) then
         output_curvature=.true.
-        CALL GTRMWA(COMLYN,COMLEN,'CVNM',4,c_fname,80,c_flen)
+        c_fname=get_remove_parameter(COMLYN,'CVNM',COMLEN); c_flen=len_trim(c_fname)
         if (c_flen.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ',& & 'CURVATURE FILE NAME NOT SPECIFIED. WILL WRITE TO STDOUT.'
-
-         c_funit=outu
+         write(0,*) 'WARNING FROM: ',whoami,': ','CURVATURE FILE NAME NOT SPECIFIED. WILL WRITE TO STDOUT.'
+         c_funit=fout
         else
          if (remove_tag(comlyn,'CAPP',comlen).gt.0) then ! APPEND?
            cform='APPEND'
@@ -2213,9 +2169,9 @@
 !ccccccccccc print summary
         if (qprint) then
          if (c_flen.gt.0) then
-          write(msg___,6521) whoami,c_fname(1:c_flen)
+          write(msg___,6521) whoami,c_fname(1:c_flen) ; write(0,'(A)') msg___
          else
-          write(msg___,6531) whoami
+          write(msg___,6531) whoami ; write(0,'(A)') msg___
          endif
         endif
  6521 format(A,' WILL WRITE CURVATURE TO FILE ',A)
@@ -2225,11 +2181,10 @@
 !!!!!!!!!!!!!! FREE ENERGY
       if (remove_tag(comlyn,'FREE',comlen).gt.0) then
         output_fe=.true.
-        CALL GTRMWA(COMLYN,COMLEN,'FENM',4,fe_fname,80,fe_flen)
+        fe_fname=get_remove_parameter(COMLYN,'FENM',COMLEN); fe_flen=len_trim(fe_fname)
         if (fe_flen.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ',& & 'NO F.E. FILE NAME SPECIFIED. WILL WRITE TO STDOUT.'
-
-         fe_funit=outu
+         write(0,*) 'WARNING FROM: ',whoami,': ','NO F.E. FILE NAME SPECIFIED. WILL WRITE TO STDOUT.'
+         fe_funit=fout
         else
          if (remove_tag(comlyn,'FAPP',comlen).gt.0) then ! APPEND?
            feform='APPEND'
@@ -2240,9 +2195,9 @@
 !ccccccccccc print summary cccccccccccccccccccccccccccccccccccccc
         if (qprint) then
          if (fe_flen.gt.0) then
-          write(msg___,6520) whoami,fe_fname(1:fe_flen)
+          write(msg___,6520) whoami,fe_fname(1:fe_flen) ; write(0,'(A)') msg___
          else
-          write(msg___,6530) whoami
+          write(msg___,6530) whoami ; write(0,'(A)') msg___
          endif
         endif
  6520 format(A,' WILL WRITE FREE ENERGY TO FILE ',A)
@@ -2252,20 +2207,20 @@
 !cccccccccc process PATH CENTERS output options ccccccccccccccccccccccc
       if (remove_tag(comlyn,'CENT',comlen).gt.0) then
 ! get file name
-       CALL GTRMWD(COMLYN,COMLEN,'CNAM',4,centers_fname,80,centers_flen)
+        centers_fname=get_remove_parameter(COMLYN,'CNAM',COMLEN); centers_flen=len_trim(centers_fname)
 !cccccccccccc print summary
         if (centers_flen.gt.0) then
          output_centers=.true.
-         if (qprint) &
-     & write(msg___,6620 ) whoami,centers_fname(1:centers_flen)
+         if (qprint) then
+          write(msg___,6620 ) whoami,centers_fname(1:centers_flen) ; write(0,'(A)') msg___
+         endif
          if (remove_tag(comlyn,'CEAP',comlen).gt.0) then ! APPEND?
            cenform='APPEND' ! note: if appending, should not duplicate DCD header !
          else
            cenform='WRITE'
          endif
         else
-          write(0,*) 'WARNING FROM: ',whoami,': ',& & ' NO FILE NAME GIVEN. WILL NOT WRITE PATH CENTERS.'
-
+          write(0,*) 'WARNING FROM: ',whoami,': ','NO FILE NAME GIVEN. WILL NOT WRITE PATH CENTERS.'
         endif
  6620 format(A,' WILL WRITE PATH CENTERS TO FILE ',A,'.')
 !
@@ -2274,32 +2229,29 @@
       rex_flen=0
       if (remove_tag(comlyn,'REXM',comlen).gt.0) then
 ! get file name
-        CALL GTRMWD(COMLYN,COMLEN,'RXNM',4,rex_fname,80, &
-     & rex_flen)
+        rex_fname=get_remove_parameter(COMLYN,'RXNM',COMLEN); rex_flen=len_trim(rex_fname)
 ! check if user specified an custom map (e.g. from an older run)
-        CALL GTRMWD(COMLYN,COMLEN,'RXOL',4,rex_fname_old,80, &
-     & rex_flen_old)
+        rex_fname_old=get_remove_parameter(COMLYN,'RXOL',COMLEN); rex_flen_old=len_trim(rex_fname_old)
 !
         if (rex_flen.gt.0) then
          output_rex_map=.true.
-         if (qprint) &
-     & write(msg___,6721) whoami,rex_fname(1:rex_flen)
+         if (qprint) then
+          write(msg___,6721) whoami,rex_fname(1:rex_flen) ; write(0,'(A)') msg___
+         endif
          if (rex_flen_old.gt.0) then
           if (qprint) then
-             write(msg___,6722) whoami,rex_fname_old(1:rex_flen_old)
+             write(msg___,6722) whoami,rex_fname_old(1:rex_flen_old) ; write(0,'(A)') msg___
              rex_funit=-1
-             call __OPEN_FILE(rex_funit,rex_fname_old(1:rex_flen_old), &
-     & 'FORMATTED','READ')
+             call files_open(rex_funit, rex_fname_old(1:rex_flen_old), 'FORMATTED', 'READ')
           endif
 !
           call ftsm_rex_read_map(rex_funit)
 !
-          if (qprint) call __CLOSE_FILE(rex_funit, 'KEEP', error)
+          if (qprint) call files_close(rex_funit)
          endif
 !
         else
-          write(0,*) 'WARNING FROM: ',whoami,': ',& & ' NO FILE NAME GIVEN. WILL NOT WRITE REPLICA EXCHANGE MAP.'
-
+          write(0,*) 'WARNING FROM: ',whoami,': ','NO FILE NAME GIVEN. WILL NOT WRITE REPLICA EXCHANGE MAP.'
         endif
  6721 format(A,' WILL WRITE REPLICA EXCHANGE MAP TO FILE ',A,'.MAP')
  6722 format(A,' WILL RESTART FROM REPLICA EXCHANGE MAP IN FILE ',A)
@@ -2308,29 +2260,29 @@
 !cccccccccccccc replica exchange log cccccccccccccccccccccccccccccccccccccccc
       if (remove_tag(comlyn,'REXL',comlen).gt.0) then
 ! get file name
-        if (rex_flen.eq.0) & ! in the case that name was read above
-     & CALL GTRMWD(COMLYN,COMLEN,'RXNM',4,rex_fname,80, &
-     & rex_flen)
+        if (rex_flen.eq.0) then ! in the case that name was read above
+         rex_fname=get_remove_parameter(COMLYN,'RXNM',COMLEN); rex_flen=len_trim(rex_fname)
+        endif
 ! check for timestep offset
         rextime_offset=atoi(get_remove_parameter(comlyn, 'ROFF', comlen), 0);
         if (rextime_offset.gt.0) then
-         if (qprint) write(msg___,6724) whoami, whoami,rextime_offset
+         if (qprint) then ; write(msg___,6724) whoami, whoami,rextime_offset ; write(0,'(A)') msg___ ; endif
  6724 format(A,' WILL OFFSET STEP COUNTER IN REPLICA EXCHANGE LOG BY ' &
      & /,A,' ',I10)
         endif
 !
         if (rex_flen.gt.0) then
          output_rex_log=.true.
-         if (qprint) &
-     & write(msg___,6723) whoami,whoami,rex_fname(1:rex_flen)
+         if (qprint) then
+          write(msg___,6723) whoami,whoami,rex_fname(1:rex_flen) ; write(0,'(A)') msg___
+         endif
          if (remove_tag(comlyn,'RXAP',comlen).gt.0) then ! APPEND?
            rxlform='APPEND'
          else
            rxlform='WRITE'
          endif ! rxap
         else
-          write(0,*) 'WARNING FROM: ',whoami,': ',& & ' NO FILE NAME GIVEN. WILL NOT WRITE REPLICA EXCHANGE LOG.'
-
+          write(0,*) 'WARNING FROM: ',whoami,': ','NO FILE NAME GIVEN. WILL NOT WRITE REPLICA EXCHANGE LOG.'
         endif ! rex_flen.gt.0
  6723 format(A,' WILL WRITE REPLICA EXCHANGE LOG TO FILE ',/, &
      & A,' ',A,'.DAT')
@@ -2339,25 +2291,24 @@
 !cccccccccccccccccc process forces output options cccccccccccccccccc
       if (remove_tag(comlyn,'FORC',comlen).gt.0) then
 ! get nergy file name
-        call GTRMWD(COMLYN,COMLEN,'FCNM',4,forces_fname,80,forces_flen)
+        forces_fname=get_remove_parameter(COMLYN,'FCNM',COMLEN); forces_flen=len_trim(forces_fname)
 !ccccccccccc print summary
         if (forces_flen.gt.0) then
          output_forces=.true.
-         if (qprint) &
-     & write(msg___,6625) whoami,forces_fname(1:forces_flen)
+         if (qprint) then
+          write(msg___,6625) whoami,forces_fname(1:forces_flen) ; write(0,'(A)') msg___
+         endif
          if (remove_tag(comlyn,'FCAP',comlen).gt.0) then ! APPEND?
            fform='APPEND'
          else
            fform='WRITE'
          endif
         else
-         write(0,*) 'WARNING FROM: ',whoami,': ',& & ' NO FILE NAME GIVEN. WILL NOT WRITE AVERAGE FORCE.'
-
+         write(0,*) 'WARNING FROM: ',whoami,': ','NO FILE NAME GIVEN. WILL NOT WRITE AVERAGE FORCE.'
         endif
  6625 format(A,' WILL WRITE AVERAGE FORCE TO FILE ',A,'.')
       endif ! forces
 !
-      if (qprint) iolev=oldiol
 !
 ! if we got this far, we are probably OK
       stat_initialized=.true.
@@ -2366,20 +2317,22 @@
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine ftsm_stat()
       use ftsm_rex, only: ftsm_rex_print_map, ftsm_rex_print_log
-      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
       use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
       use parser
       use mpi
 !
-     
-      integer :: i, k, fmt_len, oldiol
-      character(len=80 :: fmt_real, fmt_int, fmt
+      implicit none
+      integer :: i, k, fmt_len
+!
+!
+      character(len=80) :: fmt_real, fmt_int, fmt
       real*8 :: r_com(3)
       real*8 :: u (3,3)= RESHAPE( (/1,0,0,0,1,0,0,0,1/), (/3,3/) ) ! rotation matrix
       real*8 :: rmsd0, rmsd0_all(nstring), fc_all(2,nstring)
 !
       integer :: error
-      character(len=11 whoami
+      character(len=11) :: whoami
       data whoami/' FTSM_STAT>'/
 !
       logical :: qroot, qprint, qgrp
@@ -2388,14 +2341,11 @@
       qprint=qroot.and.ME_STRNG.eq.0
       qgrp=MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.SIZE_LOCAL.gt.1
 !
-! ad hoc fix for REX
-      if (qprint) then ; oldiol=iolev; iolev=0; endif
 !ccccccccccccccccccccccc begin ccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 ! check if the user has made an initialization call
       if (.not.ftsm_initialized) call ftsm_init()
       if (.not.stat_initialized) then
-       write(0,*) 'WARNING FROM: ',whoami,': ',& & 'NO OUTPUT OPTIONS SELECTED. NOTHING DONE'
-
+       write(0,*) 'WARNING FROM: ',whoami,': ','NO OUTPUT OPTIONS SELECTED. NOTHING DONE'
        return
       endif
 !
@@ -2405,7 +2355,7 @@
        write(fmt_int,'(I5)') stat_iteration_counter
        write(fmt_real,*) nstring
        fmt_len=len(fmt_real)
-       call fmt_len=min(max(0,fmt_len),len(fmt_real));fmt_real(fmt_len+1:)='';call adjustleft(fmt_real,(/' ',tab/));fmt_len=len_trim(fmt_real)
+       fmt_len=min(max(0,fmt_len),len(fmt_real));fmt_real(fmt_len+1:)='';call adjustleft(fmt_real,(/' ',tab/));fmt_len=len_trim(fmt_real)
       endif
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       if (output_rmsd0) then
@@ -2422,20 +2372,19 @@
      & ,rmsd0_all,1,MPI_DOUBLE_PRECISION,0, &
      & MPI_COMM_STRNG, error)
           if (qprint) then ! root writes
-           if (rmsd0_funit.eq.outu) then
+           if (rmsd0_funit.eq.fout) then
             fmt='("RMSD0> '//fmt_int(1:5)//' ",'                        &
      & //fmt_real(1:fmt_len)//real_format//')'
            else
             rmsd0_funit=-1
-            call __OPEN_FILE(rmsd0_funit, rmsd0_fname, &
-     & 'FORMATTED',rform)
+            call files_open(rmsd0_funit, rmsd0_fname, 'FORMATTED', rform)
             fmt='("'//fmt_int(1:5)//' ",'                               &
      & //fmt_real(1:fmt_len)//real_format//')'
            endif
            write(rmsd0_funit,fmt) (rmsd0_all(i),i=1,nstring)
 !
-           if (rmsd0_funit.ne.outu) then
-            call __CLOSE_FILE(rmsd0_funit, 'KEEP', error)
+           if (rmsd0_funit.ne.fout) then
+            call files_close(rmsd0_funit)
            endif
           endif ! qprint
           rform='APPEND'
@@ -2445,25 +2394,23 @@
        if (qprint) then
         if (repa_initialized) then ! proceed only if arclength defined
 !
-         if (s_funit.eq.outu) then
+         if (s_funit.eq.fout) then
           fmt='("ARCL> '//fmt_int(1:5)//' ",'                           &
      & //fmt_real(1:fmt_len)//real_format//')'
          else
           s_funit=-1
-          call __OPEN_FILE(s_funit, s_fname, &
-     & 'FORMATTED',sform)
+          call files_open(s_funit, s_fname, 'FORMATTED', sform)
           fmt='("'//fmt_int(1:5)//' ",'//fmt_real(1:fmt_len)            &
      & //real_format//')'
          endif
 !
          write(s_funit, fmt) ds
 ! flush unit: close and reopen later
-         if (s_funit.ne.outu) then
-          call __CLOSE_FILE(s_funit, 'KEEP', error)
+         if (s_funit.ne.fout) then
+          call files_close(s_funit)
          endif
         else ! repa
-          write(0,*) 'WARNING FROM: ',whoami,': ',& & ' NO REPARAMETRIZATION OPTIONS SELECTED. SKIPPING ARCLENGTH.'
-
+          write(0,*) 'WARNING FROM: ',whoami,': ','NO REPARAMETRIZATION OPTIONS SELECTED. SKIPPING ARCLENGTH.'
         endif
        endif ! qprint
        sform='APPEND'
@@ -2473,25 +2420,23 @@
        if (qprint) then
         if (repa_initialized) then ! proceed only if arclength defined
 !
-         if (c_funit.eq.outu) then
+         if (c_funit.eq.fout) then
           fmt='("CURV> '//fmt_int(1:5)//' ",'                           &
      & //fmt_real(1:fmt_len)//real_format//')'
          else
           c_funit=-1
-          call __OPEN_FILE(c_funit, c_fname, &
-     & 'FORMATTED',cform)
+          call files_open(c_funit, c_fname, 'FORMATTED', cform)
           fmt='("'//fmt_int(1:5)//' ",'//fmt_real(1:fmt_len)            &
      & //real_format//')'
          endif
 !
          write(s_funit, fmt) curv
 ! flush unit: close and reopen later
-         if (c_funit.ne.outu) then
-          call __CLOSE_FILE(c_funit, 'KEEP', error)
+         if (c_funit.ne.fout) then
+          call files_close(c_funit)
          endif
         else
-          write(0,*) 'WARNING FROM: ',whoami,': ',& & ' NO REPARAMETRIZATION OPTIONS SELECTED. SKIPPING CURVATURE.'
-
+          write(0,*) 'WARNING FROM: ',whoami,': ','NO REPARAMETRIZATION OPTIONS SELECTED. SKIPPING CURVATURE.'
         endif
        endif
        cform='APPEND'
@@ -2501,13 +2446,12 @@
 ! compute free energy
        call ftsm_compute_fe_fd()
        if (qprint) then
-         if (fe_funit.eq.outu) then
+         if (fe_funit.eq.fout) then
           fmt='("FE> '//fmt_int(1:5)//' ",'                             &
      & //fmt_real(1:fmt_len)//real_format//')'
          else
           fe_funit=-1
-          call __OPEN_FILE(fe_funit, fe_fname, &
-     & 'FORMATTED',feform)
+          call files_open(fe_funit, fe_fname, 'FORMATTED', feform)
           fmt='("'//fmt_int(1:5)//' ",'//fmt_real(1:fmt_len)            &
      & //real_format//')'
          endif
@@ -2515,53 +2459,51 @@
 ! print
          write(fe_funit, fmt) fe
 ! flush unit: close and reopen later
-         if (fe_funit.ne.outu) then
-          call __CLOSE_FILE(fe_funit, 'KEEP', error)
+         if (fe_funit.ne.fout) then
+          call files_close(fe_funit)
          endif
        endif ! qprint
        feform='APPEND'
       endif
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       if (output_rex_map) then ! output replica exchange map
-        if (rex_flen.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ',& & 'NO FILE NAME SPECIFIED. WILL NOT WRITE REPLICA EXCHANGE MAP.'
-
-        else
-         if (qprint) then
-          rex_funit=-1
-          call __OPEN_FILE(rex_funit, &
-     & rex_fname(1:rex_flen)//'.map', 'FORMATTED','WRITE')
-          call ftsm_rex_print_map(rex_funit) ! all processes enter
+       if (rex_flen.eq.0) then
+        write(0,*) 'WARNING FROM: ',whoami,': ','NO FILE NAME SPECIFIED. WILL NOT WRITE REPLICA EXCHANGE MAP.'
+       else
+        if (qprint) then
+         rex_funit=-1
+         rex_fname(rex_flen+1:rex_flen+4)='.map' ! append to name
+         call files_open(rex_funit, rex_fname(1:rex_flen+4), 'FORMATTED', 'WRITE')
+         rex_fname(rex_flen+1:)='' ! erase extension
+         call ftsm_rex_print_map(rex_funit) ! all processes enter
 !
-          call __CLOSE_FILE(rex_funit, 'KEEP', error)
-         endif ! qprint
-        endif
+         call files_close(rex_funit)
+        endif ! qprint
+       endif
       endif
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       if (output_rex_log) then
        if (rex_flen.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ',& & 'NO FILE NAME SPECIFIED. WILL NOT WRITE REPLICA EXCHANGE LOG.'
-
+         write(0,*) 'WARNING FROM: ',whoami,': ','NO FILE NAME SPECIFIED. WILL NOT WRITE REPLICA EXCHANGE LOG.'
        else
-         if (qprint) then
-           rex_funit=-1
-           call __OPEN_FILE(rex_funit, &
-     & rex_fname(1:rex_flen)//'.dat',                  &
-     & 'FORMATTED', rxlform)
-         endif
-         rxlform='APPEND'
+        if (qprint) then
+         rex_funit=-1
+         rex_fname(rex_flen+1:rex_flen+4)='.dat' ! append to name
+         call files_open(rex_funit, rex_fname(1:rex_flen+4), 'FORMATTED', rxlform)
+         rex_fname(rex_flen+1:)='' ! erase extension
+        endif
+        rxlform='APPEND'
 !
-         call ftsm_rex_print_log(rex_funit)
+        call ftsm_rex_print_log(rex_funit)
 ! flush unit:
-         if (qprint) call __CLOSE_FILE(rex_funit,'KEEP',error)
+        if (qprint) call files_close(rex_funit)
        endif
       endif
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       if (output_centers) then
         if (qprint) then
          centers_funit=-1
-         call __OPEN_FILE(centers_funit, centers_fname,'UNFORMATTED', &
-     & cenform)
+         call files_open(centers_funit, centers_fname, 'UNFORMATTED', cenform)
         endif
 ! write current centers as a trajectory frame (adopted from write_dcd)
 !--------------------------------------------------------------------
@@ -2572,7 +2514,7 @@
 ! NOTE: should write the correct number of records to header at the end
 !--------------------------------------------------------------------
 ! flush unit:
-        if (qprint) call __CLOSE_FILE(centers_funit, 'KEEP', error)
+        if (qprint) call files_close(centers_funit)
         cenform='APPEND'
       endif
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -2585,12 +2527,11 @@
 !
         fmt='('//fmt_real(1:fmt_len)//real_format//')'
         if (qprint) then
-         if (forces_funit.eq.outu) then
+         if (forces_funit.eq.fout) then
           write(forces_funit,'("FORCES> ",I8)') stat_iteration_counter ! % is a MATLAB comment
          else
           forces_funit=-1
-          call __OPEN_FILE(forces_funit, forces_fname, &
-     & 'FORMATTED',fform)
+          call files_open(forces_funit, forces_fname, 'FORMATTED', fform)
           write(forces_funit,'("% ",I8)') stat_iteration_counter ! % is a MATLAB comment
          endif
 !
@@ -2599,16 +2540,14 @@
          write(forces_funit, fmt) fc_all(2,:) ! perpendicular forces
 !
 ! flush unit: close and reopen later
-         if (forces_funit.ne.outu) &
-     & call __CLOSE_FILE(forces_funit, 'KEEP', error)
+         if (forces_funit.ne.fout) &
+     & call files_close(forces_funit)
         endif ! qprint
         fform='APPEND'
        endif ! qroot
 !
       endif ! output_force
 !
-! ad hoc fix for REX
-      if (qprint) iolev=oldiol
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 ! reset force averages -- relevant for f.e.
       num_force_samples=0
@@ -2617,10 +2556,12 @@
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       function ftsm_check(qorie) result (ok)
       use parser
-     
-      character(len=12 :: whoami
+      implicit none
+      character(len=12) :: whoami
       integer :: error
       logical :: ok, qorie
+!
+ character(len=80) :: msg___
 !
       data whoami /' FTSM_CHECK>'/
 !
@@ -2648,10 +2589,11 @@
       subroutine ftsm_main(x,y,z,fx,fy,fz,iteration)
       use parser
       use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
-      use parallel
       use mpi
 !
-     
+      implicit none
+!
+      character(len=80) :: msg___
 !
       real*8 :: x(:), y(:), z(:), &
      & fx(:), fy(:), fz(:)
@@ -2659,7 +2601,7 @@
 !
 ! locals
       real*8 :: s
-      character(len=11 :: whoami
+      character(len=11) :: whoami
       logical :: qgrp
       integer :: i, bug, qfac
 !
@@ -2695,8 +2637,9 @@
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        if (update_on.and.update_freq.gt.0) then
         if (mod(iteration,update_freq).eq.0) then
-         if (prnlev.ge.3.and..not.string_noprint) write(msg___,'(2A)') &
-     & whoami,' UPDATING STRING.'
+         if (.not.string_noprint) then
+          write(msg___,'(2A)') whoami,' UPDATING STRING.' ; call plainmessage(msg___,3)
+         endif
 !
          if (proj_on) then
 ! save old reference coordinates
@@ -2708,22 +2651,25 @@
           endif
 ! see if reparametrization requested
           if (repa_on) then
-            if (prnlev.ge.3.and..not.string_noprint) write(msg___,'(2A)') &
-     & whoami,' REPARAMETRIZING IMAGES.'
+            if (.not.string_noprint) then
+             write(msg___,'(2A)') whoami,' REPARAMETRIZING IMAGES.' ; call plainmessage(msg___,3)
+            endif
             call ftsm_repa(.false.) ! reparametrize string, do not broadcast to slaves; removes COM
           else
 ! recompute and remove centers of mass (which will change due to repa)
            call ftsm_save_com()
           endif ! repa_on
 ! update reference coordinates
-          if (prnlev.ge.3.and..not.string_noprint) write(msg___,'(2A)') &
-     & whoami,' UPDATING NEIGHBOR IMAGES.'
+          if (.not.string_noprint) then
+           write(msg___,'(2A)') whoami,' UPDATING NEIGHBOR IMAGES.' ; call plainmessage(msg___,3)
+          endif
           call ftsm_swap_bc(.false.)
 !------------------------------------------------------------------------
          else ! not proj_on
 ! save old reference coordinates and switch to new reference coordinates
-          if (prnlev.ge.3.and..not.string_noprint) write(msg___,'(2A)') &
-     & whoami,' UPDATING REFERENCE IMAGES.'
+          if (.not.string_noprint) then
+           write(msg___,'(2A)') whoami,' UPDATING REFERENCE IMAGES.' ; call plainmessage(msg___,3)
+          endif
           r_f(:,:,center_old)=r_f(:,:,center)
           r_f(:,:,center)=r_f(:,:,center_new)
           if (qdiffrot) then
@@ -2735,8 +2681,9 @@
 !
 ! see if reparametrization requested
           if (repa_on) then
-            if (prnlev.ge.3.and..not.string_noprint) write(msg___,'(2A)') &
-     & whoami,' REPARAMETRIZING IMAGES.'
+            if (.not.string_noprint) then
+             write(msg___,'(2A)') whoami,' REPARAMETRIZING IMAGES.' ; call plainmessage(msg___,3)
+            endif
             call ftsm_repa(.true.) ! reparametrize string and broadcast to slaves
 ! recompute centers of mass (which will change due to repa or regular evolution)
 ! call ftsm_save_com() ! moved to repa routine
@@ -2754,16 +2701,16 @@
 !
        if (repl_x_on.and.repl_x_freq.gt.0) then
         if (mod(iteration, repl_x_freq).eq.0) then
-         if (prnlev.ge.3.and..not.string_noprint) write(msg___,'(2A)') &
-     & whoami,' ATTEMPTING EXCHANGE OF NEIGHBORING REPLICAS.'
-          call ftsm_repl_exchange(x, y, z, iteration)
+         if (.not.string_noprint) then
+          write(msg___,'(2A)') whoami,' ATTEMPTING EXCHANGE OF NEIGHBORING REPLICAS.' ; call plainmessage(msg___,3)
+         endif
+         call ftsm_repl_exchange(x, y, z, iteration)
         endif
        endif
 !
        if (stat_on.and.stat_freq.gt.0) then
          if (mod(iteration,stat_freq).eq.0) then
-           if (prnlev.ge.3) write(msg___,'(2A)') &
-     & whoami,' CALLING STRING STATISTICS.'
+           write(msg___,'(2A)') whoami,' CALLING STRING STATISTICS.' ; call plainmessage(msg___,3)
            call ftsm_stat() ! output statistics
          endif
        endif ! stat_on
@@ -2777,17 +2724,16 @@
 !
       use constants
       use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
-      use parallel
       use mpi
 !
-     
+      implicit none
 !
       real*8 :: x(:), y(:), z(:)
       logical :: deriv, qgrp, qcombine
       real*8, optional :: t
       real*8 :: s, oms ! this value indicates how much of the old reference set to take
 !
-      integer :: ind, i, j, k, obeg, oend, p, q, error
+      integer :: ind, i, j, k, obeg, oend, p, q, ierror
 !
       real*8 :: u (3,3), u1(3,3), u2(3,3), u3(3,3)
       real*8 :: r_com(3) ! COM vector
@@ -2807,18 +2753,20 @@
 !
       integer*4, allocatable :: orient_count(:), orient_displ(:) ! if declared as integer*8 parallelization will break
 !
-      real*8, parameter :: tol=rsmall
+      real*8 :: tol
 !
       real*8, pointer :: ow(:), fw(:)
 !
       interface
        subroutine hypercube_allgatherv(message,count,displ,type, &
-     & comm, error, rank, size)
+     & comm, ierror, rank, size)
        real*8 :: message(*)
-       integer :: size, type, rank, error, comm
+       integer :: size, type, rank, ierror, comm
        integer*4 :: count(size), displ(size)
        end subroutine hypercube_allgatherv
       end interface
+!
+      tol=errtol()
 !
       if (present(t)) then ; s=t ; else ; s=1d0 ; endif
 !
@@ -3023,7 +2971,6 @@
           call RMSBestFit(roc,roi,ow,u) ! orientation between center image and current coords
          endif ! proj_on
        endif ! deriv
-
 ! rotate target structures to overlap with current
 ! conventional way (might be faster)
        rfl_rot=0d0;
@@ -3252,21 +3199,21 @@
           if (mod(SIZE_LOCAL,2).eq.0) then ! use hypercube allgather
            call hypercube_allgatherv( &
      & fopar, orient_count, orient_displ, MPI_RTMD_TYPE, &
-     & MPI_COMM_LOCAL, error, ME_LOCAL, SIZE_LOCAL )
+     & MPI_COMM_LOCAL, ierror, ME_LOCAL, SIZE_LOCAL )
            call hypercube_allgatherv( &
      & foprp, orient_count, orient_displ, MPI_RTMD_TYPE, &
-     & MPI_COMM_LOCAL, error, ME_LOCAL, SIZE_LOCAL )
+     & MPI_COMM_LOCAL, ierror, ME_LOCAL, SIZE_LOCAL )
           else ! regular gather
            call MPI_GATHERV(fopar(obeg,1), &
      & orient_count(ME_LOCAL+1),MPI_RTMD_TYPE, &
      & fopar, orient_count, orient_displ, MPI_RTMD_TYPE, &
-     & 0, MPI_COMM_LOCAL, error)
+     & 0, MPI_COMM_LOCAL, ierror)
            call MPI_GATHERV(foprp(obeg,1), &
      & orient_count(ME_LOCAL+1),MPI_RTMD_TYPE, &
      & foprp, orient_count, orient_displ, MPI_RTMD_TYPE, &
-     & 0, MPI_COMM_LOCAL, error)
+     & 0, MPI_COMM_LOCAL, ierror)
 ! send to slaves
-           call call mpi_bcast(r_o(1,1,fpar),6*norient,MPI_INTEGER8,0,MPI_COMM_LOCAL,ierror) ! perp follows par in memory, so send both by doubling data count
+           call mpi_bcast(r_o(1,1,fpar),6*norient,MPI_INTEGER8,0,MPI_COMM_LOCAL,ierror) ! perp follows par in memory, so send both by doubling data count
           endif ! powers of two
          endif
 !
@@ -3348,14 +3295,14 @@
            if (mod(SIZE_LOCAL,2).eq.0) then ! use hypercube allgather
            call hypercube_allgatherv( &
      & fopar, orient_count, orient_displ, MPI_RTMD_TYPE, &
-     & MPI_COMM_LOCAL, error, ME_LOCAL, SIZE_LOCAL )
+     & MPI_COMM_LOCAL, ierror, ME_LOCAL, SIZE_LOCAL )
            else
             call MPI_GATHERV(fopar(obeg,1), &
      & orient_count(ME_LOCAL+1),MPI_RTMD_TYPE, &
      & fopar, orient_count, orient_displ, MPI_RTMD_TYPE, &
-     & 0, MPI_COMM_LOCAL, error)
+     & 0, MPI_COMM_LOCAL, ierror)
 ! send to slaves
-            call call mpi_bcast(fopar,3*norient,MPI_INTEGER8,0,MPI_COMM_LOCAL,ierror)
+            call mpi_bcast(fopar,3*norient,MPI_INTEGER8,0,MPI_COMM_LOCAL,ierror)
            endif
           endif ! qgrp
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -3375,8 +3322,7 @@
 !
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine ftsm_addforce(fx,fy,fz,addforce)
-
-     
+      implicit none
 ! note: boundary points require special treatment: x0.25 force constant and x2 dperp0
 ! this is because distance between replicas is halved for the endpoints, but still corresponds to 1 (as for the inner pts)
       real*8 :: fx(:), fy(:), fz(:)
@@ -3476,7 +3422,7 @@
       end subroutine ftsm_addforce
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine ftsm_evolve(x,y,z)
-     
+      implicit none
       real*8 :: x(:), y(:), z(:)
       integer :: ind, j, k
       real*8 :: t, omt
@@ -3536,11 +3482,11 @@
         rfi(:,2)=rfi(:,2)-r_com(2)
         rfi(:,3)=rfi(:,3)-r_com(3)
 !
-       if (qdiffrot) then
+        if (qdiffrot) then
          roi(:,1)=roi(:,1)-r_com(1)
          roi(:,2)=roi(:,2)-r_com(2)
          roi(:,3)=roi(:,3)-r_com(3)
-       endif ! qdiffrot
+        endif ! qdiffrot
 !
        endif ! qorient
       endif ! .not. restrained on
@@ -3558,22 +3504,21 @@
       end subroutine ftsm_evolve
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine ftsm_compute_fe_fd()
-     
       use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
-      use parallel
       use mpi
+      implicit none
+!
       real*8 :: avforces(2,nstring)
-      integer :: bug, i
-      character(len=20 :: whoami
+      integer :: ierror, i
+      character(len=20) :: whoami
       data whoami /' FTSM_COMPUTE_FE_FD>'/
 !
       if (proj_on) then
        if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and. &
      & SIZE_STRNG.gt.1) then
-
         call MPI_GATHER(avforce, 2, MPI_DOUBLE_PRECISION, &
      & avforces, 2, MPI_DOUBLE_PRECISION, &
-     & 0, MPI_COMM_STRNG, bug)
+     & 0, MPI_COMM_STRNG, ierror)
         fe(1)=0d0
         do i=2, nstring
          fe(i) =fe(i-1) - 0.5d0 * ( avforces(1,i-1) + avforces(1,i) )
@@ -3592,7 +3537,7 @@
       end subroutine ftsm_compute_fe_fd
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine ftsm_save_com(c)
-     
+      implicit none
       real*8 :: r_com(3), w
       real*8, pointer :: ro_com(:)
       integer, optional :: c
@@ -3638,14 +3583,12 @@
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine ftsm_swap_bc(qsendo)
       use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
-      use parallel
       use mpi
-!
-     
+      implicit none
       logical :: qroot, qslave, qsend_o
       logical, optional :: qsendo
       real*8, pointer, dimension(:,:) :: rlf, rcf, rrf, rlo, rco, rro
-      integer :: me, bug
+      integer :: me, ierror
       integer*4 :: stat(MPI_STATUS_SIZE)
 !
       qroot=MPI_COMM_STRNG.ne.MPI_COMM_NULL
@@ -3674,57 +3617,57 @@
 ! replicas send to the right and receive from the left
         if (me.eq.1) then
          call MPI_SEND(rcf, 3*nforced, MPI_DOUBLE_PRECISION, &
-     & me, 0, MPI_COMM_STRNG, bug)
+     & me, 0, MPI_COMM_STRNG, ierror)
          if (qsend_o) &
      & call MPI_SEND(rco, 3*norient, MPI_DOUBLE_PRECISION, &
-     & me, 1, MPI_COMM_STRNG, bug)
+     & me, 1, MPI_COMM_STRNG, ierror)
 !
         elseif (me.eq.nstring) then
          call MPI_RECV(rlf, 3*nforced, MPI_DOUBLE_PRECISION, &
-     & mestring-1, 0, MPI_COMM_STRNG, stat, bug)
+     & mestring-1, 0, MPI_COMM_STRNG, stat, ierror)
          if (qsend_o) &
      & call MPI_RECV(rlo, 3*norient, MPI_DOUBLE_PRECISION, &
-     & mestring-1, 1, MPI_COMM_STRNG, stat, bug)
+     & mestring-1, 1, MPI_COMM_STRNG, stat, ierror)
         else ! inner replicas
          call MPI_SENDRECV(rcf, 3*nforced, MPI_DOUBLE_PRECISION, me, 0, &
      & rlf, 3*nforced, MPI_DOUBLE_PRECISION, &
-     & mestring-1, 0, MPI_COMM_STRNG, stat,bug)
+     & mestring-1, 0, MPI_COMM_STRNG, stat,ierror)
          if (qsend_o) &
      & call MPI_SENDRECV(rco, 3*norient, MPI_DOUBLE_PRECISION, me, 1,&
      & rlo, 3*norient, MPI_DOUBLE_PRECISION, &
-     & mestring-1, 1, MPI_COMM_STRNG, stat,bug)
+     & mestring-1, 1, MPI_COMM_STRNG, stat,ierror)
         endif ! me.eq.1
 ! replicas send to the left and receive from the right
         if (me.eq.nstring) then
          call MPI_SEND(rcf, 3*nforced, MPI_DOUBLE_PRECISION, &
-     & mestring-1, 0, MPI_COMM_STRNG, bug)
+     & mestring-1, 0, MPI_COMM_STRNG, ierror)
          if (qsend_o) &
      & call MPI_SEND(rco, 3*norient, MPI_DOUBLE_PRECISION, &
-     & mestring-1, 1, MPI_COMM_STRNG, bug)
+     & mestring-1, 1, MPI_COMM_STRNG, ierror)
 !
         elseif (me.eq.1) then
          call MPI_RECV(rrf, 3*nforced, MPI_DOUBLE_PRECISION, &
-     & me, 0, MPI_COMM_STRNG, stat, bug)
+     & me, 0, MPI_COMM_STRNG, stat, ierror)
          if (qsend_o) &
      & call MPI_RECV(rro, 3*norient, MPI_DOUBLE_PRECISION, &
-     & me, 1, MPI_COMM_STRNG, stat, bug)
+     & me, 1, MPI_COMM_STRNG, stat, ierror)
         else ! inner replicas
          call MPI_SENDRECV(rcf, 3*nforced, MPI_DOUBLE_PRECISION, &
      & mestring-1, 0, &
      & rrf, 3*nforced, MPI_DOUBLE_PRECISION, &
-     & me, 0, MPI_COMM_STRNG, stat,bug)
+     & me, 0, MPI_COMM_STRNG, stat,ierror)
          if (qsend_o) &
      & call MPI_SENDRECV(rco, 3*norient, MPI_DOUBLE_PRECISION, &
      & mestring-1, 1, &
      & rro, 3*norient, MPI_DOUBLE_PRECISION, &
-     & me, 1, MPI_COMM_STRNG, stat,bug)
+     & me, 1, MPI_COMM_STRNG, stat,ierror)
         endif ! me.eq.nstring
       endif ! qroot
 !
 ! send to slaves
       if (qslave) then
-       call call mpi_bcast(r_f(:,:,left),9*nforced,MPI_INTEGER8,0,MPI_COMM_LOCAL,ierror) ! send three sets at once (see ftsm_var)
-       if (qsend_o) call call mpi_bcast(r_o(:,:,left),9*norient,MPI_INTEGER8,0,MPI_COMM_LOCAL,ierror)
+       call mpi_bcast(r_f(:,:,left),9*nforced,MPI_INTEGER8,0,MPI_COMM_LOCAL,ierror) ! send three sets at once (see ftsm_var)
+       if (qsend_o) call mpi_bcast(r_o(:,:,left),9*norient,MPI_INTEGER8,0,MPI_COMM_LOCAL,ierror)
       endif
 !
 ! duplicate endpoints for force calculations:
@@ -3750,12 +3693,11 @@
       subroutine ftsm_repa(qbcast)
       use parser
       use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
-      use parallel
       use mpi
 !
-     
+      implicit none
 ! local variables
-      character(len=11 :: whoami
+      character(len=11) :: whoami
       logical :: qroot, qslave, qprint
       logical, optional :: qbcast
       real*8 :: u(3,3)= RESHAPE( (/1,0,0,0,1,0,0,0,1/), (/3,3/) ) ! rotation matrix
@@ -3765,15 +3707,16 @@
       real*8 :: weights(nforced,3) ! assuming nforced is reasonably defined
       integer*4 :: RTYPE=MPI_DOUBLE_PRECISION
       integer*4 :: stat(MPI_STATUS_SIZE)
-      integer :: i, ierr
+      integer :: i, ierror
 !
+ character(len=80) :: msg___
 !
       interface
         subroutine interp_driver_sci(rin,rout,wgt,n, &
      & interp_method,tol,max_iterations,d_arclength, curvature, &
      & dst_cutoff, dr,r_bc_0, r_bc_1)
-      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
-!
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
+! implicit none
         integer n
         real*8 rin(n), rout(n), wgt(n)
         integer, intent(in) :: interp_method
@@ -3796,11 +3739,12 @@
 ! check if the user has made an initialization call
 !
       if (.not.repa_initialized) then
-       write(0,*) 'WARNING FROM: ',whoami,': ',& & 'NO REPARAMETRIZATION OPTIONS SELECTED. NOTHING DONE.'
-
+       write(0,*) 'WARNING FROM: ',whoami,': ','NO REPARAMETRIZATION OPTIONS SELECTED. NOTHING DONE.'
        return
       endif
-      if (qprint.and.(prnlev.ge.5)) write(msg___,690) whoami
+      if (qprint) then
+       write(msg___,690) whoami ; call plainmessage(msg___,5)
+      endif
  690 format(/A,' PERFORMING STRING REPARAMETRIZATION.')
 !
 ! shorthand
@@ -3836,7 +3780,7 @@
 !
         if (mestring.gt.0) then
          call MPI_RECV(ro1,3*norient,rtype,mestring-1, 1, &
-     & MPI_COMM_STRNG, stat, ierr)
+     & MPI_COMM_STRNG, stat, ierror)
 ! orient current structure
          call RMSBestFit(ro,ro1,orientWeights,u)
 ! transform current structure to overlap with reference
@@ -3856,7 +3800,7 @@
 !
         if (mestring.lt.nstring-1) then
          call mpi_send(ro1,3*norient,rtype,mestring+1, 1, &
-     & MPI_COMM_STRNG, ierr)
+     & MPI_COMM_STRNG, ierror)
         endif ! me
        endif ! qorient
 !cccccccccccccc now call the approproate interpolation subroutine
@@ -3878,7 +3822,7 @@
       endif ! root
 !
 ! broadcast coordinates to slaves
-      if (qslave) call call mpi_bcast(rf,3*nforced,MPI_INTEGER8,0,MPI_COMM_LOCAL,ierror)
+      if (qslave) call mpi_bcast(rf,3*nforced,MPI_INTEGER8,0,MPI_COMM_LOCAL,ierror)
 ! update any orientation coordinates that have changes
       if (qdiffrot) call ftsm_update_overlap_coor(1)
 !
@@ -3887,7 +3831,7 @@
       end subroutine ftsm_repa
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine ftsm_update_overlap_coor(which)
-     
+      implicit none
       integer :: which
       integer :: i
 ! copy overlapping coordinates from one set to another
@@ -3917,48 +3861,43 @@
       use ivector, only: int_vector_add
 !
       use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
-      use parallel
       use constants
-      use reawri
+      use rng
+      use molsim
       use parser
-      use exfunc
       use mpi
-      use clcg_mod, only : random
 !
-     
+      implicit none
 !
       real*8 :: x(:), y(:), z(:) ! mass(size(x,1))
       integer :: itime
 !
-      integer :: i, j, ibeg, iend, bug, stat(MPI_STATUS_SIZE)
+      integer :: i, j, ibeg, iend, ierror, stat(MPI_STATUS_SIZE)
       logical :: deriv, qendpoint, qgrp, qvalid
 !
       integer :: which ! replica with which the exchange was attempted
       logical :: success ! whether the exchange attempt was successful
       integer :: nodelist(nstring) ! holds new string replica order after excahnge attempt
       integer :: itype ! MPI_INTEGER type
-      integer :: ndata
+      integer :: ndata, nfiles
 !
       real*8 :: dE_me, dE, s, dpar0i, dperp0i, drms0i, dpar_ori, &
      & dperp_ori, drms_ori, fac, fac2
 !
-      character(len=150 :: fnames(5) ! for storing output file names
-      character(len=150 :: new_fnames(5) ! for storing swapped file names
+      character(len=150) :: fnames(5) ! for storing output file names
+      character(len=150) :: new_fnames(5) ! for storing swapped file names
       logical :: openun(5), qform, qwrite
       integer :: oldiol
 !
       real*8, pointer, dimension(:,:,:) :: r_f2, r_o2, r_f3, r_o3
 !
-      character(len=20 :: whoami
+      character(len=20) :: whoami
       data whoami /' FTSM_REPL_EXCHANGE>'/
 !
       if (.not.rex_initialized) call ftsm_rex_init()
 !
       if (.not.ftsm_check(qorient)) return
       if (.not.restrained_on) return ! restrained dynamics required
-!
-       itype=MPI_INTEGER !!**CHARMM_ONLY**!##.not.INTEGER8
-       itype=MPI_INTEGER8 !!**CHARMM_ONLY**!##INTEGER8
 !
       qgrp=(MPI_COMM_LOCAL.ne.MPI_COMM_NULL) &
      & .and.(SIZE_LOCAL.gt.1)
@@ -3969,8 +3908,8 @@
 !
 ! determine exchange partner
       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then
-       if (ME_STRNG.eq.0) which=integer(random(iseed)*2d0) ! either 0 or 1
-       call MPI_BCAST(which, 1, itype, 0, MPI_COMM_STRNG, bug) ! string root broadcasts to all replicas
+       if (ME_STRNG.eq.0) which=INT(randomu()*2d0) ! either 0 or 1
+       call MPI_BCAST(which, 1, MPI_INTEGER, 0, MPI_COMM_STRNG, ierror) ! string root broadcasts to all replicas
 ! determine whether swapping w. left (-1) or w. right (+1) neighbor & calculate rank of neighbor
        which=ME_STRNG + (mod(ME_STRNG + which, 2)*2 - 1)
 ! if which == 0, then: -1, 2, 1, 4, 3, ...
@@ -3986,7 +3925,7 @@
         ndata=3*(nforced*9+1) ! number of reals to send
         call MPI_SENDRECV(r_f, ndata, MPI_DOUBLE_PRECISION, & ! send almost everything
      & which, which, r_f2, ndata, MPI_DOUBLE_PRECISION, & ! put into the same array, starting at position 11
-     & which, ME_STRNG, MPI_COMM_STRNG, stat, bug)
+     & which, ME_STRNG, MPI_COMM_STRNG, stat, ierror)
         if (qorient) then
          if (qdiffrot) then ! orientation atoms
 ! allocate storage for new restraints
@@ -3994,7 +3933,7 @@
           ndata=27*norient
           call MPI_SENDRECV(r_o, ndata, MPI_DOUBLE_PRECISION, &
      & which, which, r_o2, ndata, MPI_DOUBLE_PRECISION, &
-     & which, ME_STRNG, MPI_COMM_STRNG, stat, bug)
+     & which, ME_STRNG, MPI_COMM_STRNG, stat, ierror)
          else
           r_o2=>r_f2
          endif ! qdiffrot
@@ -4038,7 +3977,6 @@
          dE_me = dE_me &
      & - kpara * fac * fac * ( dpar_ori-dpar0 )**2 &
      & - kperp * fac * max ( fac * dperp_ori - dperp0, 0d0 )**2
-
         else ! .not. proj_on
          dE_me = krms * ( ( drms-drms0i )**2 - ( drms_ori-drms0 )**2 )
         endif
@@ -4046,7 +3984,7 @@
 ! combine energies from two replicas:
         call MPI_SENDRECV(dE_me, 1, MPI_DOUBLE_PRECISION, &
      & which, which, dE, 1, MPI_DOUBLE_PRECISION, &
-     & which, ME_STRNG, MPI_COMM_STRNG, stat, bug)
+     & which, ME_STRNG, MPI_COMM_STRNG, stat, ierror)
         dE = 0.5d0 * ( dE+dE_me )
 ! 5) apply Metropolis criterion
         if (dE.le.0d0) then
@@ -4056,21 +3994,21 @@
 ! this may not be correct because the random numbers will not come from the same sequence;
 ! may change this later
          if (which.lt.ME_STRNG) then
-          success=(random(iseed).le.exp(-rex_beta*dE))
+          success=(randomu().le.exp(-rex_beta*dE))
 ! send to othe replica
           call MPI_SEND(success, 1, MPI_LOGICAL, which, which, &
-     & MPI_COMM_STRNG, bug)
+     & MPI_COMM_STRNG, ierror)
          else
           call MPI_RECV(success, 1, MPI_LOGICAL, which, ME_STRNG, &
-     & MPI_COMM_STRNG, stat, bug)
+     & MPI_COMM_STRNG, stat, ierror)
          endif ! which lt ME_STRNG
         endif ! apply Metropolis
 !
        endif ! qvalid ...
 ! all root nodes continue (success=false for idle node(s)) :
        if (success) then
-        call MPI_ALLGATHER(which, 1, itype, &
-     & nodelist, 1, itype, MPI_COMM_STRNG, bug)
+        call MPI_ALLGATHER(which, 1, MPI_INTEGER, &
+     & nodelist, 1, MPI_INTEGER, MPI_COMM_STRNG, ierror)
 !
 ! make entry in REX log (only lower-rank replica does this)
         if (ME_STRNG.lt.which) then
@@ -4081,45 +4019,33 @@
 !
 !********************************************************************************************
 ! swap restart & traj file info; otherwise restart files will correspond to wrong replica
+!#ifdef __CHARMM
 ! oldiol=iolev
 ! iolev=1 ! so that vinqre works
+!#endif
 !
-! can add others here
-        if (iunwri.gt.0) &
-! VINQUIRE gives problems, did not bother to debug, since that code is obsolete anyway
-     & INQUIRE(UNIT=iunwri, OPENED=openun(1), NAME=fnames(1))
-! & CALL VINQRE('UNIT',fnames(1),i,j,
-! & OPENUN(1),QFORM,QWRITE,iunwri)
-        if (iuncrd.gt.0) &
-     & INQUIRE(UNIT=iuncrd, OPENED=openun(2), NAME=fnames(2))
-! & CALL VINQRE('UNIT',fnames(2),i,j,
-! & OPENUN(2),QFORM,QWRITE,iuncrd)
-! aa
-! write(600+ME_STRNG,*) iunwri, fnames(1), iuncrd, fnames(2)
+! DYNAMOL does not store restart fid;
+! furthermore, files are not kept open (so that they are complete in the case of a crash)
+! all we have to do is exchange the file names
+        nfiles=3
+        fnames(1)=trajectoryoutname
+        fnames(2)=restartoutname
+        fnames(3)=statisticsoutname
 !
-        if (iuncrd.gt.0.or.iunwri.gt.0) &
-     & call MPI_SENDRECV(fnames, 2*150, MPI_BYTE, &
-     & which, which, new_fnames, 2*150, MPI_BYTE, &
-     & which, ME_STRNG, MPI_COMM_STRNG, stat, bug)
+        i=nfiles*len(fnames(1)) ! length of broadcast buffer
+         call MPI_SENDRECV(fnames, i, MPI_BYTE, &
+     & which, which, new_fnames, i, MPI_BYTE, &
+     & which, ME_STRNG, MPI_COMM_STRNG, stat, ierror)
+! write(600+ME_STRNG,*) iunwri, new_fnames(1),
+! & iuncrd, new_fnames(2)
+! close(600+ME_STRNG)
 ! assuming that the restart file is formatted (might change this later)
-        if (iunwri.gt.0.and.openun(1)) then
-         close(iunwri)
-         i=len(new_fnames(1))
-         call i=min(max(0,i),len(new_fnames(1)));new_fnames(1)(i+1:)='';call adjustleft(new_fnames(1),(/' ',tab/));i=len_trim(new_fnames(1))
-         open(UNIT=iunwri, FILE=new_fnames(1)(1:i), FORM='FORMATTED', &
-     & STATUS='OLD', ACCESS='SEQUENTIAL')
-        endif
-! assuming that dcd file is unformatted
-        if (iuncrd.gt.0.and.openun(2)) then
-         close(iuncrd)
-         i=len(new_fnames(2))
-         call i=min(max(0,i),len(new_fnames(2)));new_fnames(2)(i+1:)='';call adjustleft(new_fnames(2),(/' ',tab/));i=len_trim(new_fnames(2))
-         open(UNIT=iuncrd, FILE=new_fnames(2)(1:i), FORM='UNFORMATTED', &
-! & STATUS='OLD', ACCESS='APPEND')
-     & STATUS='OLD', POSITION='APPEND')
-        endif
-!
+        trajectoryoutname=new_fnames(1)
+        restartoutname =new_fnames(2)
+        statisticsoutname=new_fnames(3)
+!#ifdef __CHARMM
 ! iolev=oldiol
+!#endif
 ! done with swap output file info
 !********************************************************************************************
 ! finish updating reference values
@@ -4133,8 +4059,8 @@
          endif
         endif ! qvalid
        else
-        call MPI_ALLGATHER(ME_STRNG, 1, itype, &
-     & nodelist, 1, itype, MPI_COMM_STRNG, bug)
+        call MPI_ALLGATHER(ME_STRNG, 1, MPI_INTEGER, &
+     & nodelist, 1, MPI_INTEGER, MPI_COMM_STRNG, ierror)
 !
 ! move rejected, so restore reference values
 !
@@ -4157,13 +4083,14 @@
 ! from here on all nodes continue:
 ! broadcast success to all slave nodes
       if (qgrp) then
-       call call mpi_bcast(success,1,MPI_INTEGER4,0,MPI_COMM_LOCAL,ierror)
-       call call mpi_bcast(nodelist,nstring,MPI_INTEGER4,0,MPI_COMM_LOCAL,ierror) !!**CHARMM_ONLY**!##.not.INTEGER8
-       call call mpi_bcast(nodelist,nstring,MPI_INTEGER8,0,MPI_COMM_LOCAL,ierror) !!**CHARMM_ONLY**!##INTEGER8
+       call mpi_bcast(success,1,MPI_LOGICAL,0,MPI_COMM_LOCAL,ierror)
+       call mpi_bcast(nodelist,nstring,MPI_INTEGER,0,MPI_COMM_LOCAL,ierror)
 ! broadcast new cv to slaves
        if (success) then
-        call call mpi_bcast(r_f,27*nforced,MPI_INTEGER8,0,MPI_COMM_LOCAL,ierror)
-        if (qorient.and.qdiffrot) call call mpi_bcast(r_o,27*norient,MPI_INTEGER8,0,MPI_COMM_LOCAL,ierror)
+        call mpi_bcast(r_f,27*nforced,MPI_REAL,0,MPI_COMM_LOCAL,ierror)
+        if (qorient.and.qdiffrot) then ;
+         call mpi_bcast(r_o,27*norient,MPI_REAL,0,MPI_COMM_LOCAL,ierror) ;
+        endif
        endif
       endif ! qgrp
 !
@@ -4192,11 +4119,7 @@
       if (success) then
        if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) mestring=ME_STRNG
 ! broadcast string size to all slave nodes
-       call call mpi_bcast(mestring,1,MPI_INTEGER4,0,MPI_COMM_LOCAL,ierror) !!**CHARMM_ONLY**!##.not.INTEGER8
-       call call mpi_bcast(mestring,1,MPI_INTEGER8,0,MPI_COMM_LOCAL,ierror) !!**CHARMM_ONLY**!##INTEGER8
-
-
-
+       call mpi_bcast(mestring,1,MPI_INTEGER,0,MPI_COMM_LOCAL,ierror)
       endif
 ! write(600+ME_GLOBAL, *) ME_STRNG
 ! close(600+ME_GLOBAL)
@@ -4205,5 +4128,4 @@
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       end module ftsm
 !
-!**CHARMM_ONLY**!##ENDIF
 !**CHARMM_ONLY**!##ENDIF

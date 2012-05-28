@@ -87,7 +87,7 @@ __CHARMM_ONLY##IF STRINGM
 #else
       int :: ierror ! for __DMOL
       int :: natom
-      int, pointer :: iselct
+      int, pointer :: iselct(:)
 #endif
       float, pointer :: fd_error(:,:)
 !
@@ -191,7 +191,7 @@ __CHARMM_ONLY##IF STRINGM
 !
         evolve_expo_on=(__INDX_RM(comlyn,comlen,'EXPO').gt.0) ! use exponential convolution
         if (evolve_expo_on) then
-         evolve_expo_mem=gtrmf(comlyn,comlen,'MEMO',0.999d0)
+         evolve_expo_mem=__GET_RM_F(comlyn,comlen,'MEMO',0.999d0)
         endif
 !
         evolve_aver_on=(__INDX_RM(comlyn,comlen,'AVER').gt.0) ! r_ref=mean(r_inst)
@@ -199,7 +199,7 @@ __CHARMM_ONLY##IF STRINGM
          num_evolve_samples=0
          max_evolve_samples=0
 !        setting this large will dampen initial fluctuations
-         if (indx(comlyn, comlen,'NAVE' ,4).gt.0) then
+         if (__INDX(comlyn, comlen,'NAVE' ,4).gt.0) then
           num_ave_samples=__GET_RM_I(comlyn,comlen,'NAVE',-1)
           if (num_ave_samples.gt.0) then
             num_evolve_samples=num_ave_samples
@@ -208,7 +208,7 @@ __CHARMM_ONLY##IF STRINGM
           endif ! num_samples
          endif ! NAVE
 !
-         if (indx(comlyn, comlen,'MAXAVE',6).gt.0) then
+         if (__INDX(comlyn, comlen,'MAXAVE',6).gt.0) then
           num_ave_samples=__GET_RM_I(comlyn,comlen,'MAXAVE',-1)
           if (num_ave_samples.gt.0) then
             max_evolve_samples=num_ave_samples
@@ -249,7 +249,7 @@ __CHARMM_ONLY##IF STRINGM
        repl_x_on=(__INDX_RM(comlyn,comlen,'REX').gt.0)
        if (repl_x_on) then
         repl_x_freq=__GET_RM_I(comlyn,comlen,'REXF',0)
-        repl_x_temp=gtrmf(comlyn,comlen,'REXT',0d0)
+        repl_x_temp=__GET_RM_F(comlyn,comlen,'REXT',0d0)
 !
         if (repl_x_freq.le.0) then
           __WRN(whoami,'MUST SPECIFY POSITIVE REXF. REPLICA EXCHANGE IS OFF.')
@@ -277,7 +277,7 @@ __CHARMM_ONLY##IF STRINGM
      &      evolve_freq,' ITERATIONS.'; __PRINT(_MSGBUF)
             WRITE (_MSGBUF,'(2A,I7,A)')                                 &
      &      whoami, ' THE FIRST', evolve_nskip,                         &
-     &      ' ITERATIONS WILL NOT CONTRIBUTE TO AVERAGES.'; __PRINT(__MSGBUF)
+     &      ' ITERATIONS WILL NOT CONTRIBUTE TO AVERAGES.'; __PRINT(_MSGBUF)
             if (evolve_expo_on) then
                write(_MSGBUF,671) whoami, whoami, evolve_expo_mem ; __PRINT(_MSGBUF)
  671  format(A,' STRING EVOLUTION WILL BE OF THE FORM:',/,              &
@@ -443,12 +443,12 @@ __CHARMM_ONLY##IF STRINGM
           write(_MSGBUF,7007) whoami, zval, whoami, parallel_tolerance ; __PRINT(_MSGBUF)
          else
           write(_MSGBUF,7008) whoami, zval, whoami, parallel_tolerance ; __PRINT(_MSGBUF)
-          __WRN(,whoami,'PARALLEL COMPUTATION TEST FAILED.')
+          __WRN(whoami,'PARALLEL COMPUTATION TEST FAILED.')
          endif ! report test result
- 7007 format(/A, ' THE MAXIMUM ERROR IS ',E10.5,', ',                   &
-     &       /A, ' WHICH IS SMALLER THAN ',E10.5,'. TEST PASSED.')
- 7008 format(/A, ' THE MAXIMUM ERROR IS ',E10.5,', ',                   &
-     &       /A, ' WHICH IS NO SMALLER THAN ',E10.5,'. TEST FAILED.')
+ 7007 format(/A, ' THE MAXIMUM ERROR IS ',E12.5,', ',                   &
+     &       /A, ' WHICH IS SMALLER THAN ',E12.5,'. TEST PASSED.')
+ 7008 format(/A, ' THE MAXIMUM ERROR IS ',E12.5,', ',                   &
+     &       /A, ' WHICH IS NO SMALLER THAN ',E12.5,'. TEST FAILED.')
          if (associated(fd_error)) deallocate(fd_error) ! pointer to an array of abs errors
         endif
        endif ! para
@@ -671,14 +671,20 @@ __CHARMM_ONLY##IF STRINGM
           ENDIF
           norient=count( iselct.gt.0 )
 #elif defined(__DMOL)
-          klen=__INDX(comlyn, comlen,' END',4)
-          _MSGBUF=comlyn(isele+5:klen) ! extract selection
-          if (klen.gt.isele) comlyn=(comlyn(1:isele-1)//comlyn(klen+5:comlen)
-          comlen=len(len_trim(comlyn))
+          i=index(comlyn(isele:comlen),' END') ! location of selection termination
+          i=i-1+isele                                            ! index into comlyn starting from 1
+          _MSGBUF=comlyn(isele:i) ! part of string that begins with the selection and ends before ' END'
+          keyword=pop_string(_MSGBUF) ! remove first word (which we know is 'SELE*') from _MSGBUF
+!     process selection:
           nullify(iselct)
           iselct=>system_getind(_MSGBUF)
-          if (associated(iselct) then ; norient=size(iselct) ; else ; norient=0 ; endif
-#endif
+          if (associated(iselct)) then ; norient=size(iselct) ; else ; norient=0 ; endif
+!     remove selection string from command line:
+          _MSGBUF=comlyn(i:comlen)  ! command line starting with 'END' (see above) 
+          keyword=pop_string(_MSGBUF) ! remove 'END*' e.g. 'ENDING' is ok too
+          comlyn(isele:isele)=' ';
+          comlyn(isele+1:)=_MSGBUF          ! selection has been removed from command
+          comlen=len_trim(comlyn)
 #endif
 !
 ! currently we require at least three atoms for orientation
@@ -753,7 +759,7 @@ __CHARMM_ONLY##IF STRINGM
         elseif (irmsd.gt.0) then
 !    process forcing atom selection
 !    determine whether a selection keyword follows 'rmsd'
-         isele=indx(comlyn, comlen, 'SELE' ,4)
+         isele=__INDX(comlyn, comlen, 'SELE' ,4)
          if (isele.gt.irmsd) then
 !
 #ifdef __CHARMM
@@ -768,13 +774,20 @@ __CHARMM_ONLY##IF STRINGM
           ENDIF
           nforced=count( iselct.gt.0 )
 #elif defined(__DMOL)
-          klen=__INDX(comlyn, comlen,' END',4)
-          _MSGBUF=comlyn(isele+5:klen) ! extract selection
-          if (klen.gt.isele) comlyn=(comlyn(1:isele-1)//comlyn(klen+5:comlen)
-          comlen=len(len_trim(comlyn))
+          i=index(comlyn(isele:comlen),' END') ! same code as above
+          i=i-1+isele
+          _MSGBUF=comlyn(isele:i)
+          keyword=pop_string(_MSGBUF)
+!     process selection:
+          nullify(iselct)
           iselct=>system_getind(_MSGBUF)
-          if (associated(iselct)) then ; nforced=size(iselct) ; else ; nforced=0 ; endif
-#endif
+          if (associated(iselct)) then ; nforced=size(iselct) ; else ; norient=0 ; endif
+!     remove selection string from command line:
+          _MSGBUF=comlyn(i:comlen)
+          keyword=pop_string(_MSGBUF)
+          comlyn(isele:isele)=' '
+          comlyn(isele+1:)=_MSGBUF
+          comlen=len_trim(comlyn)
 #endif
 !
           if (nforced.le.0) then
@@ -854,7 +867,7 @@ __CHARMM_ONLY##IF STRINGM
           k=gtrmf(comlyn,comlen,'KPRP',-1d0)
           if (k.ge.0d0) then
            kperp=k
-           if (qprint) then  ; write(_MSGBUF,6746) whoami, k ; __PRINT(_MSGBUG) ; endif
+           if (qprint) then  ; write(_MSGBUF,6746) whoami, k ; __PRINT(_MSGBUF) ; endif
  6746 format(A,' SETTING PERPENDICULAR RESTRAINT FORCE CONSTANT TO '    &
      &       ,F11.5)
           else
@@ -946,9 +959,9 @@ __CHARMM_ONLY##IF STRINGM
           endif ! irep
  6776 format(A,' REPLICA NUMBER INVALID OR UNSPECIFIED.',               &
      &      /A,' WILL SET OFFSET DISTANCE FOR PERPENDICULAR RESTRAINT', &
-     &         ' TO ',E9.3,' ON ALL REPLICAS.')
+     &         ' TO ',E10.3,' ON ALL REPLICAS.')
  6775 format(A,' WILL SET OFFSET DISTANCE FOR PERPENDICULAR RESTRAINT ',&
-     &   'ON REPLICA ',I5,' TO ',E9.3,'.')
+     &   'ON REPLICA ',I5,' TO ',E10.3,'.')
 !********************************************************************
         elseif (indx(comlyn,comlen,'DRMS',4).gt.0) then ! RMS distance between simulation and reference structure
           zval=gtrmf(comlyn, comlen, 'DRMS', -1.0d0)
@@ -1770,14 +1783,14 @@ __CHARMM_ONLY##IF STRINGM
       character(len=16) :: whoami
 #ifdef __CHARMM
       character(len=80) :: title(maxtit)
-      int :: ntitle
+      int :: ntitle, ncv
 #endif
 #ifndef __CHARMM
       int :: natom
 #endif
       float, pointer :: r3(:,:)  ! coordinates
       int, pointer :: stringatoms(:), string_inds(:)
-      int :: i, j, k, ncv
+      int :: i, j, k
       int :: ifile
       int, optional :: col, ibeg, iend
       int :: c, ierror, stat(MPI_STATUS_SIZE), ibg, ie, ind
@@ -1827,7 +1840,9 @@ __CHARMM_ONLY##IF STRINGM
        do i = 1, natom
         if (stringatoms(i).gt.0) then; k=k+1; string_inds(k)=i; endif ! need this array for dcd writer below
        enddo
+#ifdef __CHARMM
        ncv=ncvel ; ncvel=0  !__CHARMM_ONLY##CVELOCI ! exclude constant velocity atoms also
+#endif
 !      for first frame, output all coordinates: take from instantaneous set
        allocate(r3(natom,3)) ; r3=0d0
 #ifdef __CHARMM
@@ -1974,13 +1989,13 @@ __CHARMM_ONLY##IF STRINGM
       enddo
 !
       if (ME_STRNG.eq.0) then
-       istats=1
-       qcg=.false.
-       qdim4=.false.
 !
 !    call trajectory reader
 !
 #ifdef __CHARMM
+       istats=1
+       qcg=.false.
+       qdim4=.false.
        begin_=1
        skip_=1
        stop_=nstring
@@ -1993,10 +2008,11 @@ __CHARMM_ONLY##IF STRINGM
      &  istep, istats, ndof, delta, begin_, stop_, skip_,               &
      &  nsavv_, 'CORD', 'CORD', title, ntitle, qdim4, trash8, .false.)
 #elif defined(__DMOL)
+       if (associated(stringatoms)) deallocate(stringatoms)
        call dcd_read_frame(ifile, r3, .true., FREEATOMS=stringatoms)
 #endif
 !
-       if (satoms.eq.k) then
+       if (size(stringatoms).eq.k) then
         if ( any(stringatoms(1:k).ne.string_inds(1:k)) )                &
      &   __WRN(whoami,'INVALID STRING ATOM INDICES. BEWARE.')
        else
@@ -2088,12 +2104,13 @@ __CHARMM_ONLY##IF STRINGM
       end subroutine ftsm_read_dcd
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine ftsm_write_cor(ifile, col)
-#ifdef__CHARMM
+#ifdef __CHARMM
       __DEP PSF 
 #endif
       __DEP_COORDINATES
       __DEP_SIZE
       __DEP_PARSER
+      __DEP_COORIO
 !
       __IMPNONE
       character(len=16) :: whoami
@@ -2196,6 +2213,8 @@ __CHARMM_ONLY##IF STRINGM
 !
       int :: icntrl(20), moder, ntitle=0
       int :: ifree(natom)
+#else
+      int :: natom
 #endif
 !
       data whoami /' FTSM_READ_COR>'/
@@ -2286,7 +2305,9 @@ __CHARMM_ONLY##IF STRINGM
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       qroot=MPI_COMM_STRNG.ne.MPI_COMM_NULL
       qprint=qroot.and.ME_STRNG.eq.0
+#ifdef __CHARMM
       if (qprint) then; oldiol=iolev; iolev=0; endif
+#endif
 !     begin
 !     reset iteration counter
 !     did the user specify it?
@@ -2327,7 +2348,7 @@ __CHARMM_ONLY##IF STRINGM
        __GET_RM_A(COMLYN,COMLEN,'RNAM',4,rmsd0_fname,80,rmsd0_flen)
        if (rmsd0_flen.eq.0) then
          __WRN(whoami,'NO RMSD FILE NAME SPECIFIED. WILL WRITE TO STDOUT.')
-         rmsd0_funit=outu
+         rmsd0_funit=__OSTREAM
        else
          if (__INDX_RM(comlyn,comlen,'RAPP').gt.0) then ! APPEND?
            rform='APPEND'
@@ -2353,7 +2374,7 @@ __CHARMM_ONLY##IF STRINGM
         __GET_RM_A(COMLYN,COMLEN,'ANAM',4,s_fname,80,s_flen)
         if (s_flen.eq.0) then
          __WRN(whoami,'STRING LENGTH FILE NAME NOT SPECIFIED. WILL WRITE TO STDOUT.')
-         s_funit=outu
+         s_funit=__OSTREAM
         else
          if (__INDX_RM(comlyn,comlen,'AAPP').gt.0) then ! APPEND?
            sform='APPEND'
@@ -2379,7 +2400,7 @@ __CHARMM_ONLY##IF STRINGM
         __GET_RM_A(COMLYN,COMLEN,'CVNM',4,c_fname,80,c_flen)
         if (c_flen.eq.0) then
          __WRN(whoami,'CURVATURE FILE NAME NOT SPECIFIED. WILL WRITE TO STDOUT.')
-         c_funit=outu
+         c_funit=__OSTREAM
         else
          if (__INDX_RM(comlyn,comlen,'CAPP').gt.0) then ! APPEND?
            cform='APPEND'
@@ -2405,7 +2426,7 @@ __CHARMM_ONLY##IF STRINGM
         __GET_RM_A(COMLYN,COMLEN,'FENM',4,fe_fname,80,fe_flen)
         if (fe_flen.eq.0) then
          __WRN(whoami,'NO F.E. FILE NAME SPECIFIED. WILL WRITE TO STDOUT.')
-         fe_funit=outu
+         fe_funit=__OSTREAM
         else
          if (__INDX_RM(comlyn,comlen,'FAPP').gt.0) then ! APPEND?
            feform='APPEND'
@@ -2463,8 +2484,7 @@ __CHARMM_ONLY##IF STRINGM
           if (qprint) then
              write(_MSGBUF,6722) whoami,rex_fname_old(1:rex_flen_old) ; __PRINT(_MSGBUF)
              rex_funit=-1
-             __OPEN_FILE(rex_funit,rex_fname_old(1:rex_flen_old),    &
-     &         'FORMATTED','READ')
+             __OPEN_FILE(rex_funit,rex_fname_old(1:rex_flen_old),'FORMATTED','READ')
           endif
 !
           call ftsm_rex_read_map(rex_funit)
@@ -2531,7 +2551,9 @@ __CHARMM_ONLY##IF STRINGM
  6625 format(A,' WILL WRITE AVERAGE FORCE TO FILE ',A,'.')
       endif ! forces
 !
+#ifdef __CHARMM
       if (qprint) iolev=oldiol
+#endif
 !
 !      if we got this far, we are probably OK
       stat_initialized=.true.
@@ -2608,8 +2630,7 @@ __CHARMM_ONLY##IF STRINGM
      &                //fmt_real(1:fmt_len)//real_format//')'
            else
             rmsd0_funit=-1
-            __OPEN_FILE(rmsd0_funit, rmsd0_fname,                    &
-     &       'FORMATTED',rform)
+            __OPEN_FILE(rmsd0_funit, rmsd0_fname,'FORMATTED',rform)
             fmt='("'//fmt_int(1:5)//' ",'                               &
      &                //fmt_real(1:fmt_len)//real_format//')'
            endif
@@ -2631,8 +2652,7 @@ __CHARMM_ONLY##IF STRINGM
      &                //fmt_real(1:fmt_len)//real_format//')'
          else
           s_funit=-1
-          __OPEN_FILE(s_funit, s_fname,                              &
-     &      'FORMATTED',sform)
+          __OPEN_FILE(s_funit, s_fname,'FORMATTED',sform)
           fmt='("'//fmt_int(1:5)//' ",'//fmt_real(1:fmt_len)            &
      &                                 //real_format//')'
          endif
@@ -2653,13 +2673,12 @@ __CHARMM_ONLY##IF STRINGM
        if (qprint) then
         if (repa_initialized) then ! proceed only if arclength defined
 !
-         if (c_funit.eq.outu) then
+         if (c_funit.eq.__OSTREAM) then
           fmt='("CURV> '//fmt_int(1:5)//' ",'                           &
      &                //fmt_real(1:fmt_len)//real_format//')'
          else
           c_funit=-1
-          __OPEN_FILE(c_funit, c_fname,                              &
-     &      'FORMATTED',cform)
+          __OPEN_FILE(c_funit, c_fname,'FORMATTED',cform)
           fmt='("'//fmt_int(1:5)//' ",'//fmt_real(1:fmt_len)            &
      &                                 //real_format//')'
          endif
@@ -2685,8 +2704,7 @@ __CHARMM_ONLY##IF STRINGM
      &                //fmt_real(1:fmt_len)//real_format//')'
          else
           fe_funit=-1
-          __OPEN_FILE(fe_funit, fe_fname,                            &
-     &      'FORMATTED',feform)
+          __OPEN_FILE(fe_funit, fe_fname,'FORMATTED',feform)
           fmt='("'//fmt_int(1:5)//' ",'//fmt_real(1:fmt_len)            &
      &                                 //real_format//')'
          endif
@@ -2702,43 +2720,43 @@ __CHARMM_ONLY##IF STRINGM
       endif
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       if (output_rex_map) then ! output replica exchange map
-        if (rex_flen.eq.0) then
-         __WRN(whoami,'NO FILE NAME SPECIFIED. WILL NOT WRITE REPLICA EXCHANGE MAP.')
-        else
-         if (qprint) then
-          rex_funit=-1
-          __OPEN_FILE(rex_funit,                                     &
-     &     rex_fname(1:rex_flen)//'.map', 'FORMATTED','WRITE')
-          call ftsm_rex_print_map(rex_funit) ! all processes enter
+       if (rex_flen.eq.0) then
+        __WRN(whoami,'NO FILE NAME SPECIFIED. WILL NOT WRITE REPLICA EXCHANGE MAP.')
+       else
+        if (qprint) then
+         rex_funit=-1
+         rex_fname(rex_flen+1:rex_flen+4)='.map' ! append to name
+         __OPEN_FILE(rex_funit,rex_fname(1:rex_flen+4), 'FORMATTED','WRITE')
+         rex_fname(rex_flen+1:)='' ! erase extension
+         call ftsm_rex_print_map(rex_funit) ! all processes enter
 !
-          __CLOSE_FILE(rex_funit, 'KEEP', error)
-         endif ! qprint
-        endif
+         __CLOSE_FILE(rex_funit, 'KEEP', error)
+        endif ! qprint
+       endif
       endif
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       if (output_rex_log) then
        if (rex_flen.eq.0) then
          __WRN(whoami,'NO FILE NAME SPECIFIED. WILL NOT WRITE REPLICA EXCHANGE LOG.')
        else
-         if (qprint) then
-           rex_funit=-1
-           __OPEN_FILE(rex_funit,                                    &
-     &                  rex_fname(1:rex_flen)//'.dat',                  &
-     &                  'FORMATTED', rxlform)
-         endif
-         rxlform='APPEND'
+        if (qprint) then
+         rex_funit=-1
+         rex_fname(rex_flen+1:rex_flen+4)='.dat' ! append to name
+         __OPEN_FILE(rex_funit,rex_fname(1:rex_flen+4),'FORMATTED', rxlform)
+         rex_fname(rex_flen+1:)='' ! erase extension
+        endif
+        rxlform='APPEND'
 !
-         call ftsm_rex_print_log(rex_funit)
+        call ftsm_rex_print_log(rex_funit)
 !    flush unit:
-         if (qprint) __CLOSE_FILE(rex_funit,'KEEP',error)
+        if (qprint) __CLOSE_FILE(rex_funit,'KEEP',error)
        endif
       endif
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       if (output_centers) then
         if (qprint) then
          centers_funit=-1
-         __OPEN_FILE(centers_funit, centers_fname,'UNFORMATTED',     &
-     &                  cenform)
+         __OPEN_FILE(centers_funit, centers_fname,'UNFORMATTED', cenform)
         endif
 !    write current centers as a trajectory frame (adopted from write_dcd)
 !--------------------------------------------------------------------
@@ -2766,8 +2784,7 @@ __CHARMM_ONLY##IF STRINGM
           write(forces_funit,'("FORCES> ",I8)') stat_iteration_counter ! % is a MATLAB comment
          else
           forces_funit=-1
-          __OPEN_FILE(forces_funit, forces_fname,                    &
-     &      'FORMATTED',fform)
+          __OPEN_FILE(forces_funit, forces_fname,'FORMATTED',fform)
           write(forces_funit,'("% ",I8)') stat_iteration_counter ! % is a MATLAB comment
          endif
 !
@@ -2901,7 +2918,7 @@ __CHARMM_ONLY##IF STRINGM
           endif ! repa_on
 !    update reference coordinates
           if (.not.string_noprint) then 
-           write(_MSGBUF,'(2A)') whoami,' UPDATING NEIGHBOR IMAGES.' ; __PRINT(_MSGBUF,3)
+           write(_MSGBUF,'(2A)') whoami,' UPDATING NEIGHBOR IMAGES.' ; __PRINTL(_MSGBUF,3)
           endif
           call ftsm_swap_bc(.false.)
 !------------------------------------------------------------------------
@@ -3746,9 +3763,10 @@ __CHARMM_ONLY##IF STRINGM
       end subroutine ftsm_evolve
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine ftsm_compute_fe_fd()
-      __IMPNONE
       __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
       __DEP_MPI 
+      __IMPNONE
+!
       float :: avforces(2,nstring)
       int :: ierror, i
       character(len=20) :: whoami
@@ -3951,6 +3969,7 @@ __CHARMM_ONLY##IF STRINGM
       int4mpi :: stat(MPI_STATUS_SIZE)
       int :: i, ierror
 !
+ __DECLARE_MSGBUF
 !
       interface
         subroutine interp_driver_sci(rin,rout,wgt,n,                    &
@@ -3984,7 +4003,7 @@ __CHARMM_ONLY##IF STRINGM
        return
       endif
       if (qprint) then
-       write(_MSGBUF,690) whoami ; call __PRINTL(_MSGBUF,5)
+       write(_MSGBUF,690) whoami ; __PRINTL(_MSGBUF,5)
       endif
  690  format(/A,' PERFORMING STRING REPARAMETRIZATION.')
 !
@@ -4114,7 +4133,7 @@ __CHARMM_ONLY##IF STRINGM
       float :: x(:), y(:), z(:) ! mass(size(x,1))
       int :: itime
 !
-      int :: i, j, ibeg, iend, bug, stat(MPI_STATUS_SIZE)
+      int :: i, j, ibeg, iend, ierror, stat(MPI_STATUS_SIZE)
       bool :: deriv, qendpoint, qgrp, qvalid
 !
       int :: which   ! replica with which the exchange was attempted
@@ -4150,7 +4169,7 @@ __CHARMM_ONLY##IF STRINGM
 !
 !     determine exchange partner
       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then
-       if (ME_STRNG.eq.0) which=INT(random(iseed)*2d0) ! either 0 or 1
+       if (ME_STRNG.eq.0) which=INT(__RANDOMU(__SEED)*2d0) ! either 0 or 1
        call MPI_BCAST(which, 1, mpiint, 0, MPI_COMM_STRNG, ierror)     ! string root broadcasts to all replicas
 !    determine whether swapping w. left (-1) or w. right (+1) neighbor & calculate rank of neighbor
        which=ME_STRNG + (mod(ME_STRNG + which, 2)*2 - 1)
@@ -4237,7 +4256,7 @@ __CHARMM_ONLY##IF STRINGM
 !    this may not be correct because the random numbers will not come from the same sequence;
 !    may change this later
          if (which.lt.ME_STRNG) then
-          success=(random(iseed).le.exp(-rex_beta*dE))
+          success=(__RANDOMU(__SEED).le.exp(-rex_beta*dE))
 !     send to othe replica
           call MPI_SEND(success, 1, MPI_LOGICAL, which, which,          &
      &    MPI_COMM_STRNG, ierror)
@@ -4325,7 +4344,9 @@ __CHARMM_ONLY##IF STRINGM
         restartoutname   =new_fnames(2)
         statisticsoutname=new_fnames(3)
 #endif
+!#ifdef __CHARMM
 !        iolev=oldiol
+!#endif
 !     done with swap output file info
 !********************************************************************************************
 !       finish updating reference values

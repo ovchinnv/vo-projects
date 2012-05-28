@@ -66,6 +66,7 @@
       public list_params ! list parameters
       public adjustleft
       public numword
+      public remove_tag
       public pop_string
       public get_remove_parameter
       public toupper

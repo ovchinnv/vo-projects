@@ -1,3 +1,9 @@
+/*
+#ifdef __IMPNONE
+#undef __IMPNONE
+#endif
+#define __IMPNONE
+*/
 ! **********************************************************************!
 ! This source file was was generated automatically from a master source !
 ! code tree, which may or may not be distributed with this code, !
@@ -19,7 +25,7 @@
       use ivector
       use ftsm_var, only: nstring, ftsm_initialized
 !
-     
+      implicit none
 !
       private
 !
@@ -77,7 +83,7 @@
        end subroutine ftsm_rex_set_temp
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine ftsm_rex_print_map(iunit,fmt)
-      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
 ! only root process should call
        integer :: iunit
        character(len=*), optional :: fmt
@@ -102,9 +108,11 @@
        end subroutine ftsm_rex_print_map
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine ftsm_rex_read_map(iunit)
-      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
       use multicom_aux
       use mpi
+!
+!
        integer :: iunit, ierror
        character(len=19) :: whoami
        data whoami /' FTSM_READ_REX_MAP>'/
