@@ -1,3 +1,4 @@
+/*COORDINATES AND MASSES:*/
 /*
 #ifdef __IMPNONE
 #undef __IMPNONE
@@ -75,7 +76,7 @@
       use constants
       use mpi
       use system, only : system_getind
-      use system, only : r, rcomp
+      use system, only : r, rcomp, m, bfactor, occupancy
       use psf
 !
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -146,7 +147,6 @@
        endif
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       elseif (( keyword(1:4).eq.'DYNA'(1:4) )) then
-
 
 
 
@@ -351,26 +351,26 @@
        if (qcomp) then
          if (qprint) write(msg___,6657) whoami ; write(0,'(A)') msg___
  6657 format(/A,' WILL DEFINE PATH FROM COMPARISON COORDINATES.')
-         call ftsm_fill(xcomp,ycomp,zcomp)
+         call ftsm_fill(rcomp(1,:),rcomp(2,:),rcomp(3,:))
        else ! ~qcomp -- use main coordinates
          if (qprint) write(msg___,6660) whoami ; write(0,'(A)') msg___
  6660 format(/A,' WILL DEFINE PATH FROM MAIN COORDINATES.')
-         call ftsm_fill(x,y,z)
+         call ftsm_fill(r(1,:),r(2,:),r(3,:))
        endif ! qcomp
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       elseif (( keyword(1:4).eq.'TEST'(1:4) )) then !
        if (remove_tag(comlyn,'GRAD',comlen).gt.0) then ! finite-difference gradient test
 ! check fd spec
-        step=gtrmf(comlyn, comlen, 'STEP', finite_difference_d)
+        step=atof(get_remove_parameter(comlyn, 'STEP', comlen), finite_difference_d)
         if (qprint) write(msg___, 7001) whoami,whoami,step,whoami,whoami ;write(0,'(A)') msg___
  7001 format(/A,' WILL TEST GRADIENTS USING FINITE DIFFERENCES', &
      & /A,' USING DX = DY = DZ = ',F15.9,'.', &
      & /A,' MAIN COORDINATE SET MUST BE DEFINED.', &
      & /A,' WILL OVERWRITE FORCE/GRAD ARRAYS')
-        if (any(x.eq.anum)) then
+        if (any(r(1,:).eq.unknownf)) then
          write(0,*) 'WARNING FROM: ',whoami,': ','MAIN X SET HAS UNDEFINED VALUES. NOTHING DONE.'
         else
-         fd_error=>ftsm_test_grad_fd(x,y,z,step)
+         fd_error=>ftsm_test_grad_fd(r(1,:),r(2,:),r(3,:),step)
 ! write(me_global+100,*) fd_error
          if (qprint) then
           if (proj_on) then
@@ -413,10 +413,10 @@
  7005 format(/A,' WILL COMPARE PARALLEL AND SERIAL FORCE COMPUTATION', &
      & /A,' MAIN COORDINATE SET MUST BE DEFINED.', &
      & /A,' WILL OVERWRITE FORCE/GRAD ARRAYS')
-        if (any(x.eq.anum)) then
+        if (any(r(1,:).eq.unknownf)) then
          write(0,*) 'WARNING FROM: ',whoami,': ',' MAIN X SET HAS UNDEFINED VALUES. NOTHING DONE.'
         else
-         fd_error=>ftsm_test_parallel(x,y,z) ! use the same array as above
+         fd_error=>ftsm_test_parallel(r(1,:),r(2,:),r(3,:)) ! use the same array as above
          if (qprint) then
           if (proj_on) then
            write(msg___,7006) whoami, whoami, whoami, whoami ; write(0,'(A)') msg___
@@ -685,7 +685,7 @@
           if (.not.qdiffrot) then
            deallocate(iatom_o); iatom_o=>iatom_f; r_o=>r_f;
           else
-           allocate(r_o(norient,3,num_sets)); r_o=anum;
+           allocate(r_o(norient,3,num_sets)); r_o=unknownf;
            if (nforced.gt.0) call ftsm_compute_overlap_ind() ! compute overlap indices in iatom_both
           endif
 !
@@ -763,7 +763,7 @@
           if (.not.qdiffrot) then
            deallocate(iatom_f); iatom_f=>iatom_o; r_f=>r_o;
           else
-           allocate(r_f(nforced,3,num_sets)); r_f=anum;
+           allocate(r_f(nforced,3,num_sets)); r_f=unknownf;
            if (norient.gt.0) call ftsm_compute_overlap_ind() ! compute overlap indices in iatom_both
           endif
 ! print summary
@@ -785,8 +785,8 @@
          endif
 !*************************************************************
 ! set k parallel to path (for off-path dynamics)
-        elseif (indx(comlyn,comlen,'KPAR',4).gt.0) then
-          k=gtrmf(comlyn,comlen,'KPAR',-1d0)
+        elseif (index(comlyn(1:min(comlen,len(comlyn))),'KPAR'(1:min(4,len('KPAR')))).gt.0) then
+          k=atof(get_remove_parameter(comlyn, 'KPAR', comlen), -1d0)
           if (k.ge.0d0) then
            kpara=k
            if (qprint) then ; write(msg___,6756) whoami, k ; write(0,'(A)') msg___ ; endif
@@ -797,8 +797,8 @@
           endif
 !*************************************************************
 ! set k perpendicular to path (for off-path dynamics)
-        elseif (indx(comlyn,comlen,'KPRP',4).gt.0) then
-          k=gtrmf(comlyn,comlen,'KPRP',-1d0)
+        elseif (index(comlyn(1:min(comlen,len(comlyn))),'KPRP'(1:min(4,len('KPRP')))).gt.0) then
+          k=atof(get_remove_parameter(comlyn, 'KPRP', comlen), -1d0)
           if (k.ge.0d0) then
            kperp=k
            if (qprint) then ; write(msg___,6746) whoami, k ; write(0,'(A)') msg___ ; endif
@@ -808,8 +808,8 @@
            if (qprint) then ; write(msg___,6757) whoami, k ; write(0,'(A)') msg___ ; endif
           endif
 !**************************************************************
-        elseif (indx(comlyn,comlen,'KRMS',4).gt.0) then
-          k=gtrmf(comlyn,comlen,'KRMS',-1d0)
+        elseif (index(comlyn(1:min(comlen,len(comlyn))),'KRMS'(1:min(4,len('KRMS')))).gt.0) then
+          k=atof(get_remove_parameter(comlyn, 'KRMS', comlen), -1d0)
           if (k.ge.0d0) then
            krms=k
            if (qprint) then ; write(msg___,6752) whoami, k ; write(0,'(A)') msg___ ; endif
@@ -827,16 +827,16 @@
           select case(keyword(1:klen))
            case('YES','ON','TRUE','T','yes','on','true','t')
             if (qprint) then ; write(msg___,8001) whoami, 'SET FROM ATOM MASSES' ; write(0,'(A)') msg___ ; endif
-            call ftsm_set_weights(amass, natom) ! send masses
+            call ftsm_set_weights(m, natom) ! send masses
            case('NO','OFF','FALSE','F','no','off','false','f')
             if (qprint) then ; write(msg___,8001) whoami, 'WILL BE UNIFORM' ; write(0,'(A)') msg___ ; endif
             call ftsm_set_weights( (/ (1d0, i=1,natom) /), natom) ! uniform
-           case('WMAIN', 'wmain')
-            if (qprint) then ; write(msg___,8001) whoami, 'SET FROM WMAIN ARRAY' ; write(0,'(A)') msg___ ; endif
-            call ftsm_set_weights(wmain, natom) ! send masses
-           case('WCOMP', 'wcomp')
-            if (qprint) then ; write(msg___,8001) whoami, 'SET FROM WCOMP ARRAY' ; write(0,'(A)') msg___ ; endif
-            call ftsm_set_weights(wcomp, natom) ! send masses
+           case('BFACTOR', 'bfactor', 'BFACT', 'bfact')
+            if (qprint) then ; write(msg___,8001) whoami, 'SET FROM BFACTOR ARRAY' ; write(0,'(A)') msg___ ; endif
+            call ftsm_set_weights(bfactor, natom) ! send masses
+           case('OCCU', 'occu','OCCUPANCY', 'occupancy')
+            if (qprint) then ; write(msg___,8001) whoami, 'SET FROM OCCUPANCY ARRAY' ; write(0,'(A)') msg___ ; endif
+            call ftsm_set_weights(occupancy, natom) ! send masses
            case default
             write(0,*) 'WARNING FROM: ',whoami,': ','UNKNOWN OPTION SPECIFIED'
           end select
@@ -860,8 +860,8 @@
             write(0,*) 'WARNING FROM: ',whoami,': ','UNKNOWN OPTION SPECIFIED'
           end select
 !*********************************************************************
-        elseif (indx(comlyn,comlen,'DPAR',4).gt.0) then ! normalized distance parallel to vector between neighboring replicas at which this system is restrained
-          zval=gtrmf(comlyn, comlen, 'DPAR', -1.0d0)
+        elseif (index(comlyn(1:min(comlen,len(comlyn))),'DPAR'(1:min(4,len('DPAR')))).gt.0) then ! normalized distance parallel to vector between neighboring replicas at which this system is restrained
+          zval=atof(get_remove_parameter(comlyn, 'DPAR', comlen), -1.0d0)
 ! check replica spec
           irep=atoi(get_remove_parameter(comlyn, 'REP', comlen), -1)
           if (irep.lt.0.or.irep.ge.nstring) then
@@ -878,8 +878,8 @@
      & 'ON REPLICA ',I5,' TO ',F7.3,'.')
         ! DPAR
 !********************************************************************
-        elseif (indx(comlyn,comlen,'DPRP',4).gt.0) then ! distance perpendicular to vector between neighboring replicas at which this system is restrained
-          zval=gtrmf(comlyn, comlen, 'DPRP', -1.0d0)
+        elseif (index(comlyn(1:min(comlen,len(comlyn))),'DPRP'(1:min(4,len('DPRP')))).gt.0) then ! distance perpendicular to vector between neighboring replicas at which this system is restrained
+          zval=atof(get_remove_parameter(comlyn, 'DPRP', comlen), -1.0d0)
 ! check replica spec
           irep=atoi(get_remove_parameter(comlyn, 'REP', comlen), -1)
           if (irep.lt.0.or.irep.ge.nstring) then
@@ -895,8 +895,8 @@
  6775 format(A,' WILL SET OFFSET DISTANCE FOR PERPENDICULAR RESTRAINT ',&
      & 'ON REPLICA ',I5,' TO ',E10.3,'.')
 !********************************************************************
-        elseif (indx(comlyn,comlen,'DRMS',4).gt.0) then ! RMS distance between simulation and reference structure
-          zval=gtrmf(comlyn, comlen, 'DRMS', -1.0d0)
+        elseif (index(comlyn(1:min(comlen,len(comlyn))),'DRMS'(1:min(4,len('DRMS')))).gt.0) then ! RMS distance between simulation and reference structure
+          zval=atof(get_remove_parameter(comlyn, 'DRMS', comlen), -1.0d0)
 ! check replica spec
           irep=atoi(get_remove_parameter(comlyn, 'REP', comlen), -1)
           if (irep.lt.0.or.irep.ge.nstring) then
@@ -1301,7 +1301,7 @@
 !
       if (.not.ftsm_check(qorient)) return
 !
-      if (any(x.eq.anum).or.any(y.eq.anum).or.any(z.eq.anum)) then
+      if (any(x.eq.unknownf).or.any(y.eq.unknownf).or.any(z.eq.unknownf)) then
        write(0,*) 'WARNING FROM: ',whoami,': ','COORDINATE SET HAS UNDEFINED VALUES. NOTHING DONE.'
        return
       else ! if (qroot) then
@@ -1330,7 +1330,7 @@
          endif
         enddo
        endif ! qdiffrot
-      endif ! x.eq.anum
+      endif ! x.eq.unknownf
 ! remove and save center of mass of orientation atoms
 !
       call ftsm_save_com()
@@ -1680,7 +1680,7 @@
 !
 !
       use psf
-      use system, only : r, rcomp
+      use system, only : r, rcomp, m, bfactor, occupancy
       use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
       use parser
       use charmmio
@@ -1799,7 +1799,7 @@
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine ftsm_read_dcd(ifile, col)
       use psf
-      use system, only : r, rcomp
+      use system, only : r, rcomp, m, bfactor, occupancy
       use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
       use parser
       use mpi
@@ -1930,7 +1930,7 @@
       end subroutine ftsm_read_dcd
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine ftsm_write_cor(ifile, col)
-      use system, only : r, rcomp
+      use system, only : r, rcomp, m, bfactor, occupancy
       use psf
       use parser
       use charmmio
@@ -1984,7 +1984,7 @@
       subroutine ftsm_read_cor(ifile, col)
 !
       use psf
-      use system, only : r, rcomp
+      use system, only : r, rcomp, m, bfactor, occupancy
       use parser
 !
       use constants

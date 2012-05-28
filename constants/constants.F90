@@ -1,3 +1,4 @@
+/*COORDINATES AND MASSES:*/
 ! **********************************************************************!
 ! This source file was was generated automatically from a master source !
 ! code tree, which may or may not be distributed with this code, !

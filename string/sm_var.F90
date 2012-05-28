@@ -1,3 +1,4 @@
+/*COORDINATES AND MASSES:*/
 /*
 #ifdef __IMPNONE
 #undef __IMPNONE
