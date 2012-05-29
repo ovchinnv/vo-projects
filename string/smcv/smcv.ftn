@@ -99,6 +99,8 @@ __CHARMM_ONLY##IF STRINGM
 !
       __DECLARE_MSGBUF
 !
+      include "../mpitype.def"
+!
 !     interface to frames_align_string routine (needed since routine is not in a module and I use optional args
       interface
        subroutine frames_align_string(x,y,z,mass,min_rmsd,ind)
@@ -237,7 +239,9 @@ __CHARMM_ONLY##IF STRINGM
              ok=me.eq.cv%voronoi_whereami
             endif
            endif ! qroot
-           if (qslave) call __BROADCAST_LOCAL_4B(ok,1)
+           if (qslave) then 
+            __BROADCAST_LOCAL_4B(ok,1)
+           endif
            if (.not.ok) then
             __WRN(whoami,'VORONOI MAP INCONSISTENT WITH CURRENT COORDINATES. ABORTING.')
             return
@@ -492,9 +496,7 @@ __CHARMM_ONLY##IF STRINGM
 !     &  ME_LOCAL, SIZE_LOCAL
 !         call MPI_BARRIER(MPI_COMM_GLOBAL, ierror)
 !                stop
-
-
-
+!
        call smcv_add(comlyn, comlen) ! this routine deals with the various CV
 !
 !     (re)compute cv index limits (for parallelization) after each addition,
@@ -560,7 +562,7 @@ __CHARMM_ONLY##IF STRINGM
 !
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       elseif (__STRNCMP(keyword,'CLEA',4)) then ! initialize
-       if (qprint) write(_MSGBUF,6666) whoami
+       if (qprint) then ; write(_MSGBUF,6666) whoami ; __PRINT(_MSGBUF) ; endif
  6666 format(/A,' WILL REMOVE ALL CV.')
        call frames_done()
        call quat_done()
@@ -574,22 +576,23 @@ __CHARMM_ONLY##IF STRINGM
        keyword=__NEXTA(comlyn,comlen)
        if (__STRNCMP(keyword,'VMAP',4)) then
         if (__INDX_RM(comlyn, comlen, 'CALC').gt.0) then
-          if (qprint) write(_MSGBUF,6010) whoami
+          if (qprint) then ; write(_MSGBUF,6010) whoami ; __PRINT(_MSGBUF) ; endif
  6010 format(A,' WILL CALCULATE VORONOI MAP FROM MAIN COORDINATES.')
           call smcv_voronoi_whereami(x,y,z,amass)
 !    put 'whereami' into the map
           if (qroot.and.SIZE_STRNG.gt.1) then
-           call MPI_ALLGATHER(cv%voronoi_whereami, 1, MPI_INTEGER       &
-     &8                                                                 &  !__CHARMM_ONLY##INTEGER8
-     &     ,cv%voronoi_map, 1, MPI_INTEGER                              &
-     &8                                                                 &  !__CHARMM_ONLY##INTEGER8
-     &     , MPI_COMM_STRNG, ierror)
+           call MPI_ALLGATHER(cv%voronoi_whereami, 1, mpiint,       &
+     &      cv%voronoi_map, 1, mpiint, MPI_COMM_STRNG, ierror)
           else
            cv%voronoi_map(mestring+1)=cv%voronoi_whereami
           endif
-          if (qslave) call                                              &
-     &     __BROADCAST_LOCAL_4B(cv%voronoi_map,nstring)  !__CHARMM_ONLY##.not.INTEGER8
-     &     __BROADCAST_LOCAL_8B(cv%voronoi_map,nstring)  !__CHARMM_ONLY##INTEGER8
+          if (qslave) then
+#ifdef __CHARMM
+          __BROADCAST_LOCAL_4B(cv%voronoi_map,nstring)  !__CHARMM_ONLY##.not.INTEGER8
+          __BROADCAST_LOCAL_8B(cv%voronoi_map,nstring)  !__CHARMM_ONLY##INTEGER8
+#elif defined (__DMOL)
+          __BROADCAST_LOCAL(cv%voronoi_map,nstring,mpiint)
+#endif
 !
 !    print cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
         elseif (__INDX_RM(comlyn, comlen, 'PRIN').gt.0) then
@@ -598,14 +601,15 @@ __CHARMM_ONLY##IF STRINGM
 !        note: FNAME will be UPPER CASE
           if (qroot) then
            if (flen.GT.0) then
-            if (qprint) __OPEN_FILE(ifile,fname,'FORMATTED','WRITE')
-            if (qprint) write(_MSGBUF,6011) whoami, fname(1:flen)
+            if (qprint) then 
+             __OPEN_FILE(ifile,fname,'FORMATTED','WRITE')
+             write(_MSGBUF,6011) whoami, fname(1:flen) ; __PRINT(_MSGBUF)
+            endif
  6011 format(A,' WRITING VORONOI MAP TO FILE ',A,'.')
             call cv_common_print_voro_map(ifile)
-            if (qprint) __CLOSE_FILE(ifile,'KEEP',ierror)
+            if (qprint) then ; __CLOSE_FILE(ifile,'KEEP',ierror) ; endif
            else
-            __WRN(whoami,                                       &
-     &        'FILE NAME NOT SPECIFIED. NOTHING DONE.')
+            __WRN(whoami,'FILE NAME NOT SPECIFIED. NOTHING DONE.')
            endif ! flen
           endif ! qroot
 !    read ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -614,14 +618,16 @@ __CHARMM_ONLY##IF STRINGM
           __GET_RM_A(COMLYN,COMLEN,'NAME',4,FNAME,80,FLEN)
 !        note: FNAME will be UPPER CASE
           if (flen.GT.0) then
-            if (qprint) __OPEN_FILE(ifile,fname,'FORMATTED','WRITE')
-            if (qprint) write(_MSGBUF,6013) whoami, fname(1:flen)
+            if (qprint) then 
+            __OPEN_FILE(ifile,fname,'FORMATTED','WRITE')
+             write(_MSGBUF,6013) whoami, fname(1:flen) ; __PRINT(_MSGBUF)
+            endif
+!
  6013 format(A,' READING VORONOI MAP FROM FILE ',A,'.')
             call cv_common_read_voro_map(ifile)
-            if (qprint) __CLOSE_FILE(ifile,'KEEP',ierror)
+            if (qprint) then ; __CLOSE_FILE(ifile,'KEEP',ierror) ; endif
            else
-            __WRN(whoami,                                       &
-     &        'FILE NAME NOT SPECIFIED. NOTHING DONE.')
+            __WRN(whoami,'FILE NAME NOT SPECIFIED. NOTHING DONE.')
            endif ! flen
         endif ! CALC
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -631,31 +637,31 @@ __CHARMM_ONLY##IF STRINGM
          __GET_RM_A(COMLYN,COMLEN,'NAME',4,FNAME,80,FLEN)
 !        note: FNAME will be UPPER CASE
          if (flen.GT.0) then
-          if (qprint) __OPEN_FILE(ifile,fname,'FORMATTED','WRITE')
-          if (qprint) write(_MSGBUF,6014) whoami, fname(1:flen)
+          if (qprint) then
+           __OPEN_FILE(ifile,fname,'FORMATTED','WRITE')
+           write(_MSGBUF,6014) whoami, fname(1:flen) ; __PRINT(_MSGBUF) 
+          endif
  6014 format(A,' READING VORONOI CROSSING DATA FROM FILE ',A,'.')
           call cv_common_read_voro_data(ifile)
-          if (qprint) __CLOSE_FILE(ifile,'KEEP',ierror)
+          if (qprint) then ; __CLOSE_FILE(ifile,'KEEP',ierror) ; endif
          else
-          __WRN(whoami,                                         &
-     &        'FILE NAME NOT SPECIFIED. NOTHING DONE.')
+          __WRN(whoami,'FILE NAME NOT SPECIFIED. NOTHING DONE.')
          endif ! flen
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        elseif (__STRNCMP(keyword,'PRIN',4)) then
          ifile=__GET_RM_I(comlyn,comlen,'UNIT',-1)
          __GET_RM_A(COMLYN,COMLEN,'NAME',4,FNAME,80,FLEN)
 !        note: FNAME will be UPPER CASE
-         if (flen.GT.0) then
+         if (flen.gt.0) then
            if (qprint) then
             __OPEN_FILE(ifile,fname,'FORMATTED','WRITE')
-            write(_MSGBUF,6015) whoami, fname(1:flen)
+            write(_MSGBUF,6015) whoami, fname(1:flen) ; __PRINT(_MSGBUF)
  6015 format(A,' WRITING VORONOI CROSSING DATA TO FILE ',A,'.')
            endif
            call cv_common_print_voro_data(ifile)
-           if (qprint) __CLOSE_FILE(ifile,'KEEP',ierror)
+           if (qprint) then ; __CLOSE_FILE(ifile,'KEEP',ierror) ; endif
          else
-            __WRN(whoami,                                       &
-     &        'FILE NAME NOT SPECIFIED. NOTHING DONE.')
+            __WRN(whoami,'FILE NAME NOT SPECIFIED. NOTHING DONE.')
          endif ! flen
        endif ! VMAP
 !cccccccccccccccccccc FRAMES PARSER ccccccccccccccccccccccccccccccccccccc
@@ -664,13 +670,13 @@ __CHARMM_ONLY##IF STRINGM
        keyword=__NEXTA(comlyn,comlen)
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        if (__STRNCMP(keyword,'CLEA',4)) then ! initialize
-        if (qprint) write(_MSGBUF,6667) whoami
+        if (qprint) then ; write(_MSGBUF,6667) whoami ; __PRINT(_MSGBUF) ; endif
  6667 format(/A,' WILL REMOVE ALL LOCAL FRAMES.')
         call frames_done()
         call frames_init()
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        elseif (__STRNCMP(keyword,'RESE',4)) then ! initialize
-        if (qprint) write(_MSGBUF,6650) whoami
+        if (qprint) then ; write(_MSGBUF,6650) whoami ; __PRINT(_MSGBUF) ; endif
  6650 format(/A,' WILL FORCE RECALCULATION OF FRAME AXES.')
         call frames_reset_calculate(.true.)
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -687,14 +693,12 @@ __CHARMM_ONLY##IF STRINGM
 !       to the best-fit-RMSD rotation matrix
          if (__INDX_RM(comlyn, comlen, 'ALIG').gt.0) then
           if (any(xcomp.eq.__NAN)) then
-           __WRN(whoami,                                        &
-     &      'MAIN X SET HAS UNDEFINED VALUES. NOTHING DONE.')
+           __WRN(whoami,'MAIN X SET HAS UNDEFINED VALUES. NOTHING DONE.')
           elseif (any(x.eq.__NAN)) then
-           __WRN(whoami,                                        &
-     &      'COMPARISON X SET HAS UNDEFINED VALUES. NOTHING DONE.')
+           __WRN(whoami,'COMPARISON X SET HAS UNDEFINED VALUES. NOTHING DONE.')
           else
            if (qcomp) then
-            if (qprint) write(_MSGBUF,6651) whoami, whoami
+            if (qprint) then ; write(_MSGBUF,6651) whoami, whoami ; __PRINT(_MSGBUF) ; endif
  6651 format(/A,' WILL CALCULATE FRAME AXES FROM',                      &
      &          ' COMPARISON COORDINATES USING',                        &
      &       /A,' BEST-FIT ALIGNMENT WITH MAIN COORDINATES.')
@@ -703,7 +707,7 @@ __CHARMM_ONLY##IF STRINGM
      &                  i,xcomp,ycomp,zcomp,x,y,z,amass,.true.)
             enddo
            else ! qcomp
-            if (qprint) write(_MSGBUF,6652) whoami, whoami
+            if (qprint) then ; write(_MSGBUF,6652) whoami, whoami ; __PRINT(_MSGBUF) ; endif
  6652 format(/A,' WILL CALCULATE FRAME AXES FROM',                      &
      &          ' MAIN COORDINATES USING BEST-FIT',                     &
      &       /A,' ALIGNMENT WITH COMPARISON COORDINATES.')
@@ -719,12 +723,10 @@ __CHARMM_ONLY##IF STRINGM
          elseif (qcomp) then
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
           if (any(xcomp.eq.__NAN)) then
-           __WRN(whoami,                                        &
-     &      'COMPARISON X SET HAS UNDEFINED VALUES. NOTHING DONE.')
+           __WRN(whoami,'COMPARISON X SET HAS UNDEFINED VALUES. NOTHING DONE.')
           else
-           if (qprint) write(_MSGBUF,6656) whoami
- 6656 format(/A,' WILL CALCULATE FRAME AXES FROM',                      &
-     &          ' COMPARISON COORDINATES.')
+           if (qprint) then ; write(_MSGBUF,6656) whoami ; __PRINT(_MSGBUF) ; endif
+ 6656 format(/A,' WILL CALCULATE FRAME AXES FROM COMPARISON COORDINATES.')
            do i=1, frames%num_frames
             call frames_calc(i,xcomp,ycomp,zcomp,amass,.true.)
            enddo
@@ -733,10 +735,9 @@ __CHARMM_ONLY##IF STRINGM
          else ! qcomp false -- use main coords
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
           if (any(x.eq.__NAN)) then
-           __WRN(whoami,                                        &
-     &      'MAIN X SET HAS UNDEFINED VALUES. NOTHING DONE.')
+           __WRN(whoami,'MAIN X SET HAS UNDEFINED VALUES. NOTHING DONE.')
           else
-           if (qprint) write(_MSGBUF,6668) whoami
+           if (qprint) then ; write(_MSGBUF,6668) whoami ; __PRINT(_MSGBUF) ; endif
  6668 format(/A,' WILL CALCULATE FRAME AXES FROM MAIN COORDINATES.')
            do i=1, frames%num_frames
             call frames_calc(i,x,y,z,amass,.true.)
@@ -758,13 +759,15 @@ __CHARMM_ONLY##IF STRINGM
 !---------------------------------- OPEN FILE --------------------------------
         if (qroot) then
          if (all.gt.0.or.qprint) then
+#ifdef __CHARMM
           oldiol=iolev
           iolev=0 ! trick to open file on all nodes
-          if (flen.GT.0) __OPEN_FILE(ifile,fname,'FORMATTED','WRITE')
-          if (ifile .EQ. -1) ifile=__OSTREAM ! write to output stream
+#endif
+          if (flen.gt.0) then ; __OPEN_FILE(ifile,fname,'FORMATTED','WRITE') ; endif
+          if (ifile .eq. -1) ifile=__OSTREAM ! write to output stream
          endif
 !---------------------------- assume file is open, write -------------------------
-         if (qprint) write(_MSGBUF,6669) whoami
+         if (qprint) then ; write(_MSGBUF,6669) whoami ; __PRINT(_MSGBUF) ; endif
  6669 format(/A,' WRITING LOCAL FRAME AXES.')
          if (all.eq.0) then ; call frames_print_global(ifile) ;
          else ; call frames_print_local(ifile) ; endif
@@ -785,24 +788,28 @@ __CHARMM_ONLY##IF STRINGM
         if (qroot) then
 !cccccccccccccccccccccccccccc OPEN FILE ccccccccccccccccccccccc
          if (all.gt.0.or.qprint) then
+#ifdef __CHARMM
           oldiol=iolev
           iolev=0 ! open file on all processors
-          if (flen.GT.0) __OPEN_FILE(ifile,fname,'FORMATTED','READ')
+#endif
+          if (flen.gt.0) then ; __OPEN_FILE(ifile,fname,'FORMATTED','READ') ; endif
          endif
-         if (ifile .EQ. -1) then
+         if (ifile .eq. -1) then
           Ifile=__ISTREAM ! read from input file
 #ifdef __CHARMM
           call rdtitl(titleb,ntitlb,ifile,0) ! 0 = card format
 #endif
          endif
 !cccccccccccccccccc assume file is open, read ccccccccccccccccccc
-         if (qprint) write(_MSGBUF,6670) whoami
+         if (qprint) then ; write(_MSGBUF,6670) whoami ; __PRINT(_MSGBUF) ; endif
  6670 format(A,' READING LOCAL FRAME AXES.')
          if (all.gt.0) then ; call frames_read_local(ifile) ;
          else ; call frames_read_global(ifile) ; endif
          if (all.gt.0.or.qprint) then
-          if (flen.gt.0) __CLOSE_FILE(ifile,'KEEP',ierror)
+          if (flen.gt.0) then ; __CLOSE_FILE(ifile,'KEEP',ierror) ; endif
+#ifdef __CHARMM
           iolev=oldiol
+#endif
          endif
         endif ! qroot
 ! send to slaves
@@ -840,7 +847,7 @@ __CHARMM_ONLY##IF STRINGM
 !
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        elseif (__STRNCMP(keyword,'LIST',4)) then ! list frames
-        if (qprint) write(_MSGBUF,6671) whoami
+        if (qprint) then ; write(_MSGBUF,6671) whoami ; __PRINT(_MSGBUF) ; endif
  6671 format(/A,' WILL LIST LOCAL FRAMES.')
        call frames_list() ! list local frames
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -849,21 +856,20 @@ __CHARMM_ONLY##IF STRINGM
 !                                                      (optional) to mimimize DIST(z,theta(x))
         min_rmsd=(__INDX_RM(comlyn,comlen,'RMSD').gt.0) ! look for optimal RMSD alignment : i.e. minimize DIST(z,theta(x)) ?
 !
-        if (qprint) write(_MSGBUF,6672) whoami
+        if (qprint) then ; write(_MSGBUF,6672) whoami ; __PRINT(_MSGBUF) ; endif
  6672 format(/A,' WILL ALIGN LOCAL FRAMES.')
         if (__INDX_RM(comlyn,comlen,'VORO').gt.0) then
-            if (qprint) write(_MSGBUF,6673) whoami
+          if (qprint) then ; write(_MSGBUF,6673) whoami ; __PRINT(_MSGBUF) ; endif
  6673 format(A,' WILL FIT THE VORONOI MAP.')
           call frame_align_voro(x,y,z,amass)
         else
-          if (min_rmsd.and.qprint) write(_MSGBUF,6674) whoami
+          if (min_rmsd.and.qprint) then ; write(_MSGBUF,6674) whoami ; __PRINT(_MSGBUF) ; endif
  6674 format(A,' WILL CHECK RMSD(Z,THETA[X]).')
           call frames_align_string(x,y,z,amass,min_rmsd) ! subroutine moved to sm_util to resolve dependency problems
         endif
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        else
-            CALL WRNDIE(0, whoami,                                      &
-     &       'UNRECOGNIZED SUBCOMMAND: '//keyword)
+            __WARN(whoami,'UNRECOGNIZED SUBCOMMAND: ',keyword)
        endif ! frames parser
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -873,21 +879,20 @@ __CHARMM_ONLY##IF STRINGM
 !
        if (qcomp) then
         if (any(xcomp.eq.__NAN)) then
-         __WRN(whoami,                                          &
-     &      'COMPARISON X SET HAS UNDEFINED VALUES. NOTHING DONE.')
+         __WRN(whoami,'COMPARISON X SET HAS UNDEFINED VALUES. NOTHING DONE.')
         else
-         if (qprint) write(_MSGBUF,6657) whoami
+         if (qprint) then ; write(_MSGBUF,6657) whoami ; __PRINT(_MSGBUF) ; endif
  6657 format(/A,' WILL OBTAIN CV VALUES FROM COMPARISON COORDINATES.')
 !     check for column spec
          c1=__GET_RM_I(comlyn, comlen, 'COL', -1)
          if (c1.gt.0) then
-          if (qprint) write(_MSGBUF,6661) whoami, c1
+          if (qprint) then ; write(_MSGBUF,6661) whoami, c1 ; __PRINT(_MSGBUF) ; endif
           call smcv_fill(xcomp,ycomp,zcomp,amass,c1)
           call quat_reset_calculate(.true.)
           call frames_reset_calculate(.true.)
           call cv_common_unwrap_angles(c1) ! in case they are present
          else
-          if (qprint) write(_MSGBUF,6662) whoami
+          if (qprint) then ; write(_MSGBUF,6662) whoami ; __PRINT(_MSGBUF) ; endif
           call smcv_fill(xcomp,ycomp,zcomp,amass)
           call quat_reset_calculate(.true.)
           call frames_reset_calculate(.true.)
@@ -896,22 +901,21 @@ __CHARMM_ONLY##IF STRINGM
         endif ! x.eq.__NAN
        else ! ~qcomp -- use main coirdinates
         if (any(x.eq.__NAN)) then
-         __WRN(whoami,                                          &
-     &      'MAIN X SET HAS UNDEFINED VALUES. NOTHING DONE.')
+         __WRN(whoami,'MAIN X SET HAS UNDEFINED VALUES. NOTHING DONE.')
         else
-         if (qprint) write(_MSGBUF,6660) whoami
+         if (qprint) then ; write(_MSGBUF,6660) whoami ; __PRINT(_MSGBUF) ; endif
  6660 format(/A,' WILL OBTAIN CV VALUES FROM MAIN COORDINATES.')
 !     check for column spec
          c1=__GET_RM_I(comlyn, comlen, 'COL', -1)
          if (c1.gt.0) then
-          if (qprint) write(_MSGBUF,6661) whoami, c1
+          if (qprint) then ; write(_MSGBUF,6661) whoami, c1 ; __PRINT(_MSGBUF) ; endif
  6661  format(/A,' WILL FILL COLUMN ',I3,'.')
           call smcv_fill(x,y,z,amass,c1)
           call quat_reset_calculate(.true.)
           call frames_reset_calculate(.true.)
           call cv_common_unwrap_angles(c1) ! in case they are present
          else
-          if (qprint) write(_MSGBUF,6662) whoami
+          if (qprint) then ; write(_MSGBUF,6662) whoami ; __PRINT(_MSGBUF) ; endif
  6662  format(/A,' WILL FILL DEFAULT COLUMN.')
           call smcv_fill(x,y,z,amass)
           call quat_reset_calculate(.true.)
@@ -925,32 +929,31 @@ __CHARMM_ONLY##IF STRINGM
        if (__INDX_RM(comlyn,comlen,'GRAD').gt.0) then ! finite-difference gradient test
 ! check fd spec
         step=__GET_RM_F(comlyn, comlen, 'STEP', finite_difference_d)
-        if (qprint) write(_MSGBUF, 7001) whoami,whoami,step,whoami,whoami
+        if (qprint) then ; write(_MSGBUF, 7001) whoami,whoami,step,whoami,whoami ; __PRINT(_MSGBUF) ; endif
  7001  format(/A,' WILL TEST GRADIENTS USING FINITE DIFFERENCES',       &
      &        /A,' USING DX = DY = DZ = ',F15.9,'.',                    &
      &        /A,' MAIN COORDINATE SET MUST BE DEFINED.',               &
      &        /A,' WILL OVERWRITE "MAIN", "ZCUR", AND "ZOLD" CV ARRAYS')
         if (any(x.eq.__NAN)) then
-         __WRN(whoami,                                          &
-     &      'MAIN X SET HAS UNDEFINED VALUES. NOTHING DONE.')
+         __WRN(whoami,'MAIN X SET HAS UNDEFINED VALUES. NOTHING DONE.')
         else
          fd_error=>smcv_test_grad_fd(x,y,z,amass,step)
          if (qprint) then
-          write(_MSGBUF,7002) whoami, whoami
+          write(_MSGBUF,7002) whoami, whoami ; __PRINT(_MSGBUF)
  7002  format(/A,' CV#, DGRAD_X_MAX, DGRAD_Y_MAX, DGRAD_Z_MAX',         &
      &        /A,' ==========================================')
           do i=1, cv%num_cv
-         write(_MSGBUF,'(A," ",I5," ",3(F15.9," "))')whoami,i,fd_error(i,:)
+         write(_MSGBUF,'(A," ",I5," ",3(F15.9," "))')whoami,i,fd_error(i,:) ; __PRINT(_MSGBUF)
 !          write(_MSGBUF,*), i, fd_error(i,:)
           enddo
          endif ! qprint
 !     decide whether the test was passed
          zval=abs(maxval(fd_error))
          if (zval.lt.abs(step)*1d0) then
-          write(_MSGBUF,7003) whoami, zval, whoami
+          write(_MSGBUF,7003) whoami, zval, whoami ; __PRINT(_MSGBUF)
          else
-          write(_MSGBUF,7004) whoami, zval, whoami
-          call wrndie(-1,whoami,'FINITE DERIVATIVE TEST FAILED.')
+          write(_MSGBUF,7004) whoami, zval, whoami ; __PRINT(_MSGBUF)
+          __WRN(whoami,'FINITE DERIVATIVE TEST FAILED.')
          endif ! report test result
  7003 format(/A, ' THE MAXIMUM GRADIENT ierror IS ',F15.9,', ',          &
      &       /A, ' WHICH IS SMALLER THAN STEP. TEST PASSED.')
@@ -961,31 +964,30 @@ __CHARMM_ONLY##IF STRINGM
        endif ! grad
 !
        if (__INDX_RM(comlyn,comlen,'PARA').gt.0) then ! parallel communication test
-        if (qprint) write(_MSGBUF, 7005) whoami,whoami,whoami
+        if (qprint) then ; write(_MSGBUF, 7005) whoami,whoami,whoami ; __PRINT(_MSGBUF) ; endif
  7005  format(/A,' WILL COMPARE PARALLEL AND SERIAL CV COMPUTATION',    &
      &        /A,' MAIN COORDINATE SET MUST BE DEFINED.',               &
      &        /A,' WILL OVERWRITE "ZCUR" CV ARRAY')
         if (any(x.eq.__NAN)) then
-         __WRN(whoami,                                          &
-     &      'MAIN X SET HAS UNDEFINED VALUES. NOTHING DONE.')
+         __WRN(whoami,'MAIN X SET HAS UNDEFINED VALUES. NOTHING DONE.')
         else
          fd_error=>smcv_test_parallel(x,y,z,amass) ! use the same array as above
          if (qprint) then
-          write(_MSGBUF,7006) whoami, whoami
+          write(_MSGBUF,7006) whoami, whoami ; __PRINT(_MSGBUF)
  7006  format(/A,' CV#, DCV, DGRAD_X_MAX, DGRAD_Y_MAX, DGRAD_Z_MAX',    &
      &        /A,' ===============================================')
           do i=1, cv%num_cv
-         write(_MSGBUF,'(A," ",I5," ",4(F15.9," "))')whoami,i,fd_error(i,:)
+         write(_MSGBUF,'(A," ",I5," ",4(F15.9," "))')whoami,i,fd_error(i,:) ; __PRINT(_MSGBUF)
 !          write(_MSGBUF,*), i, fd_error(i,:)
           enddo
          endif ! qprint
 !     decide whether the test was passed
          zval=abs(maxval(fd_error))
          if (zval.lt.parallel_tolerance) then
-          write(_MSGBUF,7007) whoami, zval, whoami, parallel_tolerance
+          write(_MSGBUF,7007) whoami, zval, whoami, parallel_tolerance ; __PRINT(_MSGBUF)
          else
-          write(_MSGBUF,7008) whoami, zval, whoami, parallel_tolerance
-          call wrndie(-1,whoami,'PARALLEL COMPUTATION TEST FAILED.')
+          write(_MSGBUF,7008) whoami, zval, whoami, parallel_tolerance ; __PRINT(_MSGBUF)
+          __WRN(whoami,'PARALLEL COMPUTATION TEST FAILED.')
          endif ! report test result
  7007 format(/A, ' THE MAXIMUM ierror IS ',E10.5,', ',                   &
      &       /A, ' WHICH IS SMALLER THAN ',E10.5,'. TEST PASSED.')
@@ -996,22 +998,22 @@ __CHARMM_ONLY##IF STRINGM
        endif ! para
 !
        if (__INDX_RM(comlyn,comlen,'MINV').gt.0) then ! finite-difference gradient test
-        if (qprint) write(_MSGBUF, 7010) whoami,whoami,whoami, whoami
+        if (qprint) then ; write(_MSGBUF, 7010) whoami,whoami,whoami, whoami ; __PRINT(_MSGBUF) ; endif
  7010  format(/A,' WILL COMPARE M TENSOR INVERSE COMPUTATION',          &
      &        /A,' USING LU DECOMPOSITION AND MULTIDIAGONAL',           &
      &        /A,' MATRIX INVERSION.'                                   &
      &        /A,' MAIN COORDINATE SET MUST BE DEFINED.')
         if (any(x.eq.__NAN)) then
-         __WRN(whoami,                                          &
-     &      'MAIN X SET HAS UNDEFINED VALUES. NOTHING DONE.')
+         __WRN(whoami,'MAIN X SET HAS UNDEFINED VALUES. NOTHING DONE.')
         else
          zval=smcv_test_Minv(x,y,z,amass)
          if (zval.lt.parallel_tolerance) then
-          write(_MSGBUF,7011) whoami, zval, whoami, parallel_tolerance
+          write(_MSGBUF,7011) whoami, zval, whoami, parallel_tolerance ;  __PRINT(_MSGBUF)
          else
-          write(_MSGBUF,7012) whoami, zval, whoami, parallel_tolerance
+          write(_MSGBUF,7012) whoami, zval, whoami, parallel_tolerance ;  __PRINT(_MSGBUF)
           __WRN(whoami,'M INVERSE TEST FAILED.')
          endif ! report test result
+!
  7011 format(/A, ' THE MAXIMUM DIFFERENCE IS ',E10.5,', ',              &
      &       /A, ' WHICH IS SMALLER THAN ',E10.5,'. TEST PASSED.')
  7012 format(/A, ' THE MAXIMUM DIFFERENCE IS ',E10.5,', ',              &
@@ -1030,10 +1032,10 @@ __CHARMM_ONLY##IF STRINGM
           select case(keyword)
            case('YES','ON','TRUE','T','yes','on','true','t')
             keyword='ENABLED '; calc_qt_para=.true.
-            if (qprint) write(_MSGBUF,7009) whoami, 'QUATERNIONS', keyword
+            if (qprint) then ; write(_MSGBUF,7009) whoami, 'QUATERNIONS', keyword ; __PRINT(_MSGBUF) ; endif
            case('NO','OFF','FALSE','F','no','off','false','f')
             keyword='DISABLED' ; calc_qt_para=.false.
-            if (qprint) write(_MSGBUF,7009) whoami, 'QUATERNIONS', keyword
+            if (qprint) then ; write(_MSGBUF,7009) whoami, 'QUATERNIONS', keyword ; __PRINT(_MSGBUF) ; endif
            case default
             __WRN(whoami,'UNKNOWN OPTION SPECIFIED FOR "QUAT"')
           end select
@@ -1042,10 +1044,10 @@ __CHARMM_ONLY##IF STRINGM
           select case(keyword)
            case('YES','ON','TRUE','T','yes','on','true','t')
             keyword='ENABLED '; calc_fr_para=.true.
-            if (qprint) write(_MSGBUF,7009) whoami, 'FRAMES', keyword
+            if (qprint) then ; write(_MSGBUF,7009) whoami, 'FRAMES', keyword ; __PRINT(_MSGBUF) ; endif
            case('NO','OFF','FALSE','F','no','off','false','f')
             keyword='DISABLED' ; calc_fr_para=.false.
-            if (qprint) write(_MSGBUF,7009) whoami, 'FRAMES', keyword
+            if (qprint) then ; write(_MSGBUF,7009) whoami, 'FRAMES', keyword ; __PRINT(_MSGBUF) ; endif
            case default
             __WRN(whoami,'UNKNOWN OPTION SPECIFIED FOR "FRAM"')
           end select
@@ -1054,10 +1056,10 @@ __CHARMM_ONLY##IF STRINGM
           select case(keyword)
            case('YES','ON','TRUE','T','yes','on','true','t')
             keyword='ENABLED '; calc_cv_para=.true.
-            if (qprint) write(_MSGBUF,7009) whoami, 'CV', keyword
+            if (qprint) then ; write(_MSGBUF,7009) whoami, 'CV', keyword ; __PRINT(_MSGBUF) ; endif
            case('NO','OFF','FALSE','F','no','off','false','f')
             keyword='DISABLED' ; calc_cv_para=.false.
-            if (qprint) write(_MSGBUF,7009) whoami, 'CV', keyword
+            if (qprint) then ; write(_MSGBUF,7009) whoami, 'CV', keyword ; __PRINT(_MSGBUF) ; endif
            case default
             __WRN(whoami,'UNKNOWN OPTION SPECIFIED FOR "COLV"')
           end select
@@ -1066,10 +1068,10 @@ __CHARMM_ONLY##IF STRINGM
           select case(keyword)
            case('YES','ON','TRUE','T','yes','on','true','t')
             keyword='ENABLED '; calc_Mtensor_para=.true.
-            if (qprint) write(_MSGBUF,7009) whoami, 'M TENSOR', keyword
+            if (qprint) then ; write(_MSGBUF,7009) whoami, 'M TENSOR', keyword ; __PRINT(_MSGBUF) ; endif
            case('NO','OFF','FALSE','F','no','off','false','f')
             keyword='DISABLED' ; calc_Mtensor_para=.false.
-            if (qprint) write(_MSGBUF,7009) whoami, 'M TENSOR', keyword
+            if (qprint) then ; write(_MSGBUF,7009) whoami, 'M TENSOR', keyword ; __PRINT(_MSGBUF) ; endif
            case default
             __WRN(whoami,'UNKNOWN OPTION SPECIFIED FOR "MMAT"')
           end select
@@ -1078,10 +1080,10 @@ __CHARMM_ONLY##IF STRINGM
           select case(keyword)
            case('YES','ON','TRUE','T','yes','on','true','t')
             keyword='ENABLED '; calc_voronoi_para=.true.
-            if (qprint) write(_MSGBUF,7009) whoami, 'VORONOI NORM', keyword
+            if (qprint) then ; write(_MSGBUF,7009) whoami, 'VORONOI NORM', keyword ; __PRINT(_MSGBUF) ; endif
            case('NO','OFF','FALSE','F','no','off','false','f')
             keyword='DISABLED' ; calc_voronoi_para=.false.
-            if (qprint) write(_MSGBUF,7009) whoami, 'VORONOI NORM', keyword
+            if (qprint) then ; write(_MSGBUF,7009) whoami, 'VORONOI NORM', keyword ; __PRINT(_MSGBUF) ; endif
            case default
             __WRN(whoami,'UNKNOWN OPTION SPECIFIED FOR "VORO"')
           end select
@@ -1096,18 +1098,17 @@ __CHARMM_ONLY##IF STRINGM
        select case(keyword)
         case('LU','lu')
           keyword='LU'; inverse_LU=.true.
-          if (qprint) write(_MSGBUF,7013) whoami, keyword
+          if (qprint) then ; write(_MSGBUF,7013) whoami, keyword ; __PRINT(_MSGBUF) ; endif
         case('DIAG','diag')
           keyword='MULTDIAG' ; inverse_LU=.false.
-          if (qprint) write(_MSGBUF,7013) whoami, keyword
+          if (qprint) then ; write(_MSGBUF,7013) whoami, keyword ; __PRINT(_MSGBUF) ; endif
         case default
-          call                                                          &
-     &   wrndie(0,whoami,'UNKNOWN MATRIX INVERSION OPTION SPECIFIED.',0)
+          __WRN(whoami,'UNKNOWN MATRIX INVERSION OPTION SPECIFIED.')
        end select
  7013  format(/A, ' MATRIX INVERSION WILL USE ',A,' ROUTINES.')
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       elseif (__STRNCMP(keyword,'FIX',3)) then ! tell cv_posi about fixed "virtual" replicas
-       if (qprint) write(_MSGBUF, 6665) whoami, whoami
+       if (qprint) then ; write(_MSGBUF, 6665) whoami, whoami ; __PRINT(_MSGBUF) ; endif
        fixed_bc_0=(__INDX_RM(comlyn,comlen,'FIRS').gt.0)
        fixed_bc_1=(__INDX_RM(comlyn,comlen,'LAST').gt.0)
        if (fixed_bc_0) then
@@ -1117,7 +1118,7 @@ __CHARMM_ONLY##IF STRINGM
          fixbc=' NOT '
          flen=5
        endif
-       if (qprint) write(_MSGBUF,6663) whoami, fixbc(1:flen)
+       if (qprint) then ; write(_MSGBUF,6663) whoami, fixbc(1:flen) ; __PRINT(_MSGBUF) ; endif
        if (fixed_bc_1) then
          fixbc=' '
          flen=1
@@ -1125,7 +1126,7 @@ __CHARMM_ONLY##IF STRINGM
          fixbc=' NOT '
          flen=5
        endif
-       if (qprint) write(_MSGBUF,6664) whoami, fixbc(1:flen)
+       if (qprint) then ; write(_MSGBUF,6664) whoami, fixbc(1:flen) ; __PRINT(_MSGBUF) ; endif
        call cv_common_set_bc(fixed_bc_0, fixed_bc_1)
  6663 format(/A,' FIRST REPLICA OF STRING WILL',A,'BE FIXED.')
  6664 format(A,' LAST REPLICA OF STRING WILL',A,'BE FIXED.'/)
@@ -1144,28 +1145,32 @@ __CHARMM_ONLY##IF STRINGM
 !---------------------------------- OPEN FILE --------------------------------
        if (qroot) then
         if (all.gt.0.or.qprint) then
+#ifdef __CHARMM
          oldiol=iolev
          iolev=0 ! trick to open file on all nodes
-         if (flen.GT.0) __OPEN_FILE(ifile,fname,'FORMATTED','WRITE')
+#endif
+         if (flen.gt.0) then ; __OPEN_FILE(ifile,fname,'FORMATTED','WRITE') ; endif
         endif
-        if (ifile .EQ. -1) ifile=__OSTREAM ! write to output stream
+        if (ifile .eq. -1) ifile=__OSTREAM ! write to output stream
 !---------------------------- assume file is open, write -------------------------
 !     check for column spec
         c1=__GET_RM_I(comlyn, comlen, 'COL', -1)
         if (c1.gt.0) then
-         if (qprint) write(_MSGBUF,6679) whoami, c1
+         if (qprint) then ; write(_MSGBUF,6679) whoami, c1 ; __PRINT(_MSGBUF) ; endif
  6679 format(/A,' WRITING COORDINATES FROM COLUMN ',I3)
          if (all.eq.0) then ; call cv_common_print_global(ifile, c1) ;
          else ; call cv_common_print_local(ifile,c1) ; endif
         else
-         if (qprint) write(_MSGBUF,6689) whoami
+         if (qprint) then ; write(_MSGBUF,6689) whoami ; __PRINT(_MSGBUF) ; endif
  6689 format(/A,' WRITING COORDINATES FROM DEFAULT COLUMN.')
          if (all.eq.0) then ; call cv_common_print_global(ifile) ;
          else ; call cv_common_print_local(ifile) ; endif
         endif ! c1
         if (all.gt.0.or.qprint) then
-         if (flen.gt.0) __CLOSE_FILE(ifile,'KEEP',ierror)
+         if (flen.gt.0) then ; __CLOSE_FILE(ifile,'KEEP',ierror) ; endif
+#ifdef __CHARMM
          iolev=oldiol
+#endif
         endif
        endif ! qroot
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -1174,23 +1179,20 @@ __CHARMM_ONLY##IF STRINGM
 !      local is specified with 'ALL'; default is global
 !      can also read a specific column: specify SCOL x
        all=__INDX_RM(comlyn,comlen,'ALL') ! all replicas read
-       if (indx(comlyn, comlen, 'SCOL',4).gt.0) then
+       if (__INDX(comlyn, comlen, 'SCOL',4).gt.0) then
         scol=__GET_RM_I(comlyn, comlen, 'SCOL', 0)
         if (scol.ge.1) then ! need to know total number of replicas in CV file
          if (all.gt.0) then
-          __WRN(whoami,                                         &
-     &     'ALL AND SCOL CANNOT BOTH BE SPECIFIED.')
+          __WRN(whoami,'ALL AND SCOL CANNOT BOTH BE SPECIFIED.')
           return
          endif
          totcol=__GET_RM_I(comlyn, comlen, 'TCOL', 0)
          if (totcol.le.0) then
-          __WRN(whoami,                                         &
-     &     'MUST PROVIDE TOTAL NUMBER OF COLUMNS IN CV DATA FILE.')
+          __WRN(whoami,'MUST PROVIDE TOTAL NUMBER OF COLUMNS IN CV DATA FILE.')
           return
          endif
         else ! scol.ge.1
-         __WRN(whoami,                                          &
-     &     'SCOL MUST BE A POSITIVE INTEGER.')
+         __WRN(whoami,'SCOL MUST BE A POSITIVE INTEGER.')
          return
         endif
        endif ! SCOL present
@@ -1204,24 +1206,28 @@ __CHARMM_ONLY##IF STRINGM
        if (qroot) then
 !cccccccccccccccccccccccccccc OPEN FILE ccccccccccccccccccccccc
         if (all.gt.0.or.qprint) then
+#ifdef __CHARMM
          oldiol=iolev
          iolev=0 ! open file on all processors
-         if (FLEN.GT.0) __OPEN_FILE(ifile,fname,'FORMATTED','READ')
+#endif
+         if (flen.gt.0) then ; __OPEN_FILE(ifile,fname,'FORMATTED','READ') ; endif
         endif
-        IF(Ifile .EQ. -1) then
-         Ifile=ISTRM ! read from input file
+        if(ifile .eq. -1) then
+         ifile=__ISTREAM ! read from input file
+#ifdef __CHARMM
          call rdtitl(titleb,ntitlb,ifile,0) ! 0 = card format
+#endif
         endif
 !cccccccccccccccccc assume file is open, read ccccccccccccccccccc
         if (c1.gt.0) then ! column spec
-         if (qprint) write(_MSGBUF,6699) whoami, c1
+         if (qprint) then ; write(_MSGBUF,6699) whoami, c1 ; __PRINT(_MSGBUF) ; endif
  6699 format(A,' READING COORDINATES INTO COLUMN ',I3)
          if (all.gt.0) then ; call cv_common_read_local(ifile, c1) ;
          elseif (scol.ge.1) then
           call cv_common_read_local_from_global(ifile, totcol, scol, c1)
          else; call cv_common_read_global(ifile,c1) ; endif
         else
-         if (qprint) write(_MSGBUF,6709) whoami
+         if (qprint) then ; write(_MSGBUF,6709) whoami ; __PRINT(_MSGBUF) ; endif
  6709 format(A,' READING COORDINATES INTO DEFAULT COLUMN.')
          if (all.gt.0) then ; call cv_common_read_local(ifile) ;
          elseif (scol.ge.1) then
@@ -1229,7 +1235,7 @@ __CHARMM_ONLY##IF STRINGM
          else ; call cv_common_read_global(ifile) ; endif
         endif
         if (all.gt.0.or.qprint) then
-         if (flen.gt.0) __CLOSE_FILE(ifile,'KEEP',ierror)
+         if (flen.gt.0) then ; __CLOSE_FILE(ifile,'KEEP',ierror) ; endif
          iolev=oldiol
         endif
        endif ! qroot
@@ -3201,7 +3207,7 @@ __CHARMM_ONLY##IF STRINGM
          rxlform='APPEND'
          call cv_common_rex_print_log(rex_funit)
 !    flush unit:
-         if (qprint) __CLOSE_FILE(rex_funit,'KEEP',ierror)
+         if (qprint) then ; __CLOSE_FILE(rex_funit,'KEEP',ierror) ;  endif
        endif
       endif
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -3214,7 +3220,7 @@ __CHARMM_ONLY##IF STRINGM
         cvform='APPEND'
         call cv_common_print_global(cv_funit)
 !    flush unit:
-        if (qprint) __CLOSE_FILE(cv_funit, 'KEEP', ierror)
+        if (qprint) then ; __CLOSE_FILE(cv_funit, 'KEEP', ierror) ; endif
       endif
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       if (output_forces) then
@@ -3226,7 +3232,7 @@ __CHARMM_ONLY##IF STRINGM
        fform='APPEND'
        call cv_common_print_forces(forces_funit)
 !    flush unit:
-       if (qprint) __CLOSE_FILE(forces_funit, 'KEEP', ierror)
+       if (qprint) then ; __CLOSE_FILE(forces_funit, 'KEEP', ierror) ; endif
       endif
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       if (output_wgt) then
@@ -3276,14 +3282,13 @@ __CHARMM_ONLY##IF STRINGM
      &                   repa_initialized
       use cv_common,only: cv_common_repa
       __DEP_OUTPUT
-!      __IMPNONE
       __DEP_PARSER 
       __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
-      use parallel 
       __DEP_MPI 
 !
+      __IMPNONE
 ! local variables
-      character(len=11 whoami
+      character(len=11) :: whoami
       bool :: qprint
       data whoami/' SMCV_REPA>'/
 ! check if the user has made an initialization call
@@ -3291,11 +3296,10 @@ __CHARMM_ONLY##IF STRINGM
       qprint=(MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.ME_STRNG.eq.0)
 !
       if (.not.repa_initialized) then
-       __WRN( whoami,                                           &
-     &    'NO REPARAMETRIZATION OPTIONS SELECTED. NOTHING DONE.')
+       __WRN( whoami,'NO REPARAMETRIZATION OPTIONS SELECTED. NOTHING DONE.')
        return
       endif
-      if (qprint.and.(prnlev.ge.5)) write(_MSGBUF,690) whoami
+      if (qprint) then ; write(_MSGBUF,690) whoami ; __PRINTL(_MSGBUF,5) ; endif
  690  format(/A,' CALLING STRING REPARAMETRIZATION.')
       call cv_common_repa(interp_method,def,iterations,dst_cutoff)
 !
@@ -3309,5 +3313,4 @@ __CHARMM_ONLY##IF STRINGM
       call cv_common_set_ave_samples(n)
       end subroutine cv_set_ave_samples
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-__CHARMM_ONLY##ENDIF
 __CHARMM_ONLY##ENDIF
