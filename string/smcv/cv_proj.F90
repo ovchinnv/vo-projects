@@ -1,7 +1,14 @@
+/*COORDINATES AND MASSES:*/
+/*
+#ifdef __IMPNONE
+#undef __IMPNONE
+#endif
+#define __IMPNONE
+*/
 ! **********************************************************************!
 ! This source file was was generated automatically from a master source !
-! code tree, which may or may not be distributed with this code, !
-! because it is up to the distributor, and not up to me. !
+! code tree, which may not be distributed with this code if the !
+! distributor has a proprietary compilation procedure (e.g. CHARMM) !
 ! If you edit this file (rather than the master source file) !
 ! your changes will be lost if another pull from the master tree occurs.!
 ! In case you are wondering why, this approach makes it possible for !
@@ -29,7 +36,7 @@
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        function cv_proj_add(ind_o,ind_f,r_o,r_f,r1_o,r1_f, &
      & ow,fw,k,gamma,weight)
-      
+       implicit none
        real*8 :: k, gamma, weight
        integer, pointer :: ind_o(:), ind_f(:)
        real*8, pointer :: r_o(:,:), r_f(:,:), r1_o(:,:), r1_f(:,:), &
@@ -45,7 +52,7 @@
      & calctheta,deriv,addforce,fext)
        use bestfit
        use constants
-      
+       implicit none
 !
        real*8 :: x(:), y(:), z(:), &
      & fx(:), fy(:), fz(:), mass(:)
@@ -428,7 +435,7 @@
        end subroutine cv_proj_calc
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_proj_list(i)
-      
+       implicit none
        integer :: i
        call cv_drmsd_list(i,.true.) ! call drmsd routine
        end subroutine cv_proj_list

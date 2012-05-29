@@ -1,7 +1,14 @@
+/*COORDINATES AND MASSES:*/
+/*
+#ifdef __IMPNONE
+#undef __IMPNONE
+#endif
+#define __IMPNONE
+*/
 ! **********************************************************************!
 ! This source file was was generated automatically from a master source !
-! code tree, which may or may not be distributed with this code, !
-! because it is up to the distributor, and not up to me. !
+! code tree, which may not be distributed with this code if the !
+! distributor has a proprietary compilation procedure (e.g. CHARMM) !
 ! If you edit this file (rather than the master source file) !
 ! your changes will be lost if another pull from the master tree occurs.!
 ! In case you are wondering why, this approach makes it possible for !
@@ -29,8 +36,8 @@
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 ! this function does the job for x, y, and z positions
        function cv_posi_com_add(type,atom_list,k,gamma,weight,frame)
-       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
-      
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
+       implicit none
        character(len=80) :: msg___
 !
        real*8 :: k, gamma, weight
@@ -138,7 +145,7 @@ write(msg___,*)' POSITION_COM_',pos,' CV ALREADY PRESENT. NOTHING DONE.';write(0
 ! this routine does the job for x, y, and z positions
        subroutine cv_posi_com_calc(i,x,y,z,mass,fx,fy,fz,calctheta, &
      & deriv,addforce,fext)
-      
+       implicit none
 !
        real*8 :: x(:), y(:), z(:), fx(:), fy(:), fz(:), mass(:)
        real*8, optional :: fext ! `external' force for planar dynamics (see smcv_addforce in smcv_master)
@@ -356,12 +363,12 @@ write(msg___,*)' POSITION_COM_',pos,' CV ALREADY PRESENT. NOTHING DONE.';write(0
        end subroutine cv_posi_com_calc
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_posi_com_list(i)
-      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
       use multicom_aux
       use mpi
       use psf, only : atoms
 !
-      
+       implicit none
 !
        character(len=80) :: msg___
        integer :: i, j, type, ii, jj, iatom

@@ -1,7 +1,14 @@
+/*COORDINATES AND MASSES:*/
+/*
+#ifdef __IMPNONE
+#undef __IMPNONE
+#endif
+#define __IMPNONE
+*/
 ! **********************************************************************!
 ! This source file was was generated automatically from a master source !
-! code tree, which may or may not be distributed with this code, !
-! because it is up to the distributor, and not up to me. !
+! code tree, which may not be distributed with this code if the !
+! distributor has a proprietary compilation procedure (e.g. CHARMM) !
 ! If you edit this file (rather than the master source file) !
 ! your changes will be lost if another pull from the master tree occurs.!
 ! In case you are wondering why, this approach makes it possible for !
@@ -19,7 +26,7 @@
       use multicom_aux
       use mpi
 !
-     
+      implicit none
       integer :: n
       real*8 :: x(n), f(n)
       real*8 :: work(:)
@@ -112,7 +119,7 @@
       use multicom_aux
       use mpi
 !
-     
+      implicit none
 !
       integer n
       real*8 :: rin(n), rout(n), wgt(n)
@@ -286,11 +293,11 @@
      & drout, & ! optional computation of tangent
      & r_bc_0, r_bc_1) ! provide additional arrays for fixed bc
 !
-      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
       use multicom_aux
       use mpi
 !
-     
+      implicit none
 !
       integer :: n
       real*8 :: rin(n), rout(n), wgt(n)
@@ -343,7 +350,7 @@
 !
       interface ! to linear interpolation routine
        subroutine linear_interp(xin,yin,nin,xout,yout,nout,dydxout)
-      
+       implicit none
        integer :: nin, nout
        real*8 :: xin(nin), yin(nin), xout(nout), yout(nout)
        real*8, optional :: dydxout(nout) ! tangent computation
@@ -405,7 +412,6 @@
       call mpi_alltoallv(rin_w,s_count,s_disp,MPI_REAL, &
      & rall,r_count,r_disp,MPI_REAL, &
      & MPI_COMM_STRNG, ierror)
-
 ! take care of BC as well
       if (fbc0.eq.1) &
      & rall(1:r_count(1),1)= &
@@ -476,7 +482,6 @@
        enddo ! loop over variables
       else
         write(0,*) 'WARNING FROM: ',whoami,': ','NO VALID INTERPOLATION METHODS SELECTED'
-
       endif
 ! now we have a finely spaced path
 !
@@ -606,10 +611,8 @@
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       enddo
 ! print message
-      if (prnlev.ge.4) then
-       write(msg___,666) whoami, iteration, def; write(0,'(A)') msg___
+      write(msg___,666) whoami, iteration, def; call plainmessage(msg___,4)
  666 format(A,' ',I4,' ITERATIONS. DEF=',F10.5)
-      endif
 !
 ! save arclength to pass back to calling routine
       d_arclength=ds
@@ -632,7 +635,6 @@
        dum=dot_product(drout,drout)
        drout=drout/sqrt(dum)
       endif
-
 ! done!
 !cccccccccccccccccccccccccccccccccccccccccccccccccc
       deallocate(rall, drall, dr2all, rfine, drfine)
@@ -640,7 +642,6 @@
       deallocate(tfine,sfine,rrfine,ds2me_fine,dsfine,ds2all_fine)
       if (interp_method.eq.dst) &
      & deallocate(sinvec, sinvec_fine, rh)
-
       end subroutine interp_driver_sci
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -653,11 +654,11 @@
      & drout, & ! optional computation of tangent
      & r_bc_0, r_bc_1) ! provide additional arrays for fixed bc
 !
-      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
       use multicom_aux
       use mpi
 !
-     
+      implicit none
 !
       integer :: n
       real*8 :: rin(n), rout(n), wgt(n)
@@ -703,7 +704,6 @@
       real*8, parameter :: pi=3.14159265358979323846
       real*8 :: r0, r1, wrs
  character(len=80) :: msg___
-
       character(len=24) :: whoami
       data whoami /' INTERP_DRIVER_SCI_ROOT>'/
 !
@@ -942,16 +942,13 @@
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        enddo ! convergence loop
 ! print message
-       if (prnlev.ge.4) then
-        write(msg___,666) whoami, iteration, def; write(0,'(A)') msg___
+       write(msg___,666) whoami, iteration, def; call plainmessage(msg___,4)
  666 format(A,' ',I4,' ITERATIONS. DEF=',F10.5)
-       endif
 !
 ! save arclength to pass back to calling routine
        d_arclength=ds
 !
       endif ! qroot
-
 !ccccc now scatter new coordinates into rout
       call mpi_scatter(rall(1,fbc0+1), n, MPI_REAL, rout, n ,MPI_REAL, &
      & 0, MPI_COMM_STRNG, ierror)
@@ -978,7 +975,6 @@
         drout=drout/sqrt(dum)
        endif
       endif ! drout present
-
 ! done!
 !cccccccccccccccccccccccccccccccccccccccccccccccccc
       deallocate(rall, drall, dr2all, rfine, drfine)
@@ -1005,7 +1001,7 @@
       use mpi
       use multidiag ! tridiagonal inversion
 !
-     
+      implicit none
 !
       integer :: n
       real*8 :: rin(n), rout(n), wgt(n)
@@ -1198,7 +1194,7 @@
 !
       use multicom_aux
       use mpi
-     
+      implicit none
 !
       integer :: n
       real*8 :: rin(n), drout(n), wgt(n)
@@ -1337,10 +1333,10 @@
        use sm_var, only : nstring, mestring
 !
        use multicom_aux
-       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
        use mpi
 !
-      
+       implicit none
 !
        real*8 :: x(:), y(:), z(:), mass(:)
        logical, optional :: min_rmsd
@@ -1584,7 +1580,7 @@
       use mpi
       use multicom_aux
 !
-     
+      implicit none
 !
        real*8 :: x(:), y(:), z(:), mass(:)
        integer, optional :: ind ! frame index
@@ -1703,9 +1699,9 @@
        use smcv_master, only : smcv_voronoi_whereami ! used for rmsd test
        use sm_var, only : mestring
 !
-       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
 !
-      
+       implicit none
 !
        real*8 :: x(:), y(:), z(:), mass(:)
        integer, optional :: ind ! frame index
@@ -1813,7 +1809,7 @@ character(len=80) :: msg___
       use mpi
       use multicom_aux
 !
-     
+      implicit none
 !
       real*8 :: message(*)
       integer :: size, type, rank, error, comm

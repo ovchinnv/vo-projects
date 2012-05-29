@@ -1,7 +1,8 @@
+/*COORDINATES AND MASSES:*/
 ! **********************************************************************!
 ! This source file was was generated automatically from a master source !
-! code tree, which may or may not be distributed with this code, !
-! because it is up to the distributor, and not up to me. !
+! code tree, which may not be distributed with this code if the !
+! distributor has a proprietary compilation procedure (e.g. CHARMM) !
 ! If you edit this file (rather than the master source file) !
 ! your changes will be lost if another pull from the master tree occurs.!
 ! In case you are wondering why, this approach makes it possible for !
@@ -86,7 +87,6 @@ module output
  logical :: fatal_warning
 ! compute the maximum value of errorcodes across all nodes; then decice whether to terminate
 !
-
  level=warnlev ! current value of the error level
 
 !

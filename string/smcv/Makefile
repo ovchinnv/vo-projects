@@ -1,6 +1,6 @@
 ROOT=../..
 CVOBJ=cv_posi_com.o cv_dist_com.o cv_angle_com.o cv_anglvec.o cv_dihe_com.o cv_rmsd.o cv_drmsd.o cv_proj.o cv_quaternion.o cv_qcomp.o
-OBJS=cv_types.o cv_common.o cv_frames.o cv_cvrms.o smcv_master.o $(CVOBJ)
+OBJS=cv_types.o cv_common.o cv_frames.o cv_cvrms.o smcv_master.o smcv.o $(CVOBJ)
 
 COMMON=..
 INCLUDES= -I $(COMMON) -I $(ROOT)/modules
@@ -23,6 +23,7 @@ cv_qcomp.o : cv_quaternion.o
 cv_cvrms.o : $(CVOBJ)
 
 smcv_master.o : lu sm_common_vars random
+smcv.o : sm_common_vars smcv_master.o cv_frames.o cv_quaternion.o cv_common.o
 
 sm_common_vars:
 	$(MAKE) -C $(COMMON) sm_var.o sm_config.o 

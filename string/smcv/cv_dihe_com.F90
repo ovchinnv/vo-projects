@@ -1,7 +1,14 @@
+/*COORDINATES AND MASSES:*/
+/*
+#ifdef __IMPNONE
+#undef __IMPNONE
+#endif
+#define __IMPNONE
+*/
 ! **********************************************************************!
 ! This source file was was generated automatically from a master source !
-! code tree, which may or may not be distributed with this code, !
-! because it is up to the distributor, and not up to me. !
+! code tree, which may not be distributed with this code if the !
+! distributor has a proprietary compilation procedure (e.g. CHARMM) !
 ! If you edit this file (rather than the master source file) !
 ! your changes will be lost if another pull from the master tree occurs.!
 ! In case you are wondering why, this approach makes it possible for !
@@ -31,8 +38,8 @@
       contains
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        function cv_dihe_com_add(atom_list,k,gamma,weight) ! note: i is the atom index in the PSF
-       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
-      
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
+       implicit none
        real*8 :: k, gamma, weight
        type (int_vector), dimension(4) :: atom_list
 ! locals
@@ -107,7 +114,7 @@
        subroutine cv_dihe_com_calc(i,x,y,z,mass,fx,fy,fz, &
      & calctheta,deriv,addforce,fext)
        use constants
-      
+       implicit none
 !
        real*8 :: x(:), y(:), z(:), &
      & fx(:), fy(:), fz(:), mass(:)
@@ -525,7 +532,7 @@
        end subroutine cv_dihe_com_calc
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        real*8 function cv_dihe_com_grad_dot_dr(i,dx,dy,dz)
-      
+       implicit none
 !
        real*8 :: dx(:), dy(:), dz(:)
        integer :: i
@@ -593,7 +600,7 @@
        end function cv_dihe_com_grad_dot_dr
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_dihe_com_dcv_dot_grad(i,dx,dy,dz,dcv)
-      
+       implicit none
 !
        real*8 :: dx(:), dy(:), dz(:)
        integer :: i
@@ -659,11 +666,11 @@
        end subroutine cv_dihe_com_dcv_dot_grad
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_dihe_com_list(i)
-       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
        use multicom_aux
        use mpi
        use psf, only : atoms
-      
+       implicit none
 !
  character(len=80) :: msg___
 !

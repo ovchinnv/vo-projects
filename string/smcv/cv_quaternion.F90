@@ -1,7 +1,14 @@
+/*COORDINATES AND MASSES:*/
+/*
+#ifdef __IMPNONE
+#undef __IMPNONE
+#endif
+#define __IMPNONE
+*/
 ! **********************************************************************!
 ! This source file was was generated automatically from a master source !
-! code tree, which may or may not be distributed with this code, !
-! because it is up to the distributor, and not up to me. !
+! code tree, which may not be distributed with this code if the !
+! distributor has a proprietary compilation procedure (e.g. CHARMM) !
 ! If you edit this file (rather than the master source file) !
 ! your changes will be lost if another pull from the master tree occurs.!
 ! In case you are wondering why, this approach makes it possible for !
@@ -56,7 +63,7 @@
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine quat_init()
 !
-      
+       implicit none
 !
        integer :: i
 !
@@ -81,7 +88,7 @@
        end subroutine quat_init
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine quat_done()
-      
+       implicit none
        integer :: i
        quat%num_quat=0
        if (quat_initialized) then
@@ -113,8 +120,9 @@
        end subroutine quat_done
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        function quat_add(fr1, fr2)
-       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
-      
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
+       use constants
+       implicit none
 !
        integer :: fr1, fr2
 ! locals
@@ -175,7 +183,7 @@
          quat%priv(l)%p(1)=f1
          quat%priv(l)%p(2)=f2
          quat_add=l
-         quat%q(:,l)=anum ! undefined value
+         quat%q(:,l)=unknownf ! undefined value
 ! add pointers to indices in the atom map (faster gradient computation)
          ncomf=frames%priv(f1)%p(1);
          allocate(indf(ncomf));
@@ -212,11 +220,11 @@
        end function quat_add
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine quat_list(i)
-       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
        use multicom_aux
        use mpi
 !
-      
+       implicit none
  character(len=80) :: msg___
 !
        integer :: i
@@ -241,8 +249,8 @@
        end subroutine quat_list
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine quat_calc(i,x,y,z,mass,deriv)
-       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
-      
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
+       implicit none
 !
        integer :: i ! which quaternion to calculate
        real*8 :: x(:), y(:), z(:), mass(:)
@@ -788,7 +796,7 @@
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine quat_grad_init()
 ! initialize quat%grad arrays
-      
+       implicit none
        if (associated(quat%gradq)) deallocate(quat%gradq)
 ! if (associated(quat%gradqx)) deallocate(quat%gradqx)
 ! if (associated(quat%gradqy)) deallocate(quat%gradqy)
@@ -811,10 +819,10 @@
        subroutine quat_print_local(iunit)
 ! assume that unit is prepared
 ! NOTE that this is a local print!
-! use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
+! use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
        use multicom_aux
        use mpi
-      
+       implicit none
 !
        integer iunit
 ! locals
@@ -833,12 +841,12 @@
        subroutine quat_print_global(iunit)
 ! assume that unit is prepared
 ! NOTE that this is a global print!
-! use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
+! use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
 !
        use multicom_aux
        use mpi
 !
-      
+       implicit none
 !
        integer iunit
 ! locals
@@ -875,8 +883,8 @@
        end subroutine quat_print_global
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine quat_reset_calculate(grad,i)
-       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
-      
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
+       implicit none
        integer, optional :: i
        logical :: grad
 !

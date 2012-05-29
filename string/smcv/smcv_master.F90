@@ -1,7 +1,14 @@
+/*COORDINATES AND MASSES:*/
+/*
+#ifdef __IMPNONE
+#undef __IMPNONE
+#endif
+#define __IMPNONE
+*/
 ! **********************************************************************!
 ! This source file was was generated automatically from a master source !
-! code tree, which may or may not be distributed with this code, !
-! because it is up to the distributor, and not up to me. !
+! code tree, which may not be distributed with this code if the !
+! distributor has a proprietary compilation procedure (e.g. CHARMM) !
 ! If you edit this file (rather than the master source file) !
 ! your changes will be lost if another pull from the master tree occurs.!
 ! In case you are wondering why, this approach makes it possible for !
@@ -59,10 +66,10 @@
       subroutine smcv_main(x,y,z,xcomp,ycomp,zcomp, &
      & mass,fx,fy,fz,iteration)
 ! called from dynamics
-      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
       use multicom_aux
       use mpi
-     
+      implicit none
  character(len=80) :: msg___
 !
       real*8 :: x(:), y(:), z(:), &
@@ -203,7 +210,7 @@
 !
        if (repl_x_on.and.repl_x_freq.gt.0) then
         if (mod(iteration, repl_x_freq).eq.0) then
-         if (prnlev.ge.3.and..not.string_noprint) then
+         if (.not.string_noprint) then
           write(msg___,'(2A)') whoami,' ATTEMPTING EXCHANGE OF NEIGHBORING REPLICAS.'
           call plainmessage(msg___,3)
          endif
@@ -225,11 +232,11 @@
       end subroutine smcv_main
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine smcv_addforce(x,y,z,mass,fx,fy,fz,t)
-      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
       use multicom_aux
       use constants
       use mpi
-     
+      implicit none
 !
       real*8 :: x(:), y(:), z(:), mass(:), & ! mass(size(x,1)) ,
      & fx(:), fy(:), fz(:)
@@ -541,11 +548,11 @@
       subroutine smcv_add_hist(x,y,z,mass,update_average)
 ! this is a driver to routines
 ! that calculate the M matrix and cv time series
-      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
       use multicom_aux
       use constants
       use mpi
-     
+      implicit none
 !
       real*8 :: x(:), y(:), z(:), mass(:) ! mass(size(x,1))
       logical :: update_average ! whether the current dataset should be included with the cv running average
@@ -788,7 +795,7 @@
       use sm_var, only: nstring, mestring
       use multicom, only: multicom_permute_string_ranks
 !
-      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
       use multicom_aux
       use constants
 ! __DEP_FILES ! in the case of CHARMM, should ues a 'clean' way to open files (future?)
@@ -797,7 +804,7 @@
       use rng
       use molsim
 !
-     
+      implicit none
 !
       real*8 :: x(:), y(:), z(:), mass(:) ! mass(size(x,1))
       integer :: itime
@@ -817,7 +824,7 @@
       character(len=150) :: fnames(5) ! for storing output file names
       character(len=150) :: new_fnames(5) ! for storing swapped file names
       logical :: openun(5), qform, qwrite
-      integer :: oldiol
+      integer :: nfiles
 !
 ! real*8 :: dEG(nstring) !aa
 !
@@ -965,9 +972,14 @@
 !
 !********************************************************************************************
 ! swap restart & traj file info; otherwise restart files will correspond to wrong replica
+!#ifdef __CHARMM
 ! oldiol=iolev
 ! iolev=1 ! so that vinqre works
-!
+!#endif
+
+
+
+
 ! DYNAMOL does not store restart fid;
 ! furthermore, files are not kept open (so that they are complete in the case of a crash)
 ! all we have to do is exchange the file names
@@ -975,8 +987,12 @@
         fnames(1)=trajectoryoutname
         fnames(2)=restartoutname
         fnames(3)=statisticsoutname
+
 !
         i=nfiles*len(fnames(1)) ! length of broadcast buffer
+
+
+
          call MPI_SENDRECV(fnames, i, MPI_BYTE, &
      & which, which, new_fnames, i, MPI_BYTE, &
      & which, ME_STRNG, MPI_COMM_STRNG, stat, ierror)
@@ -988,7 +1004,9 @@
         restartoutname =new_fnames(2)
         statisticsoutname=new_fnames(3)
 !
+!#ifdef __CHARMM
 ! iolev=oldiol
+!#endif
 ! done with swap output file info
 !********************************************************************************************
        else ! success
@@ -1058,8 +1076,8 @@
 ! both subroutines assume that the CV gradients are known and valid
       subroutine smcv_gradcv_dot_dr(rx,ry,rz,c)
 ! for now, this routine is not parallel, since it should execute pretty fast
-      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
-     
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
+      implicit none
       real*8 :: rx(:), ry(:), rz(:)
       integer, optional :: c
 !
@@ -1103,8 +1121,8 @@
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine smcv_dcv_dot_gradcv(rx,ry,rz,c)
 ! for now, this routine is not parallel, since it should execute pretty fast
-      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
-     
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
+      implicit none
       real*8 :: rx(:), ry(:), rz(:)
       integer, optional :: c
 !
@@ -1148,8 +1166,8 @@
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine smcv_fill(x,y,z,mass,c)
 ! for now, this routine is not parallel, since it should not be called often
-      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
-     
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
+      implicit none
       real*8 :: x(:), y(:), z(:), mass(:) ! mass(size(x,1))
       integer, optional :: c
 !
@@ -1201,8 +1219,8 @@
       end subroutine smcv_fill
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       function smcv_test_grad_fd(x,y,z,mass,h)
-      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
-     
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
+      implicit none
       real*8 :: x(:), y(:), z(:), mass(:) ! mass(size(x,1))
       real*8 :: h
       real*8, pointer :: error(:,:), smcv_test_grad_fd(:,:)
@@ -1303,10 +1321,10 @@
       end function smcv_test_grad_fd
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       function smcv_test_parallel(x,y,z,mass)
-     
       use multicom_aux
       use mpi
-      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
+      implicit none
 !
       real*8 :: x(:), y(:), z(:), mass(:) ! mass(size(x,1))
       real*8, pointer :: error(:,:), smcv_test_parallel(:,:)
@@ -1379,8 +1397,8 @@
       end function smcv_test_parallel
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine smcv_voronoi_whereami(x,y,z,mass)
-      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
-     
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
+      implicit none
 !
        real*8 :: x(:), y(:), z(:), mass(:) ! mass(size(x,1))
 ! locals
@@ -1434,11 +1452,11 @@
 ! not parallelized yet; have to decide what level of parallelization is time-efficient
       use sm_var, only: nstring
       use lu ! for computing FE
-      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
       use multicom_aux
       use mpi
       use rng
-     
+      implicit none
 !
 !
       real*8 :: x(:), y(:), z(:)
@@ -1719,10 +1737,10 @@
       subroutine smcv_voronoi_smart_update(x, y, z, xcomp, ycomp, zcomp,&
      & mass, iteration)
 ! currently not parallelized; I assume that it will be called infrequently (e.g. 1 in 20 or more iter.)
-      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
       use multicom_aux
       use mpi
-     
+      implicit none
 ! real*8 :: dx(:), dy(:), dz(:), xcomp(:), ycomp(:), zcomp(:)
       real*8 :: x(:), y(:), z(:), xcomp(:), ycomp(:), zcomp(:)
       real*8 :: mass(:) ! mass(size(x,1))
@@ -1848,10 +1866,10 @@
       end subroutine smcv_voronoi_smart_update
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine smcv_list()
-      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
       use multicom_aux
       use mpi
-     
+      implicit none
  character(len=80) :: msg___
 ! local
       integer :: i
@@ -1886,7 +1904,7 @@
       end subroutine smcv_list
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine smcv_compute_wgt(x,y,z,mass) ! compute CV weights from current coordinates
-      ! note that this routine clears all history
+      implicit none ! note that this routine clears all history
 !
       real*8 :: x(:), y(:), z(:), mass(:) ! mass(size(x,1))
 !
@@ -1897,10 +1915,10 @@
       end subroutine smcv_compute_wgt
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine smcv_compute_M(x,y,z,mass,inverse) ! compute matrix M from current coordinates
-      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
       use mpi
       use multicom_aux
-      ! note that this routine clears all history
+      implicit none ! note that this routine clears all history
 !
       real*8 :: x(:), y(:), z(:), mass(:) ! mass(size(x,1))
       logical :: inverse ! should inverse be computed?
@@ -1931,7 +1949,7 @@
       end subroutine smcv_compute_M
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       function smcv_test_Minv(x,y,z,mass) result(diff)
-     
+      implicit none
 !
       real*8, intent (in) :: x(:), y(:), z(:), mass(:) ! mass(size(x,1))
       real*8 :: diff
@@ -1953,7 +1971,7 @@
       use cv_quaternion
       use mpi
       use multicom_aux
-     
+      implicit none
 !
       real*8 :: x(:), y(:), z(:), mass(:) ! mass(size(x,1))
 ! local vars

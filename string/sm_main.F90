@@ -1,7 +1,14 @@
+/*COORDINATES AND MASSES:*/
+/*
+#ifdef __IMPNONE
+#undef __IMPNONE
+#endif
+#define __IMPNONE
+*/
 ! **********************************************************************!
 ! This source file was was generated automatically from a master source !
-! code tree, which may or may not be distributed with this code, !
-! because it is up to the distributor, and not up to me. !
+! code tree, which may not be distributed with this code if the !
+! distributor has a proprietary compilation procedure (e.g. CHARMM) !
 ! If you edit this file (rather than the master source file) !
 ! your changes will be lost if another pull from the master tree occurs.!
 ! In case you are wondering why, this approach makes it possible for !
@@ -67,12 +74,16 @@
        use mpi
        use multicom_aux
 !
-      
+       implicit none
 !
        character(len=*) :: COMLYN
        integer :: COMLEN
+
+
+
        character(len=132) :: filex, formt, facc
        integer :: unum, flen
+
 !
        logical :: loud
        character(len=(9) :: whoami
@@ -91,9 +102,12 @@
         UNUM=atoi(get_remove_parameter(COMLYN, 'UNIT', COMLEN), -1)
         IF (UNUM.LT.0) THEN
          write(0,*) 'WARNING FROM: ',whoami,': ',' NO UNIT NUMBER SPECIFIED'
+
+
+
         ENDIF
 ! filename
-        FILEX=get_remove_parameter(COMLYN, COMLEN, 'NAME'); FLEN=len_trim(FILEX)
+        FILEX=get_remove_parameter(COMLYN,'NAME',COMLEN); FLEN=len_trim(FILEX)
         IF (FLEN.LE.0) THEN
          write(0,*) 'WARNING FROM: ',whoami,': ','NO FILE NAME GIVEN'
          return

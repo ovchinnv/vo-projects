@@ -1,7 +1,8 @@
+/*COORDINATES AND MASSES:*/
 ! **********************************************************************!
 ! This source file was was generated automatically from a master source !
-! code tree, which may or may not be distributed with this code, !
-! because it is up to the distributor, and not up to me. !
+! code tree, which may not be distributed with this code if the !
+! distributor has a proprietary compilation procedure (e.g. CHARMM) !
 ! If you edit this file (rather than the master source file) !
 ! your changes will be lost if another pull from the master tree occurs.!
 ! In case you are wondering why, this approach makes it possible for !
@@ -29,7 +30,6 @@ module multicom_aux
 ! Additional communicators
   integer, save :: MPI_COMM_ENSBL =MPI_COMM_NULL, ME_ENSBL=MPI_UNDEFINED, SIZE_ENSBL=MPI_UNDEFINED !!**CHARMM_ONLY**!##ENSEMBLE
   integer, save :: MPI_COMM_STRNG =MPI_COMM_NULL, ME_STRNG=MPI_UNDEFINED, SIZE_STRNG=MPI_UNDEFINED !!**CHARMM_ONLY**!##STRINGM
-
   integer, save :: MPI_COMM_DMOL =MPI_COMM_NULL, ME_DMOL=MPI_UNDEFINED, SIZE_DMOL=MPI_UNDEFINED
 
 

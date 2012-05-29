@@ -1,7 +1,14 @@
+/*COORDINATES AND MASSES:*/
+/*
+#ifdef __IMPNONE
+#undef __IMPNONE
+#endif
+#define __IMPNONE
+*/
 ! **********************************************************************!
 ! This source file was was generated automatically from a master source !
-! code tree, which may or may not be distributed with this code, !
-! because it is up to the distributor, and not up to me. !
+! code tree, which may not be distributed with this code if the !
+! distributor has a proprietary compilation procedure (e.g. CHARMM) !
 ! If you edit this file (rather than the master source file) !
 ! your changes will be lost if another pull from the master tree occurs.!
 ! In case you are wondering why, this approach makes it possible for !
@@ -29,8 +36,8 @@
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        function cv_rmsd_add(ind_o,ind_f,r_o,r_f,ow,fw,k,gamma,weight) ! note: i is the atom index in the PSF
        use cv_types
-       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
-      
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
+       implicit none
 !
        real*8 :: k, gamma, weight
        integer, pointer :: ind_o(:), ind_f(:)
@@ -171,7 +178,7 @@
      & calctheta,deriv,addforce,fext)
        use bestfit
        use constants
-      
+       implicit none
 !
        real*8 :: x(:), y(:), z(:), &
      & fx(:), fy(:), fz(:), mass(:)
@@ -426,8 +433,8 @@
        use multicom_aux
        use mpi
        use psf, only : atoms
-       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
-      
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
+       implicit none
 !
  character(len=80) :: msg___
 !

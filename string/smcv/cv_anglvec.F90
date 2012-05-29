@@ -1,7 +1,14 @@
+/*COORDINATES AND MASSES:*/
+/*
+#ifdef __IMPNONE
+#undef __IMPNONE
+#endif
+#define __IMPNONE
+*/
 ! **********************************************************************!
 ! This source file was was generated automatically from a master source !
-! code tree, which may or may not be distributed with this code, !
-! because it is up to the distributor, and not up to me. !
+! code tree, which may not be distributed with this code if the !
+! distributor has a proprietary compilation procedure (e.g. CHARMM) !
 ! If you edit this file (rather than the master source file) !
 ! your changes will be lost if another pull from the master tree occurs.!
 ! In case you are wondering why, this approach makes it possible for !
@@ -38,8 +45,8 @@
       contains
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        function cv_anglvec_add(atom_list,p,fr1,fr2,k,gamma,weight) ! note: i is the atom index in the PSF
-       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
-      
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
+       implicit none
        integer :: fr1, fr2
        real*8 :: k, gamma, weight
        real*8, dimension(4,3) :: p
@@ -207,7 +214,7 @@
        subroutine cv_anglvec_calc(i,x,y,z,mass,fx,fy,fz, &
      & calctheta,deriv,addforce,fext)
        use constants
-      
+       implicit none
 !
        real*8 :: x(:), y(:), z(:), &
      & fx(:), fy(:), fz(:), mass(:)
@@ -608,11 +615,11 @@
        end subroutine cv_anglvec_calc
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_anglvec_list(i)
-       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
        use multicom_aux
        use mpi
        use psf, only : atoms
-      
+       implicit none
 !
  character(len=80) :: msg___
 !

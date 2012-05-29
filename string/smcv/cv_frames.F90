@@ -1,7 +1,14 @@
+/*COORDINATES AND MASSES:*/
+/*
+#ifdef __IMPNONE
+#undef __IMPNONE
+#endif
+#define __IMPNONE
+*/
 ! **********************************************************************!
 ! This source file was was generated automatically from a master source !
-! code tree, which may or may not be distributed with this code, !
-! because it is up to the distributor, and not up to me. !
+! code tree, which may not be distributed with this code if the !
+! distributor has a proprietary compilation procedure (e.g. CHARMM) !
 ! If you edit this file (rather than the master source file) !
 ! your changes will be lost if another pull from the master tree occurs.!
 ! In case you are wondering why, this approach makes it possible for !
@@ -65,7 +72,7 @@
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine frames_init()
 !
-      
+       implicit none
 !
        integer :: i
 !
@@ -91,7 +98,7 @@
        end subroutine frames_init
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine frames_done()
-      
+       implicit none
        integer :: i
        frames%num_frames=0
        if (frames_initialized) then
@@ -123,8 +130,8 @@
        end subroutine frames_done
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        function frames_add(atom_list)
-       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
-      
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
+       implicit none
 !
        type (int_vector) :: atom_list
 ! locals
@@ -183,7 +190,7 @@
        end function frames_add
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine frames_list()
-       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
        use multicom_aux
        use parser
        use mpi
@@ -232,8 +239,8 @@ character(len=80) :: msg___
        subroutine frames_calc(i,x,y,z,mass,deriv)
        use sm_var, only: mestring
        use bestfit
-       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
-      
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
+       implicit none
 !
        integer :: i ! which frame to calculate
        real*8 :: x(:), y(:), z(:), mass(:)
@@ -600,7 +607,6 @@ character(len=80) :: msg___
 ! write(700+whoiam,*) frames%grado(:,i)
 ! stop
 ! aardvark: done test gradients using FD: PASSED
-
 !cccccccccccccccccccccccccc done with derivatives cccccccccccccccccccccccc
         frames%recalculate_grad(i)=.false. ! indicate that derivatives are known
        endif ! deriv
@@ -613,7 +619,7 @@ character(len=80) :: msg___
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine frames_grad_init()
 ! initialize frames%grad arrays
-      
+       implicit none
        if (associated(frames%grado)) deallocate(frames%grado) ! delete old data if present
        if (associated(frames%gradr)) deallocate(frames%gradr)
        nullify(frames%gradrx)
@@ -636,11 +642,11 @@ character(len=80) :: msg___
        subroutine frames_print_local(iunit)
 ! assume that unit is prepared
 ! NOTE that this is a local print!
-! use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
+! use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
        use multicom_aux
        use mpi
 !
-      
+       implicit none
 !
        integer iunit
 ! locals
@@ -659,10 +665,10 @@ character(len=80) :: msg___
        subroutine frames_print_global(iunit)
 ! assume that unit is prepared
 ! NOTE that this is a global print!
-! use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
+! use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
        use multicom_aux
        use mpi
-      
+       implicit none
 !
        integer iunit
 ! locals
@@ -702,8 +708,8 @@ character(len=80) :: msg___
        subroutine frames_read_local(iunit)
 ! assume that unit is prepared
 ! NOTE that this is a local read!
-! use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
-!
+! use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
+! implicit none
       use multicom_aux
       use mpi
 !
@@ -724,11 +730,11 @@ character(len=80) :: msg___
        subroutine frames_read_global(iunit)
 ! assume that unit is prepared
 ! NOTE that this is a global read!
-       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
        use multicom_aux
        use mpi
 !
-      
+       implicit none
 !
        integer iunit
 ! locals
@@ -761,8 +767,8 @@ character(len=80) :: msg___
        end subroutine frames_read_global
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine frames_reset_calculate(grad,i)
-       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
-      
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
+       implicit none
        integer, optional :: i
        logical :: grad
 !
@@ -800,8 +806,8 @@ character(len=80) :: msg___
        subroutine frames_calc_align_comp(i,x,y,z, &
      & xcomp,ycomp,zcomp,mass,d)
        use bestfit
-       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning
-      
+       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
+       implicit none
 ! vars
        integer :: i
        real*8 :: x(:), y(:), z(:)
@@ -849,10 +855,8 @@ character(len=80) :: msg___
         wsum=wsum+w(j)
        enddo
        if (wsum.gt.1e-9) w=w/wsum ! normalize weights; this is NOT done by best_fit routine
-
 ! write(6,*) 'inside frames_align_comp'
 ! stop
-
 ! now we have all the coordinates for this frame; perform alignment
        call RMSBestFit(x1,x2,w,U); ! need rotation matrix !
 ! compute two sets of frames, based on xcomp & x; then use the matrix U
