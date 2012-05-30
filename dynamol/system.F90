@@ -1,7 +1,8 @@
+/*COORDINATES AND MASSES:*/
 ! **********************************************************************!
 ! This source file was was generated automatically from a master source !
-! code tree, which may or may not be distributed with this code, !
-! because it is up to the distributor, and not up to me. !
+! code tree, which may not be distributed with this code if the !
+! distributor has a proprietary compilation procedure (e.g. CHARMM) !
 ! If you edit this file (rather than the master source file) !
 ! your changes will be lost if another pull from the master tree occurs.!
 ! In case you are wondering why, this approach makes it possible for !
@@ -157,7 +158,6 @@ module system
  use pdbio
  use files
 !
-
 
  implicit none
 !
@@ -338,7 +338,7 @@ module system
 !
 ! in parallel, will need to gather coordinates
 !
- if (me.le.0) call dcd_write(fid,r,addheader)
+ if (me.le.0) call dcd_write_frame(fid,r,addheader)
  end subroutine
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  subroutine system_read_velocities(fname)
@@ -910,19 +910,6 @@ module system
  integer, pointer :: ind(:)
 
  end function system_getind
-!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
- function system_getind_charmm(selection,l) result(ind)
- use output
- use parser
- implicit none
-!
- character(len=*), intent(inout) :: selection
- integer, intent(inout) :: l
- integer, pointer :: ind(:)
-
- end function system_getind_charmm
-
-
 
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 end module system
