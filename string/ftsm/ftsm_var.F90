@@ -1,4 +1,5 @@
 /*COORDINATES AND MASSES:*/
+/*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
 /*
 #ifdef __IMPNONE
 #undef __IMPNONE

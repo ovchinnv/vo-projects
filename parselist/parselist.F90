@@ -1,4 +1,5 @@
 /*COORDINATES AND MASSES:*/
+/*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
 ! **********************************************************************!
 ! This source file was was generated automatically from a master source !
 ! code tree, which may not be distributed with this code if the !
@@ -37,7 +38,7 @@
 !
         do
          strl=min(max(0,strl),len(str));str(strl+1:)='';call adjustleft(str,(/' ',tab/));strl=len_trim(str)
-         i=index(str(1:min(strl,len(str))),'THRU'(1:min(4,len('THRU'))))
+         i=find_tag(str, 'THRU', strl)
          if (i.gt.1.or.i.eq.0) then
 ! first, add previous node number (no error if invalid)
             if (inode.ne.missing) j=int_vector_uadd(list,inode)
@@ -45,7 +46,7 @@
             jnode=atoi(get_remove_parameter(str, 'THRU', strl), missing)
 ! check for 'STEP' keyword
             strl=min(max(0,strl),len(str));str(strl+1:)='';call adjustleft(str,(/' ',tab/));strl=len_trim(str)
-            i=index(str(1:min(strl,len(str))),'STEP'(1:min(4,len('STEP'))))
+            i=find_tag(str, 'STEP', strl)
             if (i.eq.1) then ! STEP keyword present
              kstep=atoi(get_remove_parameter(str, 'STEP', strl), missing)
 !! allow (almost) any value of STEP for flexibility

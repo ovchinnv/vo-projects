@@ -1,4 +1,5 @@
 /*COORDINATES AND MASSES:*/
+/*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
 /*
 #ifdef __IMPNONE
 #undef __IMPNONE
@@ -94,11 +95,11 @@
       real*8 :: zval, k, step
       integer :: ifile, c1, c2, qcor, qdcd, flen, &
      & num_ave_samples, irep, i, imode, &
-     & iorie, irmsd, isele
+     & iorie, irmsd
 !
       integer :: ierror ! for 1
       integer :: natom
-      integer, pointer :: iselct(:)
+ integer :: isele, i__, iend; integer, pointer::iselct(:)
       real*8, pointer :: fd_error(:,:)
 !
       logical :: qroot, qslave, qprint, qcomp
@@ -150,7 +151,6 @@
 
 
 
-
 !ccccccccccccccc PARSE OTHER DYNAMICS OPTIONS
 ! reset internal interation counter for ftsm_master
        olditeration=0
@@ -199,7 +199,7 @@
          num_evolve_samples=0
          max_evolve_samples=0
 ! setting this large will dampen initial fluctuations
-         if (index(comlyn(1:min(comlen,len(comlyn))),'NAVE'(1:min(4,len('NAVE')))).gt.0) then
+         if (find_tag(comlyn, 'NAVE', comlen).gt.0) then
           num_ave_samples=atoi(get_remove_parameter(comlyn, 'NAVE', comlen), -1)
           if (num_ave_samples.gt.0) then
             num_evolve_samples=num_ave_samples
@@ -208,7 +208,7 @@
           endif ! num_samples
          endif ! NAVE
 !
-         if (index(comlyn(1:min(comlen,len(comlyn))),'MAXAVE'(1:min(6,len('MAXAVE')))).gt.0) then
+         if (find_tag(comlyn, 'MAXAVE', comlen).gt.0) then
           num_ave_samples=atoi(get_remove_parameter(comlyn, 'MAXAVE', comlen), -1)
           if (num_ave_samples.gt.0) then
             max_evolve_samples=num_ave_samples
@@ -634,23 +634,26 @@
         if (iorie.gt.0) then
 ! process orientation atom selection
 ! determine whether a selection keyword follows orie
-         isele=index(comlyn(1:min(comlen,len(comlyn))),'SELE'(1:min(4,len('SELE'))))
+         isele=find_tag(comlyn, 'SELE', comlen)
          if (isele.ge.iorie) then
 !
-          i=index(comlyn(isele:comlen),' END') ! location of selection termination
-          i=i-1+isele ! index into comlyn starting from 1
-          msg___=comlyn(isele:i) ! part of string that begins with the selection and ends before ' END'
+          isele=find_tag(comlyn, 'SELE', comlen)
+          msg___=comlyn(isele:comlen) ! part of string that begins with the selection
+          i__=comlen-isele+1
+          iend=find_tag(msg___, 'END', i__) ! location of selection termination
+          iend=iend-1+isele ! index into comlyn starting from 1
+          msg___=comlyn(isele:iend) ! part of string that begins with the selection and ends before ' END'
           keyword=pop_string(msg___) ! remove first word (which we know is 'SELE*') from msg___
 ! process selection:
           nullify(iselct)
           iselct=>system_getind(msg___)
-          if (associated(iselct)) then ; norient=size(iselct) ; else ; norient=0 ; endif
 ! remove selection string from command line:
-          msg___=comlyn(i:comlen) ! command line starting with 'END' (see above)
+          msg___=comlyn(iend:comlen) ! command line starting with 'END' (see above)
           keyword=pop_string(msg___) ! remove 'END*' e.g. 'ENDING' is ok too
           comlyn(isele:isele)=' ';
           comlyn(isele+1:)=msg___ ! selection has been removed from command
           comlen=len_trim(comlyn)
+          if (associated(iselct)) then ; norient=size(iselct) ; else ; norient=0 ; endif
 !
 ! currently we require at least three atoms for orientation
 !
@@ -715,23 +718,26 @@
         elseif (irmsd.gt.0) then
 ! process forcing atom selection
 ! determine whether a selection keyword follows 'rmsd'
-         isele=index(comlyn(1:min(comlen,len(comlyn))),'SELE'(1:min(4,len('SELE'))))
+         isele=find_tag(comlyn, 'SELE', comlen)
          if (isele.gt.irmsd) then
 !
-          i=index(comlyn(isele:comlen),' END') ! same code as above
-          i=i-1+isele
-          msg___=comlyn(isele:i)
-          keyword=pop_string(msg___)
+          isele=find_tag(comlyn, 'SELE', comlen)
+          msg___=comlyn(isele:comlen) ! part of string that begins with the selection
+          i__=comlen-isele+1
+          iend=find_tag(msg___, 'END', i__) ! location of selection termination
+          iend=iend-1+isele ! index into comlyn starting from 1
+          msg___=comlyn(isele:iend) ! part of string that begins with the selection and ends before ' END'
+          keyword=pop_string(msg___) ! remove first word (which we know is 'SELE*') from msg___
 ! process selection:
           nullify(iselct)
           iselct=>system_getind(msg___)
-          if (associated(iselct)) then ; nforced=size(iselct) ; else ; norient=0 ; endif
 ! remove selection string from command line:
-          msg___=comlyn(i:comlen)
-          keyword=pop_string(msg___)
-          comlyn(isele:isele)=' '
-          comlyn(isele+1:)=msg___
+          msg___=comlyn(iend:comlen) ! command line starting with 'END' (see above)
+          keyword=pop_string(msg___) ! remove 'END*' e.g. 'ENDING' is ok too
+          comlyn(isele:isele)=' ';
+          comlyn(isele+1:)=msg___ ! selection has been removed from command
           comlen=len_trim(comlyn)
+          if (associated(iselct)) then ; nforced=size(iselct) ; else ; nforced=0 ; endif
 !
           if (nforced.le.0) then
            write(0,*) 'WARNING FROM: ',whoami,': ','NO RMSD ATOMS SELECTED. ABORT.'
@@ -785,7 +791,7 @@
          endif
 !*************************************************************
 ! set k parallel to path (for off-path dynamics)
-        elseif (index(comlyn(1:min(comlen,len(comlyn))),'KPAR'(1:min(4,len('KPAR')))).gt.0) then
+        elseif (find_tag(comlyn, 'KPAR', comlen).gt.0) then
           k=atof(get_remove_parameter(comlyn, 'KPAR', comlen), -1d0)
           if (k.ge.0d0) then
            kpara=k
@@ -797,7 +803,7 @@
           endif
 !*************************************************************
 ! set k perpendicular to path (for off-path dynamics)
-        elseif (index(comlyn(1:min(comlen,len(comlyn))),'KPRP'(1:min(4,len('KPRP')))).gt.0) then
+        elseif (find_tag(comlyn, 'KPRP', comlen).gt.0) then
           k=atof(get_remove_parameter(comlyn, 'KPRP', comlen), -1d0)
           if (k.ge.0d0) then
            kperp=k
@@ -808,7 +814,7 @@
            if (qprint) then ; write(msg___,6757) whoami, k ; write(0,'(A)') msg___ ; endif
           endif
 !**************************************************************
-        elseif (index(comlyn(1:min(comlen,len(comlyn))),'KRMS'(1:min(4,len('KRMS')))).gt.0) then
+        elseif (find_tag(comlyn, 'KRMS', comlen).gt.0) then
           k=atof(get_remove_parameter(comlyn, 'KRMS', comlen), -1d0)
           if (k.ge.0d0) then
            krms=k
@@ -860,7 +866,7 @@
             write(0,*) 'WARNING FROM: ',whoami,': ','UNKNOWN OPTION SPECIFIED'
           end select
 !*********************************************************************
-        elseif (index(comlyn(1:min(comlen,len(comlyn))),'DPAR'(1:min(4,len('DPAR')))).gt.0) then ! normalized distance parallel to vector between neighboring replicas at which this system is restrained
+        elseif (find_tag(comlyn, 'DPAR', comlen).gt.0) then ! normalized distance parallel to vector between neighboring replicas at which this system is restrained
           zval=atof(get_remove_parameter(comlyn, 'DPAR', comlen), -1.0d0)
 ! check replica spec
           irep=atoi(get_remove_parameter(comlyn, 'REP', comlen), -1)
@@ -878,7 +884,7 @@
      & 'ON REPLICA ',I5,' TO ',F7.3,'.')
         ! DPAR
 !********************************************************************
-        elseif (index(comlyn(1:min(comlen,len(comlyn))),'DPRP'(1:min(4,len('DPRP')))).gt.0) then ! distance perpendicular to vector between neighboring replicas at which this system is restrained
+        elseif (find_tag(comlyn, 'DPRP', comlen).gt.0) then ! distance perpendicular to vector between neighboring replicas at which this system is restrained
           zval=atof(get_remove_parameter(comlyn, 'DPRP', comlen), -1.0d0)
 ! check replica spec
           irep=atoi(get_remove_parameter(comlyn, 'REP', comlen), -1)
@@ -895,7 +901,7 @@
  6775 format(A,' WILL SET OFFSET DISTANCE FOR PERPENDICULAR RESTRAINT ',&
      & 'ON REPLICA ',I5,' TO ',E10.3,'.')
 !********************************************************************
-        elseif (index(comlyn(1:min(comlen,len(comlyn))),'DRMS'(1:min(4,len('DRMS')))).gt.0) then ! RMS distance between simulation and reference structure
+        elseif (find_tag(comlyn, 'DRMS', comlen).gt.0) then ! RMS distance between simulation and reference structure
           zval=atof(get_remove_parameter(comlyn, 'DRMS', comlen), -1.0d0)
 ! check replica spec
           irep=atoi(get_remove_parameter(comlyn, 'REP', comlen), -1)
@@ -1683,7 +1689,7 @@
       use system, only : r, rcomp, m, bfactor, occupancy
       use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
       use parser
-      use charmmio
+      use charmmio; use pdbio; use mol_formats
       use mpi
 !
 ! will use fixed atom arrays to print only the path atoms
@@ -1803,7 +1809,7 @@
       use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
       use parser
       use mpi
-      use charmmio
+      use charmmio; use pdbio; use mol_formats
 !
       implicit none
       character(len=15) :: whoami
@@ -1933,7 +1939,7 @@
       use system, only : r, rcomp, m, bfactor, occupancy
       use psf
       use parser
-      use charmmio
+      use charmmio; use pdbio; use mol_formats
 !
       implicit none
       character(len=16) :: whoami
@@ -1988,7 +1994,7 @@
       use parser
 !
       use constants
-      use charmmio
+      use charmmio; use pdbio; use mol_formats
 !
       implicit none
       character(len=15) :: whoami

@@ -1,4 +1,5 @@
 /*COORDINATES AND MASSES:*/
+/*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
 ! **********************************************************************!
 ! This source file was was generated automatically from a master source !
 ! code tree, which may not be distributed with this code if the !
@@ -31,7 +32,6 @@ module multicom_aux
   integer, save :: MPI_COMM_ENSBL =MPI_COMM_NULL, ME_ENSBL=MPI_UNDEFINED, SIZE_ENSBL=MPI_UNDEFINED !!**CHARMM_ONLY**!##ENSEMBLE
   integer, save :: MPI_COMM_STRNG =MPI_COMM_NULL, ME_STRNG=MPI_UNDEFINED, SIZE_STRNG=MPI_UNDEFINED !!**CHARMM_ONLY**!##STRINGM
   integer, save :: MPI_COMM_DMOL =MPI_COMM_NULL, ME_DMOL=MPI_UNDEFINED, SIZE_DMOL=MPI_UNDEFINED
-
 
 !
 !**CHARMM_ONLY**!##ENDIF

@@ -1,4 +1,5 @@
 /*COORDINATES AND MASSES:*/
+/*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
 /*
 #ifdef __IMPNONE
 #undef __IMPNONE
@@ -618,9 +619,17 @@
 !
 ! send to slaves
        if (MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.SIZE_LOCAL.gt.1) then
+
+
+
+
+
+
+
         call mpi_bcast(cv%r(1:cv%num_cv,dz),cv%num_cv,MPI_REAL,0,MPI_COMM_LOCAL,ierror)
         call mpi_bcast(cv%ds,nstring-1,MPI_REAL,0,MPI_COMM_LOCAL,ierror)
         call mpi_bcast(cv%curvature,nstring-2,MPI_REAL,0,MPI_COMM_LOCAL,ierror)
+
        endif
 !
        cv_common_dz_initialized=.true.
@@ -660,6 +669,7 @@
        use mpi
        implicit none
 !
+
 !
        integer :: interp_method, iterations, ierror
        real*8, optional :: dst_c

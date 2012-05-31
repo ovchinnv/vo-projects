@@ -1,4 +1,5 @@
 /*COORDINATES AND MASSES:*/
+/*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
 ! **********************************************************************!
 ! This source file was was generated automatically from a master source !
 ! code tree, which may not be distributed with this code if the !
@@ -88,7 +89,6 @@ module output
 ! compute the maximum value of errorcodes across all nodes; then decice whether to terminate
 !
  level=warnlev ! current value of the error level
-
 !
 !
  fatal_warning=(level.lt.minerrorlev)

@@ -1,4 +1,5 @@
 /*COORDINATES AND MASSES:*/
+/*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
 /*
 #ifdef __IMPNONE
 #undef __IMPNONE
@@ -90,7 +91,6 @@
       integer :: int_method, length, num_rep_in, num_rep_out, &
      & len_cv_in, len_cv_out, len_cor_in, len_cor_out, ofile
       integer :: fmt
-
 !
       logical :: interp_cv, inte_get_coor, qcomp
       real*8, allocatable :: inte_rmsd(:,:), rtemp(:,:)
@@ -173,7 +173,7 @@
        voronoi_hist_on=(remove_tag(comlyn,'VORO',comlen).gt.0)
        if (voronoi_hist_on) then
         voro_cut=-999d0
-        if (index(comlyn(1:min(comlen,len(comlyn))),'VCUT'(1:min(4,len('VCUT')))).gt.0) then
+        if (find_tag(comlyn, 'VCUT', comlen).gt.0) then
          voro_cut=atof(get_remove_parameter(comlyn, 'VCUT', comlen), 0d0)
          if (voro_cut.le.0d0) then
           write(0,*) 'WARNING FROM: ',whoami,': ','VCUT MUST BE POSITIVE. NOT SET.'
@@ -187,7 +187,7 @@
          if (voronoi_update_freq.le.0) then
           write(0,*) 'WARNING FROM: ',whoami,': ','MUST SPECIFY POSITIVE VCRF. VORONOI CELL CROSSING DISABLED.'
           voronoi_allow_cross=.false.
-         elseif (index(comlyn(1:min(comlen,len(comlyn))),'VINI'(1:min(4,len('VINI')))).gt.0) then ! if vini is present
+         elseif (find_tag(comlyn, 'VINI', comlen).gt.0) then ! if vini is present
           voronoi_nocross_ini=atoi(get_remove_parameter(comlyn, 'VINI', comlen), 0) ! get it
           if (voronoi_nocross_ini.le.0) then
            write(0,*) 'WARNING FROM: ',whoami,': ','NONPOSITIVE VINI SPECIFIED. WILL SET TO ZERO.'
@@ -1142,7 +1142,7 @@
 ! local is specified with 'ALL'; default is global
 ! can also read a specific column: specify SCOL x
        all=remove_tag(comlyn,'ALL',comlen) ! all replicas read
-       if (index(comlyn(1:min(comlen,len(comlyn))),'SCOL'(1:min(4,len('SCOL')))).gt.0) then
+       if (find_tag(comlyn, 'SCOL', comlen).gt.0) then
         scol=atoi(get_remove_parameter(comlyn, 'SCOL', comlen), 0)
         if (scol.ge.1) then ! need to know total number of replicas in CV file
          if (all.gt.0) then
@@ -1298,7 +1298,7 @@
       elseif (( keyword(1:3).eq.'SET'(1:3) )) then ! modify k,w,g,dt
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 ! first check for global options: num_ave_samples
-        if (index(comlyn(1:min(comlen,len(comlyn))),'NAVE'(1:min(4,len('NAVE')))).gt.0) then
+        if (find_tag(comlyn, 'NAVE', comlen).gt.0) then
           num_ave_samples=atoi(get_remove_parameter(comlyn, 'NAVE', comlen), -1)
           if (num_ave_samples.gt.0) then
            call cv_common_set_ave_samples(num_ave_samples)
@@ -1310,7 +1310,7 @@
           endif
         endif
 ! set k parallel to path (for off-path dynamics)
-        if (index(comlyn(1:min(comlen,len(comlyn))),'KPAR'(1:min(4,len('KPAR')))).gt.0) then
+        if (find_tag(comlyn, 'KPAR', comlen).gt.0) then
           k=atof(get_remove_parameter(comlyn, 'KPAR', comlen), -1d0)
           if (k.ge.0d0) then
            call cv_common_set_kpara(k)
@@ -1322,7 +1322,7 @@
           endif
         endif ! kpara
 ! set k perpendicular to path (for off-path dynamics)
-        if (index(comlyn(1:min(comlen,len(comlyn))),'KPRP'(1:min(4,len('KPRP')))).gt.0) then
+        if (find_tag(comlyn, 'KPRP', comlen).gt.0) then
           k=atof(get_remove_parameter(comlyn, 'KPRP', comlen), -1d0)
           if (k.ge.0d0) then
            call cv_common_set_kperp(k)
@@ -1355,7 +1355,7 @@
         endif
 !
         if (iend.gt.0) then ! skip this for invalid indices
-         if (index(comlyn(1:min(comlen,len(comlyn))),'FORC'(1:min(4,len('FORC')))).gt.0) then
+         if (find_tag(comlyn, 'FORC', comlen).gt.0) then
           k=atof(get_remove_parameter(comlyn, 'FORC', comlen), 0.0d0)
           if (qprint) then ; write(msg___,6752) whoami, k ; write(0,'(A)') msg___ ; endif
  6752 format(A,' WILL SET K TO ',F11.5,'.')
@@ -1364,7 +1364,7 @@
           enddo
          endif
 !
-         if (index(comlyn(1:min(comlen,len(comlyn))),'GAMM'(1:min(4,len('GAMM')))).gt.0) then
+         if (find_tag(comlyn, 'GAMM', comlen).gt.0) then
           gam=atof(get_remove_parameter(comlyn, 'GAMM', comlen), 1.0d0)
           if (qprint) then ; write(msg___,6753) whoami, gam ; write(0,'(A)') msg___ ; endif
  6753 format(A,' WILL SET GAMMA TO ',F7.3,'.')
@@ -1373,7 +1373,7 @@
           enddo
          endif
 !
-         if (index(comlyn(1:min(comlen,len(comlyn))),'WEIG'(1:min(4,len('WEIG')))).gt.0) then ! weighting by a real
+         if (find_tag(comlyn, 'WEIG', comlen).gt.0) then ! weighting by a real
           w=atof(get_remove_parameter(comlyn, 'WEIG', comlen), -1.0d0)
           if (qprint) then ; write(msg___,6755) whoami,w ; write(0,'(A)') msg___ ; endif
  6755 format(A,' WILL SET WEIGHT TO ',F7.3,'.')
@@ -1382,7 +1382,7 @@
           enddo
          endif
 !
-         if (index(comlyn(1:min(comlen,len(comlyn))),'ZVAL'(1:min(4,len('ZVAL')))).gt.0) then ! weighting by a real
+         if (find_tag(comlyn, 'ZVAL', comlen).gt.0) then ! weighting by a real
           zval=atof(get_remove_parameter(comlyn, 'ZVAL', comlen), -1.0d0)
 ! check replica spec
           irep=atoi(get_remove_parameter(comlyn, 'REP', comlen), -1)
@@ -1544,7 +1544,7 @@
         endif
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       elseif (( keyword(1:4).eq.'KPAR'(1:4) )) then
-       if (index(comlyn(1:min(comlen,len(comlyn))),'SET'(1:min(3,len('SET')))).gt.0) then
+       if (find_tag(comlyn, 'SET', comlen).gt.0) then
          k=atof(get_remove_parameter(comlyn, 'SET', comlen), -1d0)
          if (k.ge.0d0) then
           call cv_common_set_kpara(k)
@@ -1673,7 +1673,7 @@
         endif ! interp_cv
 ! process other options ccccccccccccccccccccccccccccccccccccccccccccccc
 !
-        if (index(comlyn(1:min(comlen,len(comlyn))),'NIN'(1:min(3,len('NIN')))).gt.0) then
+        if (find_tag(comlyn, 'NIN', comlen).gt.0) then
           num_rep_in=atoi(get_remove_parameter(comlyn, 'NIN', comlen), 0)
           if (num_rep_in.le.0) then
             if (qprint) then ; write(msg___, 6781) whoami ; write(0,'(A)') msg___ ; endif
@@ -1702,7 +1702,7 @@
         endif ! indx('NIN')
 !cccccccccccccccccccccccccccccccccccccccccccccccccccc
 ! process output CV specification
-        if (index(comlyn(1:min(comlen,len(comlyn))),'NOUT'(1:min(4,len('NOUT')))).gt.0) then
+        if (find_tag(comlyn, 'NOUT', comlen).gt.0) then
           num_rep_out=atoi(get_remove_parameter(comlyn, 'NOUT', comlen), 0)
           if (num_rep_out.le.0) then
             if (qprint) then ; write(msg___, 6785) whoami, whoami ; write(0,'(A)') msg___ ; endif
