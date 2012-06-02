@@ -108,6 +108,8 @@ lu:
 	$(MAKE) -C $(ROOT)/lu modules libraries
 psf:
 	$(MAKE) -C $(ROOT)/dynamol/struc psf.o modules
+coor:
+	$(MAKE) -C $(ROOT)/dynamol/coor all modules
 dynamol:
 	$(MAKE) -C $(ROOT)/dynamol molsim.o modules
 

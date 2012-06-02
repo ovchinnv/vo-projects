@@ -305,8 +305,8 @@
        real*8 :: r(3,3),rr(3,3),a(3,3),b(3,3),b0(3,3),mu(3),oomu(2), &
      & rmu(3), roomu(2)
        integer :: i, j, k, l, n
-       character*10 :: whoami='RMSBestFit'
-       character*63 :: msg
+       character(len=10) :: whoami='RMSBestFit'
+       character(len=63) :: msg
 ! for derivatives:
        logical :: qgrad
        real*8 :: invA(3,3),detA,e,v(3),c(3),dvdrr(3,3,3,3),dmudrr(3,3,3)
@@ -711,7 +711,7 @@
        dum=u;
 ! dum=a;
        v=mu
-       detA=0.0001
+       detA=0.0001d0
        e=0d0
        do k=ibeg, iend
 !

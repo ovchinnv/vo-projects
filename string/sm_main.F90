@@ -1,4 +1,5 @@
 /*COORDINATES AND MASSES:*/
+/*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
 /*
 #ifdef __IMPNONE
 #undef __IMPNONE
@@ -20,6 +21,7 @@
 !**CHARMM_ONLY**!##IF STRINGM
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       SUBROUTINE sm_main(COMLYN,COMLEN)
+      use parser
       use sm0k, only: sm0k_main
       use ftsm, only: ftsm_parse
       implicit none
@@ -66,7 +68,7 @@
 ! Opens 1 file per replica process
 !-----------------------------------------------------------------------
 ! much of this code is duplicated from the main charmm open routine (vopen)
-       use smcv_var, only: smcv_initialized
+       use sm_var, only: smcv_initialized
        use sm0k, only: sm0k_initialized
        use ftsm_var, only: ftsm_initialized
 !
@@ -77,8 +79,7 @@
        implicit none
 !
        character(len=*) :: COMLYN
-       integer :: COMLEN
-
+       integer :: comlen
 
 
        character(len=132) :: filex, formt, facc
@@ -86,7 +87,8 @@
 
 !
        logical :: loud
-       character(len=(9) :: whoami
+       integer :: ierror
+       character(len=(9)) :: whoami
        data whoami /' SM_OPEN>'/
 !
        if (.not.(smcv_initialized &
@@ -138,6 +140,7 @@
         ENDIF
        call files_open(unum,filex,formt,facc)
        comlen=min(max(0,comlen),len(comlyn));comlyn(comlen+1:)='';call adjustleft(comlyn,(/' ',tab/));comlen=len_trim(comlyn)
+       endif
        call mpi_bcast(comlyn,len(comlyn),MPI_CHARACTER,0,MPI_COMM_LOCAL,ierror)
 !
        END SUBROUTINE SM_OPEN

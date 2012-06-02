@@ -5,8 +5,8 @@ CHARMM_SOURCES=bestfit.src
 LOCALMACROS=-include source.defs
 LOCALDEPS=source.defs
 
-# additional objects for linnking
-LINKOBJECTS=constants.o
+# additional objects for linking
+LINKOBJS=constants.o
 
 include $(ROOT)/Makefile.inc
 
@@ -15,7 +15,7 @@ EXE=bfit
 default: all $(GLOBALDEPS) $(LOCALDEPS)
 all: $(EXE)
 $(EXE): $(OBJS) bfit.o
-	$(LD) $(LDFLAGS) $(OBJS) $(LIBS) bfit.o -o $(EXE)
+	$(LD) $(LDFLAGS) $(OBJS) $(LOBJS) bfit.o -o $(EXE)
 
 bfit.o    : bestfit.o constants
 bestfit.o : constants

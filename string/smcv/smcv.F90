@@ -62,8 +62,6 @@
 !
       character(len=8) :: keyword
 !
-      integer :: natom
-      integer, pointer :: iselct(:)
 !
       integer :: ifile
       integer :: i,j,n, ierror
@@ -105,7 +103,6 @@
 !
       character(len=80) :: msg___
 !
-
 !
 ! interface to frames_align_string routine (needed since routine is not in a module and I use optional args
       interface
@@ -1260,7 +1257,7 @@
  676 format(A,' WRITING CV HISTORY. SKIPPING ',I5,' ENTRIES.')
           if (all.eq.0) then;call cv_common_print_hist_global(ifile,nskip)
           else ; call cv_common_print_hist_local(ifile,nskip) ; endif
-          if (flen.gt.0) call files_close(ifile)
+          if (flen.gt.0) then ; call files_close(ifile) ; endif
          endif ! qroot
         elseif (( keyword(1:4).eq.'SMOO'(1:4) )) then ! smooth history
 ! look for other spec.
@@ -1877,7 +1874,7 @@
               case(charmm) ; call ch_coor_read(ifile, rcomp)
               case(pdb) ; call pdb_read(ifile, rcomp)
              end select
-             call files_close(ifile)
+             if (qroot) then ; call files_close(ifile) ; endif
 ! compute "distance" to cv values
              do i=1, num_rep_out
               cv%r(:,main)=rtemp(:,i) ! CV into main set
@@ -1907,7 +1904,7 @@
              case(charmm) ; call ch_coor_read(ifile, rcomp)
              case(pdb) ; call pdb_read(ifile, rcomp)
             end select
-            call files_close(ifile)
+            if (qroot) then ; call files_close(ifile) ; endif
 !cccccccccccc now write the same file cccccccccccccccccccccccc
 ! open file
             length=len_trim(fname_cor_out(j))
@@ -1919,7 +1916,8 @@
              case(charmm) ; call ch_coor_write(ofile, rcomp, bfactor)
              case(pdb) ; call pdb_write(ofile, rcomp, occupancy, bfactor)
             end select
-            call files_close(ofile)
+            if (qroot) then ; call files_close(ofile) ; endif
+!
            endif ! mestring
          enddo ! loop over new coordinate sets
          if (allocated(fname_cor_in)) deallocate(fname_cor_in )

@@ -1,0 +1,2514 @@
+!CHARMM Element source/stringm/sm0k.src $Revision: 1.5 $
+!
+! zero-temperature string code
+! documentation will be provided in stringm.doc
+!
+__CHARMM_ONLY##IF STRINGM
+!
+      module sm0k ! string-method-at-0-K
+      private
+!
+!     VARIABLES
+!ccccc initialization flag
+      bool, public, save :: sm0k_initialized=.false.
+!ccccc number of replicas on the string
+      int, save :: nstring=-1
+      int, save :: mestring=-1
+!ccccc GENERAL VARS
+      bool, save :: repa_initialized
+      int, save :: norient, nmove
+!     interpolation methods
+      int, parameter :: linear=1, spline=2, bspline=3, dst=4,       &
+     &  linear_exact=5
+!
+      int, save :: interp_method=0,orient=0
+      bool, save :: qstat_orient=.false.
+      int, save :: orient_mass=0, repa_mass=0
+      int, save :: iterations=1  ! maximum interpolation iterations
+      float, save  :: def=1.1d0  ! interpolation tolerance
+      float, save  :: dst_cutoff=1.0d0 ! wavenumber truncation parameter for DST
+!
+!     arrays
+      float, save, allocatable ::                                      &
+     &        rcurrent_m(:,:), rref_o(:,:), rcurrent_o(:,:)
+!     arclength and curvature
+      float, save, allocatable :: ds(:), curv(:) ! unavailable at first iteration
+!     orientation weights -- for 0-temp. string
+      float, save, allocatable :: orientWeights(:), repaWeights(:)
+      int, save, allocatable :: iatom_o(:), iatom_m(:),             &
+     &      iatom_free_o(:), iatom_free_m(:)
+      int, save, pointer :: iatom_f(:)
+#ifdef __CHARMM
+      int, save :: nfix_bckl
+#endif
+      bool, save, allocatable :: fixed_o(:), fixed_m(:), fixed_s(:)
+!
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!ccccc STATISTICS VARS cccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!
+      int, save :: stat_iteration_counter=0 ! how many times 'stat' has been called
+      bool, save :: output_rmsd0=.false.,        &
+     &              output_dsdt=.false.,                             &
+     &              output_arclength=.false.,                        & ! output options
+     &              output_curvature=.false.,                        &
+     &              output_rmsd_ave=.false. ! rmsd wrt to the average structure
+      bool, save :: stat_rmsd_mass=.false. ! should the statistics routine do mass-weighted RMSD?
+      bool, save :: stat_initialized=.false.
+!
+      character(len=80), save :: rmsd0_fname='', dsdt_fname='', s_fname='', &
+     &                           rmsd_ave_fname='', c_fname=''         ! output names
+!
+      int, save :: nstat
+      int, save :: rmsd0_funit=-1, dsdt_funit=-1, s_funit=-1,       &
+     &             rmsd_ave_funit=-1, c_funit=-1
+
+#ifdef __CHARMM
+      bool, save :: output_energy=.false.
+      character(len=80), save :: energy_fname=''
+      int, parameter :: enmax=100
+      character(len=4), save :: energy_names(enmax) ! arrays large enough to
+      int, save :: energy_indices(enmax) ! indices into the EPROP array
+      int, save :: num_energy_terms=0
+      int, save :: energy_flen=0
+#endif
+      int, save :: num_average_samples=0 ! number of samples in the average set
+      int, save :: rmsd0_flen=0, dsdt_flen=0, s_flen=0, rmsd_ave_flen=0, c_flen
+!     arrays
+      float, save, allocatable, dimension(:,:) ::                      &
+     &      rold_s, rave_s, rcurrent_s, rcomp_s, rold_o, rave_o, rcomp_o
+      float, save, allocatable :: statWeights(:)
+      int, save, allocatable :: iatom_s(:), iatom_free_s(:)
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!     SUBROUTINES
+!
+      public sm0k_main
+      public sm0k_repa
+      public sm0k_stat
+!
+      contains
+!
+      SUBROUTINE sm0k_main(COMLYN,COMLEN)
+!----------------------------------------------------------------------
+! command parser for the 0K string
+!----------------------------------------------------------------------
+      use sm_config, only : stat_on, stat_freq, repa_on, repa_freq      ! for communication with MINI
+!
+      __DEP_OUTPUT
+      __DEP_SIZE
+      __DEP_COORDINATES
+      __DEP_PARSER 
+!
+      __IMPNONE
+!
+      CHARACTER(LEN=*) :: COMLYN
+      INTEGER :: COMLEN
+!
+! local variables
+      character(len=8) :: keyword
+      character(len=11) :: whoami
+#ifdef __CHARMM
+      int :: isd, iconj, icgsd, iabnr, inrap
+#endif
+!
+  __DECLARE_MSGBUF
+!
+!     declare functions here
+!
+      data whoami /' SM0K_MAIN>'/
+!
+      keyword=__NEXTA(comlyn,comlen)
+!
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      if (__STRNCMP(keyword,'INIT',4)) then
+        call sm0k_init()
+        return
+      endif
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      if (.not.sm0k_initialized) then
+        call sm0k_init()
+      endif
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      if (__STRNCMP(keyword,'INTE',4)) then
+        call sm0k_interpolate(comlyn, comlen)
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      elseif (__STRNCMP(keyword,'REPA',4)) then
+       if (comlen.gt.0) then ! this is an initialization call!
+        call sm0k_repa_init(comlyn, comlen)
+       else
+        call sm0k_repa(0)! repa routine will reparametrize main coords
+       endif
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      elseif (__STRNCMP(keyword,'STAT',4)) then
+       if (comlen.gt.0) then ! this is an initialization call!
+        call sm0k_stat_init(comlyn, comlen)
+       else
+        call sm0k_stat(0) ! compute statistics from main coordinates
+       endif
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      elseif (__STRNCMP(keyword,'MINI',4)) then
+!     string minimization
+!     SD routine will be called;
+!     SD is the only minimizer allowed, other minimizers removed below
+!     setting "repa_on" to true so that
+!     SD knows to call reparametrization
+!     other options are let through -- use at your risk!
+!      delete ABNR, POWE, CONJ, CGSD
+#ifdef __CHARMM
+       isd=__INDX_RM(comlyn, comlen, 'SD')
+       iconj=__INDX_RM(comlyn, comlen, 'CONJ')
+       icgsd=__INDX_RM(comlyn, comlen, 'CGSD')
+       iabnr=__INDX_RM(comlyn, comlen, 'ABNR')
+       inrap=__INDX_RM(comlyn, comlen, 'NRAP')
+       if ((iconj+icgsd+iabnr+inrap).gt.0) then
+        __WRN(whoami,' ONLY SD MINIMIZATION IS SUPPORTED. NOTHING DONE')
+        return
+       endif
+!      force SD minimization
+       call joinwd(comlyn, mxcmsz, comlen, 'SD ', 3)
+#endif
+!cccccccccccccccccc reparametrization option cccccccccccccccccccccc
+       repa_freq=__GET_RM_I(comlyn, comlen, 'REPF',-1)
+       if (repa_freq.le.0) then
+        repa_on=.false.
+        WRITE (_MSGBUF,'(/,2A,/,2A,/,2A/)')                            &
+     &      whoami,' STRING METHOD ENABLED, BUT',                       &
+     &      whoami,' REPARAMETRIZATION FREQUENCY ZERO OR UNSPECIFIED.', &
+     &      whoami,' REPARAMETRIZATION WILL NOT BE DONE.' ; __PRINTL(_MSGBUF,3)
+       else
+        repa_on=.true.
+        WRITE (_MSGBUF,'(/,2A,/,2A,I7,A/)')                            &
+     &      whoami,' STRING METHOD ENABLED.',                           &
+     &      whoami,' WILL REPARAMETRIZE AFTER EVERY ',                  &
+     &       repa_freq,' MINIMIZATION ITERATIONS' ; __PRINTL(_MSGBUF,3)
+       endif ! repa_freq
+!cccccccccccccccccc statistics output option cccccccccccccccccccccc
+       if (repa_on) then ! boolly, it makes sense to output string statistics only when reparametrization is enabled
+!                          if you want to follow the unparametrized dynamics, just set maxiter to 0 in the repa setup call
+        stat_freq=__GET_RM_I(comlyn, comlen, 'STAF',-1)
+        if (stat_freq.le.0) then
+        stat_on=.false.
+        WRITE (_MSGBUF,'(/,2A,/,2A/)')                                    &
+     &      whoami,' STATISTICS OUTPUT FREQUENCY NOT SPECIFIED.',       &
+     &      whoami,' STATISTICS WILL NOT BE OUTPUT.' ; __PRINTL(_MSGBUF,3)
+        else
+         stat_on=.true.
+         WRITE (_MSGBUF,'(/,2A,I6,A/)')                                    &
+     &      whoami,' WILL OUTPUT STATISTICS AFTER EVERY ',              &
+     &       stat_freq,' REPARAMETRIZATION ITERATIONS' ; __PRINTL(_MSGBUF,3)
+        stat_freq=stat_freq*repa_freq
+        endif ! stat_freq
+       else ! repa_on
+        WRITE (_MSGBUF,'(/,2A,/,2A/)')                                     &
+     &      whoami,' STATISTICS OUTPUT REQUIRES REPARAMETRIZATION',     &
+     &      whoami,' (DISABLED). STATISTICS WILL NOT BE OUTPUT.' ; __PRINTL(_MSGBUF,3)
+        stat_on=.false.
+       endif
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+#ifdef __CHARMM
+       call minmiz(comlyn, comlen)
+       repa_on=.false. ! turn off reparametrization for regular SD
+       stat_on=.false. ! turn off statistics output for regular SD
+#endif
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      else
+            __WARN(whoami,'UNRECOGNIZED SUBCOMMAND: ',keyword)
+      endif
+!
+      end subroutine sm0k_main
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      subroutine sm0k_init()
+      __DEP_OUTPUT
+      __DEP_PARSER 
+      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
+      __DEP_MPI 
+!
+      __IMPNONE
+ __DECLARE_MSGBUF
+#include "../mpitype.def"
+!
+      bool :: qroot, qslave
+      int :: ierror
+      character(len=11) :: whoami
+!
+      data whoami /' SM0K_INIT>'/
+!
+!      do a basic communicator check:
+      if (ME_LOCAL.eq.0.and.ME_STRNG.eq.MPI_UNDEFINED) then
+        write(_MSGBUF, 111) whoami, ME_GLOBAL, whoami ; __PRINT(_MSGBUF)
+ 111  FORMAT(A, ' WORLD REPLICA ',I5, ' HAS ZERO GROUP ID',             &
+     & /,A,' BUT INVALID STRING ID (MAY BE OK).')
+      elseif (ME_STRNG.ne.MPI_UNDEFINED.and.                            &
+     &  (ME_LOCAL.ne.0.or.MPI_COMM_LOCAL.eq.MPI_COMM_NULL)) then
+        write(_MSGBUF, 111) whoami, ME_GLOBAL, whoami ; __PRINT(_MSGBUF)
+ 112  FORMAT(A, ' WORLD REPLICA ',I5, ' HAS A VALID STRING ID',         &
+     & /,A,' BUT A NONZERO GROUP ID. ABORTING.')
+       return
+      endif
+!
+      qroot=ME_STRNG.ne.MPI_UNDEFINED
+      qslave=ME_LOCAL.ne.MPI_UNDEFINED ! (also includes roots)
+!
+      if (sm0k_initialized) then
+       if (qroot) then
+        if (ME_STRNG.eq.0) then
+          write(_MSGBUF,'(2A)')                                            &
+     &    whoami, ' SM0K ALREADY INITIALIZED. CALL "DONE" TO CLEAN UP.' ; __PRINT(_MSGBUF)
+        endif
+       endif
+       return
+      endif
+!
+      nstring=1 ! safe (hopefully) default
+      mestring=-1 ! safe (hopefully) default
+!
+      if (qroot) then
+        nstring=SIZE_STRNG
+        mestring=ME_STRNG
+      endif
+#ifdef __CHARMM
+!      broadcast string size to all slave nodes
+      __BROADCAST_LOCAL_8B(nstring, 1)     !##INTEGER8
+      __BROADCAST_LOCAL_8B(mestring, 1)    !##INTEGER8
+      __BROADCAST_LOCAL_4B(nstring, 1)     !##.not.INTEGER8
+      __BROADCAST_LOCAL_4B(mestring, 1)    !##.not.INTEGER8
+!      set environment variables
+      call setmsi('NSTRING',nstring)
+      call setmsi('MESTRING',mestring)
+#else
+      __BROADCAST_LOCAL(nstring, 1, mpiint)
+      __BROADCAST_LOCAL(mestring, 1, mpiint)
+#endif
+!
+      if (qroot) then
+        if (ME_STRNG.eq.0) then
+          write(_MSGBUF,'(2A,I5, A)')                                      &
+     &    whoami, ' FOUND ',nstring,' REPLICAS.' ; __PRINT(_MSGBUF)
+        endif
+      endif
+!      store fixed atom indices
+#ifdef __CHARMM
+      iatom_f=>sm0k_fixed_atoms()
+      nfix_bckl=size(iatom_f)
+#else
+      allocate(iatom_f(0))
+#endif
+!
+      sm0k_initialized=.true.
+!
+      end subroutine sm0k_init
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      subroutine sm0k_done()
+      __DEP_PARSER 
+      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
+      __DEP_MPI 
+      __IMPNONE
+ __DECLARE_MSGBUF
+!
+      character(len=11) :: whoami
+!
+      data whoami /' SM0K_DONE>'/
+      if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.ME_STRNG.eq.0) then
+       write(_MSGBUF,'(2A,I5, A)') whoami, ' CLEANING UP.' ; __PRINT(_MSGBUF)
+      endif
+      sm0k_initialized=.false.
+      nstring=-1
+      mestring=-1
+!
+#ifdef __CHARMM
+! deallocate fixed atom indices
+      nfix_bckl=-1;
+!      set envorinment variable
+      call setmsi('NSTRING',nstring)
+      call setmsi('MESTRING',mestring)
+#endif
+      if (associated(iatom_f)) deallocate(iatom_f)
+!
+      if (allocated(ds)) deallocate(ds)
+      if (allocated(curv)) deallocate(curv)
+!
+      end subroutine sm0k_done
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+#ifdef __CHARMM
+!
+      function sm0k_fixed_atoms()
+      __DEP_OUTPUT
+      __DEP_SIZE 
+      use psf 
+      use tsmh, only : backls  ! TSM common blocks included because minimizer DOF depend on TSM
+      use tsms_mod, only : qtsm
+!      use heap 
+      use coord 
+      __IMPNONE
+!
+      int, pointer :: sm0k_fixed_atoms(:)
+      int, allocatable :: backlist(:)
+      int :: nfix, i, j
+      bool :: qfree
+      allocate(backlist(natom)); backlist=0 ! need to initialize, otherwise nfix might be wrong
+! try to acommodate TSM
+__CHARMM_ONLY##IF TSM
+      if (qtsm) then
+!       j=bpert(backls)
+!       backlist=heap(j:j+natom-1) ! heap must have of int type (it was when this line was written)
+        backlist=backls
+      endif
+__CHARMM_ONLY##ENDIF
+!     construct indexing that excludes fixed and backlist atoms
+      nfix = count(abs(imove(1:natom))+abs(backlist(1:natom)).gt.0)
+      allocate(sm0k_fixed_atoms(nfix))
+!
+      nfix=0
+      do i=1,natom
+       qfree=imove(i).eq.0   ! see egrad1.src routines
+       if (qtsm) qfree=qfree.and.backlist(i).eq.0 !__CHARMM_ONLY##TSM
+       if (.not.qfree) then
+        nfix=nfix+1
+        sm0k_fixed_atoms(nfix)=i
+       endif
+      enddo
+!
+      deallocate(backlist)
+      end function sm0k_fixed_atoms
+#endif
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      subroutine sm0k_repa_init(COMLYN, COMLEN)
+!     initialize string reparametrization
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+      __DEP_OUTPUT
+      __DEP_SIZE 
+      __DEP_PARSER 
+      __DEP_COORDINATES
+      __DEP_SELECT
+#ifdef __CHARMM
+      use tsmh, only:backls  !__CHARMM_ONLY##TSM ! TSM common blocks included because minimizer DOF depend on TSM
+      use tsms_mod, only:qtsm  !__CHARMM_ONLY##TSM
+#endif
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      __IMPNONE
+ __DECLARE_MSGBUF
+!
+      CHARACTER(LEN=*) :: COMLYN
+      INTEGER :: COMLEN
+!
+      character(len=22) :: methods(5)
+      character(len=16) :: whoami
+      character(len=8) :: keyword
+      data methods                                                      &
+     & / 'LINEAR','CUBIC SPLINE','B-SPLINE','DST','LINEAR EXACT'/
+!     selection array
+      int :: i ,j, mlen
+      int :: qlinear, qspline, qbspline, qdst, qlinear_exact
+#ifdef __CHARMM
+!
+      int, pointer :: backlist(:) ! for nominal compatibility with TSM
+      int, pointer :: ifixed(:) ! fixed atom indices
+      int, pointer :: iselct(:)
+      int :: imode
+      bool :: qfree
+!
+#elif defined(__DMOL)
+!
+  __DECLARE_DMOL_SELECT
+      int, pointer :: kselct(:) ! for swapping iselct/jselct
+!
+#endif
+      int, pointer :: jselct(:)
+      int :: nslct
+!
+      data whoami /' SM0K_REPA_INIT>'/
+!
+      if (.not.sm0k_initialized) call sm0k_init()
+!
+!     reset variables
+      qspline=0
+      qbspline=0
+      qlinear=0
+      qdst=0
+      qlinear_exact=0
+      dst_cutoff=0.0
+      interp_method=0
+      orient=0
+      orient_mass=0 ! will the orientation use mass weighting?
+      repa_mass=0 ! will the reparametrization use mass weighting
+      nmove=0
+      norient=0
+      num_average_samples=0
+!
+!     deallocate arrays
+      if (allocated(fixed_o)) deallocate(fixed_o) ! flags
+      if (allocated(fixed_m)) deallocate(fixed_m) ! flags
+      if (allocated(iatom_o)) deallocate(iatom_o)
+      if (allocated(iatom_m)) deallocate(iatom_m)
+      if (allocated(iatom_free_o)) deallocate(iatom_free_o)
+      if (allocated(iatom_free_m)) deallocate(iatom_free_m)
+      if (allocated(rref_o)) deallocate(rref_o)
+      if (allocated(rcurrent_o)) deallocate(rcurrent_o)
+      if (allocated(rcurrent_m)) deallocate(rcurrent_m)
+      if (allocated(orientWeights)) deallocate(orientWeights)
+      if (allocated(repaWeights)) deallocate(repaWeights)
+!
+!     deallocate arclength+curavture arrays
+      if (allocated(ds)) deallocate(ds)
+!     initialize curvature array
+      if (allocated(curv)) deallocate(curv)
+!
+      repa_initialized=.false.
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      if (__INDX_RM(comlyn,comlen,'LINE').gt.0) then
+       qlinear=1
+       interp_method=linear
+      endif
+      if ((__INDX_RM(comlyn,comlen,'CSPL').gt.0).or.                        &
+     &    (__INDX_RM(comlyn,comlen,'SPLI').gt.0)) then
+       qspline=1
+       interp_method=spline
+      endif
+      if (__INDX_RM(comlyn,comlen,'BSPL').gt.0) then
+       qbspline=1
+       interp_method=bspline
+      endif
+      if (__INDX_RM(comlyn,comlen,'DST').gt.0) then
+       qdst=1
+       interp_method=dst
+!      did the user specify filter cutoff?
+       dst_cutoff=__GET_RM_F(comlyn, comlen, 'WNCT', -1.0d0)
+       if (dst_cutoff.lt.0.0) then
+        write(_MSGBUF,664) whoami, whoami ; __PRINTL(_MSGBUF,3)
+ 664   FORMAT(A,' DST REQUESTED BUT FILTER CUTOFF',                     &
+     &  A, ' NOT SPECIFIED.',/,' WILL USE 0.500')
+        dst_cutoff=0.5
+       endif
+      endif
+      if (__INDX_RM(comlyn,comlen,'LIN2').gt.0) then
+       qlinear_exact=1
+       interp_method=linear_exact
+      endif
+!ccccccc CHECK FOR MULTIPLE OPTIONS
+      if ((qspline+qlinear+qbspline+qdst+qlinear_exact) .eq. 0) then
+       write(_MSGBUF,665) whoami, whoami ; __PRINTL(_MSGBUF,3)
+ 665   FORMAT(A,' INTERPOLATION METHOD NOT SPECIFIED.',/,               &
+     & A,' WILL USE LINEAR INTERPOLATION.')
+       interp_method=linear
+      elseif ((qdst+qspline+qlinear+qbspline+qlinear_exact) .gt. 1)then
+       __WRN(whoami,'TOO MANY INTERPOLATION OPTIONS.')
+      endif
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!     did the user specify an interpolation tolerance?
+      if (interp_method.ne.linear_exact) then ! options below are invalid for exact interpolation
+       def=__GET_RM_F(comlyn, comlen, 'DEFI', 1.1d0)
+       if (def.lt.1.0) then
+         __WRN(whoami, 'INTERPOLATION TOLERANCE MUST BE >= 1. EXITING.')
+         return
+       endif
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!     did the user specify a maximum number of iterations?
+       iterations=__GET_RM_I(comlyn, comlen, 'ITER',10)
+      else
+       def=0d0
+       iterations=0
+      endif
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!     check for orientation options: must appear after 'ORIE'
+!     process selection
+!
+#ifdef __CHARMM
+      allocate(iselct(natom), jselct(natom)) ; iselct=1     ! select all atoms by default
+      allocate(backlist(natom))
+      backlist=0  ! setting this to zero is the simplest way to provide correct default behavior (see below)
+#endif
+!
+      i=__INDX_RM(comlyn,comlen,'ORIE') ! find the position of `intc'
+      if (i.gt.0) then ! only if the ORIE directive exists
+!      selection text taken from corman.src
+       orient=1
+       j=__INDX(comlyn, comlen, 'SELE', 4)
+       if (j.gt.0.and.j.lt.i) then ! sele occurs before orie
+        __WRN(whoami,'ATOM SELECTION MUST BE SPECIFIED AFTER ORIE.')
+        return
+       endif
+!
+#ifdef __CHARMM
+       IMODE=0
+!
+       CALL SELRPN(COMLYN,COMLEN,iselct,NATOM,1,IMODE,                   &
+     &      .FALSE.,1,' ',0,RESID,RES,IBASE,SEGID,NICTOT,NSEG,          &
+     &      .TRUE.,X,Y,Z,.TRUE.,1,WMAIN)
+       IF(IMODE.NE.0) THEN
+        CALL WRNDIE(0,whoami,'ATOM SELECTION ERROR')
+        RETURN
+       ENDIF
+#elif defined(__DMOL)
+#include "../dmol_select_macro.def"
+#endif
+      endif ! orie specified
+!
+!     check for mass weighting
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      j=1
+      do while (j.gt.0)
+       mlen=comlen
+       j=__INDX_RM(comlyn,comlen,'MASS') ! s
+       if ( (orient.eq.1).and.(j.ge.i) ) then
+        orient_mass=1
+       else if (j.gt.0) then
+        repa_mass=1
+        i=i-(mlen-comlen) ! how much the string has shrunk
+       endif
+      enddo
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!     check which atoms will be moved by reparametrization (default: all atoms)
+!     process selection
+      i=__INDX_RM(comlyn,comlen,'MOVE') !
+      if (i.gt.0) then ! only if the MOVE directive exists
+       j=__INDX(comlyn, comlen, 'SELE', 4)
+       if (j.gt.0.and.j.lt.i) then ! sele occurs before orie
+        __WRN(whoami,'ATOM SELECTION MUST BE SPECIFIED AFTER MOVE.')
+        return
+       endif
+!
+#ifdef __CHARMM
+       IMODE=0
+       CALL SELRPN(COMLYN,COMLEN,jselct,NATOM,1,IMODE,                   &
+     &      .FALSE.,1,' ',0,RESID,RES,IBASE,SEGID,NICTOT,NSEG,          &
+     &      .TRUE.,X,Y,Z,.TRUE.,1,WMAIN)
+       IF(IMODE.NE.0) THEN
+        CALL WRNDIE(0,whoami,'ATOM SELECTION ERROR')
+        RETURN
+       ENDIF
+      else
+       jselct=1   ! reparametrization will move all atoms by default
+      endif ! move specified
+!
+#elif defined(__DMOL)
+       kselct=>iselct ; nullify(iselct)
+#include "../dmol_select_macro.def"
+       jselct=>iselct
+       iselct=>kselct
+      else
+       jselct=>__GET_IND_FROM_SELECTION('ALL') ! select all atoms by default
+      endif
+#endif
+
+!
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! now process the selections
+! 3/11 provide compatibiliy with fixed atoms and nominal compatibility with TSM backlists
+!
+#ifdef __CHARMM
+      norient=count( iselct(1:natom).gt.0 ) ! total number of orientation atoms
+#elif defined(__DMOL)
+      if (associated(iselct)) then ; norient=size(iselct) ; else ; norient=0 ; endif 
+#endif
+!
+      if (norient.eq.0) then
+        __WRN(whoami,'NO ATOMS SELECTED FOR ORIENTATION. WILL NOT ORIENT.')
+        orient=0 ! invalid or missing selection for orientation
+       elseif (norient.lt.3) then
+        __WRN(whoami,'FEWER THAN FOUR ATOMS SELECTED FOR ORIENTATION. WILL NOT ORIENT.')
+        orient=0
+      endif
+!
+#ifdef __CHARMM
+      nmove=count( jselct(1:natom).gt.0 )   ! total number of moving atoms (may be overcounted -- see below)
+#elif defined(__DMOL)
+      if (associated(jselct)) then ; nmove=size(jselct) ; else ; nmove=0 ; endif 
+#endif
+!
+#ifdef __CHARMM
+! try to accommodate TSM
+__CHARMM_ONLY##IF TSM
+      if (qtsm) then
+!       j=bpert(backls)
+!       backlist=heap(j:j+natom-1) ! heap must have of int type (it was when this line was written)
+        backlist=backls
+      endif
+__CHARMM_ONLY##ENDIF
+! check that the number of fixed atoms hasn't changed since initialization; if it has, warn and quit
+      ifixed=>sm0k_fixed_atoms()
+!     the problem is that ifort sometimes crashes when arrays of unequal length are compared
+      qfree=size(ifixed).eq.nfix_bckl
+      if (qfree) qfree=all(ifixed.eq.iatom_f)
+!
+      if (.not.qfree) then
+       __WRN(whoami,'FIXED ATOM ARRAY CHANGED AFTER LAST STRING COMMAND.')
+       deallocate(iatom_f)
+       iatom_f=>ifixed
+       nfix_bckl=size(iatom_f)
+       nullify(ifixed)
+      else
+       deallocate(ifixed)
+      endif
+!
+#endif
+!     allocate space for various arrays atom array
+      allocate(iatom_o(norient), iatom_m(nmove),                        &
+     &  iatom_free_o(norient), iatom_free_m(nmove),                     & ! these index lists are for use with minimizer arrays (fixed atoms removed)
+     &  fixed_o(norient), fixed_m(nmove),                               &           ! these flags indicate that the atom will be absent from minimizer array
+     &  rref_o(norient,3),rcurrent_o(norient,3),                        &
+     &  rcurrent_m(nmove,3),                                            &
+     &  orientWeights(norient), repaWeights(nmove))
+!
+      iatom_o=0; iatom_m=0; 
+#ifdef __CHARMM
+      iatom_free_o=0; iatom_free_m=0;
+#endif
+      rref_o=0d0
+      rcurrent_o=0d0
+      rcurrent_m=0d0
+      orientWeights=1d0
+      repaWeights=1d0
+! build various index arrays
+!
+#ifdef __CHARMM
+!
+      norient=0
+      nmove=0
+!
+      j=-2 ! free atom index; want the valid indices to be 1,4,7,..etc (see below)
+      do i=1,natom
+       qfree=imove(i).eq.0   ! see egrad1.src routines
+       if (qtsm) qfree=qfree.and.backlist(i).eq.0 !__CHARMM_ONLY##TSM
+       if (qfree) j=j+3 ! increment free index -- atom is movable and will be moved by minimization
+! orientation indices
+       if (iselct(i).gt.0) then
+        norient=norient+1
+        iatom_o(norient)=i
+        if (qfree) then
+         iatom_free_o(norient)=j
+         fixed_o(norient)=.false.
+        else
+         iatom_free_o(norient)=-999 ! unknown index because the minimization routine will not supply the coordinate
+         fixed_o(norient)=.true.  ! this flag will tepp sm0k repa not to use free index
+        endif
+       endif
+! moving indices
+       if (jselct(i).gt.0) then
+        if (.not.qfree) then ! cannot (well, should not) move fixed atoms: warn but skip entry & continue
+         __WARN(whoami,'ATOM ',i,' IS FIXED OR IN A TSM BACKLIST. SKIPPING.') !__CHARMM_ONLY##TSM
+         __WARN(whoami,'ATOM ',i,' IS FIXED. SKIPPING.')                      !__CHARMM_ONLY##.not.TSM
+        else
+         nmove=nmove+1
+         iatom_m(nmove)=i
+         iatom_free_m(nmove)=j
+         fixed_m(nmove)=.false.
+        endif
+       endif
+!
+      enddo
+#elif defined(__DMOL)
+! currently, no support for fixed atoms -- assume their number is zero
+! orientation
+      if (associated(iselct)) then 
+       iatom_o=iselct
+       iatom_free_o=iatom_o*3-2 ! gives 1,4,7...
+       fixed_o=.false.
+       deallocate(iselct)
+      endif
+! moving
+      if (associated(jselct)) then 
+       iatom_m=jselct
+       iatom_free_m=iatom_m*3-2
+       fixed_m=.false.
+       deallocate(jselct)
+      endif
+#endif
+!
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+      if (nmove.eq.0) then ! this will occur if all of the atoms selected are fixed
+        __WRN(whoami,'NO ATOMS SELECTED FOR REPARAMETRIZATION. CANNOT CONTINUE.')
+        if (associated(iselct)) deallocate(iselct)
+        if (associated(jselct)) deallocate(jselct)
+#ifdef __CHARMM
+        if (associated(backlist)) deallocate(backlist)
+#endif
+        return
+      endif
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! done with selections
+!!!!!!!!! process mass-weighting
+      if (orient_mass.eq.1) then 
+       do i=1,norient
+        orientWeights(i)=__MASS(iatom_o(i))*orientWeights(i)        ! these weights are for the Best-Fit routine
+!        orientWeights(i)=sqrt(amass(iatom_o(i)))*orientWeights(i)
+       enddo
+!
+       do i=1, nmove
+!        repaWeights(i)=sqrt(amass(iatom_m(i)))*repaWeights(i)      ! these weights are essentially for multiplications
+        repaWeights(i)=__MASS(iatom_m(i))*repaWeights(i)
+       enddo
+      endif
+!!!!!!
+!     normalize orientWeights;
+      orientWeights=orientWeights/sum(orientWeights)
+!     unnecessary -- repaWeights are normalized in interpolation routine
+      repaWeights=repaWeights/sum(repaWeights)
+!
+!     print summary
+!!!!!! reparametrization summary !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+      mlen=len(methods(interp_method))
+      __TRIMA(methods(interp_method),mlen)
+      if (interp_method.eq.linear_exact) then
+        write(_MSGBUF,666) whoami,methods(interp_method)(1:mlen)
+      else
+        write(_MSGBUF,667) whoami,methods(interp_method)(1:mlen),whoami,   &
+     &  def
+      endif
+      __PRINTL(_MSGBUF,3)
+ 666  format(A,' WILL REPARAMETRIZE STRING USING ',A,' INTERPOLATION')
+ 667  format(A,' WILL REPARAMETRIZE STRING USING ',A,/,                 &
+     &A,' INTERPOLATION TO WITHIN MAX(DS)/MIN(DS) < ',F7.3,' TOLERANCE')
+      if (iterations.gt.0) then ; write(_MSGBUF,668) whoami, iterations ; __PRINTL(_MSGBUF,3) ; endif
+ 668  format(A,' WITH A MAXIMUM OF ',I3,' ITERATIONS')
+      if(interp_method.eq.dst) then ; write(_MSGBUF,6680) whoami,dst_cutoff*100.0 ; __PRINTL(_MSGBUF,3) ; endif
+ 6680 format(A,' DST INTERPOLATION WILL USE THE LOWER ',F8.4,           &
+     & '% OF WAVENUMBERS')
+!
+      write(keyword,'(I8)') nmove ; __PRINTL(_MSGBUF,3)
+      mlen=len(keyword)
+      __TRIMA(keyword,mlen)
+      write(_MSGBUF,669) whoami, keyword(1:mlen) ; __PRINTL(_MSGBUF,3)
+ 669  format(A,' INTERPOLATION IS BASED ON ',A,' CARTESIAN COORDINATES')
+      if (repa_mass.eq.1) then ; write(_MSGBUF,672) whoami ; __PRINTL(_MSGBUF,3) ; endif
+ 672  format(A,' INTERPOLATION WILL USE MASS-WEIGHTING')
+!
+!!!!!! orientation summary !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+      if (orient.eq.1) then
+        write(keyword,'(I8)') norient ; __PRINTL(_MSGBUF,3)
+        mlen=len(keyword)
+        __TRIMA(keyword,mlen)
+        write(_MSGBUF,670) whoami, keyword(1:mlen) ; __PRINTL(_MSGBUF,3)
+ 670  format(A,' STRING WILL BE ORIENTED BASED ON ',A,' ATOMS')
+        if (orient_mass.eq.1) then ; write(_MSGBUF,671) whoami ; __PRINTL(_MSGBUF,3) ; endif
+ 671  format(A,' ORIENTATION WILL USE MASS-WEIGHTING')
+      endif ! orient
+!
+!     initialize arclength array
+      if (.not.allocated(ds)) then
+       allocate(ds(nstring-1))
+       ds=0.0d0
+      endif
+!     initialize curvature array
+      if (.not.allocated(curv)) then
+       allocate(curv(nstring-2))
+       curv=0.0d0
+      endif
+!
+      repa_initialized=.true.
+!
+!    deallocate temporary variables
+      if (associated(iselct)) deallocate(iselct)
+      if (associated(jselct)) deallocate(jselct)
+#ifdef __CHARMM
+      if (allocated(backlist)) deallocate(backlist)
+#endif
+!
+      end subroutine sm0k_repa_init
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      subroutine sm0k_repa(n,var)
+!     zero-temperature:reparametrization is based
+!     on Cartesian coordinates
+!     note: var is assumed to contain coordinates of free atoms (CHARMM SD minimizer convention) in [x1,y1,z1,x2,y2,z2...] triplet format
+!
+      __DEP_BESTFIT
+      __DEP_OUTPUT
+      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
+      __DEP_NUMBER 
+      __DEP_SIZE 
+      __DEP_COORDINATES
+      __DEP_PARSER 
+      __DEP_MPI
+#ifdef __CHARMM
+      __DEP_PSF
+#endif
+!
+      __IMPNONE
+!ccccccccccccccccccccccccccccccccccccccc
+      int :: n                  ! NOTE: arrays as optional arguments are quite a dangerous feature of F90
+      float, optional :: var(*) ! ideally, n should give the dimension of n, but we live in an imperfect world
+!
+#include "../mpitype.def"
+!
+      int :: stat(MPI_STATUS_SIZE)
+      int :: ierror
+      int :: me, ncpu
+      int :: i, j
+      float :: t
+      bool :: qroot, qslave, qmanual
+!     aux arrays
+      float :: weights(nmove,3) ! for reparametrization
+      float :: u(3,3)=RESHAPE( (/1,0,0,0,1,0,0,0,1/), (/3,3/) ) ! rotation matrix
+      float :: rcurrent_com(3)=(/0d0,0d0,0d0/) ! COM vector
+!
+      character(len=11) :: whoami
+!      interface to reparametrization routine
+!      needed because of assumed shape array below
+!
+      interface
+        subroutine interp_driver_sci(rin,rout,wgt,n,                    &
+     &   interp_method,tol,max_iterations,d_arclength, curvature,       &
+     &   dst_cutoff, dr,r_bc_0, r_bc_1)
+        __DEP_OUTPUT
+        __IMPNONE
+        int :: n
+        float :: rin(n), rout(n), wgt(n)
+        int, intent(in) ::  interp_method
+        int :: max_iterations
+        float :: tol, d_arclength(:), curvature(:)
+        float, optional :: dst_cutoff
+        float, optional :: dr(n) ,r_bc_0(n), r_bc_1(n)
+        end subroutine interp_driver_sci
+!
+        subroutine interp_driver_sci_root(rin,rout,wgt,n,               &
+     &   interp_method,tol,max_iterations,d_arclength, curvature,       &
+     &   dst_cutoff, dr,r_bc_0, r_bc_1)
+        __DEP_OUTPUT
+        __IMPNONE
+        int :: n
+        float :: rin(n), rout(n), wgt(n)
+        int, intent(in) ::  interp_method
+        int :: max_iterations
+        float :: tol, d_arclength(:), curvature(:)
+        float, optional :: dst_cutoff
+        float, optional :: dr(n) ,r_bc_0(n), r_bc_1(n)
+        end subroutine interp_driver_sci_root
+!
+        subroutine interp_linear_exact(rin,rout,wgt,n,                  &
+     &   d_arclength, curvature,                                        &
+     &   drout,                                                         &
+     &   r_bc_0, r_bc_1)
+        int :: n
+        float :: rin(n), rout(n), wgt(n)
+        float :: d_arclength(:), curvature(:)
+        float, optional :: drout(n) ! optional computation of tangent
+        float , optional :: r_bc_0(n), r_bc_1(n)   ! optional fixed bc data
+       end subroutine interp_linear_exact
+!
+      end interface
+!
+      data whoami /' SM0K_REPA>'/
+!
+      if (.not.sm0k_initialized) call sm0k_init()
+      qmanual=(n.eq.0)
+!
+      qroot =MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.SIZE_STRNG.gt.1
+      qslave=MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.SIZE_LOCAL.gt.1
+!
+! check if the user has made an initialization call
+      if (.not.repa_initialized) then
+       __WRN( whoami,'NO REPARAMETRIZATION OPTIONS SELECTED. NOTHING DONE.')
+       return
+      endif
+!
+!      load coordinates
+! manual reparametrization: use PSF indices
+      if (qmanual) then
+! orientation
+       do i=1,norient
+        j=iatom_o(i)
+        rcurrent_o(i,1)=__XX(j); rcurrent_o(i,2)=__YY(j); rcurrent_o(i,3)=__ZZ(j)
+       enddo
+! moving
+       do i=1,nmove
+        j=iatom_m(i)
+#ifdef __CHARMM
+        if (imove(j).ne.0) then ; __WRN(whoami,'ATTEMPED TO MOVE A FIXED ATOM. THIS IS MOST LIKELY BAD.') ; endif
+#endif
+        rcurrent_m(i,1)=__XX(j); rcurrent_m(i,2)=__YY(j); rcurrent_m(i,3)=__ZZ(j)
+       enddo
+      else ! `automatic', i.e. called from a minimization routine
+! orientation atoms
+       do i=1,norient
+        if (fixed_o(i)) then ! grab coordinates from main coordinate array
+         j=iatom_o(i)
+         rcurrent_o(i,1)=__XX(j)
+         rcurrent_o(i,2)=__YY(j)
+         rcurrent_o(i,3)=__ZZ(j);
+        else ! grab coordinates provided by minimizer
+         j=iatom_free_o(i) ! x-index (y- z- indices follow)
+         rcurrent_o(i,1)=var(j);j=j+1
+         rcurrent_o(i,2)=var(j);j=j+1
+         rcurrent_o(i,3)=var(j)
+        endif
+       enddo
+! moving atoms
+       do i=1,nmove
+! here, we should be able to assume that the moving atom coords are passed in
+        j=iatom_free_m(i) ! x-index (y- z- indices follow)
+        rcurrent_m(i,1)=var(j);j=j+1
+        rcurrent_m(i,2)=var(j);j=j+1
+        rcurrent_m(i,3)=var(j)
+       enddo
+      endif ! qmanual
+!
+      if (orient.eq.1) then
+!       translate to centroid
+       rcurrent_com=matmul(transpose(rcurrent_o), orientWeights)
+!
+       rcurrent_m(:,1)=rcurrent_m(:,1)-rcurrent_com(1)
+       rcurrent_m(:,2)=rcurrent_m(:,2)-rcurrent_com(2)
+       rcurrent_m(:,3)=rcurrent_m(:,3)-rcurrent_com(3)
+!
+       rcurrent_o(:,1)=rcurrent_o(:,1)-rcurrent_com(1)
+       rcurrent_o(:,2)=rcurrent_o(:,2)-rcurrent_com(2)
+       rcurrent_o(:,3)=rcurrent_o(:,3)-rcurrent_com(3)
+      endif
+!
+! statistics: save current structure
+      if (stat_initialized) then
+        if (output_dsdt.or.output_rmsd_ave) then
+! also need to deal with fixed atoms
+         do i=1,nstat
+          if (qmanual.or.fixed_s(i)) then ! grab coordinates from main coordinate array
+           j=iatom_s(i)
+           rold_s(i,1)=__XX(j)
+           rold_s(i,2)=__YY(j)
+           rold_s(i,3)=__ZZ(j)
+          else
+           j=iatom_free_s(i) ! x-index (y- z- indices follow)
+           rold_s(i,1)=var(j);j=j+1
+           rold_s(i,2)=var(j);j=j+1
+           rold_s(i,3)=var(j)
+          endif
+         enddo
+!     stat orientation atoms
+         if (qstat_orient) then
+          rold_o=rcurrent_o ! COM-free
+          rold_s(:,1)=rold_s(:,1) - rcurrent_com(1)
+          rold_s(:,2)=rold_s(:,2) - rcurrent_com(2)
+          rold_s(:,3)=rold_s(:,3) - rcurrent_com(3)
+         endif
+        endif ! dsdt or rmsd_ave
+!     update running average
+        if (output_rmsd_ave) then
+         t=1.0d0*num_average_samples/(num_average_samples+1)
+         if (qstat_orient) then
+          if (num_average_samples.gt.0) then
+           call RMSBestFit(rold_o, rave_o, orientWeights, u)
+           u=transpose(u)
+           rold_o=matmul(rold_o, u)
+           rold_s=matmul(rold_s, u)
+          endif
+          rave_o=t*rave_o+(1.0d0-t)*rold_o
+         endif ! qstat_orient
+         rave_s=t*rave_s+(1.0d0-t)*rold_s
+         num_average_samples=num_average_samples+1
+        endif
+      endif
+!
+      if (qroot) then
+       if (orient.eq.1) then
+!ccccccccccc take care of orientation ccccccc
+!      send/receive orientation structure
+        me=ME_STRNG
+        ncpu=SIZE_STRNG
+        if (me.gt.0) then
+         call mpi_recv(rref_o,3*norient,mpifloat,me-1,1,                   &
+     &        MPI_COMM_STRNG, stat,ierror)
+!       orient rcurrent based on rref
+!       12.09: using RTMD orientation routines
+!       no checking for undefined coordinates here
+         call RMSBestFit(rcurrent_o,rref_o,orientWeights,u)
+!       transform current structure to overlap with reference
+!       (if orientation is off, u=I)
+         u=transpose(u)
+         rcurrent_o=matmul(rcurrent_o, u)
+         rcurrent_m=matmul(rcurrent_m, u)
+        endif
+        if (me.lt.ncpu-1) then
+         call mpi_send(rcurrent_o,norient*3,mpifloat,me+1,1,               &
+     &        MPI_COMM_STRNG, ierror)
+        endif ! me
+       endif ! orient
+!cccccccccccccc now call the approproate interpolation subroutine
+       if (repa_mass.eq.1) then
+        weights(:,1)=repaWeights(:)! need 3 sets for  x-,y-,z- coords
+        weights(:,2)=repaWeights(:)
+        weights(:,3)=repaWeights(:)
+       else
+        weights=1.0d0
+       endif
+!
+! call by name
+! there is the following (compiler?) bug: the routine thinks that dr is present
+! even though it is not -- can survive without this but this is disturbing
+!       call interp_driver_sci_root(RIN=rcurrent_m,ROUT=rcurrent_m,
+       if (interp_method.eq.linear_exact) then
+        call interp_linear_exact(RIN=rcurrent_m,ROUT=rcurrent_m,        &
+     &  WGT=weights,N=3*nmove, D_ARCLENGTH=ds,CURVATURE=curv)
+       else
+        call interp_driver_sci(RIN=rcurrent_m,ROUT=rcurrent_m,          &
+     &  WGT=weights,N=3*nmove, INTERP_METHOD=interp_method,TOL=def,     &
+     &  MAX_ITERATIONS=iterations,D_ARCLENGTH=ds,CURVATURE=curv,        &
+     &  DST_CUTOFF=dst_cutoff)
+!
+! call by argument order
+!       call interp_driver_sci(rcurrent_m,rcurrent_m,weights,3*nmove,
+!     &  interp_method,def,iterations,ds,curv,dst_cutoff)
+!       call interp_driver_sci_root(rcurrent_m,rcurrent_m,weights,
+!     &  3*nmove,interp_method,def,iterations,ds,curv,dst_cutoff)
+       endif
+!
+       if (orient.eq.1) then
+        u=transpose(u)
+        rcurrent_m=matmul(rcurrent_m, u)      ! rotate back
+!     restore original COM
+        rcurrent_m(:,1)=rcurrent_m(:,1)+rcurrent_com(1)
+        rcurrent_m(:,2)=rcurrent_m(:,2)+rcurrent_com(2)
+        rcurrent_m(:,3)=rcurrent_m(:,3)+rcurrent_com(3)
+!
+       endif ! orient
+      endif ! root
+!
+!    broadcast coordinates to slaves
+      if (qslave) then 
+#ifdef __CHARMM
+       __BROADCAST_LOCAL_4B(rcurrent_m,nmove*3) !##SINGLE
+       __BROADCAST_LOCAL_8B(rcurrent_m,nmove*3) !##.not.SINGLE
+#else
+       __BROADCAST_LOCAL(rcurrent_m,nmove*3,mpifloat)
+#endif
+      endif
+!
+!     copy back moving atoms
+!
+      if (qmanual) then
+       do i=1,nmove
+        j=iatom_m(i)
+        __XX(j)=rcurrent_m(i,1)
+        __YY(j)=rcurrent_m(i,2)
+        __ZZ(j)=rcurrent_m(i,3)
+       enddo
+      else
+       do i=1,nmove
+        if (fixed_m(i)) cycle ! do not return fixed atoms (should not be used)
+        j=iatom_free_m(i) ! x-index (y- z- indices follow)
+        var(j)=rcurrent_m(i,1);j=j+1
+        var(j)=rcurrent_m(i,2);j=j+1
+        var(j)=rcurrent_m(i,3)
+       enddo
+      endif
+!
+      end subroutine sm0k_repa
+!
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      subroutine sm0k_interpolate(comlyn, comlen)
+!     given a collection of n string replicas, interpolate onto a finer/coarser path
+!
+      __DEP_BESTFIT
+!
+      __DEP_OUTPUT
+      __DEP_MPI 
+!
+      __DEP_PARSER 
+      __DEP_SIZE 
+      __DEP_NUMBER 
+!
+#ifdef __CHARMM
+!
+      use ctitla 
+!
+#elif defined(__DMOL)
+      __DEP_COORDINATES
+#endif
+!
+      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
+      __DEP_SELECT
+      __DEP_COORIO
+!
+      __IMPNONE
+ __DECLARE_MSGBUF
+!
+      CHARACTER(LEN=*) :: COMLYN
+      INTEGER :: COMLEN
+!
+!     local declarations only: I do not want persistence, so no saving into modules
+      int, parameter :: linear=1, spline=2, bspline=3
+      int :: ifile, ofile, num_rep_in, num_rep_out
+      int :: len_cor_in, len_cor_out,        &
+     &       length, mlen, interp_method
+      int :: i,j,k, orient=0, repa_mass=0, orient_mass=0, me, norient
+!
+      float, allocatable :: rin_all(:,:,:), dr(:,:,:), rout_all(:,:,:)
+      float, allocatable :: rr(:),rr_out(:),ds(:),s(:),t(:),rrpp(:)
+      float :: dum
+!
+      character(len=80), allocatable :: fname_cor_in(:), fname_cor_out(:)
+      character(len=80) :: name_cor_in, name_cor_out, dummy
+      character(len=20) :: methods(4), method, form
+      character(len=18) :: whoami
+      character(len=8)  :: keyword
+!
+      bool :: qprint
+!
+#ifdef __CHARMM
+!
+      int :: moder, modew, imode
+      bool :: lresid=.false.
+!     compatibility variables for coordinate reading/writing
+      float :: xdum(natom+1), ydum(natom+1), zdum(natom+1),            &
+     &          wdum(natom+1)
+      int :: icntrl(20), ierror
+      int :: iselct(natom), ifreea(natom), pairs(2,natom)
+      character, parameter :: tab=char(9)
+!
+#elif defined (__DMOL)
+ __DECLARE_DMOL_SELECT
+      int :: fmt, natom
+#endif
+      float, pointer :: orient_weights(:), weight(:)
+      int :: ierror
+      float :: u(3,3) ! rotation matrix
+!
+!
+      interface ! to linear interpolation routine
+       subroutine linear_interp(xin,yin,nin,xout,yout,nout,dydxout)
+       __DEP_OUTPUT
+       __IMPNONE
+       int :: nin, nout
+       float :: xin(nin), yin(nin), xout(nout), yout(nout)
+       float, optional :: dydxout(nout) ! tangent computation
+       float :: dydx(nout)
+       end subroutine linear_interp
+      end interface
+!
+      data whoami /' SM0K_INTERPOLATE>'/
+      data methods/ 'LINEAR','CUBIC SPLINE','B-SPLINE','DST'/
+!
+      if (.not.sm0k_initialized) call sm0k_init()
+!
+      qprint=MPI_COMM_STRNG.ne.MPI_COMM_NULL
+      qprint=qprint.and.(ME_STRNG.eq.0)
+! get interpolation specifications
+! interpolation type
+!
+      interp_method=0
+      method=__GET_RM_AFUN(comlyn, comlen, 'METH')
+      length=len(method)
+      __TRIMA(method, length)
+      if (length.ge.4) then
+       if (__STRNCMP(method,'LINE',4)) then
+        interp_method=linear
+       elseif (__STRNCMP(method,'BSPL',4)) then
+        interp_method=bspline
+       elseif (__STRNCMP(method,'SPLI',4)) then
+        interp_method=spline
+       endif
+      endif
+!     print summary
+      if (qprint) then
+       if (interp_method.gt.0) then
+        length=len(methods(interp_method))
+        __TRIMA(methods(interp_method),length)
+        write(_MSGBUF,6770) whoami, methods(interp_method)(1:length) ; __PRINT(_MSGBUF)
+ 6770 format(/A,' WILL INTERPOLATE USING ',A,' INTERPOLATION')
+       else
+        if (length.gt.0) then
+         write(_MSGBUF,6771) whoami, method(1:length), whoami        ; __PRINT(_MSGBUF)
+ 6771 format(/A,' UNRECOGNIZED INTERPOLATION METHOD: ',A,'.',/,         &
+     &       A, ' WILL INTERPOLATE USING LINEAR INTERPOLATION')
+        else
+         write(_MSGBUF,6772) whoami, whoami                          ; __PRINT(_MSGBUF)
+ 6772 format(/A,' UNSPECIFIED INTERPOLATION METHOD.',/,                 &
+     &       A, ' WILL INTERPOLATE USING LINEAR INTERPOLATION')
+        endif ! length
+       endif ! interp_method
+      endif ! qprint
+      if (interp_method.eq.0) interp_method=linear ! choose linear interpolation as default
+! process other options ccccccccccccccccccccccccccccccccccccccccccccccc
+! number of input replicas
+      if (__INDX(comlyn,comlen,'NIN',3).gt.0) then
+       num_rep_in=__GET_RM_I(comlyn, comlen, 'NIN', 0)
+       if (num_rep_in.le.0) then
+        if (qprint) then ; write(_MSGBUF, 6781) whoami ; __PRINT(_MSGBUF) ; endif
+ 6781 format(A,' NUMBER OF INPUT REPLICAS MUST BE > 0. ',/,             &
+     & ' NOTHING DONE.')
+        return
+       else
+        if (qprint) then 
+          write(_MSGBUF,6783) whoami, num_rep_in ; __PRINT(_MSGBUF) 
+        endif
+ 6783 format(A,' INITIAL STRING RESOLUTION: ', I5, ' REPLICAS.')
+       endif ! num_rep_in<=0
+      else
+        if (qprint) then ; write(_MSGBUF, 6784) whoami ; __PRINT(_MSGBUF) ; endif
+ 6784 format(A,' NUMBER OF INPUT REPLICAS UNSPECIFIED',/,               &
+     & A,' NOTHING DONE.')
+         return
+      endif !  indx('NIN')
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+! number of output replicas
+      if (__INDX(comlyn,comlen,'NOUT',4).gt.0) then
+       num_rep_out=__GET_RM_I(comlyn, comlen, 'NOUT', 0)
+       if (num_rep_out.le.0) then
+        if (qprint) then ; write(_MSGBUF, 6782) whoami ; __PRINT(_MSGBUF) ; endif
+ 6782 format(A,' NUMBER OF OUTPUT REPLICAS MUST BE > 0. ',/,            &
+     & ' NOTHING DONE.')
+        return
+       else
+        if (qprint) then 
+          write(_MSGBUF,6785) whoami, num_rep_out ; __PRINT(_MSGBUF) 
+        endif
+ 6785 format(A,' INTERPOLATED STRING RESOLUTION: ', I5, ' REPLICAS.')
+       endif ! num_rep_in<=0
+      else
+        if (qprint) then ; write(_MSGBUF, 6786) whoami ; __PRINT(_MSGBUF) ; endif
+ 6786 format(A,' NUMBER OF OUTPUT REPLICAS UNSPECIFIED',/,              &
+     & A,' NOTHING DONE.')
+         return
+      endif ! indx('NIN')
+!ccccc
+! get input coordinate file info
+      __GET_RM_A(comlyn, comlen, 'CRIN', 4, name_cor_in, 80, len_cor_in)
+      if (len_cor_in.le.0) then
+       if (qprint) then ; write(_MSGBUF, 6789) whoami ; __PRINT(_MSGBUF) ; endif
+ 6789 format(A,' INPUT COORDINATE FILE NAME UNSPECIFIED.',/,            &
+     & '  NOTHING DONE.')
+       return
+      endif
+! get output coordinate file info
+      __GET_RM_A(comlyn, comlen, 'CROUT', 5, name_cor_out, 80, len_cor_out)
+      if (len_cor_out.le.0) then
+       if (qprint) then ; write(_MSGBUF, 6790) whoami ; __PRINT(_MSGBUF) ; endif
+ 6790 format(A,' OUTPUT COORDINATE FILE NAME UNSPECIFIED.',/,           &
+     & ' NOTHING DONE.')
+       return
+      endif ! len_cor_out
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!        parse file format spec. (same for both input/output)c
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+#ifdef __CHARMM
+      lresid=.false.
+#endif
+      if (__INDX_RM(comlyn,comlen,'PDB').gt.0) then
+#ifdef __CHARMM
+        moder=-1
+        modew=4
+        if (__INDX_RM(comlyn,comlen,'RESI').gt.0) lresid=.true.
+#elif defined(__DMOL)
+        fmt=pdb
+#endif
+        form='FORMATTED'
+#ifdef __CHARMM
+      elseif ( (__INDX_RM(comlyn,comlen,'FILE').gt.0).or.               &
+     &  (__INDX_RM(comlyn,comlen,'UNFO').gt.0)) then
+        moder=0
+        modew=1
+        form='UNFORMATTED'
+#endif
+      elseif ( (__INDX_RM(comlyn,comlen,'CARD').gt.0).or.               &
+     &  (__INDX_RM(comlyn,comlen,'FORM').gt.0)) then
+#ifdef __CHARMM
+        moder=1
+        modew=2
+#elif defined(__DMOL)
+        fmt=charmm
+#endif
+        form='FORMATTED'
+      else ! default
+#ifdef __CHARMM
+        moder=1
+        modew=2
+#elif defined(__DMOL)
+        fmt=charmm
+#endif
+        form='FORMATTED'
+      endif
+!
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!       write summary ( same code as in SMCV interpolation )
+      if (qprint) then ! note: using qprint as a root node flag, too (should change this)
+!ccccc   get coordinate file names
+       ifile=-1 ! a valid unit number will be assigned by __OPEN_FILE
+       ofile=-1
+       __OPEN_FILE(ifile,name_cor_in(1:len_cor_in),'FORMATTED','READ')
+       allocate(fname_cor_in(num_rep_in))
+!
+       do j=1, num_rep_in
+        read(ifile,*) fname_cor_in(j)
+       enddo
+       __CLOSE_FILE(ifile,'KEEP',ierror)
+!
+       write(_MSGBUF,6791) whoami ; __PRINT(_MSGBUF)
+ 6791 format(A,' COORDINATE SETS WILL BE READ FROM',                    &
+     & ' THE FOLLOWING FILES:' )
+!
+       do j=1, num_rep_in
+        write(_MSGBUF,'(A1,I5," ",A80)') tab, j, fname_cor_in(j) ; __PRINT(_MSGBUF)
+       enddo
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       __OPEN_FILE(ofile,name_cor_out(1:len_cor_out),'FORMATTED','READ')
+!
+       allocate(fname_cor_out(num_rep_out))
+!
+       do j=1, num_rep_out
+        read(ifile,'(A80)') fname_cor_out(j)
+       enddo
+       __CLOSE_FILE(ofile,'KEEP',ierror)
+!
+       write(_MSGBUF,6791) whoami ; __PRINT(_MSGBUF)
+ 6793 format(A,' COORDINATE SETS WILL BE WRITTEN TO',                   &
+     & ' THE FOLLOWING FILES:' )
+!
+       do j=1, num_rep_out
+        write(_MSGBUF,'(A1,I5," ",A80)') tab, j, fname_cor_out(j) ; __PRINT(_MSGBUF)
+       enddo
+!
+      endif ! qprint
+!
+!cccccccccccccccccccccc parse weighting/orientation options
+!     check for orientation options: must appear after 'ORIE'
+!     process selection
+      i=__INDX_RM(comlyn,comlen,'ORIE')
+      if (i.gt.0) then ! only if the ORIE directive exists
+!      selection text taken from corman.src
+       orient=1
+       j=__INDX(comlyn, comlen, 'SELE', 4)
+       if (j.gt.0.and.j.lt.i) then ! sele occurs before orie
+        __WRN(whoami,'ATOM SELECTION MUST BE SPECIFIED AFTER ORIE.')
+         return
+       endif
+!
+#ifdef __CHARMM
+!
+       IMODE=0
+       CALL SELRPN(COMLYN,COMLEN,ISELCT,NATOM,1,IMODE,                   &
+     &      .FALSE.,1,' ',0,RESID,RES,IBASE,SEGID,NICTOT,NSEG,          &
+     &      .TRUE.,xdum,ydum,zdum,.TRUE.,1,wdum)
+       IF(IMODE.NE.0) THEN
+        CALL WRNDIE(0,whoami,'ATOM SELECTION ERROR')
+        RETURN
+       ENDIF
+       norient=count(iselct.gt.0) 
+!
+#elif defined(__DMOL)
+#include "../dmol_select_macro.def"
+       if (associated(iselct)) then ; norient=size(iselct) ; else ; norient=0 ; endif 
+#endif
+!
+       if (norient.eq.0) then
+        __WRN(whoami,'NO ATOMS SELECTED FOR ORIENTATION. WILL NOT ORIENT.')
+        orient=0 ! invalid or missing selection for orientation
+       elseif (norient.lt.3) then
+        __WRN(whoami,'FEWER THAN FOUR ATOMS SELECTED FOR ORIENTATION. WILL NOT ORIENT.')
+        orient=0
+       endif
+!
+      endif ! orie specified
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!     check for mass weighting
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      j=1
+      do while (j.gt.0)
+       mlen=comlen
+       j=__INDX_RM(comlyn,comlen,'MASS') ! s
+       if ( (orient.eq.1).and.(j.ge.i) ) then
+        orient_mass=1
+       else if (j.gt.0) then
+        repa_mass=1
+        i=i-(mlen-comlen) ! how much the string has shrunk
+       endif
+      enddo
+!
+#ifndef __CHARMM
+ natom=__NATOM
+#endif
+!
+!     root node performs the interpolation
+!     however, other nodes are included for compatibility with CHARMM routines
+!
+      if (qprint) then ! using qprint as a root flag -- not great
+!
+       if (repa_mass.eq.1) then ; write(_MSGBUF,6720) whoami ; __PRINT(_MSGBUF) ; endif
+ 6720 format(A,' INTERPOLATION WILL USE MASS-WEIGHTING')
+!
+       if (orient.eq.1) then
+!
+        allocate(orient_weights(natom))
+!
+#ifdef __CHARMM
+        orient_weights=(__MASS*orient_mass+(1d0-orient_mass))*iselct
+#elif defined(__DMOL)
+        orient_weights=0
+        if (associated(iselct)) then
+         orient_weights(iselct) = orient_mass * __MASS(iselct) + (1d0-orient_mass) 
+         deallocate(iselct)
+        endif
+#endif
+!    print a summary
+        write(keyword,'(I8)') norient
+        mlen=len(keyword)
+        __TRIMA(keyword,mlen)
+        write(_MSGBUF,6700) whoami, keyword(1:mlen) ; __PRINT(_MSGBUF)
+ 6700 format(A,' STRING WILL BE ORIENTED BASED ON ',A,' ATOMS')
+        if (orient_mass.eq.1) then ; write(_MSGBUF,6710) whoami ; __PRINT(_MSGBUF) ; endif
+ 6710 format(A,' ORIENTATION WILL USE MASS-WEIGHTING')
+       endif ! orient == 1
+!ccccccccccccccccccccccccc do work cccccccccccccccccccccccccccc
+       write(_MSGBUF,6974) whoami ; __PRINT(_MSGBUF)
+ 6974 format(A,' READING COORDINATE FILES')
+!     allocate memory for ALL replicas (may not be the best solution if
+!     the structure is very large; however, with 0K string, you will want
+!     to exclude water
+!
+      endif ! qprint
+!   coordinate arrays input & output
+!
+      if (allocated(rin_all)) deallocate(rin_all)
+      allocate(rin_all(natom,3,num_rep_in))
+      rin_all=__NAN ! initialize
+!
+      if (allocated(rout_all)) deallocate(rout_all)
+      allocate(rout_all(natom,3,num_rep_out))
+      rout_all=__NAN
+!
+      ifile=-1 ! __OPEN_FILE will assign a valut unit #
+!
+#ifdef __CHARMM
+      iselct=1. ! CHARMM compatibility
+#endif
+!
+      do j=1, num_rep_in
+!
+        length=len_trim(fname_cor_in(j))
+        dummy=fname_cor_in(j)(1:length)
+!
+        if (qprint) then ; __OPEN_FILE(ifile,dummy,form,'READ') ; endif
+!
+#ifdef __CHARMM
+        dummy=''
+        call cread(ifile, titleb, ntitlb, icntrl,                       &
+     &        rin_all(1,1,j), rin_all(1,2,j), rin_all(1,3,j),           &
+     &        wdum, natom, moder, iselct,              &
+     &        0, res, nres, atype, ibase, 1, ifreea,               &
+     &        segid, resid, nictot, nseg, lresid, .false.,              &
+     &        dummy, 80, 0, .false.)
+#elif defined (__DMOL)
+        select case(fmt)
+         case(charmm) ; call ch_coor_read(ifile, rcomp)
+         case(pdb)    ; call pdb_read(ifile, rcomp)
+        end select
+        rin_all(:,:,j)=transpose(rcomp)
+#endif
+       if (qprint) then ; __CLOSE_FILE(ifile,'KEEP',ierror) ; endif
+      enddo
+!
+!     check for undefined coordinates
+      if (any(rin_all.eq.__NAN)) then 
+        __WRN(whoami,'WARNING: SOME INPUT COORDINATES ARE UNDEFINED AFTER READING.')
+      endif
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!     orient structures if requested
+!
+      if (qprint) then
+        if (orient.eq.1) then
+!   set up pairs
+!         pairs = RESHAPE( (/ (i, i=1,natom),                            &
+!     &   (i, i=1,natom) /), (/ 2,natom /), order=(/ 2,1 /) )
+!       orient x based on the previous replica
+         do j=2,num_rep_in
+          call RMSBestFit(rin_all(:,:,j-1), rin_all(:,:,j), orient_weights, u) ! superpose r_(j-i) onto r_j
+          rin_all(:,:,j)=matmul(rin_all(:,:,j),u) ! apply transpose (=inverse) of u to r_j
+! old CHARMM routine:
+!          call rotls1(                                                  &
+!     &     rin_all(1,1,j-1), rin_all(1,2,j-1), rin_all(1,3,j-1),        &
+!     &     rin_all(1,1,j), rin_all(1,2,j), rin_all(1,3,j),              &
+!     &     natom,pairs,natom,                                           &
+!     &     orient_weights,                                              &
+!     &     .false.,.false.)
+         enddo ! j
+        endif ! orient
+!
+        allocate(weight(natom))
+!
+        if (repa_mass.eq.1) then
+         weight=__MASS(1:natom)
+        else
+         weight=1d0
+        endif
+!
+!     do the actual interpolation --  simple, not self-consistent
+!      allocate memory
+        if (allocated(dr)) deallocate(dr)
+        allocate(dr(natom,3,num_rep_in-1))
+        if (allocated(ds)) deallocate(ds)
+        allocate(ds(num_rep_in-1))
+        if (allocated(s)) deallocate(s)
+        allocate(s(num_rep_in))
+        if (allocated(t)) deallocate(t)
+        allocate(t(num_rep_out))
+        if (allocated(rr)) deallocate(rr)
+        allocate(rr(num_rep_in))
+        if (allocated(rr_out)) deallocate(rr_out)
+        allocate(rr_out(num_rep_out))
+        if (allocated(rrpp)) deallocate(rrpp)
+        allocate(rrpp(num_rep_in))
+!
+!     compute arclength
+        dr=rin_all(:,:,2:num_rep_in)-rin_all(:,:,1:num_rep_in-1)
+        s(1)=0
+        do i=1,num_rep_in-1
+         ds(i)=sqrt(sum(matmul( (transpose(dr(:,:,i)))**2, weight**2)))
+         s(i+1)=s(i)+ds(i)
+        enddo
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!     normalize arclength
+        do i=1,num_rep_in
+         s(i)=s(i)/s(num_rep_in)
+        enddo
+!ccccccccccccccccccccccccc
+!     create uniform array
+        do i=1,num_rep_out
+         t(i)=1.0d0*(i-1)/(num_rep_out-1)
+        enddo
+!cccccccccccccc now interpolate variables cccccc
+        if (interp_method.eq.spline) then
+         do i=1,natom
+          do j=1,3
+           rr=rin_all(i,j,:)
+           call spline_cubic_set(num_rep_in,s,rr,0,0,0,0,rrpp)
+           do k=1,num_rep_out
+            call spline_cubic_val(num_rep_in,s,rr,rrpp,t(k),            &
+     &                          rout_all(i,j,k),dum,dum)
+           enddo
+          enddo
+         enddo
+        elseif (interp_method.eq.bspline) then
+         do i=1,natom
+          do j=1,3
+           rr=rin_all(i,j,:)
+           do k=1,num_rep_out
+            call spline_b_val(num_rep_in,s,rr,t(k),rout_all(i,j,k))
+           enddo
+          enddo
+         enddo
+        elseif (interp_method.eq.linear) then
+         do i=1,natom
+          do j=1,3
+           rr=rin_all(i,j,:)
+           call linear_interp(s,rr,num_rep_in,t,rr_out,num_rep_out)
+           rout_all(i,j,:)=rr_out
+          enddo
+         enddo
+        endif ! interp_method
+!       check for undefined coordinates
+        if (any(rout_all.eq.__NAN)) then 
+         __WRN(whoami,'WARNING: SOME COORDINATES ARE UNDEFINED AFTER INTERPOLATION.')
+        endif
+!
+!cccccccccccc write file cccccccccccccccccccccccc
+!
+#ifdef __CHARMM
+        wdum=1. ! reset weighting array (can modify this if needed)
+#endif
+!
+        ofile=-1 ! open_file will assign a valut unit #
+        do j=1,num_rep_out
+!cccccccccccc write new coordinate file
+         length=len_trim(fname_cor_out(j))
+         dummy=fname_cor_out(j)(1:length)
+         __OPEN_FILE(ofile,dummy,form,'WRITE')
+!
+#ifdef __CHARMM
+         if (ntitla+1 .lt. maxtit)                                      &
+     &      write(titlea(ntitla+1),'(A,I5,A,I5)')                       &
+     &      '* REPLICA ',j,' OF ',num_rep_out
+!
+         call CWRITE(ofile,TITLEA,min(NTITLA+1,maxtit),icntrl,          &
+     &              rout_all(1,1,j), rout_all(1,2,j), rout_all(1,3,j),  &
+     &               wdum,res,atype,ibase,                               &
+     &               NRES,NATOM,iselct,modew,0,0,.false.)
+#elif defined (__DMOL)
+         rcomp=transpose(rout_all(:,:,j))
+         select case(fmt)
+          case(charmm) ; call ch_coor_write(ofile, rcomp, bfactor)
+          case(pdb)    ; call pdb_write(ofile, rcomp, occupancy, bfactor)
+         end select
+#endif
+         __CLOSE_FILE(ofile,'KEEP',ierror)
+!
+        enddo ! loop over new coordinate sets
+!
+        deallocate(rr, rr_out, dr, s, t, ds, rrpp)
+      endif ! qprint
+!
+      if (allocated(rin_all)) deallocate(rin_all) 
+      if (allocated(rout_all)) deallocate(rout_all)
+      if (allocated(fname_cor_in))  deallocate(fname_cor_in )
+      if (allocated(fname_cor_out)) deallocate(fname_cor_out)
+!
+      if (associated(orient_weights)) deallocate(orient_weights)
+      if (associated(weight)) deallocate(weight)
+!
+      end subroutine sm0k_interpolate
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      subroutine sm0k_stat_init(comlyn, comlen)
+!
+      __DEP_OUTPUT
+      __DEP_SIZE 
+      __DEP_PARSER 
+      __DEP_COORDINATES
+      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
+      __DEP_SELECT
+      __DEP_NUMBER
+!      __DEP_PSF
+!
+#ifdef __CHARMM
+      use energym 
+!
+__CHARMM_ONLY##IF TSM
+      use tsmh  ! TSM common blocks included because minimizer DOF depend on TSM
+      use tsms_mod, only:qtsm
+__CHARMM_ONLY##ENDIF
+#endif
+      __DEP_MPI                               !__CHARMM_ONLY##MPI
+!ccccccccccccccccccccccccccccccccccccccccccccccccc
+      __IMPNONE
+ __DECLARE_MSGBUF
+!
+      CHARACTER(len=*) :: COMLYN
+      INTEGER :: COMLEN
+!
+      character(len=80) :: rform, dform, sform, fcform, cform
+      int :: klen=0, ierror, i, j
+      bool :: found
+      bool :: qprint, qfree
+!
+#ifdef __CHARMM
+      int, pointer :: iselct(:)
+      int, allocatable :: backlist(:) ! for nominal compatibility with TSM
+      int, pointer :: ifixed(:)
+      int :: imode
+#elif (__DMOL)
+ __DECLARE_DMOL_SELECT
+#endif
+!
+      float :: d, com(3)
+!
+      character(len=8) :: keyword
+      character(len=16) :: whoami
+      data whoami/' SM0K_STAT_INIT>'/
+!
+!      interface
+!       function sm0k_fixed_atoms()
+!       int, pointer :: sm0k_fixed_atoms(:)
+!       end function sm0k_fixed_atoms
+!      end interface
+!
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      if (.not.sm0k_initialized) call sm0k_init()
+!
+      qprint=(ME_STRNG.eq.0).and.(MPI_COMM_STRNG.ne.MPI_COMM_NULL)
+!     begin
+!     reset iteration counter
+!     did the user specify it?
+      stat_iteration_counter=__GET_RM_I(comlyn, comlen, 'COUN', -1)
+      stat_iteration_counter=max(stat_iteration_counter,0)
+      if (stat_iteration_counter.gt.0) then
+       if (qprint) then ; write(_MSGBUF,639) whoami, stat_iteration_counter ; __PRINT(_MSGBUF) ; endif
+ 639  format(A,' SETTING ITERATION COUNTER TO ',I7)
+      endif
+!
+#ifdef __CHARMM
+      energy_fname=''
+      output_energy=.false.
+#endif
+!
+      if (rmsd0_funit.ge.0) then ; __CLOSE_FILE(rmsd0_funit,'KEEP',ierror) ; endif
+      rmsd0_fname=''
+      output_rmsd0=.false.
+
+      if (dsdt_funit.ge.0) then ; __CLOSE_FILE(dsdt_funit,'KEEP',ierror) ; endif
+      dsdt_fname=''
+      output_dsdt=.false.
+!
+      if (c_funit.ge.0) then ; __CLOSE_FILE(c_funit,'KEEP',ierror) ; endif
+      c_fname=''
+      output_curvature=.false.
+!
+      if (s_funit.ge.0) then ; __CLOSE_FILE(s_funit,'KEEP',ierror) ; endif
+      s_fname=''
+      output_arclength=.false.
+!
+!    memory allocation
+      if (allocated(fixed_s)) deallocate(fixed_s) ! flags
+      if (allocated(iatom_s)) deallocate(iatom_s)
+      if (allocated(iatom_free_s)) deallocate(iatom_free_s)
+      if (allocated(rold_s)) deallocate(rold_s)
+      if (allocated(rave_s)) deallocate(rave_s)
+      if (allocated(rcurrent_s)) deallocate(rcurrent_s)
+      if (allocated(rcomp_s)) deallocate(rcomp_s)
+      if (allocated(statWeights)) deallocate(statWeights)
+      if (allocated(rcomp_o)) deallocate(rcomp_o)
+      if (allocated(rold_o)) deallocate(rold_o)
+      if (allocated(rave_o)) deallocate(rave_o)
+      nstat=0
+      qstat_orient=.false.
+!
+#ifdef __CHARMM
+! first check that the number of fixed atoms hasn't changed since initialization; if it has, warn and quit
+      ifixed=>sm0k_fixed_atoms()
+      qfree=size(ifixed).eq.nfix_bckl
+      if (qfree) qfree=all(ifixed.eq.iatom_f)
+      if (.not.qfree) then
+       __WRN(whoami,'FIXED ATOM ARRAY CHANGED AFTER LAST STRING COMMAND.')
+       deallocate(iatom_f)
+       iatom_f=>ifixed
+       nfix_bckl=size(iatom_f)
+       nullify(ifixed)
+      else
+       deallocate(ifixed)
+      endif
+!
+!cccccccccc first process energy terms (ZTS ONLY) ccccccccccccc
+      keyword=__NEXTA(comlyn,comlen)
+      if (__STRNCMP(keyword,'ENER',4)) then
+        output_energy=.true.
+!       get nergy file name
+        __GET_RM_A(COMLYN,COMLEN,'ENAM',4,energy_fname,80,energy_flen)
+!
+!       get energy file name
+!       now parse until the 'end' keyword
+        keyword=__NEXTA(comlyn,comlen)
+        klen=len(keyword)
+        __TRIMA(keyword,klen)
+        do while (keyword(1:3).ne.'END'.and.klen.gt.0)
+!     assume that it is a energy parameter; locate it in the property/term arrays:
+!
+         found=.false.
+! 1) search properties
+         i=0
+         do while (.not.found.and.i.lt.lenenp)
+          i=i+1
+          if ( (keyword(1:klen).EQ.ceprop(i)) ) then
+           found=.true.
+          endif
+         enddo
+!
+         if (.not.found) then
+! 2) search energy terms
+          i=0
+          do while (.not.found.and.i.lt.lenent)
+           i=i+1
+           if ( (keyword(1:klen).EQ.ceterm(i)) ) then
+            found=.true.
+           endif
+          enddo
+          i=-i ! this is a 'trick' to keep distinguish between indices into eprop and eterm
+         endif
+!
+         if (.not.found) then ! if still not found, warn
+           __WARN(whoami,'ENERGY VALUE ',KEYWORD(1:KLEN),' NOT FOUND')
+         else
+          num_energy_terms=num_energy_terms+1
+          if (num_energy_terms.gt.enmax) then
+           __WRN(whoami,'NUMBER OF REQUESTED ENERGY TERMS TOO LARGE. ABORTING.')
+           return
+          else
+           energy_indices(num_energy_terms)=i
+           energy_names(num_energy_terms)=keyword(1:klen)
+          endif
+         endif
+!        read the next keyword
+         keyword=__NEXTA(comlyn,comlen)
+         klen=len(keyword)
+         __TRIMA(keyword,klen)
+        enddo ! lop over all keywords
+!ccccccccccc print summary
+        if (qprint) then
+         if (energy_flen.gt.0) then
+          write(_MSGBUF,662 ) whoami,whoami,energy_fname(1:energy_flen)
+         else
+          write(_MSGBUF,663 ) whoami
+         endif
+         __PRINT(_MSGBUF)
+         write(_MSGBUF,664) whoami,(energy_names(i),i=1,num_energy_terms)
+         __PRINT(_MSGBUF)
+        endif
+ 662  format(A,' WILL WRITE STRING ENERGY TO FILES ',/A,' ',A,'[I].DAT,'&
+     &, ' AT EACH ITERATION INDEX I.')
+ 663  format(A,' WILL WRITE STRING ENERGY TO STDOUT.')
+ 664  format(A,' THE FOLLOWING KEYWORDS',                               &
+     & ' WILL BE USED:',100(' ',A5),/)
+!
+      endif ! energy terms
+!
+!cccccccccccccccccccccc deal with RMSD comparison options cccccccccccccccccccccccccccccccc
+!
+      allocate(iselct(natom), backlist(natom))
+      iselct=1     ! select all atoms by default
+      backlist=0  ! setting this to zero is the simplest way to provide correct default behavior (see below)
+!
+#endif
+!
+!      is there an atom selection ?
+!ccccccccccccccccc first process the RMSD-related commands
+      j=__INDX(comlyn, comlen, 'SELE', 4)
+      if (j.gt.0) then
+#ifdef __CHARMM
+       imode=0
+       CALL SELRPN(COMLYN,COMLEN,iselct,NATOM,1,IMODE,                   &
+     &      .FALSE.,1,' ',0,RESID,RES,IBASE,SEGID,NICTOT,NSEG,          &
+     &      .TRUE.,X,Y,Z,.TRUE.,1,WMAIN) !
+       IF(IMODE.NE.0) THEN
+        CALL WRNDIE(0,whoami,'ATOM SELECTION ERROR')
+        RETURN
+       ENDIF
+      else
+       iselct=1
+      endif
+      nstat=count( iselct(1:natom).gt.0 )
+!
+#elif defined (__DMOL)
+#include "../dmol_select_macro.def"
+      else
+       iselct=>__GET_IND_FROM_SELECTION('ALL') ! select all atoms by default
+      endif
+      if (associated(iselct)) then ; nstat=size(iselct) ; else ; nstat=0 ; endif 
+#endif
+!*************************************************************************
+      if (nstat.eq.0) then
+        __WRN(whoami,'NO ATOMS SELECTED FOR RMSD COMPUTATION. WILL NOT COMPUTE RMSD.')
+        output_rmsd0=.false.
+        output_dsdt=.false.
+        output_rmsd_ave=.false.
+      else
+!    determine whether structures are to be oriented before comparison
+       qstat_orient=(__INDX_RM(comlyn,comlen,'ORIE').gt.0)
+       if (qstat_orient) then
+        if (repa_initialized.and.norient.gt.0) then
+         if (qprint) then ; write(_MSGBUF,638) whoami ; __PRINT(_MSGBUF) ; endif
+ 638  format(A,' RMSD CALCULATIONS WILL INCLUDE ORIENTATION.')
+        else
+      __WRN( whoami,'REPARAMETRIZATION DISABLED OR NO ORIENTATION ATOMS FOUND. WILL NOT ORIENT.')
+         qstat_orient=.false.
+        endif ! repa_initialized
+       endif ! qstat_orient
+!
+!!!!!!!!!!!!!! RMSD from static structure in comp
+       if (__INDX_RM(comlyn,comlen,'RMSD').gt.0) then ! request for RMSD
+        output_rmsd0=.true.
+!
+        if (.not.allocated(rcurrent_s)) allocate(rcurrent_s(nstat,3))
+        if (.not.allocated(rcomp_s))    allocate(rcomp_s(nstat,3))
+        if (qstat_orient) then
+         if (.not.allocated(rcomp_o))   allocate(rcomp_o(norient,3))
+        endif ! qstat_orient
+!
+        __GET_RM_A(COMLYN,COMLEN,'RNAM',4,rmsd0_fname,80,rmsd0_flen)
+        if (rmsd0_flen.eq.0) then
+         __WRN(whoami,'NO RMSD FILE NAME SPECIFIED. WILL WRITE TO STDOUT.')
+         rmsd0_funit=__OSTREAM
+        else
+         if (__INDX_RM(comlyn,comlen,'RAPP').gt.0) then ! APPEND?
+           rform='APPEND'
+         else
+           rform='WRITE'
+         endif
+         if (qprint) then
+          rmsd0_funit=-1
+          __OPEN_FILE(rmsd0_funit, rmsd0_fname, 'FORMATTED',rform)
+         endif
+        endif
+!ccccccccccc print summary
+        if (qprint) then
+         if (rmsd0_flen.gt.0) then
+          write(_MSGBUF,660 ) whoami,rmsd0_fname(1:rmsd0_flen)
+         else
+          write(_MSGBUF,661 ) whoami
+         endif
+         __PRINT(_MSGBUF)
+        endif
+ 660  format(A,' WILL WRITE STRING RMSD TO FILE ',A)
+ 661  format(A,' WILL WRITE STRING RMSD TO STDOUT.')
+!
+       endif ! RMSD
+!!!!!!!!!!!!!! RMSD from structure at the previous step (zts/fts)
+       if (__INDX_RM(comlyn,comlen,'DELS').gt.0) then
+        output_dsdt=.true.
+!
+        if (.not.allocated(rold_s))     allocate(rold_s(nstat,3)) ! for storing "old" coords
+        if (.not.allocated(rcurrent_s)) allocate(rcurrent_s(nstat,3))
+        if (qstat_orient) then
+         if (.not.allocated(rold_o))    allocate(rold_o(norient,3))
+        endif
+!
+        __GET_RM_A(COMLYN,COMLEN,'DNAM',4,dsdt_fname,80,dsdt_flen)
+        if (dsdt_flen.eq.0) then
+         __WRN(whoami,'NO DELS FILE NAME SPECIFIED. WILL WRITE TO STDOUT.')
+         dsdt_funit=__OSTREAM
+        else
+         if (__INDX_RM(comlyn,comlen,'DAPP').gt.0) then ! APPEND?
+           dform='APPEND'
+         else
+           dform='WRITE'
+         endif
+         if (qprint) then
+          dsdt_funit=-1
+          __OPEN_FILE(dsdt_funit, dsdt_fname,'FORMATTED',dform)
+         endif
+        endif
+!ccccccccccc print summary
+        if (qprint) then
+         if (dsdt_flen.gt.0) then
+          write(_MSGBUF,650 ) whoami,dsdt_fname(1:dsdt_flen)
+         else
+          write(_MSGBUF,651 ) whoami
+         endif
+         __PRINT(_MSGBUF)
+        endif
+ 650  format(A,' WILL WRITE STRING RMSD(I,I+1) TO FILE ',A)
+ 651  format(A,' WILL WRITE STRING RMSD(I,I+1) TO STDOUT.')
+!
+       endif ! rmsd0
+!!!!!!!!!!!!!! RMSD from average structure (zts/fts)
+       if (__INDX_RM(comlyn,comlen,'RMSA').gt.0) then
+        output_rmsd_ave=.true.
+!
+        if (.not.allocated(rave_s)) allocate(rave_s(nstat,3)) ! for storing average coords
+        if (.not.allocated(rold_s)) allocate(rold_s(nstat,3)) ! for storing "old" coords
+        rave_s=0d0
+        if (.not.allocated(rcurrent_s)) allocate(rcurrent_s(nstat,3))
+        if (qstat_orient) then
+         if (.not.allocated(rold_o))    allocate(rold_o(norient,3))
+         if (.not.allocated(rave_o))    allocate(rave_o(norient,3))
+         rave_o=0d0
+        endif
+!
+        __GET_RM_A(COMLYN,COMLEN,'RANM',4,rmsd_ave_fname,80,rmsd_ave_flen)
+        if (rmsd_ave_flen.eq.0) then
+         __WRN(whoami,'NO RMSA FILE NAME SPECIFIED. WILL WRITE TO STDOUT.')
+         rmsd_ave_funit=__OSTREAM
+        else
+         if (__INDX_RM(comlyn,comlen,'RAAP').gt.0) then ! APPEND?
+           rform='APPEND'
+         else
+           rform='WRITE'
+         endif
+         if (qprint) then
+          rmsd_ave_funit=-1
+          __OPEN_FILE(rmsd_ave_funit, rmsd_ave_fname,'FORMATTED',rform)
+         endif
+        endif
+!ccccccccccc print summary
+        if (qprint) then
+         if (rmsd_ave_flen.gt.0) then
+          write(_MSGBUF,6500 ) whoami,rmsd_ave_fname(1:rmsd_ave_flen)
+         else
+          write(_MSGBUF,6510 ) whoami
+         endif
+         __PRINT(_MSGBUF)
+        endif
+ 6500 format(A,' WILL WRITE STRING RMSD FROM AVERAGE STRUC. TO FILE ',A)
+ 6510 format(A,' WILL WRITE STRING RMSD FROM AVERAGE STRUC. TO STDOUT.')
+       endif ! rmsd_ave
+!
+       if (output_rmsd_ave.or.output_rmsd0.or.output_dsdt) then
+!       populate iatom array
+        if (.not.allocated(fixed_s)) allocate(fixed_s(nstat)) ! psf indices
+        if (.not.allocated(iatom_s)) allocate(iatom_s(nstat)) ! psf indices
+        if (.not.allocated(iatom_free_s)) allocate(iatom_free_s(nstat)) ! free indices for atoms with minimizer
+        nstat=0
+        iatom_s=0; iatom_free_s=0;
+!
+#ifdef __CHARMM
+!
+__CHARMM_ONLY##IF TSM
+        if (qtsm) then
+!         j=bpert(backls)
+!         backlist=heap(j:j+natom-1) ! heap must have of int type (it was when this line was written)
+          backlist=backls
+        endif
+__CHARMM_ONLY##ENDIF
+!
+        j=-2 ! free atom index
+        do i=1,natom
+         qfree=imove(i).eq.0   ! see egrad1.src routines
+         if (qtsm) qfree=qfree.and.backlist(i).eq.0 !__CHARMM_ONLY##TSM
+         if (qfree) j=j+3 ! indices increase in increments of 3: 1,4,...
+! orientation indices
+         if (iselct(i).gt.0) then
+          nstat=nstat+1
+          iatom_s(nstat)=i
+          if (qfree) then
+           iatom_free_s(nstat)=j
+           fixed_s(nstat)=.false.
+          else
+           iatom_free_s(nstat)=__NAN ! unknown index because the minimization routine will not supply the coordinate
+           fixed_s(nstat)=.true.  ! this flag will tepp sm0k stat not to use free index
+          endif
+         endif
+        enddo ! all atoms
+!
+#elif defined(__DMOL)
+! currently, no support for fixed atoms -- assume their number is zero
+      if (associated(iselct)) then 
+       iatom_s=iselct
+       iatom_free_s=iatom_s*3-2 ! gives 1,4,7...
+       fixed_s=.false.
+       deallocate(iselct)
+      endif
+#endif
+!
+        if (output_rmsd0) then
+         do i=1, nstat
+           j=iatom_s(i)
+           rcomp_s(i,1)=__XXCOMP(j);
+           rcomp_s(i,2)=__YYCOMP(j);
+           rcomp_s(i,3)=__ZZCOMP(j);
+         enddo
+!    orientation atoms
+         if (qstat_orient) then
+          do i=1, norient
+           j=iatom_o(i)
+           rcomp_o(i,1)=__XXCOMP(j);
+           rcomp_o(i,2)=__YYCOMP(j);
+           rcomp_o(i,3)=__ZZCOMP(j);
+          enddo
+!    subtract COM
+          com=matmul(transpose(rcomp_o), orientWeights)
+          rcomp_o(:,1)=rcomp_o(:,1)-com(1)
+          rcomp_o(:,2)=rcomp_o(:,2)-com(2)
+          rcomp_o(:,3)=rcomp_o(:,3)-com(3)
+!
+          rcomp_s(:,1)=rcomp_s(:,1)-com(1)
+          rcomp_s(:,2)=rcomp_s(:,2)-com(2)
+          rcomp_s(:,3)=rcomp_s(:,3)-com(3)
+!
+         endif ! qstat_orient
+        endif
+!
+        if (.not.(allocated(statWeights))) allocate(statWeights(nstat))
+        statWeights=1d0
+!
+!     use mass-weighting in RMSD computation?
+!
+        stat_rmsd_mass=(__INDX_RM(comlyn,comlen,'MASS').gt.0)
+        if (stat_rmsd_mass) then
+         if (qprint) then ; write(_MSGBUF,640) whoami ; __PRINT(_MSGBUF) ; endif
+         do i=1,nstat
+          statWeights(i)=__MASS(iatom_s(i))*statWeights(i)
+         enddo
+        endif ! stat_rmsd_mass
+!
+        d=sum(statWeights)
+        if (abs(d).gt.__ERRTOL) then
+         d=1d0/d
+         statWeights=d*statWeights
+        endif
+!
+ 640  format(A, ' WILL USE MASS WEIGHTING IN RMSD CALCULATIONS.')
+       endif ! output_ ...
+      endif ! nstat .eq. 0
+!
+!!!!!!!!!!!!!! ARCLENGTH
+      if (__INDX_RM(comlyn,comlen,'ARCL').gt.0) then
+        output_arclength=.true.
+        __GET_RM_A(COMLYN,COMLEN,'ANAM',4,s_fname,80,s_flen)
+        if (s_flen.eq.0) then
+         __WRN(whoami,'STRING LENGTH FILE NAME NOT SPECIFIED. WILL WRITE TO STDOUT.')
+         s_funit=__OSTREAM
+        else
+         if (__INDX_RM(comlyn,comlen,'AAPP').gt.0) then ! APPEND?
+           sform='APPEND'
+         else
+           sform='WRITE'
+         endif
+         if (qprint) then
+          s_funit=-1
+          __OPEN_FILE(s_funit, s_fname, 'FORMATTED',sform)
+         endif
+        endif
+!ccccccccccc print summary
+        if (qprint) then
+         if (s_flen.gt.0) then
+          write(_MSGBUF,652) whoami,s_fname(1:s_flen)
+         else
+          write(_MSGBUF,653) whoami
+         endif
+         __PRINT(_MSGBUF)
+        endif
+ 652  format(A,' WILL WRITE STRING LENGTH TO FILE ',A)
+ 653  format(A,' WILL WRITE STRING LENGTH TO STDOUT.')
+!
+      endif ! ARCLENGTH
+!!!!!!!!!!!!!! CURVATURE
+      if (__INDX_RM(comlyn,comlen,'CURV').gt.0) then
+        output_curvature=.true.
+        __GET_RM_A(COMLYN,COMLEN,'CVNM',4,c_fname,80,c_flen)
+        if (c_flen.eq.0) then
+         __WRN(whoami,'CURVATURE FILE NAME NOT SPECIFIED. WILL WRITE TO STDOUT.')
+         c_funit=__OSTREAM
+        else
+         if (__INDX_RM(comlyn,comlen,'CAPP').gt.0) then ! APPEND?
+           cform='APPEND'
+         else
+           cform='WRITE'
+         endif
+         if (qprint) then
+          c_funit=-1
+          __OPEN_FILE(c_funit, c_fname, 'FORMATTED',cform)
+         endif
+        endif
+!ccccccccccc print summary
+        if (qprint) then
+         if (c_flen.gt.0) then
+          write(_MSGBUF,6521) whoami,c_fname(1:c_flen)
+         else
+          write(_MSGBUF,6531) whoami
+         endif
+         __PRINT(_MSGBUF)
+        endif
+ 6521 format(A,' WILL WRITE CURVATURE TO FILE ',A)
+ 6531 format(A,' WILL WRITE CURVATURE TO STDOUT.')
+!
+      endif ! CURVATURE
+!      if we got this far, we are probably OK
+      stat_initialized=.true.
+!
+      end subroutine sm0k_stat_init
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      subroutine sm0k_stat(n,var)
+      __DEP_BESTFIT
+      __DEP_OUTPUT
+      __DEP_SIZE 
+      __DEP_PARSER 
+      __DEP_COORDINATES
+!
+#ifdef __CHARMM
+      __DEP_PSF
+      use energym
+      use eutil, only : gete
+#endif
+      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
+      __DEP_NUMBER
+      __DEP_MPI
+!
+      __IMPNONE
+#include "../mpitype.def"
+!
+      int :: n
+      float, optional :: var(*)
+!    locals
+      character(len=8) :: keyword
+      float :: u(3,3), com(3)
+!
+      int :: klen, i, j, k, ifile
+!
+!     for  output
+#ifdef __CHARMM
+      float :: energy_values(enmax,SIZE_STRNG)! store data from all procs
+      float :: energy_values_me(enmax)
+      int :: fmt_e_len
+      character(len=80) :: fmt_ene
+#endif
+!
+      int :: me, ierror
+      character(len=80) :: fmt
+      int :: fmt_len
+      character(len=8) :: dummy
+      bool :: found
+      bool :: qprint, qroot, qmanual
+      float :: rmsd0, rmsd0_all(SIZE_STRNG), dsdt, dsdt_all(SIZE_STRNG)
+!
+      character(len=11) :: whoami
+      data whoami/' SM0K_STAT>'/
+!
+      qroot=MPI_COMM_STRNG.ne.MPI_COMM_NULL
+      qprint=qroot.and.ME_STRNG.eq.0
+      qmanual=(n.eq.0)
+!cccccccccccccccccccccc begin ccccccccccccccccccccccccccccc
+! check if the user has made an initialization call
+      if (.not.sm0k_initialized) call sm0k_init()
+!
+      if (.not.stat_initialized) then
+       __WRN(whoami,'NO OUTPUT OPTIONS SELECTED. NOTHING DONE')
+       return
+      endif
+!
+      stat_iteration_counter=stat_iteration_counter+1
+!     define number format string for output
+!
+      if (qroot) then
+       write(fmt,*) SIZE_STRNG
+       fmt_len=len(fmt)
+       __TRIMA(fmt,fmt_len)
+      endif
+!
+      me=mestring
+!
+#ifdef __CHARMM
+!
+      if (output_energy) then
+       write(fmt_ene,*) num_energy_terms
+       fmt_e_len=len(fmt_ene)
+       __TRIMA(fmt_ene,fmt_e_len)
+!
+!      call energy
+!      NOTE: this routine needs to be called after "update"
+       if (qmanual) call gete(x,y,z,x,y,z,0) ! is everything calculated in this routine?
+!      otherwise, the minimizer has already called energy routines (off by one iteration, but this should be insignificant)
+       if (qroot) then
+        if (energy_flen.eq.0) then
+         __WRN(whoami,'NO ENERGY FILE NAME SPECIFIED. WILL WRITE TO STDOUT.')
+         ifile=__OSTREAM
+        else
+         if (qprint) then
+          write(dummy,'(I8)') stat_iteration_counter
+          k=len(dummy)
+          __TRIMA(dummy, k)
+          ifile=-1
+          energy_fname(energy_flen+1:energy_flen+k+4)=dummy(1:k)//'.dat'
+          __OPEN_FILE(ifile, energy_fname(1:energy_flen)+k+4,'FORMATTED','WRITE')
+          energy_fname(energy_flen+1:)=''
+         endif
+        endif
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!     assume file is open
+!     loop over energy terms
+        do i=1, num_energy_terms
+          j=energy_indices(i)
+          if (j.gt.0) then
+           energy_values_me(i)=eprop(j)
+          elseif (j.lt.0) then
+           energy_values_me(i)=eterm(-j)
+          endif
+        enddo
+!ccccccccccccccccc
+!      gather data and write file
+!        call mpi_gather(energy_values(1,me+1),enmax,mpifloat
+!     &                ,energy_values,enmax,mpifloat,0,
+!     &                 MPI_COMM_STRNG, ierror)
+! some compilers require mpi_in_place when the input and output buffere are the same
+! mpi_in_place, however, behaves strangely on some systems, so I am using
+! the additional array `energy_values_me'
+        call mpi_gather(energy_values_me,enmax,mpifloat     &
+     &                 ,energy_values,enmax,mpifloat,0,     &
+     &                 MPI_COMM_STRNG, ierror)
+!
+        if (qprint) then
+         if (ifile.ne.__OSTREAM) then
+          write(ifile,'("%",'//fmt_ene(1:fmt_e_len)//'(A19))')          &
+     &         (energy_names(i),i=1,num_energy_terms)
+          do j=1,SIZE_STRNG
+           write(ifile,'(I5," ",'//fmt_ene(1:fmt_e_len)//'F20.10)')     &
+     &           j,(energy_values(i,j),i=1,num_energy_terms)
+          enddo
+          __CLOSE_FILE(ifile,'KEEP',ierror)
+         else
+      write(ifile,'("ENERGY> ",'//fmt_ene(1:fmt_e_len)//'(," ",A19))')  &
+     &         (energy_names(i),i=1,num_energy_terms)
+          do j=1,SIZE_STRNG
+          write(ifile,'("ENERGY> ",I5," ",'//                           &
+     &           fmt_ene(1:fmt_e_len)//'F20.10)')                       &
+     &           j,(energy_values(i,j),i=1,num_energy_terms)
+          enddo
+         endif ! ifile
+        endif ! qprint
+! 6650 format('ENERGY> ',100(' ',A19))
+! 6660 format('ENERGY> ',I5,' ',100F20.10)
+! 665  format('%',100(A19))
+! 666  format(I5,' ',100F20.10)
+!
+       endif ! qroot
+      endif ! output energy
+!
+#endif
+!
+      if (output_rmsd0.or.output_rmsd_ave.or.output_dsdt) then
+       do i=1, nstat
+         if (qmanual.or.fixed_s(i)) then
+          j=iatom_s(i)
+          rcurrent_s(i,1)=__XX(j)
+          rcurrent_s(i,2)=__YY(j)
+          rcurrent_s(i,3)=__ZZ(j)
+         else
+          j=iatom_free_s(i);
+          rcurrent_s(i,1)=var(j);j=j+1
+          rcurrent_s(i,2)=var(j);j=j+1
+          rcurrent_s(i,3)=var(j)
+         endif
+       enddo ! nstat
+! orientation atoms
+       if (qstat_orient) then
+        do i=1,norient
+          if (qmanual.or.fixed_o(i)) then ! grab coordinates from main coordinate array
+           j=iatom_o(i)
+           rcurrent_o(i,1)=__XX(j)
+           rcurrent_o(i,2)=__YY(j)
+           rcurrent_o(i,3)=__ZZ(j)
+          else ! grab coordinates provided by minimizer
+           j=iatom_free_o(i) ! x-index (y- z- indices follow)
+           rcurrent_o(i,1)=var(j);j=j+1
+           rcurrent_o(i,2)=var(j);j=j+1
+           rcurrent_o(i,3)=var(j)
+          endif
+        enddo ! norient
+        com=matmul(transpose(rcurrent_o), orientWeights)
+        rcurrent_o(:,1)=rcurrent_o(:,1)-com(1)
+        rcurrent_o(:,2)=rcurrent_o(:,2)-com(2)
+        rcurrent_o(:,3)=rcurrent_o(:,3)-com(3)
+        rcurrent_s(:,1)=rcurrent_s(:,1)-com(1)
+        rcurrent_s(:,2)=rcurrent_s(:,2)-com(2)
+        rcurrent_s(:,3)=rcurrent_s(:,3)-com(3)
+       endif ! qstat_orient
+      endif ! output rmsd
+!
+!ccccccccccccccccccccccccccccccccccccc
+      if (output_rmsd0) then
+        if (qroot) then
+!       reference structure is in the comparison set
+         if (qstat_orient) then
+           call RMSBestFit(rcurrent_o,rcomp_o,orientWeights,u)
+!       transform current structure to overlap with reference
+!       (if orientation is off, u=I)
+           u=transpose(u)
+           rcurrent_o=matmul(rcurrent_o, u) ! need to rotate both (see below)
+           rcurrent_s=matmul(rcurrent_s, u)
+         endif
+         rmsd0=rmsd(rcurrent_s, rcomp_s, statWeights)
+!
+!  gather !
+         call mpi_gather(rmsd0,1,mpifloat                   &
+     &                ,rmsd0_all,1,mpifloat,0,              &
+     &                 MPI_COMM_STRNG, ierror)
+         if (qprint) then ! root writes
+           if (rmsd0_funit.eq.__OSTREAM) then
+      write(rmsd0_funit,'("RMSD0> ",I5," ",'//fmt(1:fmt_len)//'F11.5)') &
+     &       stat_iteration_counter,                                    &
+     &      (rmsd0_all(i),i=1,SIZE_STRNG)
+           else
+            write(rmsd0_funit,'(I5," ",'//fmt(1:fmt_len)//'F11.5)')     &
+     &      stat_iteration_counter,                                     &
+     &      (rmsd0_all(i),i=1,SIZE_STRNG)
+           endif
+!     flush unit: close and reopen
+           __CLOSE_FILE(rmsd0_funit, 'KEEP', ierror)
+           __OPEN_FILE(rmsd0_funit, rmsd0_fname,'FORMATTED','APPEND')
+!     done
+         endif ! qprint
+        endif ! qroot
+      endif
+! 667  format(I5,' ',100F11.5)
+! 6670 format('RMSD0> ',I5,' ',100F11.5)
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      if (output_dsdt) then
+        if (qroot) then
+         if (repa_initialized) then ! proceed only if rold is defined
+          if (qstat_orient) then
+           call RMSBestFit(rcurrent_o,rold_o,orientWeights,u)
+           u=transpose(u)
+           rcurrent_o=matmul(rcurrent_o, u)
+           rcurrent_s=matmul(rcurrent_s, u)
+          endif
+          dsdt=rmsd(rcurrent_s, rold_s, statWeights)
+!  gather !
+          call mpi_gather(dsdt,1,mpifloat                   &
+     &                ,dsdt_all,1,mpifloat,0,               &
+     &                 MPI_COMM_STRNG, ierror)
+          if (qprint) then ! root writes
+           if (dsdt_funit.eq.__OSTREAM) then
+      write(dsdt_funit,'("DLEN> ",I5," ",'//fmt(1:fmt_len)//'F11.5)')   &
+     &      stat_iteration_counter,                                     &
+     &      (dsdt_all(i),i=1,SIZE_STRNG)
+           else
+            write(dsdt_funit,'(I5," ",'//fmt(1:fmt_len)//'F11.5)')      &
+     &      stat_iteration_counter,                                     &
+     &      (dsdt_all(i),i=1,SIZE_STRNG)
+           endif
+!     flush unit: close and reopen
+           __CLOSE_FILE(dsdt_funit, 'KEEP', ierror)
+           __OPEN_FILE(dsdt_funit, dsdt_fname,'FORMATTED','APPEND')
+!     done
+          endif ! qprint
+         else ! repa_initialized
+          __WRN(whoami,'NO REPARAMETRIZATION OPTIONS SELECTED. SKIPPING DSDT.')
+         endif
+        endif ! qroot
+! 6680 format('DLEN> ',I5,' ',100F11.5)
+! 668  format(I5,' ',100F11.5)
+      endif ! dsdt
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      if (output_rmsd_ave) then
+        if (qroot) then
+         if (repa_initialized) then ! proceed only if rave defined
+          if (qstat_orient) then
+           call RMSBestFit(rcurrent_o,rave_o,orientWeights,u)
+           u=transpose(u)
+           rcurrent_o=matmul(rcurrent_o, u)
+           rcurrent_s=matmul(rcurrent_s, u)
+          endif
+          dsdt=rmsd(rcurrent_s, rave_s, statWeights)
+!  gather !
+          call mpi_gather(rmsd0,1,mpifloat                  &
+     &                ,rmsd0_all,1,mpifloat,0,              &
+     &                 MPI_COMM_STRNG, ierror)
+          if (qprint) then ! root writes
+           if (rmsd_ave_funit.eq.__OSTREAM) then
+            write(rmsd_ave_funit,'("RMSD_AVE> ",I5," ",'//              &
+     &      fmt(1:fmt_len)//'F11.5)')                                   &
+     &      stat_iteration_counter,                                     &
+     &      (rmsd0_all(i),i=1,SIZE_STRNG)
+           else
+            write(rmsd_ave_funit,'(I5," ",'//fmt(1:fmt_len)//'F11.5)')  &
+     &      stat_iteration_counter,                                     &
+     &      (rmsd0_all(i),i=1,SIZE_STRNG)
+           endif
+          endif
+! 6681 format('RMSD_AVE> ',I5,' ',100F11.5)
+! 6682 format(I5,' ',100F11.5)
+!     flush unit: close and reopen
+          __CLOSE_FILE(rmsd_ave_funit, 'KEEP', ierror)
+          __OPEN_FILE(rmsd_ave_funit, rmsd_ave_fname,'FORMATTED','APPEND')
+        else ! repa_initialized
+          __WRN(whoami,'NO REPARAMETRIZATION OPTIONS SELECTED. SKIPPING RMSD_AVE.')
+        endif ! repa_initialized
+       endif ! qroot
+!     done
+      endif ! RMSD from average structure
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      if (output_arclength) then
+       if (qprint) then
+        if (repa_initialized) then ! proceed only if arclength defined
+         if (s_funit.eq.__OSTREAM) then
+      write(s_funit,'("ARCL> ",I5," ",'//fmt(1:fmt_len)//'F11.5)')      &
+     &          stat_iteration_counter, (ds(i),i=1,SIZE_STRNG-1)
+         else
+          write(s_funit,'(I5," ",'//fmt(1:fmt_len)//'F11.5)')           &
+     & stat_iteration_counter, (ds(i),i=1,SIZE_STRNG-1)
+         endif
+!     flush unit: close and reopen
+         __CLOSE_FILE(s_funit, 'KEEP', ierror)
+         __OPEN_FILE(s_funit, s_fname,'FORMATTED','APPEND')
+!     done
+        else
+          __WRN(whoami,'NO REPARAMETRIZATION OPTIONS SELECTED. SKIPPING ARCLENGTH.')
+        endif
+       endif ! qprint
+! 669  format(I5,' ',100F11.5)
+! 6690 format('ARCL> ',I5,' ',100F11.5)
+      endif ! output_arclength
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      if (output_curvature) then
+       if (qprint) then
+        if (repa_initialized) then ! proceed only if arclength defined
+         if (c_funit.eq.__OSTREAM) then
+      write(c_funit,'("CURV> ",I5," ",'//fmt(1:fmt_len)//'F11.5)')      &
+     & stat_iteration_counter, (curv(i),i=1,SIZE_STRNG-1)
+         else
+          write(c_funit,'(I5," ",'//fmt(1:fmt_len)//'F11.5)')           &
+     &          stat_iteration_counter, (curv(i),i=1,SIZE_STRNG-1)
+         endif
+!     flush unit: close and reopen
+         __CLOSE_FILE(c_funit, 'KEEP', ierror)
+         __OPEN_FILE(c_funit, c_fname, 'FORMATTED','APPEND')
+!     done
+        else
+          __WRN(whoami,'NO REPARAMETRIZATION OPTIONS SELECTED. SKIPPING CURVATURE.')
+        endif
+       endif ! me
+! 6692 format(I5,' ',100F11.5)
+! 6691 format('CURV> ',I5,' ',100F11.5)
+      endif ! output_curvature
+!
+      end subroutine sm0k_stat
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      end module sm0k
+__CHARMM_ONLY##ENDIF

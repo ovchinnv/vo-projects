@@ -15,7 +15,7 @@ cv_common.o cv_frames.o smcv_add.o : sm_common_vars output vectors
 $(CVOBJ) cv_cvrms.o : cv_types.o cv_common.o multicom_aux psf
 
 cv_posi_com.o cv_quaternion.o: cv_frames.o 
-cv_frames.o : bestfit multicom_aux multicom_aux
+cv_frames.o : bestfit multicom_aux
 cv_common.o cv_dihe_com.o cv_cvrms.o: constants
 cv_rmsd.o cv_drmsd.o cv_proj.o: bestfit
 cv_proj.o : cv_drmsd.o

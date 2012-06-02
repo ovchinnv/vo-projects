@@ -1,4 +1,5 @@
 /*COORDINATES AND MASSES:*/
+/*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
 ! **********************************************************************!
 ! This source file was was generated automatically from a master source !
 ! code tree, which may not be distributed with this code if the !
@@ -23,7 +24,7 @@ module charmmio
  real*8 :: rtemp(size(r,1),size(r,2)) ! temporary coordinate array
  real*8, optional :: wgt(:)
  integer, optional :: mask(:)
- real*8 :: wtemp(size(r,1)) ! temporary weight array
+ real*8 :: wtemp(size(r,2)) ! temporary weight array
  character(len=12), parameter :: whoami = 'CH_COOR_READ'
  character(len=200) :: cmdline
  character(len=8) :: keyword
@@ -197,7 +198,7 @@ module charmmio
  real*8 :: rtemp(size(r,1),size(r,2)) ! temporary coordinate array
  real*8, optional :: wgt(:)
  integer, optional :: selection(:)
- real*8 :: wtemp(size(r,1)) ! temporary weight array
+ real*8 :: wtemp(size(r,2)) ! temporary weight array
  character(len=22), parameter :: whoami = 'CH_COOR_READ_SELECTION'
  character(len=200) :: cmdline
  character(len=8) :: keyword

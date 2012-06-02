@@ -24,5 +24,4 @@ ivector:
 
 charmm: $(CHARMM_SOURCES)
 
-
 .PHONY : sm_common_vars constants ivector
