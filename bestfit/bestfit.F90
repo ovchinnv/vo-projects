@@ -1,3 +1,5 @@
+/*#define __WRN(__WHO,__MSG) write(0,*) 'WARNING FROM: ',__WHO,': ',__MSG*/
+/*#define __PRINT(__MSG) write(0,'(A)') __MSG*/
 /*COORDINATES AND MASSES:*/
 /*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
 ! **********************************************************************!
@@ -25,7 +27,7 @@
 !
   module bestfit
       !
-      use constants, only: ERRTOL
+      use constants, only: errtol; use output
       !
       private
       !
@@ -42,7 +44,7 @@
        real*8, parameter :: oo6=0.1666666666666666d0
        real*8, parameter :: oo9=0.1111111111111111d0
        real*8, parameter :: oo27=0.037037037037037037d0
-       real*8, parameter :: pi=3.14159265358979d0
+       real*8, parameter :: pi=3.141592653589793d0
        real*8, parameter :: twopi=6.283185307179586232d0
        real*8, parameter :: fourpi=12.566370614359172464d0
        real*8, parameter :: Kd(3,3)= &
@@ -306,7 +308,7 @@
      & rmu(3), roomu(2)
        integer :: i, j, k, l, n
        character(len=10) :: whoami='RMSBestFit'
-       character(len=63) :: msg
+ character(len=80) :: msg___
 ! for derivatives:
        logical :: qgrad
        real*8 :: invA(3,3),detA,e,v(3),c(3),dvdrr(3,3,3,3),dmudrr(3,3,3)
@@ -430,7 +432,6 @@
      & u(1,3)*(u(2,1)*u(3,2)-u(2,2)*u(3,1))
 ! if ( abs(detr-one) .gt. errtol_ ) then
         if ( abs(detr-one) .gt. 1d-3 ) then ! this is a crude test, but should be sufficient
-          write(msg,'(" ROTATION MATRIX (U) NOT UNITARY (DET[U]=",G20.13,")")') detr
           if (qdetfailtrace) then ! print debugging info after a determinant check failure
            write(666,*) whoami, '> RR matrix:'
            write(666,'(3E30.23)') rr
@@ -447,7 +448,8 @@
            write(666,'(3E22.15)') matmul(b0,transpose(a))-rr ! aa
            if (qgrad) then ; gradu(:,:,:,ibeg:iend)=zero ; qgrad=.false.; endif ! skip derivatives
          endif !qdetfailtrace
-         write(0,*) msg
+         write(msg___,*)'(" ROTATION MATRIX (U) NOT UNITARY (DET[U]=",G20.13,")")', detr;call warning(whoami, msg___, 0)
+!
         endif ! detr/=1
        endif ! qcheckdet
 !
@@ -496,7 +498,7 @@
      & a13*(a21*a32-a22*a31)
 !
          if (abs(detA).lt.errtol_) then
-          write(0,*) ' EXCEPTION: "A" MATRIX IS SINGULAR. WILL RETURN ZERO.'
+          call warning(whoami, ' EXCEPTION: "A" MATRIX IS SINGULAR. WILL RETURN ZERO.', 0)
 ! return
          else
 ! compute inverse explicitly (do not need some entries)

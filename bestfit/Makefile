@@ -1,29 +1,30 @@
 ROOT=..
 OBJS=bestfit.o
-CHARMM_SOURCES=bestfit.src
+NAME=bestfit
 
 LOCALMACROS=-include source.defs
 LOCALDEPS=source.defs
 
-# additional objects for linking
-LINKOBJS=constants.o
+# additional objects for linking executable
+LINKOBJS=constants.o output.o
 
 include $(ROOT)/Makefile.inc
 
-EXE=bfit
+EXE=test
 
-default: all $(GLOBALDEPS) $(LOCALDEPS)
-all: $(EXE)
+default: $(ROOT)/bestfit.stamp $(GLOBALDEPS) $(LOCALDEPS)
+
+test: $(EXE)
 $(EXE): $(OBJS) bfit.o
 	$(LD) $(LDFLAGS) $(OBJS) $(LOBJS) bfit.o -o $(EXE)
 
-bfit.o    : bestfit.o constants
-bestfit.o : constants
+bfit.o    : bestfit.o constants.stamp
+bestfit.o : constants.stamp output.stamp
 
 charmm: $(CHARMM_SOURCES)
 
-lib: force_look
-	/bin/sh -c 'for file in "bestfit.o"; do  ln -fs `pwd`/$$file ${ROOT}/lib/$$file; done'
+#lib: force_look
+#	/bin/sh -c 'for file in "bestfit.o"; do  ln -fs `pwd`/$$file ${ROOT}/lib/$$file; done'
 
 clean: 
-	rm -f *.mod $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(EXE) bfit.o
+	rm -f *.mod $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(EXE) bfit.o $(ROOT)/$(NAME).stamp

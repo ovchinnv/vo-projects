@@ -47,41 +47,31 @@ MPI_LIB=-L $(MPI_HOME)/lib
 
 INCLUDES+=-I $(ROOT)/include
 LIBS+=-L $(ROOT)/lib
-OBJDIR=$(ROOT)/obj
+OBJDIR=$(ROOT)/lib
 LOBJS=$(addprefix $(OBJDIR)/,$(LINKOBJS))
 
 SOURCES=$(OBJS:%.o=%.F90)
 CHARMM_SOURCES=$(OBJS:%.o=%.src)
 
-VPATH=$(ROOT) #this is necessary to prevent recompilation under %.stamp rule
-
 FPP=cpp -P
 FPPFLAGS = -C -I $(ROOT)
 
 .SUFFIXES:
-.SUFFIXES: .o .F90 .a .H .h .c .f .F .stamp
+.SUFFIXES: .o .F90 .a .H .h .c .f .F
 
-all : default
+default : all libraries
+all: $(OBJS)
 ########################### OBJECTS ##########################
 %.o:%.F90 $(LIBDEPS)
-	$(FC) $(FFLAGS) $(DEFS) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $< -o $@
+	$(FC) $(FFLAGS) $(DEFS) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $<
 %.o:%.f $(LIBDEPS)
-	$(FC) $(FFLAGS) $(DEFS) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $< -o $@
+	$(FC) $(FFLAGS) $(DEFS) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $<
 %.o:%.F $(LIBDEPS)
-	$(FC) $(FFLAGS) $(DEFS) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $< -o $@
+	$(FC) $(FFLAGS) $(DEFS) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $<
 %.o:%.c $(CLIBDEPS)
-	$(CC) $(CFLAGS) $< -o $@
+	$(CC) $(CFLAGS) $<
 %.a:
 	$(AR) $(AFLAGS) $@ $(OBJS)
-###################### STAMPS KEEP TRACK OF DEPENDENCIES
-$(ROOT)/%.stamp: $(OBJS)
-	file=$< ; ln -fs `pwd`/$$file ${ROOT}/obj/$$file
-	file=$${file%.*}.mod ; if [ -f $$file  ] ; then ln -fs `pwd`/$$file ${ROOT}/include/$$file; fi
-	echo -n > $@
-###################### 
-%.stamp:
-	DIR=$@ ; DIR=$(ROOT)/$${DIR%.*} ; cd $$DIR; $(MAKE)
-
 ########################## SOURCE CODE #######################
 %.h:%.H $(LOCALDEPS) $(GLOBALDEPS)
 	$(FPP) $(FPPFLAGS) $(DEFS) $(LOCALDEFS) $< > $@
@@ -130,14 +120,13 @@ mod:
 	/bin/sh -c 'for file in `ls *.mod *.h 2>/dev/null`; do  ln -fs `pwd`/$$file ${ROOT}/include/$$file; done'
 modules: $(OBJS) mod
 	for d in $(DIRS); do (cd $$d; $(MAKE) modules); done
-lib:
-	/bin/sh -c 'for file in ${OBJS}; do  ln -fs `pwd`/$$file ${ROOT}/lib/$$file; done'
-	/bin/sh -c 'for file in `ls *.a 2>/dev/null`; do  ln -fs `pwd`/$$file ${ROOT}/lib/$$file; done'
+lib: force_look
+	/bin/sh -c 'for file in `ls *.a *.o 2>/dev/null`; do  ln -fs `pwd`/$$file ${ROOT}/lib/$$file; done'
 libs : libraries
 libraries: $(OBJS) lib
 	for d in $(DIRS); do (cd $$d; $(MAKE) libraries); done
-.SILENT : %.stamp
+.SILENT : force_look clean modules mod
 clean: 
-	rm -f *.mod *.h $(ROOT)/$(NAME).stamp $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(EXE)
+	rm -f *.mod *.h $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(EXE)
 
 .PHONY : parser output vectors ivector files constants clean random multicom_aux multidiag psf

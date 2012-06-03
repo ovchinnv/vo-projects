@@ -1,6 +1,7 @@
 ROOT=..
 OBJS=output.o
+NAME=output
 
 include $(ROOT)/Makefile.inc
 
-default: all modules
+default: $(ROOT)/output.stamp

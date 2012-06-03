@@ -1,3 +1,5 @@
+/*#define __WRN(__WHO,__MSG) write(0,*) 'WARNING FROM: ',__WHO,': ',__MSG*/
+/*#define __PRINT(__MSG) write(0,'(A)') __MSG*/
 /*COORDINATES AND MASSES:*/
 /*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
 ! **********************************************************************!
@@ -103,7 +105,11 @@ module output
   if (.not.output_initialized) call output_init()
 !
   if (qprint) then
-   if (level.gt.minmessagelev) write(fout,'(4A)') ' MESSAGE (',whoami,'): ', msg
+   if (present(level)) then
+    if (level.gt.minmessagelev) write(fout,'(4A)') ' MESSAGE (',whoami,'): ', msg
+   else
+     write(fout,'(4A)') ' MESSAGE (',whoami,'): ', msg
+   endif
   endif
 !
  end subroutine message
@@ -116,7 +122,11 @@ module output
   if (.not.output_initialized) call output_init()
 !
   if (qprint) then
-   if (level.gt.minmessagelev) write(fout,'(4A)') msg
+   if (present(level)) then
+    if (level.gt.minmessagelev) write(fout,'(4A)') msg
+   else
+    write(fout,'(4A)') msg
+   endif
   endif
 !
  end subroutine plainmessage
