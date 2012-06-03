@@ -61,6 +61,7 @@ FPPFLAGS = -C -I $(ROOT)
 .SUFFIXES:
 .SUFFIXES: .o .F90 .a .H .h .c .f .F .stamp
 
+default: $(ROOT)/$(NAME).stamp
 all : default
 ########################### OBJECTS ##########################
 %.o:%.F90 $(LIBDEPS)
@@ -74,13 +75,15 @@ all : default
 %.a:
 	$(AR) $(AFLAGS) $@ $(OBJS)
 ###################### STAMPS KEEP TRACK OF DEPENDENCIES
-$(ROOT)/%.stamp: $(OBJS)
-	file=$< ; ln -fs `pwd`/$$file ${ROOT}/obj/$$file
-	file=$${file%.*}.mod ; if [ -f $$file  ] ; then ln -fs `pwd`/$$file ${ROOT}/include/$$file; fi
+$(ROOT)/$(NAME).stamp: $(OBJS)
+	for file in $(OBJS); do \
+	ln -fs `pwd`/$$file ${ROOT}/obj/$$file; \
+	file=$${file%.*}.mod ; if [ -f $$file  ] ; then ln -fs `pwd`/$$file ${ROOT}/include/$$file; fi ;\
+	done
 	echo -n > $@
 ###################### 
 %.stamp:
-	DIR=$@ ; DIR=$(ROOT)/$${DIR%.*} ; cd $$DIR; $(MAKE)
+	DIR=$@ ; DIR=$(ROOT)/$${DIR%.*} ; if [ -d $$DIR ] ; then cd $$DIR; $(MAKE) ; fi
 
 ########################## SOURCE CODE #######################
 %.h:%.H $(LOCALDEPS) $(GLOBALDEPS)
@@ -91,7 +94,8 @@ $(ROOT)/%.stamp: $(OBJS)
 	$(FPP) $(FPPFLAGS)         -D__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(CHMSG) -P $< > $@
 ######################### OTHER RULES ########################
 source: $(SOURCES)
-#$(OBJS):$(SOURCES)
+$(OBJS):$(addsuffix .stamp, $(DEPS))
+
 $(DIRS): force_look
 	$(MAKE) -C $@ modules
 

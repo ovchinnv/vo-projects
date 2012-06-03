@@ -1,7 +1,11 @@
+/*#define __WRN(__WHO,__MSG) write(0,*) 'WARNING FROM: ',__WHO,': ',__MSG*/
+/*#define __PRINT(__MSG) write(0,'(A)') __MSG*/
+/*COORDINATES AND MASSES:*/
+/*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
 ! **********************************************************************!
 ! This source file was was generated automatically from a master source !
-! code tree, which may or may not be distributed with this code, !
-! because it is up to the distributor, and not up to me. !
+! code tree, which may not be distributed with this code if the !
+! distributor has a proprietary compilation procedure (e.g. CHARMM) !
 ! If you edit this file (rather than the master source file) !
 ! your changes will be lost if another pull from the master tree occurs.!
 ! In case you are wondering why, this approach makes it possible for !

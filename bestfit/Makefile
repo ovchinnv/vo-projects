@@ -12,7 +12,6 @@ include $(ROOT)/Makefile.inc
 
 EXE=test
 
-default: $(ROOT)/bestfit.stamp $(GLOBALDEPS) $(LOCALDEPS)
 
 test: $(EXE)
 $(EXE): $(OBJS) bfit.o

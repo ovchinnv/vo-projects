@@ -4,4 +4,3 @@ NAME=output
 
 include $(ROOT)/Makefile.inc
 
-default: $(ROOT)/output.stamp

@@ -1,14 +1,10 @@
 ROOT=..
 OBJS=parselist.o
+NAME=parselist
 
 INCLUDES=-I $(ROOT)/modules
 
 include $(ROOT)/Makefile.inc
 
-default: all modules
-iparselist.o : ivector
-ivector:
-	$(MAKE) -C $(ROOT)/vectors all modules
+parselist.o : vectors.stamp
 charmm: $(CHARMM_SOURCES)
-
-.PHONY : output

@@ -1,14 +1,13 @@
 ROOT=..
 OBJS=rng.o
+NAME=random
 
 INCLUDES=-I $(ROOT)/modules
 
 include $(ROOT)/Makefile.inc
 
-rng.o : clcg.o constants output parser
+rng.o : clcg.o constants.stamp output.stamp parser.stamp
 clcg.o : clcg.f clcg.h
 
-mod:
-	/bin/sh -c 'for file in "rng.mod"; do  ln -fs `pwd`/$$file ${ROOT}/include/$$file; done'
 clean: 
-	rm -f *.mod $(SOURCES) $(OBJS)
+	rm -f *.mod $(SOURCES) $(OBJS) $(ROOT)/$(NAME).stamp

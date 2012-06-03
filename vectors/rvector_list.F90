@@ -1,12 +1,14 @@
-! This source file was was generated automatically from a master source
-! code tree, which may or may not be distributed with this code,
-! because it is up to the distributor, and not up to me.
-! If you edit this file (rather than the master source file)
-! your changes will be lost if another pull from the master tree occurs.
-! In case you are wondering why, this approach makes it possible for
-! me to have the same master source code interfaced with different
-! applications (some of which are written in a way that is quite far
-! from being object-oriented) at the source level
+! **********************************************************************!
+! This source file was was generated automatically from a master source !
+! code tree, which may not be distributed with this code if the !
+! distributor has a proprietary compilation procedure (e.g. CHARMM) !
+! If you edit this file (rather than the master source file) !
+! your changes will be lost if another pull from the master tree occurs.!
+! In case you are wondering why, this approach makes it possible for !
+! me to have the same master source code interfaced with different !
+! applications (some of which are written in a way that is quite far !
+! from being object-oriented) at the source level. !
+! **********************************************************************!
 !
 !
       module rvector_list
@@ -26,7 +28,6 @@
       int, parameter, private :: expand_incr=1
 !
       contains
-
        subroutine real_vlist_init( vl, length )
        int, optional :: length
        int :: i, llength
@@ -95,7 +96,6 @@
        k=vl%last+1
        vl%i(k)=i ! new list label
        if (present(j)) l=real_vector_add(vl%v(k),j) ! add element to the list
-
        vl%last=k
        real_vlist_add=k
        end function real_vlist_add

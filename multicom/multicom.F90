@@ -1,3 +1,5 @@
+/*#define __WRN(__WHO,__MSG) write(0,*) 'WARNING FROM: ',__WHO,': ',__MSG*/
+/*#define __PRINT(__MSG) write(0,'(A)') __MSG*/
 /*COORDINATES AND MASSES:*/
 /*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
 ! **********************************************************************!
@@ -92,7 +94,7 @@
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        if ( keyword(1:4).eq.'INIT'(1:4) ) then
         if (me.eq.0) &
-        write(0,*) 'WARNING FROM: ',whoami,': ','REINITIALIZING USER-DEFINED COMMUNICATOR LIST.'
+        call warning(whoami, 'REINITIALIZING USER-DEFINED COMMUNICATOR LIST.', 0)
         call multicom_init()
         call multicom_list()
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -104,7 +106,7 @@
 !
         do i=1,list%last
          if (list%i(i).lt.0.or.list%i(i).ge.ncpu) then
-          write(0,*) 'WARNING FROM: ',whoami,': ','ONE OR MORE NODES OUT OF RANGE. NOTHING DONE.'
+          call warning(whoami, 'ONE OR MORE NODES OUT OF RANGE. NOTHING DONE.', 0)
           call int_vector_done(list)
           return
          endif
@@ -112,14 +114,14 @@
         enddo
 !
         if (list%last.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ',' NO NODES SPECIFIED.'
+         call warning(whoami, ' NO NODES SPECIFIED.', 0)
         else
 !
          newcomm=multicom_add(list%i(1:list%last)+1) ! offsetting nodes at 0 and adding 1 here permits users to think of the list as ranks in COMM_WORLD
 ! ! conceptually, this is incorrect because the indices point into the a node array (indexed from 1)
 ! ! of the first communicator (on top of WORLD), but I am making this compromise for simplicity
          if (newcomm.lt.0) then
-          write(0,*) 'WARNING FROM: ',whoami,': ',' COULD NOT ADD COMMUNICATOR.'
+          call warning(whoami, ' COULD NOT ADD COMMUNICATOR.', 0)
          else
           write(msg___,222) whoami, newcomm;
           call plainmessage(msg___,3) ! print if verbosity >= 3
@@ -141,14 +143,14 @@
 ! check range
         do i=1, list%last
          if (list%i(i).lt.1.or.list%i(i).gt.ncomm) then
-          write(0,*) 'WARNING FROM: ',whoami,': ',' ONE OR MORE COMMUNICATORS OUT OF RANGE. NOTHING DONE.'
+          call warning(whoami, ' ONE OR MORE COMMUNICATORS OUT OF RANGE. NOTHING DONE.', 0)
           call int_vector_done(list)
           return
          endif
         enddo ! check
 !
         if (list%last.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ',' NO COMMUNICATORS SPECIFIED.'
+         call warning(whoami, ' NO COMMUNICATORS SPECIFIED.', 0)
         else
          call multicom_set(keyword, list%i(1:list%last)) ! pass subset of array -- only the communnicators
 ! warn if LOCAL modified
@@ -157,7 +159,7 @@
            if (first_me.eq.0) then
             write(msg___, '(2A)') whoami, &
      & ' WARNING: MPI_COMM_LOCAL CHANGED (REINITIALIZING PARALLEL RUN).'
-            write(0,'(A)') msg___
+            call plainmessage(msg___)
            endif
            call multicom_parinit()
           endif ! local
@@ -171,7 +173,7 @@
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        elseif ( keyword(1:4).eq.'DONE'(1:4) ) then
         if (me.ge.0) &
-     & write(0,*) 'WARNING FROM: ',whoami,': ','REMOVING USER-DEFINED COMMUNICATOR LIST.'
+     & call warning(whoami, 'REMOVING USER-DEFINED COMMUNICATOR LIST.', 0)
         call multicom_cleanup()
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 ! now have to reinitialize communicators; this is not done here
@@ -194,7 +196,7 @@
         keyword=pop_string(comlyn,comlen) ; comlen=len_trim(comlyn)
         nlocal=atoi(keyword(1:klen))
         if (nlocal.le.0) then
-         write(msg___,*)' INVALID NUMBER OF PROCESSORS PER REPLICA (',keyword,').';write(0,*) 'WARNING FROM: ',whoami,': ',msg___
+         write(msg___,*)' INVALID NUMBER OF PROCESSORS PER REPLICA (',keyword,').';call warning(whoami, msg___, 0)
         else
          i=index(comlyn(1:comlen), 'BY');
          if (i.gt.0) then
@@ -206,9 +208,9 @@
          endif
          nrep=atoi(keyword(1:i))
          if (nrep.le.0) then
-          write(msg___,*)' INVALID NUMBER OF REPLICAS (',keyword,').';write(0,*) 'WARNING FROM: ',whoami,': ',msg___
+          write(msg___,*)' INVALID NUMBER OF REPLICAS (',keyword,').';call warning(whoami, msg___, 0)
          elseif (ncpu.lt.nrep*nlocal) then
-          write(0,*) 'WARNING FROM: ',whoami,': ',' REQUESTING TOO MANY PROCESSORS. NOTHING DONE.'
+          call warning(whoami, ' REQUESTING TOO MANY PROCESSORS. NOTHING DONE.', 0)
          else
 ! set up for a (nlocal x nrep) run
 ! use existing routines
@@ -219,7 +221,7 @@
  333 FORMAT(/A, ' WILL SET UP COMMUNICATORS FOR ',A, &
      & /,A,' ON ', I5, ' REPLICA(S) WITH ', I5, &
      & ' PROCESSORS PER REPLICA.')
-           write(0,'(A)') msg___
+           call plainmessage(msg___)
           endif ! first_me
 !
           call multicom_init() ! (re)initialize
@@ -241,14 +243,14 @@
             write(msg___,444) whoami,first_size-nlocal*nrep, keyword
  444 FORMAT(A, I5, ' PROCESSORS WILL NOT BE USED FOR ', &
      & A,' CALCULATIONS.');
-            write(0,'(A)') msg___
+            call plainmessage(msg___)
            endif ! first_size
           endif ! first_me
          endif ! nrep
         endif ! nlocal
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        else
-            write(msg___,*)' UNRECOGNIZED SUBCOMMAND: ',keyword;write(0,*) 'WARNING FROM: ',whoami,': ',msg___
+            write(msg___,*)' UNRECOGNIZED SUBCOMMAND: ',keyword;call warning(whoami, msg___, 0)
        endif
 !
        end subroutine multicom_main
@@ -296,7 +298,7 @@
        enddo
 !
        if (ncomm.eq.max_comm) then
-        write(0,*) 'WARNING FROM: ',whoami,': ',' NUMBER OF ALLOWED COMMUNICATORS EXCEEDED.'
+        call warning(whoami, ' NUMBER OF ALLOWED COMMUNICATORS EXCEEDED.', 0)
         call multicom_cleanup()
         return
        endif
@@ -358,13 +360,13 @@
        endif
 !
        if (comm_id.gt.ncomm.or.comm_id.lt.1) then
-        write(0,*) 'WARNING FROM: ',whoami,': ',' INVALID PARENT COMMUNICATOR.'
+        call warning(whoami, ' INVALID PARENT COMMUNICATOR.', 0)
         return
        endif
 !
 ! parse processor array
        if (ncomm.eq.max_comm) then
-        write(0,*) 'WARNING FROM: ',whoami,': ',' NUMBER OF ALLOWED COMMUNICATORS EXCEEDED.'
+        call warning(whoami, ' NUMBER OF ALLOWED COMMUNICATORS EXCEEDED.', 0)
         return
        endif
 !
@@ -392,7 +394,7 @@
 !
 ! check for empty group
        if (communicators(ncomm)%group_id.eq.MPI_GROUP_EMPTY) then
-        write(0,*) 'WARNING FROM: ',whoami,': ',' NO VALID NODES FOUND. NOTHING DONE.'
+        call warning(whoami, ' NO VALID NODES FOUND. NOTHING DONE.', 0)
         ncomm=ncomm-1
         return
        endif
@@ -476,21 +478,21 @@
        data whoami /' MULTICOM_LIST>'/
 !
        if (.not.multicom_initialized) then
-        write(0,*) 'WARNING FROM: ',whoami,': ',' COMMUNICATOR MODULE NOT INITIALIZED.'
+        call warning(whoami, ' COMMUNICATOR MODULE NOT INITIALIZED.', 0)
         return
        endif
 !
        if (ncomm.lt.1) then
-        write(0,*) 'WARNING FROM: ',whoami,': ',' INTERNAL ERROR: NO COMMUNICATORS DEFINED.'
+        call warning(whoami, ' INTERNAL ERROR: NO COMMUNICATORS DEFINED.', 0)
         return
        endif
 !
        if (communicators(1)%me.eq.0) then
-         write(msg___, 111) whoami ; write(0,'(A)') msg___ ! 0 writes
+         write(msg___, 111) whoami ; call plainmessage(msg___) ! 0 writes
          do i=1, ncomm
-           write(msg___, 112) whoami, i, communicators(i)%parent_id ; write(0,'(A)') msg___
+           write(msg___, 112) whoami, i, communicators(i)%parent_id ; call plainmessage(msg___)
            write(msg___, '(" MULTICOM_LIST> ", 10I5)') &
-     & communicators(i)%nodes%i(1:communicators(i)%nodes%last) ; write(0,'(A)') msg___
+     & communicators(i)%nodes%i(1:communicators(i)%nodes%last) ; call plainmessage(msg___)
          enddo
        endif
  111 FORMAT (/A,' THE FOLLOWING COMMUNICATORS ARE DEFINED:')
@@ -522,13 +524,13 @@
        data whoami /' MULTICOM_BARRIER>'/
 !
        if (.not.multicom_initialized) then
-        write(0,*) 'WARNING FROM: ',whoami,': ',' COMMUNICATOR MODULE NOT INITIALIZED. NOTHING DONE.'
+        call warning(whoami, ' COMMUNICATOR MODULE NOT INITIALIZED. NOTHING DONE.', 0)
         return
        endif
 !
        comm_name=adjustl(comm_name); l=len_trim(comm_name)
        if (l.le.0) then
-        write(0,*) 'WARNING FROM: ',whoami,': ',' COMMUNICATOR NAME NOT SPECIFIED. NOTHING DONE.'
+        call warning(whoami, ' COMMUNICATOR NAME NOT SPECIFIED. NOTHING DONE.', 0)
         return
        endif
 !
@@ -550,13 +552,13 @@
        elseif (comm_name(1:5).eq.'STRNG') then !!**CHARMM_ONLY**!##STRINGM
         c=MPI_COMM_STRNG; s=SIZE_STRNG; m=ME_STRNG; !!**CHARMM_ONLY**!##STRINGM
        else
-        write(msg___,*)comm_name,' IS NOT IN USE. NOTHING DONE.';write(0,*) 'WARNING FROM: ',whoami,': ',msg___
+        write(msg___,*)comm_name,' IS NOT IN USE. NOTHING DONE.';call warning(whoami, msg___, 0)
         return
        endif
 !
        if (first_me.eq.0) then
          write(msg___, '(2A)') whoami, &
-     & ' CALLING MPI_BARRIER ON COMMUNICATOR "',comm_name(1:l),'".'; write(0,'(A)') msg___
+     & ' CALLING MPI_BARRIER ON COMMUNICATOR "',comm_name(1:l),'".'; call plainmessage(msg___)
        endif
 !
        if (c.ne.MPI_COMM_NULL.and.m.ne.MPI_UNDEFINED) &
@@ -589,7 +591,7 @@
        data whoami /' MULTICOM_SET>'/
 !
        if (.not.multicom_initialized) then
-        write(0,*) 'WARNING FROM: ',whoami,': ',' COMMUNICATOR MODULE NOT INITIALIZED. NOTHING DONE.'
+        call warning(whoami, ' COMMUNICATOR MODULE NOT INITIALIZED. NOTHING DONE.', 0)
         return
        endif
 !
@@ -597,7 +599,7 @@
        llist=SIZE(commlist)
        do i=1, llist
         if (commlist(i).gt.ncomm.or.commlist(i).lt.1) then
-         write(0,*) 'WARNING FROM: ',whoami,': ',' SOME COMMUNICATOR IDs INVALID. NOTHING DONE.'
+         call warning(whoami, ' SOME COMMUNICATOR IDs INVALID. NOTHING DONE.', 0)
          return
         endif
        enddo
@@ -624,7 +626,7 @@
         call MPI_ALLREDUCE(found, foundg, 1, MPI_LOGICAL, MPI_LAND, &
      & communicators(1)%comm_id, bug)
         if (foundg) then
-         write(0,*) 'WARNING FROM: ',whoami,': ',' UNEXPECTED ERROR: COMMUNICATOR HANDLE NULL ON ALL NODES.'
+         call warning(whoami, ' UNEXPECTED ERROR: COMMUNICATOR HANDLE NULL ON ALL NODES.', 0)
          return
         endif
 !
@@ -700,19 +702,19 @@
        llist=sum(min(flagg,1)) ! # nodes with successful assignments
        found=(llist.gt.0)
        if (.not.found) then
-        write(msg___,*)comm_name,' IS NOT IN USE ON REQUESTED NODES.';write(0,*) 'WARNING FROM: ',whoami,': ',msg___
+        write(msg___,*)comm_name,' IS NOT IN USE ON REQUESTED NODES.';call warning(whoami, msg___, 0)
        else
         if (first_me.eq.0) then
          write(msg___, '(2A)') whoami, &
      & ' ASSIGNED "'//comm_name(1:5)//                               &
-     & '" COMMUNICATOR ON THE FOLLOWING NODES:'; write(0,'(A)') msg___
+     & '" COMMUNICATOR ON THE FOLLOWING NODES:'; call plainmessage(msg___)
          write(msg___, '(" MULTICOM_SET> ",20I5)') &
      & PACK(flagg, flagg.gt.0)-1 ! node numbering starts from 0
-          write(0,'(A)') msg___
+          call plainmessage(msg___)
          if (llist.lt.first_size) & ! warn that on some nodes, communicator is still unassigned
      & write(msg___, '(2A,I5,A)') whoami, &
      & ' COMMUNICATOR "'//comm_name(1:5)//'" UNASSIGNED ON ',         &
-     & first_size-llist, ' NODES.' ; write(0,'(A)') msg___
+     & first_size-llist, ' NODES.' ; call plainmessage(msg___)
         endif ! first_me
        endif ! .not.found
 !
@@ -739,7 +741,7 @@
        data whoami /' MULTICOM_PERMUTE_STRING_RANKS>'/
 !
        if (.not.multicom_initialized) then
-        write(0,*) 'WARNING FROM: ',whoami,': ',' COMMUNICATOR MODULE NOT INITIALIZED. NOTHING DONE.'
+        call warning(whoami, ' COMMUNICATOR MODULE NOT INITIALIZED. NOTHING DONE.', 0)
         return
        endif
 !
@@ -750,7 +752,7 @@
        endif
 !
        if (ncomm.lt.1) then
-        write(0,*) 'WARNING FROM: ',whoami,': ',' INTERNAL ERROR: NO COMMUNICATORS DEFINED.'
+        call warning(whoami, ' INTERNAL ERROR: NO COMMUNICATORS DEFINED.', 0)
         return
        endif
 !
@@ -767,7 +769,7 @@
        call MPI_ALLREDUCE(comm, i, 1, itype, MPI_BOR,MPI_COMM_GLOBAL, bug)
        comm=i
        if (comm.eq.0) then
-        write(0,*) 'WARNING FROM: ',whoami,': ',' INTERNAL ERROR: MPI_COMM_STRNG NOT FOUND.'
+        call warning(whoami, ' INTERNAL ERROR: MPI_COMM_STRNG NOT FOUND.', 0)
         return
        endif
 !

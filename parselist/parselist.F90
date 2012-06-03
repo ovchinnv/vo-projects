@@ -1,3 +1,5 @@
+/*#define __WRN(__WHO,__MSG) write(0,*) 'WARNING FROM: ',__WHO,': ',__MSG*/
+/*#define __PRINT(__MSG) write(0,'(A)') __MSG*/
 /*COORDINATES AND MASSES:*/
 /*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
 ! **********************************************************************!
@@ -51,7 +53,7 @@
              kstep=atoi(get_remove_parameter(str, 'STEP', strl), missing)
 !! allow (almost) any value of STEP for flexibility
              if (kstep.eq.missing) then
-              write(0,*) 'WARNING FROM: ',whoami,': ',' INVALID STEP VALUE SPECIFIED. USING STEP=1.'
+              call warning(whoami, ' INVALID STEP VALUE SPECIFIED. USING STEP=1.', 0)
               kstep=1
              endif
             else ! STEP not specified -- using 1
@@ -63,7 +65,7 @@
                j=int_vector_uadd(list,k)
              enddo
             else
-              write(0,*) 'WARNING FROM: ',whoami,': ',' INVALID RANGE SPECIFIED. SKIPPING ENTRY.'
+              call warning(whoami, ' INVALID RANGE SPECIFIED. SKIPPING ENTRY.', 0)
             endif
          endif ! i
 ! read the next number
