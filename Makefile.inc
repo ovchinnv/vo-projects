@@ -8,9 +8,11 @@ FFLAGS=-O3 -fast -finline -fp-model fast=2 -xhost -ipo -fno-math-errno -no-inlin
 #FFLAGS= -O3 -c -check-all -extend-source -fast -fno-math-errno -finline -fp-model fast=2 -xhost -ipo  #-ipo 
 #FFLAGS= -O3 -c -extend-source -fast -fno-math-errno -finline -fp-model fast=2 -xSSE3 -ipo # -no-inline-factor -no-inline-min-size #-ipo 
 #FFLAGS= -O3 -c -extend-source -fast -fno-math-errno -finline -fp-model fast=2 -xhost -no-ipo # -no-inline-factor -no-inline-min-size #-ipo 
+MPI_HOME=/usr/local/mpich2-intel
 #FC=gfortran
-#FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-132 -ffree-line-length-132 -fno-math-errno -fbounds-check -frange-check #-fopenmp 
-#FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-132 -ffree-line-length-132 -fno-math-errno #-fbounds-check -frange-check 
+#FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fbounds-check -frange-check #-fopenmp 
+#FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno #-fbounds-check -frange-check 
+#MPI_HOME=/usr/local/mpich2-gnu
 #
 DEFS=-D int=integer -D float=real*8 -D bool=logical -D int4mpi=integer*4 -D mpiint=MPI_INTEGER -D mpifloat=MPI_REAL -D mpichar=MPI_CHARACTER -D mpiint4=MPI_INTEGER4\
      -D mpibool=MPI_LOGICAL -D __DMOL -D __RCOMP
@@ -40,7 +42,6 @@ MSG=-include $(ROOT)/source.msg
 CHMSG=-include $(ROOT)/charmm.msg
 GLOBALDEPS=$(ROOT)/source.defs $(ROOT)/source.msg
 
-MPI_HOME=/usr/local/mpich2-intel
 
 MPI_INCLUDE=-I $(MPI_HOME)/include
 MPI_LIB=-L $(MPI_HOME)/lib
