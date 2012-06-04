@@ -1,6 +1,7 @@
 ROOT=..
 OBJS=bestfit.o
 NAME=bestfit
+DEPS=constants output
 
 LOCALMACROS=-include source.defs
 LOCALDEPS=source.defs
@@ -17,8 +18,7 @@ test: $(EXE)
 $(EXE): $(OBJS) bfit.o
 	$(LD) $(LDFLAGS) $(OBJS) $(LOBJS) bfit.o -o $(EXE)
 
-bfit.o    : bestfit.o constants.stamp
-bestfit.o : constants.stamp output.stamp
+bfit.o    : bestfit.o
 
 charmm: $(CHARMM_SOURCES)
 

@@ -64,24 +64,24 @@ FPPFLAGS = -C -I $(ROOT)
 default: $(ROOT)/$(NAME).stamp
 all : default
 ########################### OBJECTS ##########################
-%.o:%.F90 $(LIBDEPS)
-	$(FC) $(FFLAGS) $(DEFS) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $< -o $@
 %.o:%.f $(LIBDEPS)
-	$(FC) $(FFLAGS) $(DEFS) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $< -o $@
-%.o:%.F $(LIBDEPS)
 	$(FC) $(FFLAGS) $(DEFS) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $< -o $@
 %.o:%.c $(CLIBDEPS)
 	$(CC) $(CFLAGS) $< -o $@
+%.o:%.F90 $(LIBDEPS)
+	$(FC) $(FFLAGS) $(DEFS) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $< -o $@
+%.o:%.F $(LIBDEPS)
+	$(FC) $(FFLAGS) $(DEFS) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $< -o $@
 %.a:
 	$(AR) $(AFLAGS) $@ $(OBJS)
-###################### STAMPS KEEP TRACK OF DEPENDENCIES
-$(ROOT)/$(NAME).stamp: $(OBJS)
+###################### STAMPS KEEP TRACK OF DEPENDENCIES ON DIRECTORIES (OR OTHER COMPOUND OBJECTS): #####
+$(ROOT)/$(NAME).stamp:: $(OBJS)
 	for file in $(OBJS); do \
 	ln -fs `pwd`/$$file ${ROOT}/obj/$$file; \
 	file=$${file%.*}.mod ; if [ -f $$file  ] ; then ln -fs `pwd`/$$file ${ROOT}/include/$$file; fi ;\
 	done
 	echo -n > $@
-###################### 
+####################### GENERIC STAMP RESULTS IN DIFFERENT BEHAVIOR : ####################################
 %.stamp:
 	DIR=$@ ; DIR=$(ROOT)/$${DIR%.*} ; if [ -d $$DIR ] ; then cd $$DIR; $(MAKE) ; fi
 
@@ -99,27 +99,6 @@ $(OBJS):$(addsuffix .stamp, $(DEPS))
 $(DIRS): force_look
 	$(MAKE) -C $@ modules
 
-multidiag:
-	$(MAKE) -C $(ROOT)/multidiag modules libraries
-output:
-	$(MAKE) -C $(ROOT)/output modules libraries
-parser:
-	$(MAKE) -C $(ROOT)/parser modules libraries
-ivector: vectors
-vectors:
-	$(MAKE) -C $(ROOT)/vectors modules libraries
-files:
-	$(MAKE) -C $(ROOT)/files modules libraries
-constants:
-	$(MAKE) -C $(ROOT)/constants modules libraries
-multicom_aux:
-	$(MAKE) -C $(ROOT)/multicom modules libraries
-random:
-	$(MAKE) -C $(ROOT)/random modules libraries
-bestfit:
-	$(MAKE) -C $(ROOT)/bestfit modules libraries
-lu:
-	$(MAKE) -C $(ROOT)/lu modules libraries
 psf:
 	$(MAKE) -C $(ROOT)/dynamol/struc psf.o modules
 coor:
@@ -143,5 +122,3 @@ libraries: $(OBJS) lib
 .SILENT : %.stamp
 clean: 
 	rm -f *.mod *.h $(ROOT)/$(NAME).stamp $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(EXE)
-
-.PHONY : parser output vectors ivector files constants clean random multicom_aux multidiag psf

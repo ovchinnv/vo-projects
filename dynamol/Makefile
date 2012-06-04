@@ -1,7 +1,10 @@
 ROOT=..
 OBJS=stats.o sysinfo.o system.o sysmanip.o verlet.o molsim.o
+NAME=dynamol
 INCLUDES=-I $(ROOT)/include
-DIRS=param struc coor compute
+DEPS=output parser vectors files multicom random bestfit constants
+SUBDIRS=param struc coor compute
+DEPS+=$(addprefix $(NAME)/,$(SUBDIRS))
 
 # for making a static library
 LINKOBJS=constants.o output.o files.o parser.o multicom_aux.o            \
@@ -16,14 +19,14 @@ LOCALDEPS=source.defs multicom_def.src
 
 include $(ROOT)/Makefile.inc
 
-sysinfo.o sysmanip.o : system.o output
-system.o: stats.o parser output vectors files multicom_aux random bestfit multicom_def.src $(DIRS)
-verlet.o: system.o parser output constants random
+sysinfo.o sysmanip.o : system.o
+system.o: stats.o multicom_def.src $(DIRS)
+verlet.o: system.o
 
 libraries : libdynamol.a
 libdynamol.a: $(OBJS)  force_look                      #force relinking
 	$(AR) $(AFLAGS) $@ $(OBJS) $(LOBJS)
 	/bin/sh -c 'ln -fs `pwd`/libdynamol.a ${ROOT}/lib/libdynamol.a'
 clean: 
-	for d in $(DIRS); do (cd $$d; $(MAKE) clean); done
+	for d in $(SUBDIRS); do (cd $$d; $(MAKE) clean); done
 	rm -f *.mod *.a $(OBJS) $(SOURCES)

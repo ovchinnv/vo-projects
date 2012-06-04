@@ -1,11 +1,12 @@
 ROOT=../..
 OBJS=angles.o bonds.o dihedrals.o
-DIRS=../param ../struc
+NAME=dynamol/compute
+DEPS=constants dynamol/struc dynamol/param
 INCLUDES=-I $(ROOT)/modules
 include $(ROOT)/Makefile.inc
 
-modules : interface.h
-angles.o dihedrals.o : constants $(DIRS)
-#angles.o    : anglpar.o constants
-#bonds.o     : bondpar.o constants
-#dihedrals.o : dihepar.o constants
+$(ROOT)/$(NAME).stamp :: interface.h
+	file=$< ; ln -fs `pwd`/$$file ${ROOT}/include/$$file;
+	echo -n > $@
+
+.SILENT : $(ROOT)/$(NAME).stamp

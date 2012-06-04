@@ -1,12 +1,13 @@
 ROOT=..
-OBJS=rng.o
+OBJS=rng.o clcg.o
 NAME=random
+DEPS=constants output parser
 
 INCLUDES=-I $(ROOT)/modules
 
 include $(ROOT)/Makefile.inc
 
-rng.o : clcg.o constants.stamp output.stamp parser.stamp
+rng.o : clcg.o 
 clcg.o : clcg.f clcg.h
 
 clean: 

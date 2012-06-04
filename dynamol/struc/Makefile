@@ -1,7 +1,8 @@
 ROOT=../..
 OBJS=psf.o tlist.o psfatom.o
 INCLUDES=-I $(ROOT)/modules
+NAME=dynamol/struc
+DEPS=parser output
 include $(ROOT)/Makefile.inc
 
-tlist.o psfatom.o psf.o: parser output
 psf.o : tlist.o psfatom.o

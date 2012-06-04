@@ -1,3 +1,5 @@
+/*#define __WRN(__WHO,__MSG) write(0,*) 'WARNING FROM: ',__WHO,': ',__MSG*/
+/*#define __PRINT(__MSG) write(0,'(A)') __MSG*/
 /*COORDINATES AND MASSES:*/
 /*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
 /*
@@ -356,7 +358,7 @@
          if (gamma.gt.0d0) then
           cv%gamma(j)=1d0/gamma; ! disallow zero
          else
-          write(0,*) 'WARNING FROM: ',whoami,': ','NONPOSITIVE GAMMA SPECIFIED. WILL RESET TO 1.0.'
+          call warning(whoami, 'NONPOSITIVE GAMMA SPECIFIED. WILL RESET TO 1.0.', 0)
           cv%gamma(j)=1d0;
          endif
         else
@@ -380,7 +382,7 @@
         cv%wrss=1./sqrt( sum( cv%weight(1:cv%num_cv)**2) )
        else ! out of bounds
 ! maximum storage space exceeded; for now complain and exit; in the future, can reallocate
-        write(0,*) 'WARNING FROM: ',whoami,': ','MAXIMUM NUMBER OF CV EXCEEDED. NOTHING DONE.'
+        call warning(whoami, 'MAXIMUM NUMBER OF CV EXCEEDED. NOTHING DONE.', 0)
         cv_common_add=0
         return
        endif
@@ -398,7 +400,7 @@
 ! do work:
        if (present(c)) then
         if (c.lt.1.or.c.gt.main_offset+max_hist_base) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','OUT OF BOUNDS. NOTHING DONE.'
+         call warning(whoami, 'OUT OF BOUNDS. NOTHING DONE.', 0)
          return
         else ! c valid
          c1=c
@@ -481,7 +483,7 @@
          cv%weight(j)=s ! for positions, s will be sqrt(mass), as expected
         enddo
         if (any(cv%weight(1:cv%num_cv).eq.0)) &
-        write(0,*) 'WARNING FROM: ',whoami,': ','ZERO CV WEIGHT COMPUTED.'
+        call warning(whoami, 'ZERO CV WEIGHT COMPUTED.', 0)
        endif ! qroot
 !
 ! broadcast to slaves
@@ -506,7 +508,7 @@
        data whoami /' CV_BASE_PRINT_WGT>'/
 ! begin
        if (.not.cv_common_weights_initialized) &
-     & write(0,*) 'WARNING FROM: ',whoami,': ','CV WEIGHTS NOT INITIALIZED.'
+     & call warning(whoami, 'CV WEIGHTS NOT INITIALIZED.', 0)
        if (.not.present(fmt)) then
         write(frm,'("(",I5,"E15.5)")') max(cv%num_cv,1)
        else
@@ -530,7 +532,7 @@
         if (ME_STRNG.eq.0) then
          read(iunit,*) cv%weight(1:cv%num_cv) ! only root reads
          if (any(cv%weight(1:cv%num_cv).le.0)) &
-     & write(0,*) 'WARNING FROM: ',whoami,': ','READ ZERO OR NEGATIVE CV WEIGHT'
+     & call warning(whoami, 'READ ZERO OR NEGATIVE CV WEIGHT', 0)
         endif ! ME_
         if (SIZE_STRNG.gt.1) &
      & call mpi_bcast(cv%weight,cv%num_cv,MPI_REAL,0,MPI_COMM_STRNG,ierror)
@@ -559,12 +561,12 @@
          enddo
          cv_common_k_initialized=.true. ! note: this flag only relevant for off-path sampling
          if (any(cv%k(1:cv%num_cv).lt.0)) &
-     & write(0,*) 'WARNING FROM: ',whoami,': ','COMPUTED NEGATIVE FORCE CONSTANT'
+     & call warning(whoami, 'COMPUTED NEGATIVE FORCE CONSTANT', 0)
         else
-         write(0,*) 'WARNING FROM: ',whoami,': ','PARALLEL FORCE CONSTANT NOT SET. NOTHING DONE.'
+         call warning(whoami, 'PARALLEL FORCE CONSTANT NOT SET. NOTHING DONE.', 0)
         endif
        else
-         write(0,*) 'WARNING FROM: ',whoami,': ','CV WEIGHTS NOT INITIALIZED. NOTHING DONE.'
+         call warning(whoami, 'CV WEIGHTS NOT INITIALIZED. NOTHING DONE.', 0)
        endif
 !
        end subroutine cv_common_compute_k
@@ -619,8 +621,6 @@
 !
 ! send to slaves
        if (MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.SIZE_LOCAL.gt.1) then
-
-
 
 
 
@@ -695,7 +695,7 @@
        end interface
 !
        if (.not.cv_common_weights_initialized) then
-        write(0,*) 'WARNING FROM: ',whoami,': ','CV WEIGHTS NOT INITIALIZED'
+        call warning(whoami, 'CV WEIGHTS NOT INITIALIZED', 0)
        endif
 !
        if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and. &
@@ -809,7 +809,7 @@
        if (present(dt)) then; delt=dt; else ; delt=cv%dt; endif
 !
        if (cv%num_run_ave.lt.1) then
-        write(0,*) 'WARNING FROM: ',whoami,': ','NO SLICES IN THE AVERAGE. NOTHING DONE'
+        call warning(whoami, 'NO SLICES IN THE AVERAGE. NOTHING DONE', 0)
         return
        endif
 ! compute average F.E. gradient and dump into force set
@@ -870,7 +870,7 @@
        if (present(dt)) then; delt=dt; else ; delt=cv%dt; endif
 !
        if (cv%num_run_ave.lt.1) then
-        write(0,*) 'WARNING FROM: ',whoami,': ','NO SLICES IN THE AVERAGE. NOTHING DONE'
+        call warning(whoami, 'NO SLICES IN THE AVERAGE. NOTHING DONE', 0)
         return
        endif
 ! compute average F.E. gradient and dump into force set
@@ -915,7 +915,7 @@
        data whoami /' CV_BASE_ADD_HIST>'/
 ! returns index into cv%r array; the addition is done elsewhere
        if (cv%num_cv.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','NO CV DEFINED. NOTHING DONE';
+         call warning(whoami, 'NO CV DEFINED. NOTHING DONE', 0);
          return
        endif
 !
@@ -963,7 +963,7 @@
        if (present(d)) then; delta=d; else ; delta=10; endif
        if (present(nskip)) then ; numskip=nskip; else; numskip=0; endif
        if (numskip.ge.cv%num_hist) then
-        write(0,*) 'WARNING FROM: ','CV_BASE_SMOOTH_HIST',': ','SKIPPED ALL SLICES. NOTHING DONE'
+        call warning('CV_BASE_SMOOTH_HIST', 'SKIPPED ALL SLICES. NOTHING DONE', 0)
         return
        endif
 ! cv%r(:,comp)=cv%r(:,main) ! save current as "old" coordinates in column 2
@@ -1019,7 +1019,7 @@
 ! do work
        if (present(nskip)) then ; numskip=nskip; else; numskip=0; endif
        if (numskip.ge.cv%num_hist) then
-        write(0,*) 'WARNING FROM: ',whoami,': ','SKIPPED ALL ELEMENTS. NOTHING PRINTED'
+        call warning(whoami, 'SKIPPED ALL ELEMENTS. NOTHING PRINTED', 0)
         return
        endif
        write(fmt,int_format) cv%num_cv
@@ -1056,7 +1056,7 @@
        if (qroot) then
         if (present(nskip)) then ; numskip=nskip; else; numskip=0; endif
         if (numskip.ge.cv%num_hist) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','SKIPPED ALL ELEMENTS. NOTHING PRINTED'
+         call warning(whoami, 'SKIPPED ALL ELEMENTS. NOTHING PRINTED', 0)
          return
         endif
 !
@@ -1068,7 +1068,7 @@
          allocate(rall(cv%num_cv,kout,SIZE_STRNG))
          allocate(rtemp(cv%num_cv,kout))
         else
-         write(0,*) 'WARNING FROM: ',whoami,': ','SKIPPED ALL ELEMENTS. NOTHING PRINTED'
+         call warning(whoami, 'SKIPPED ALL ELEMENTS. NOTHING PRINTED', 0)
          return
         endif ! kout
 !
@@ -1119,12 +1119,12 @@
 ! do work
 ! only valid for 0 <= a <= 1
        if (a.lt.0.or.a.gt.1) then
-        write(0,*) 'WARNING FROM: ',whoami,': ','MEMORY PARAMETER MUST BE BETWEEN 0 AND 1'
+        call warning(whoami, 'MEMORY PARAMETER MUST BE BETWEEN 0 AND 1', 0)
         return
        endif
        if (present(nskip)) then ; numskip=nskip; else; numskip=0; endif
        if (numskip.ge.cv%num_hist) then
-        write(0,*) 'WARNING FROM: ',whoami,': ','SKIPPED ALL ELEMENTS. NOTHING DONE'
+        call warning(whoami, 'SKIPPED ALL ELEMENTS. NOTHING DONE', 0)
         return
        endif
 ! 12.08.08: made modifications: 1) compute forces 2) evolve using runave
@@ -1237,7 +1237,7 @@
 ! do work
        if (.not.present(col)) then ; c=main ; else ; c=col ; endif
        if (c.lt.1.or.c.gt.(max_hist_base+main_offset)) then
-        write(0,*) 'WARNING FROM: ',whoami,': ','OUT OF BOUNDS. NOTHING DONE.'
+        call warning(whoami, 'OUT OF BOUNDS. NOTHING DONE.', 0)
         return
        endif
        do i=1, cv%num_cv
@@ -1272,7 +1272,7 @@
 !
         if (.not.present(col)) then ; c=main ; else ; c=col ; endif
         if (c.lt.1.or.c.gt.(cv%num_hist+main_offset)) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','OUT OF BOUNDS. NOTHING DONE.'
+         call warning(whoami, 'OUT OF BOUNDS. NOTHING DONE.', 0)
          return
         endif
 !
@@ -1354,7 +1354,7 @@
 ! do work
        if (.not.present(col)) then ; c=main ; else ; c=col ; endif
        if (c.lt.1.or.c.gt.(cv%num_hist+main_offset)) then
-        write(0,*) 'WARNING FROM: ',whoami,': ','OUT OF BOUNDS. NOTHING DONE.'
+        call warning(whoami, 'OUT OF BOUNDS. NOTHING DONE.', 0)
         return
        endif
 !
@@ -1362,7 +1362,7 @@
         ibeg=1 ; iend=cv%num_cv
        else
         if (ind.lt.1.or.ind.gt.cv%num_cv) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','OUT OF BOUNDS. NOTHING DONE.'
+         call warning(whoami, 'OUT OF BOUNDS. NOTHING DONE.', 0)
          return
         endif
         ibeg=ind; iend=ind ;
@@ -1423,7 +1423,7 @@
        if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and. &
      & SIZE_STRNG.gt.1) then
         if (cv%num_cv.eq.0) &
-     & write(0,*) 'WARNING FROM: ',whoami,': ','NO CV DEFINED.'
+     & call warning(whoami, 'NO CV DEFINED.', 0)
         if (cv_common_fixed_0_bc.eq.1) then
          if (cv_common_fixed_1_bc.eq.1) then
           call compute_work_fd( &
@@ -1476,7 +1476,7 @@
 ! write(fmt,int_format) max_cv_common
        if (.not.present(col)) then ; c=main ; else ; c=col ; endif
        if (c.lt.1.or.c.gt.(max_hist_base+main_offset)) then
-        write(0,*) 'WARNING FROM: ',whoami,': ','OUT OF BOUNDS. NOTHING DONE.'
+        call warning(whoami, 'OUT OF BOUNDS. NOTHING DONE.', 0)
         return
        endif
        do i=1,cv%num_cv
@@ -1519,7 +1519,7 @@
 ! write(fmt,int_format) max_cv_common
        if (.not.present(col)) then ; c=main ; else ; c=col ; endif
        if (c.lt.1.or.c.gt.(cv%num_hist+main_offset)) then
-        write(0,*) 'WARNING FROM: ',whoami,': ','OUT OF BOUNDS. NOTHING DONE.'
+        call warning(whoami, 'OUT OF BOUNDS. NOTHING DONE.', 0)
         return
        endif
 ! read file
@@ -1599,7 +1599,7 @@
          write(me,'(I8)') ME_STRNG
          i=len(me)
          i=min(max(0,i),len(me));me(i+1:)='';call adjustleft(me,(/' ',tab/));i=len_trim(me)
-      write(msg___,*)'SOME CV VALUES ARE UNDEFINED AFTER READING ON REPLICA',me,'.';write(0,*) 'WARNING FROM: ',whoami,': ',msg___
+      write(msg___,*)'SOME CV VALUES ARE UNDEFINED AFTER READING ON REPLICA',me,'.';call warning(whoami, msg___, 0)
         endif
        endif ! MPI_COMM_STRNG
 !
@@ -1641,7 +1641,7 @@ character(len=80) :: msg___
 ! write(fmt,int_format) max_cv_common
        if (.not.present(col)) then ; c=main ; else ; c=col ; endif
        if (c.lt.1.or.c.gt.(cv%num_hist+main_offset)) then
-        write(0,*) 'WARNING FROM: ',whoami,': ','OUT OF BOUNDS. NOTHING DONE.'
+        call warning(whoami, 'OUT OF BOUNDS. NOTHING DONE.', 0)
         return
        endif
 !
@@ -1664,14 +1664,14 @@ character(len=80) :: msg___
         else
          write(me,'(I8)') ME_STRNG
          write(which,'(I8)') replica
-write(msg___,*)'REPLICA',me,'ATTEMPTED TO READ NONEXISTENT COLUMN',which,'. NOTHING DONE.';write(0,*) 'WARNING FROM: ',whoami,': ',msg___
+write(msg___,*)'REPLICA',me,'ATTEMPTED TO READ NONEXISTENT COLUMN',which,'. NOTHING DONE.';call warning(whoami, msg___, 0)
         endif ! replica
 ! check for zero coordinate entries
         if (any(cv%r(1:cv%num_cv,c).eq.0.0d0)) then
          write(me,'(I8)') ME_STRNG
          i=len(me)
          i=min(max(0,i),len(me));me(i+1:)='';call adjustleft(me,(/' ',tab/));i=len_trim(me)
-write(msg___,*)'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.';write(0,*) 'WARNING FROM: ',whoami,': ',msg___
+write(msg___,*)'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.';call warning(whoami, msg___, 0)
         endif
        endif ! root
 !
@@ -1777,7 +1777,7 @@ write(msg___,*)'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.';w
        character(len=19) :: whoami
        data whoami /' CV_BASE_SET_KPARA>'/
        if (k.lt.0d0) &
-     &write(0,*) 'WARNING FROM: ',whoami,': ',' NEGTIVE FORCE CONSTANT SPECIFIED. NOTHING DONE.'
+     &call warning(whoami, ' NEGTIVE FORCE CONSTANT SPECIFIED. NOTHING DONE.', 0)
        cv%kpara=k
        cv_common_kpara_initialized=.true.
        end subroutine cv_common_set_kpara
@@ -1790,7 +1790,7 @@ write(msg___,*)'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.';w
        character(len=19) :: whoami
        data whoami /' CV_BASE_SET_KPERP>'/
        if (k.lt.0d0) &
-     & write(0,*) 'WARNING FROM: ',whoami,': ',' NEGTIVE FORCE CONSTANT SPECIFIED. NOTHING DONE.'
+     & call warning(whoami, ' NEGTIVE FORCE CONSTANT SPECIFIED. NOTHING DONE.', 0)
        cv%kperp=k
        cv_common_kperp_initialized=.true.
        end subroutine cv_common_set_kperp
@@ -1834,10 +1834,10 @@ write(msg___,*)'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.';w
         if (i.gt.0.and.i.le.cv%num_cv) then
          cv%r(i,col)=z
         else
-         write(0,*) 'WARNING FROM: ',whoami,': ','INVALID COLUMN. NOTHING DONE.'
+         call warning(whoami, 'INVALID COLUMN. NOTHING DONE.', 0)
         endif
        else
-        write(0,*) 'WARNING FROM: ',whoami,': ','INVALID CV INDEX. NOTHING DONE.'
+        call warning(whoami, 'INVALID CV INDEX. NOTHING DONE.', 0)
        endif
        end subroutine cv_common_set_r
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -1898,11 +1898,11 @@ write(msg___,*)'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.';w
        data whoami /' CV_BASE_RMSD>'/
 ! start
        if (cv%num_cv.eq.0) then
-        write(0,*) 'WARNING FROM: ',whoami,': ','NO CV DEFINED. EXITING.'
+        call warning(whoami, 'NO CV DEFINED. EXITING.', 0)
         return
        endif
        if (.not.cv_common_weights_initialized) then
-        write(0,*) 'WARNING FROM: ',whoami,': ','CV WEIGHTS NOT INITIALIZED.'
+        call warning(whoami, 'CV WEIGHTS NOT INITIALIZED.', 0)
        endif
 !
 ! NOTE: might be a good idea to force the (re)computation of weights before this call
@@ -1940,7 +1940,7 @@ write(msg___,*)'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.';w
 ! & *(1.0d0/sum(cv%weight(1:cv%num_cv)**2)) ! weight, average
 ! & ) ! sqrt
        else
-        write(0,*) 'WARNING FROM: ',whoami,': ','OUT OF BOUNDS. NOTHING DONE.'
+        call warning(whoami, 'OUT OF BOUNDS. NOTHING DONE.', 0)
        endif
        end function cv_common_rmsd
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -2026,7 +2026,7 @@ write(msg___,*)'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.';w
        data whoami /' CV_BASE_PRINT_REX_MAP>'/
 ! begin
        if (.not.cv_common_rex_initialized) then
-        write(0,*) 'WARNING FROM: ',whoami,': ','REX NOT INITIALIZED. NOTHING DONE.'
+        call warning(whoami, 'REX NOT INITIALIZED. NOTHING DONE.', 0)
         return
        endif
 !
@@ -2058,7 +2058,7 @@ write(msg___,*)'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.';w
         if (ME_STRNG.eq.0) then
          read(iunit,*) cv%rex_map(1:nstring) ! first row contains indices 0 -- nstring-1
          read(iunit,*) cv%rex_map(1:nstring) ! second row is what we want
-         if (any(cv%rex_map.lt.0)) write(0,*) 'WARNING FROM: ',whoami,': ','READ NEGATIVE RANK.'
+         if (any(cv%rex_map.lt.0)) call warning(whoami, 'READ NEGATIVE RANK.', 0)
         endif ! ME_
         if (SIZE_STRNG.gt.1) &
      & call mpi_bcast(cv%rex_map,nstring,MPI_INTEGER,0,MPI_COMM_STRNG,ierror)
@@ -2238,7 +2238,7 @@ write(msg___,*)'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.';w
         if (ME_STRNG.eq.0) then
          read(iunit,*) cv%voronoi_map(1:nstring) ! first row contains indices 0 -- nstring-1
          read(iunit,*) cv%voronoi_map(1:nstring) ! second row is what we want
-         if (any(cv%voronoi_map.lt.0)) write(0,*) 'WARNING FROM: ',whoami,': ','READ NEGATIVE RANK.'
+         if (any(cv%voronoi_map.lt.0)) call warning(whoami, 'READ NEGATIVE RANK.', 0)
         endif ! ME_
         if (SIZE_STRNG.gt.1) &
      & call mpi_bcast(cv%voronoi_map,nstring,MPI_INTEGER,0,MPI_COMM_STRNG,ierror)
@@ -2348,7 +2348,7 @@ write(msg___,*)'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.';w
 ! begin
 !
        if (cv%num_cv.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','NO CV DEFINED. NOTHING DONE.'
+         call warning(whoami, 'NO CV DEFINED. NOTHING DONE.', 0)
          return
        endif
 !
@@ -2403,7 +2403,7 @@ write(msg___,*)'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.';w
         if (qroot) then
 !
          if (.not.cv_common_Minv_initialized) then
-          write(0,*) 'WARNING FROM: ',whoami,': ','TENSOR M^-1 HAS NOT BEEN SET.'
+          call warning(whoami, 'TENSOR M^-1 HAS NOT BEEN SET.', 0)
          endif
 !
          me=mestring+1
@@ -2425,7 +2425,7 @@ write(msg___,*)'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.';w
          call MPI_ALLREDUCE(correct_cell_me, correct_cell, 1, &
      & MPI_INTEGER, MPI_MIN, MPI_COMM_STRNG, ierror)
          if (correct_cell.eq.0) then
-          write(0,*) 'WARNING FROM: ',whoami,': ',' CURRENT VORONOI CELL CENTERS INCONSISTENT WITH COORDINATES.'
+          call warning(whoami, ' CURRENT VORONOI CELL CENTERS INCONSISTENT WITH COORDINATES.', 0)
 ! roll back CVs
            cv%r(1:cv%num_cv,1)=cv%rall(1:cv%num_cv,me)
 !
@@ -2457,7 +2457,7 @@ write(msg___,*)'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.';w
             endif
             exit
            elseif (iter.ge.max_iter) then
-            write(0,*) 'WARNING FROM: ',whoami,': ',' MAXIMUM NUMBER OF ITERATIONS EXCEEDED.'
+            call warning(whoami, ' MAXIMUM NUMBER OF ITERATIONS EXCEEDED.', 0)
 ! reset cv's to consistent Voronoi cell centers :
             cv%r(1:cv%num_cv,1)=cv%rall(1:cv%num_cv,me)
             cv%M(1:cv%num_cv,1:cv%num_cv,3)=cv%Mall(:,:,me)
@@ -2614,12 +2614,12 @@ write(msg___,*)'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.';w
        data whoami /' CV_BASE_VORONOI_COMPUTE>'/
 !
        if (cv%num_cv.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','NO CV DEFINED. NOTHING DONE.'
+         call warning(whoami, 'NO CV DEFINED. NOTHING DONE.', 0)
          return
        endif
 !
        if (.not.cv_common_Minv_initialized) then
-        write(0,*) 'WARNING FROM: ',whoami,': ','TENSOR M^-1 HAS NOT BEEN SET.'
+        call warning(whoami, 'TENSOR M^-1 HAS NOT BEEN SET.', 0)
        endif
 ! initialize, if necessary
        if (.not.cv_common_voronoi_initialized) call cv_common_voronoi_init()
@@ -3006,7 +3006,7 @@ write(msg___,*)'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.';w
        qroot=(MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.ME_STRNG.eq.0)
 !
        if (cv%num_cv.eq.0) then
-        write(0,*) 'WARNING FROM: ',whoami,': ',' NO CV DEFINED. NOTHING DONE.'
+        call warning(whoami, ' NO CV DEFINED. NOTHING DONE.', 0)
         return
        endif
 !
@@ -3022,7 +3022,7 @@ write(msg___,*)'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.';w
        if (qroot) then ! only root does the work
 ! check for undefined values
        if (any(rin(1:cv%num_cv,:).eq.unknownf)) &
-     & write(0,*) 'WARNING FROM: ',whoami,': ','SOME CV VALUES ARE UNDEFINED'
+     & call warning(whoami, 'SOME CV VALUES ARE UNDEFINED', 0)
 ! compute arclength
         dr=rin(:,2:num_rep_in)-rin(:,1:num_rep_in-1)
         s(1)=0
@@ -3065,7 +3065,7 @@ write(msg___,*)'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.';w
            rout(i,:)=rr_out
          enddo
         else
-         write(0,*) 'WARNING FROM: ',whoami,': ','NO VALID INTERPOLATION METHODS SELECTED'
+         call warning(whoami, 'NO VALID INTERPOLATION METHODS SELECTED', 0)
         endif ! interp_method
 !
 ! write output file

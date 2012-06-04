@@ -1,3 +1,5 @@
+/*#define __WRN(__WHO,__MSG) write(0,*) 'WARNING FROM: ',__WHO,': ',__MSG*/
+/*#define __PRINT(__MSG) write(0,'(A)') __MSG*/
 /*COORDINATES AND MASSES:*/
 /*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
 /*
@@ -94,12 +96,12 @@
       call quat_reset_calculate(.true.) ! make sure that quaternions recalculate their values + derivatives
 !
       if (.not.cv_common_weights_initialized) then
-       write(0,*) 'WARNING FROM: ',whoami,': ',' CV WEIGHTS NOT INITIALIZED. WILL COMPUTE FROM M^-1(X)'
+       call warning(whoami, ' CV WEIGHTS NOT INITIALIZED. WILL COMPUTE FROM M^-1(X)', 0)
        call smcv_compute_wgt(x,y,z,mass)
       endif
 ! for off-path sampling, determine tangent vector
       if (planar_on.and..not.cv_common_dz_initialized) then
-       write(0,*) 'WARNING FROM: ',whoami,': ',' PATH TANGENT NOT INITIALIZED. WILL COMPUTE FROM CV.'
+       call warning(whoami, ' PATH TANGENT NOT INITIALIZED. WILL COMPUTE FROM CV.', 0)
        call cv_common_compute_dr()
       endif
 ! for off-path sampling simulations, need to compute dimensional k from koffp
@@ -107,7 +109,7 @@
 ! may be recoded in the future
 ! NOTE: this operation will destroy the current contents of the cv%k array
       if (planar_on.and..not.cv_common_k_initialized) then
-       write(0,*) 'WARNING FROM: ',whoami,': ',' FORCE CONSTANTS FOR PLANAR SAMPLING UNDEFINED.'
+       call warning(whoami, ' FORCE CONSTANTS FOR PLANAR SAMPLING UNDEFINED.', 0)
         write(msg___, 6765) whoami, whoami, whoami ; call plainmessage(msg___,3)
  6765 format(/A, 'COMPUTING FORCE CONSTANTS FOR RESTRAINED ',/, &
      & A, 'DYNAMICS BY SCALING KPAR WITH CV WEIGHTS.',/, &
@@ -461,7 +463,7 @@
           if (.not. qgrp) call cv_cvrms_calc(i,x,y,z,mass,fx,fy,fz, &
      & calctheta,deriv,addforce)
           case default
-           write(0,*) 'WARNING FROM: ',whoami,': ','UNKNOWN CV SPECIFIED.'
+           call warning(whoami, 'UNKNOWN CV SPECIFIED.', 0)
        end select
 ! update force prefactor (planar sampling)
        fpre=fpre+cv%r(i,forces2)*cv%r(i,dz)/cv%weight(i) ! for planar force; incorrect for inactive cv or cvrms; also obsolete
@@ -539,7 +541,7 @@
            call cv_cvrms_calc(i,x,y,z,mass,fx,fy,fz, &
      & qgrp, qgrp, addforce,f)
           case default
-           write(0,*) 'WARNING FROM: ',' SMCV_ADDFORCE>',': ','UNKNOWN CV SPECIFIED.'
+           call warning(' SMCV_ADDFORCE>', 'UNKNOWN CV SPECIFIED.', 0)
         end select
        enddo ! over all cv
       endif ! planar_on
@@ -576,7 +578,7 @@
       if (.not.cv_common_grad_initialized) call cv_common_grad_init() ! allocate cv%grad array (for derivatives)
 ! loop over all cv and make calls by type
       if (cv%num_cv.eq.0) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','NO CV DEFINED.'
+       call warning(whoami, 'NO CV DEFINED.', 0)
       endif
 !
       calctheta=.true. ! compute cv values
@@ -656,7 +658,7 @@
            cycle ! continue without updating average since it would be incorrect
           endif
          case default
-         write(0,*) 'WARNING FROM: ',whoami,': ','UNKNOWN CV SPECIFIED.'
+         call warning(whoami, 'UNKNOWN CV SPECIFIED.', 0)
         end select
 ! update running average
 ! add history
@@ -843,7 +845,7 @@
 !
 ! loop over all cv and make calls by type
       if (cv%num_cv.eq.0) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','NO CV DEFINED.'
+       call warning(whoami, 'NO CV DEFINED.', 0)
       endif
 !
       calctheta=.true. ! compute cv values
@@ -894,7 +896,7 @@
           call cv_cvrms_calc(i,x,y,z,mass,x,y,z,calctheta, &
      & deriv,.false.)
          case default
-         write(0,*) 'WARNING FROM: ',whoami,': ','UNKNOWN CV SPECIFIED.'
+         call warning(whoami, 'UNKNOWN CV SPECIFIED.', 0)
         end select
        enddo ! loop over cv
 !
@@ -977,8 +979,6 @@
 ! oldiol=iolev
 ! iolev=1 ! so that vinqre works
 !#endif
-
-
 
 ! DYNAMOL does not store restart fid;
 ! furthermore, files are not kept open (so that they are complete in the case of a crash)
@@ -1094,7 +1094,7 @@
 !
 ! loop over all cv and make calls by type
       if (cv%num_cv.eq.0) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','NO CV DEFINED.'
+       call warning(whoami, 'NO CV DEFINED.', 0)
       endif
       do i=1, cv%num_cv
        select case(cv%type(i))
@@ -1112,7 +1112,7 @@
 ! dcv=cv_dist_com_grad_dot_dr(i,rx,ry,rz)
 ! case(cvrms);
 ! dcv=cv_cvrms_grad_dot_dr(i,rx,ry,rz)
-        case default; write(0,*) 'WARNING FROM: ',whoami,': ','UNKNOWN CV SPECIFIED.'
+        case default; call warning(whoami, 'UNKNOWN CV SPECIFIED.', 0)
        end select
        cv%r(i,col)=dcv
       enddo ! loop over cv
@@ -1139,7 +1139,7 @@
 !
 ! loop over all cv and make calls by type
       if (cv%num_cv.eq.0) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','NO CV DEFINED.'
+       call warning(whoami, 'NO CV DEFINED.', 0)
       endif
       do i=1, cv%num_cv
        dummy=cv%r(i,col)
@@ -1158,7 +1158,7 @@
 ! call cv_dist_com_dcv_dot_grad(i,rx,ry,rz,dummy)
 ! case(cvrms);
 ! call cv_cvrms_dcv_dot_grad(i,rx,ry,rz,dummy)
-        case default; write(0,*) 'WARNING FROM: ',whoami,': ','UNKNOWN CV SPECIFIED.'
+        case default; call warning(whoami, 'UNKNOWN CV SPECIFIED.', 0)
        end select
       enddo ! loop over cv
 !
@@ -1182,7 +1182,7 @@
       deriv=.true.
 ! loop over all cv and make calls by type
       if (cv%num_cv.eq.0) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','NO CV DEFINED.'
+       call warning(whoami, 'NO CV DEFINED.', 0)
       endif
       do i=1, cv%num_cv
        select case(cv%type(i))
@@ -1206,7 +1206,7 @@
          call cv_dist_com_calc(i,x,y,z,mass,x,y,z,calcz,deriv,.false.)
         case(cvrms);
          call cv_cvrms_calc(i,x,y,z,mass,x,y,z,calcz,deriv,.false.)
-        case default; write(0,*) 'WARNING FROM: ',whoami,': ','UNKNOWN CV SPECIFIED.'
+        case default; call warning(whoami, 'UNKNOWN CV SPECIFIED.', 0)
        end select
 ! now cv%r(i,instant) is filled
        if (present(c)) then
@@ -1235,12 +1235,12 @@
       error=0d0
 !
       if (cv%num_cv.eq.0) then
-       write(0,*) 'WARNING FROM: ',whoami,': ',' NO CV DEFINED.'
+       call warning(whoami, ' NO CV DEFINED.', 0)
        return
       endif
 !
       if (h.eq.0d0) then
-       write(0,*) 'WARNING FROM: ',whoami,': ',' COORDINATE PERTURBATION ZERO.'
+       call warning(whoami, ' COORDINATE PERTURBATION ZERO.', 0)
        return
       endif
 !
@@ -1342,14 +1342,14 @@
       smcv_test_parallel=>error
 !
       if (cv%num_cv.eq.0) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','NO CV DEFINED.'
+       call warning(whoami, 'NO CV DEFINED.', 0)
        return
       endif
 !
       qgrp=(MPI_COMM_LOCAL.ne.MPI_COMM_NULL) &
      & .and.(SIZE_LOCAL.gt.1)
       if (.not. qgrp) then ! quit if cannot run in parallel
-       write(0,*) 'WARNING FROM: ',whoami,': ',' CANNOT PERFORM TEST ON 1-PROCESSOR GROUPS'
+       call warning(whoami, ' CANNOT PERFORM TEST ON 1-PROCESSOR GROUPS', 0)
        return
       endif
 ! save values & force a serial calculation
@@ -1439,7 +1439,7 @@
         case(cvrms);
          call cv_cvrms_calc(i,x,y,z,mass,x,y,z,calcz,deriv,addforce)
         case default
-         write(0,*) 'WARNING FROM: ',whoami,': ','UNKNOWN CV SPECIFIED.'
+         call warning(whoami, 'UNKNOWN CV SPECIFIED.', 0)
        end select
        rtemp(i)=cv%r(i,instant)
       enddo
@@ -1487,7 +1487,7 @@
       data whoami /' SMCV_VORONOI_COMPUTE>'/
 ! loop over all cv and make calls by type
       if (cv%num_cv.eq.0) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','NO CV DEFINED.'
+       call warning(whoami, 'NO CV DEFINED.', 0)
       endif
 !
       qstring=(MPI_COMM_STRNG.ne.MPI_COMM_NULL) &
@@ -1581,7 +1581,7 @@
         case(cvrms);
          call cv_cvrms_calc(i,x,y,z,mass,x,y,z,calcz,deriv,addforce)
         case default
-         write(0,*) 'WARNING FROM: ',whoami,': ','UNKNOWN CV SPECIFIED.'
+         call warning(whoami, 'UNKNOWN CV SPECIFIED.', 0)
        end select
        rtemp(i)=cv%r(i,instant)
       enddo
@@ -1755,7 +1755,7 @@
       data whoami /' SMCV_VORONOI_SMART_UPDATE>'/
 ! loop over all cv and make calls by type
       if (cv%num_cv.eq.0) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','NO CV DEFINED.'
+       call warning(whoami, 'NO CV DEFINED.', 0)
       endif
 ! compute theta(x) -- note this is possibly redundant!
       calcz=.true. ; deriv=.false. ; addforce=.false.
@@ -1787,7 +1787,7 @@
          case(cvrms);
           call cv_cvrms_calc(i,x,y,z,mass,x,y,z,calcz,deriv,addforce)
          case default
-          write(0,*) 'WARNING FROM: ',whoami,': ','UNKNOWN CV SPECIFIED.'
+          call warning(whoami, 'UNKNOWN CV SPECIFIED.', 0)
         end select
         rnew(i)=cv%r(i,instant)
       enddo
@@ -1842,7 +1842,7 @@
           call cv_cvrms_calc(i,xcomp,ycomp,zcomp,mass, &
      & xcomp,ycomp,zcomp,calcz,deriv,addforce)
          case default
-          write(0,*) 'WARNING FROM: ',whoami,': ','UNKNOWN CV SPECIFIED.'
+          call warning(whoami, 'UNKNOWN CV SPECIFIED.', 0)
         end select
         rold(i)=cv%r(i,instant)
         cv%r(i,instant)=rnew(i) ! restore correct instantaneous values (note, if frames are present, they will have incorrect axes)
@@ -1881,7 +1881,7 @@
      & .and.ME_STRNG.eq.0
 !
       do i=1, cv%num_cv
-       if (qprint) then ; write(msg___,666) whoami,i ; write(0,'(A)') msg___ ; endif
+       if (qprint) then ; write(msg___,666) whoami,i ; call plainmessage(msg___) ; endif
  666 format(A,' CV # ',I8,':')
        select case (cv%type(i))
          case (posi_com_x, posi_com_y, posi_com_z);
@@ -1898,7 +1898,7 @@
          case (cvrms); call cv_cvrms_list(i)
 !
          case default
-          write(0,*) 'WARNING FROM: ',whoami,': ','UNEXPECTED CV SPECIFIED.'
+          call warning(whoami, 'UNEXPECTED CV SPECIFIED.', 0)
        end select
       enddo ! over all cv
       end subroutine smcv_list
