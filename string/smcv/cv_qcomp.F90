@@ -1,3 +1,5 @@
+/*#define __WRN(__WHO,__MSG) write(0,*) 'WARNING FROM: ',__WHO,': ',__MSG*/
+/*#define __PRINT(__MSG) write(0,'(A)') __MSG*/
 /*COORDINATES AND MASSES:*/
 /*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
 /*
@@ -58,19 +60,19 @@
        if (fr1.ge.0.and.fr1.le.frames%num_frames) then
         f1=fr1
        else
-        write(0,*) 'WARNING FROM: ',whoami,': ',' INVALID FRAME SPECIFIED. WILL USE FIXED COORDINATE SYSTEM.'
+        call warning(whoami, ' INVALID FRAME SPECIFIED. WILL USE FIXED COORDINATE SYSTEM.', 0)
         f1=0
        endif
 !
        if (fr2.ge.0.and.fr2.le.frames%num_frames) then
         f2=fr2
        else
-        write(0,*) 'WARNING FROM: ',whoami,': ',' INVALID FRAME SPECIFIED. WILL USE FIXED COORDINATE SYSTEM.'
+        call warning(whoami, ' INVALID FRAME SPECIFIED. WILL USE FIXED COORDINATE SYSTEM.', 0)
         f2=0
        endif
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        if ( f1.eq.f2 ) then
-        write(0,*) 'WARNING FROM: ',whoami,': ',' FRAMES CANNOT BE THE SAME. NOTHING DONE.'
+        call warning(whoami, ' FRAMES CANNOT BE THE SAME. NOTHING DONE.', 0)
         return
        endif
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -81,7 +83,7 @@
         case (qcomp_3); pos='3'
         case (qcomp_4); pos='4'
         case default;
-         write(0,*) 'WARNING FROM: ',whoami,': ','UNKNOWN CV TYPE. NOTHING DONE.'
+         call warning(whoami, 'UNKNOWN CV TYPE. NOTHING DONE.', 0)
          return
        end select
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -99,7 +101,7 @@
        if ( .not. found ) then
          j=quat_add(f1, f2)
          if (j.eq.0) then
-          write(0,*) 'WARNING FROM: ',whoami,': ',' COULD NOT ADD QUATERNION. NOTHING DONE.'
+          call warning(whoami, ' COULD NOT ADD QUATERNION. NOTHING DONE.', 0)
           cv_qcomp_add=.false.
           return
          endif
@@ -109,7 +111,7 @@
        do l=1, cv%num_cv
         if (cv%type(l).eq.type) then
          if (j.eq.cv%priv(l)%p(1)) then
-    write(msg___,*)' QUAT_',pos,'CV ALREADY PRESENT. NOTHING DONE.';write(0,*) 'WARNING FROM: ',whoami,': ',msg___
+    write(msg___,*)' QUAT_',pos,'CV ALREADY PRESENT. NOTHING DONE.';call warning(whoami, msg___, 0)
             cv_qcomp_add=.false.
             return
          endif
@@ -148,7 +150,7 @@
 !****************************************************************************************
         cv_qcomp_add=.true.
        else ! out of bounds
-        write(msg___,*)' ERROR ADDING QCOMP_',pos,'CV. NOTHING DONE.';write(0,*) 'WARNING FROM: ',whoami,': ',msg___
+        write(msg___,*)' ERROR ADDING QCOMP_',pos,'CV. NOTHING DONE.';call warning(whoami, msg___, 0)
         cv_qcomp_add=.false.
        endif
        end function cv_qcomp_add
@@ -264,14 +266,14 @@
         case (qcomp_3); pos='Y'
         case (qcomp_4); pos='Z'
         case default;
-         write(0,*) 'WARNING FROM: ',whoami,': ','UNKNOWN CV TYPE. NOTHING DONE.'
+         call warning(whoami, 'UNKNOWN CV TYPE. NOTHING DONE.', 0)
          return
        end select
 !
        if (ME_STRNG.eq.0) then
         iq=cv%priv(i)%p(1)
         write(msg___,'(A)') '\t '//pos//'-COMPONENT OF' ; 
-        write(0,'(A)') msg___
+        call plainmessage(msg___)
         call quat_list(iq)
        endif
 !

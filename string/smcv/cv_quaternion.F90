@@ -1,3 +1,5 @@
+/*#define __WRN(__WHO,__MSG) write(0,*) 'WARNING FROM: ',__WHO,': ',__MSG*/
+/*#define __PRINT(__MSG) write(0,'(A)') __MSG*/
 /*COORDINATES AND MASSES:*/
 /*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
 /*
@@ -143,19 +145,19 @@
        if (fr1.ge.0.and.fr1.le.frames%num_frames) then
         f1=fr1
        else
-        write(0,*) 'WARNING FROM: ',whoami,': ',' INVALID FRAME SPECIFIED. WILL USE FIXED COORDINATE SYSTEM.'
+        call warning(whoami, ' INVALID FRAME SPECIFIED. WILL USE FIXED COORDINATE SYSTEM.', 0)
         f1=0
        endif
 !
        if (fr2.ge.0.and.fr2.le.frames%num_frames) then
         f2=fr2
        else
-        write(0,*) 'WARNING FROM: ',whoami,': ',' INVALID FRAME SPECIFIED. WILL USE FIXED COORDINATE SYSTEM.'
+        call warning(whoami, ' INVALID FRAME SPECIFIED. WILL USE FIXED COORDINATE SYSTEM.', 0)
         f2=0
        endif
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        if ( f1.eq.f2 ) then
-        write(0,*) 'WARNING FROM: ',whoami,': ',' ERROR: FRAMES CANNOT BE THE SAME. NOTHING DONE.'
+        call warning(whoami, ' ERROR: FRAMES CANNOT BE THE SAME. NOTHING DONE.', 0)
         return
        endif
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -211,11 +213,11 @@
          call int_vector_done(unique_amap_ptr)
 !
         else ! out of bounds
-         write(0,*) 'WARNING FROM: ',whoami,': ',' ERROR ADDING QUATERNION. NOTHING DONE.'
+         call warning(whoami, ' ERROR ADDING QUATERNION. NOTHING DONE.', 0)
          quat_add=0
         endif
        else ! found
-         write(0,*) 'WARNING FROM: ',whoami,': ',' EQUIVALENT QUATERNION ALREADY PRESENT. NOTHING DONE.'
+         call warning(whoami, ' EQUIVALENT QUATERNION ALREADY PRESENT. NOTHING DONE.', 0)
          quat_add=0
        endif
        end function quat_add
@@ -242,9 +244,9 @@
         f1=quat%priv(i)%p(1)
         f2=quat%priv(i)%p(2)
 !
-        write(msg___,'(A)') '\t ORIENTATION QUATERNION BETWEEN TWO FRAMES' ; write(0,'(A)') msg___
-        write(msg___,'(A,I5)') '\t FRAME: ',f1 ; write(0,'(A)') msg___
-        write(msg___,'(A,I5)') '\t FRAME: ',f2 ; write(0,'(A)') msg___
+        write(msg___,'(A)') '\t ORIENTATION QUATERNION BETWEEN TWO FRAMES' ; call plainmessage(msg___)
+        write(msg___,'(A,I5)') '\t FRAME: ',f1 ; call plainmessage(msg___)
+        write(msg___,'(A,I5)') '\t FRAME: ',f2 ; call plainmessage(msg___)
        endif
 !
        end subroutine quat_list
@@ -277,13 +279,13 @@
        data whoami /' QUAT_CALC>'/
 ! check for initialization
        if (.not.quat_initialized) then
-        write(0,*) 'WARNING FROM: ',whoami,': ','NO QUATERNIONS DEFINED. NOTHING DONE.'
+        call warning(whoami, 'NO QUATERNIONS DEFINED. NOTHING DONE.', 0)
         return
        endif
 !
 ! check frame number:
        if (i.lt.1.or.i.gt.quat%num_quat) then
-        write(0,*) 'WARNING FROM: ',whoami,': ','OUT OF BOUNDS. NOTHING DONE.'
+        call warning(whoami, 'OUT OF BOUNDS. NOTHING DONE.', 0)
         return
        endif
 !
@@ -894,14 +896,14 @@
 !
 ! check for initialization
        if (.not.quat_initialized) then
-! write(0,*) 'WARNING FROM: ',whoami,': ','NO quat DEFINED. NOTHING DONE.'
+! call warning(whoami, 'NO quat DEFINED. NOTHING DONE.', 0)
         return
        endif
 !
        if (present(i)) then ! reset ith frame
 ! check frame number:
         if (i.lt.1.or.i.gt.quat%num_quat) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','OUT OF BOUNDS. NOTHING DONE.'
+         call warning(whoami, 'OUT OF BOUNDS. NOTHING DONE.', 0)
          return
         endif
         quat%recalculate(i)=.true.

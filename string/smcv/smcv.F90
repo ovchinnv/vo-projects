@@ -1,3 +1,5 @@
+/*#define __WRN(__WHO,__MSG) write(0,*) 'WARNING FROM: ',__WHO,': ',__MSG*/
+/*#define __PRINT(__MSG) write(0,'(A)') __MSG*/
 /*COORDINATES AND MASSES:*/
 /*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
 /*
@@ -173,7 +175,7 @@
         if (find_tag(comlyn, 'VCUT', comlen).gt.0) then
          voro_cut=atof(get_remove_parameter(comlyn, 'VCUT', comlen), 0d0)
          if (voro_cut.le.0d0) then
-          write(0,*) 'WARNING FROM: ',whoami,': ','VCUT MUST BE POSITIVE. NOT SET.'
+          call warning(whoami, 'VCUT MUST BE POSITIVE. NOT SET.', 0)
          else
           call cv_common_voronoi_set_cutoff(voro_cut)
          endif
@@ -182,12 +184,12 @@
         if (voronoi_allow_cross) then
          voronoi_update_freq=atoi(get_remove_parameter(comlyn, 'VCRF', comlen), 0)
          if (voronoi_update_freq.le.0) then
-          write(0,*) 'WARNING FROM: ',whoami,': ','MUST SPECIFY POSITIVE VCRF. VORONOI CELL CROSSING DISABLED.'
+          call warning(whoami, 'MUST SPECIFY POSITIVE VCRF. VORONOI CELL CROSSING DISABLED.', 0)
           voronoi_allow_cross=.false.
          elseif (find_tag(comlyn, 'VINI', comlen).gt.0) then ! if vini is present
           voronoi_nocross_ini=atoi(get_remove_parameter(comlyn, 'VINI', comlen), 0) ! get it
           if (voronoi_nocross_ini.le.0) then
-           write(0,*) 'WARNING FROM: ',whoami,': ','NONPOSITIVE VINI SPECIFIED. WILL SET TO ZERO.'
+           call warning(whoami, 'NONPOSITIVE VINI SPECIFIED. WILL SET TO ZERO.', 0)
            voronoi_nocross_ini=0
           endif ! voronoi_nocross_ini>0
          else
@@ -214,7 +216,7 @@
 !
         if (voronoi_check_map) then
          if (qprint) then
-          write(msg___, 660) whoami ; write(0,'(A)') msg___
+          write(msg___, 660) whoami ; call plainmessage(msg___)
          endif
  660 FORMAT(A,' CHECKING VORONOI MAP AGAINST CURRENT COORDINATES.')
 !
@@ -236,11 +238,11 @@
             call mpi_bcast(ok,1,MPI_INTEGER4,0,MPI_COMM_LOCAL,ierror)
            endif
            if (.not.ok) then
-            write(0,*) 'WARNING FROM: ',whoami,': ','VORONOI MAP INCONSISTENT WITH CURRENT COORDINATES. ABORTING.'
+            call warning(whoami, 'VORONOI MAP INCONSISTENT WITH CURRENT COORDINATES. ABORTING.', 0)
             return
            endif ! .not. ok
          else ! voronoi map invalid (or was not read); proceed anyway using current whereami
-          write(0,*) 'WARNING FROM: ',whoami,': ','VORONOI MAP CONTAINS INVALID ENTRIES.'
+          call warning(whoami, 'VORONOI MAP CONTAINS INVALID ENTRIES.', 0)
          endif ! voronoi_map.ne.-1
 !
         else
@@ -312,19 +314,19 @@
         repl_x_temp=atof(get_remove_parameter(comlyn, 'REXT', comlen), 0d0)
 !
         if (repl_x_freq.le.0) then
-          write(0,*) 'WARNING FROM: ',whoami,': ','MUST SPECIFY POSITIVE REXF. REPLICA EXCHANGE IS OFF.'
+          call warning(whoami, 'MUST SPECIFY POSITIVE REXF. REPLICA EXCHANGE IS OFF.', 0)
           repl_x_on=.false.
 !
         elseif (repl_x_temp.le.0) then
-          write(0,*) 'WARNING FROM: ',whoami,': ','MUST SPECIFY POSITIVE REXT. REPLICA EXCHANGE IS OFF.'
+          call warning(whoami, 'MUST SPECIFY POSITIVE REXT. REPLICA EXCHANGE IS OFF.', 0)
           repl_x_on=.false.
         elseif (voronoi_hist_on) then
-          write(0,*) 'WARNING FROM: ',whoami,': ','REPLICA EXCHANGE INCOMPATIBLE WITH V. TESSELATION. REX IS OFF.'
+          call warning(whoami, 'REPLICA EXCHANGE INCOMPATIBLE WITH V. TESSELATION. REX IS OFF.', 0)
           repl_x_on=.false.
         elseif (evolve_cv_on.and.mod(repl_x_freq,evolve_freq).gt.0) then
-          write(0,*) 'WARNING FROM: ',whoami,': ','REPLICA SWAP ATTEMPT FREQ. NOT A MULTIPLE OF EVOLUTION FREQ.'
+          call warning(whoami, 'REPLICA SWAP ATTEMPT FREQ. NOT A MULTIPLE OF EVOLUTION FREQ.', 0)
         elseif (repa_on.and.mod(repl_x_freq,repa_freq).gt.0) then
-          write(0,*) 'WARNING FROM: ',whoami,': ','REPLICA SWAP ATTEMPT FREQ. NOT A MULTIPLE OF REPA. FREQ.'
+          call warning(whoami, 'REPLICA SWAP ATTEMPT FREQ. NOT A MULTIPLE OF REPA. FREQ.', 0)
         else ! OK
           call cv_common_rex_set_temp(repl_x_temp)
         endif
@@ -338,15 +340,15 @@
 !cccccccccccccccccc STRING METHOD OPTIONS cccccccccccccccccccccc
        if (qprint) then
         WRITE (msg___,'(2A)') &
-     & whoami, ' STRING METHOD ENABLED.' ; write(0,'(A)') msg___
+     & whoami, ' STRING METHOD ENABLED.' ; call plainmessage(msg___)
         if (evolve_cv_on) then
             WRITE (msg___,'(/,2A,/,2A,I7,A)') &
      & whoami, ' STRING EVOLUTION ENABLED.', &
      & whoami, ' WILL EVOLVE AFTER EVERY ', &
-     & evolve_freq,' ITERATIONS.' ; write(0,'(A)') msg___
+     & evolve_freq,' ITERATIONS.' ; call plainmessage(msg___)
             WRITE (msg___,'(2A,I7,A)') &
      & whoami, ' THE FIRST', evolve_nskip, &
-     & ' ITERATIONS WILL NOT CONTRIBUTE TO AVERAGES.' ; write(0,'(A)') msg___
+     & ' ITERATIONS WILL NOT CONTRIBUTE TO AVERAGES.' ; call plainmessage(msg___)
 ! type of evolution
             i=0;
             if (evolve_expo_on) i=i+1
@@ -355,7 +357,7 @@
             if (evolve_smooth_on) i=i+1
 !
             if (i.gt.1) then
-             write(0,*) 'WARNING FROM: ',whoami,': ','MORE THAN ONE EVOLUTION SCHEME REQUESTED. WILL USE SMCV.'
+             call warning(whoami, 'MORE THAN ONE EVOLUTION SCHEME REQUESTED. WILL USE SMCV.', 0)
              evolve_expo_on=.false.
              evolve_aver_on=.false.
              evolve_smooth_on=.false.
@@ -363,52 +365,52 @@
             endif
 !
             if (evolve_expo_on) then
-               write(msg___,671) whoami, whoami, evolve_expo_mem ; write(0,'(A)') msg___
+               write(msg___,671) whoami, whoami, evolve_expo_mem ; call plainmessage(msg___)
  671 format(A,' CV EVOLUTION WILL BE OF THE FORM:',/, &
      & A,' Z(N+1)=A*Z(N)+(1-A)*<THETA>, A=',F9.5,'.')
             elseif (evolve_aver_on) then
-               write(msg___,6710) whoami, whoami, num_ave_cv_samples ; write(0,'(A)') msg___
+               write(msg___,6710) whoami, whoami, num_ave_cv_samples ; call plainmessage(msg___)
  6710 format(A,' CV EVOLUTION WILL BE OF THE FORM:',/, &
      &A,' Z(N+1)=AVERAGE(THETA).  INITIAL NUMBER OF SAMPLES IS ',I5,'.')
             elseif (evolve_smooth_on) then
-               write(msg___,672) whoami, whoami, evolve_smooth_d ; write(0,'(A)') msg___
+               write(msg___,672) whoami, whoami, evolve_smooth_d ; call plainmessage(msg___)
  672 format(A,' WILL EVOLVE CV BY SMOOTHING MD TRAJECTORY',/, &
      & A,' USING FILTER WIDTH D=',F8.3)
             elseif (evolve_bd_on) then
-               write(msg___,6720) whoami, whoami, evolve_step, evolve_bd_T ; write(0,'(A)') msg___
+               write(msg___,6720) whoami, whoami, evolve_step, evolve_bd_T ; call plainmessage(msg___)
  6720 format(A,' WILL EVOLVE CV USING BD ADVANCEMENT',/, &
      & A,' AT T=',F8.3,' WITH STEP=',F11.5)
             else
-               write(msg___,673) whoami, whoami, evolve_step ; write(0,'(A)') msg___
+               write(msg___,673) whoami, whoami, evolve_step ; call plainmessage(msg___)
  673 format(A,' WILL EVOLVE CV USING SMCV ADVANCEMENT ',/, &
      & A,' WITH STEP=',F11.5)
             endif ! evolve_expo
         endif ! evolve_cv_on
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
         if (repa_on) then
-          WRITE (msg___,666) whoami, repa_freq ; write(0,'(A)') msg___
+          WRITE (msg___,666) whoami, repa_freq ; call plainmessage(msg___)
  666 format(A,' WILL REPARAMETRIZE STRING AFTER EVERY ',I7, &
      & ' ITERATIONS.')
         endif ! repa_on
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-        if (hist_freq.gt.0) then ; write(msg___,667) whoami, hist_freq ; write(0,'(A)') msg___ ; endif
+        if (hist_freq.gt.0) then ; write(msg___,667) whoami, hist_freq ; call plainmessage(msg___) ; endif
  667 format(A,' WILL SAVE CV VALUES AFTER EVERY ', I7, ' ITERATIONS.')
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
         if (restrained_on.and..not.unrestrained_on) then
             WRITE (msg___,'(2A)') &
-     & whoami, ' WILL USE RESTRAINED DYNAMICS.' ; write(0,'(A)') msg___
+     & whoami, ' WILL USE RESTRAINED DYNAMICS.' ; call plainmessage(msg___)
         endif ! restrained
         if (unrestrained_on) then
             WRITE (msg___,'(2A)') &
-     & whoami, ' WILL USE UNRESTRAINED DYNAMICS.' ; write(0,'(A)') msg___
+     & whoami, ' WILL USE UNRESTRAINED DYNAMICS.' ; call plainmessage(msg___)
             unrestrained_eq0=0
-            WRITE (msg___,669) whoami, unrestrained_eq_steps ; write(0,'(A)') msg___
+            WRITE (msg___,669) whoami, unrestrained_eq_steps ; call plainmessage(msg___)
  669 format(A,' WILL EQUILIBRATE UNDER CV RESTRAINTS FOR ', &
      & I7, ' STEPS.')
         endif ! unrestrained
 !
         if (restrained_on.or.unrestrained_on) then
-            write(msg___,665) whoami, restrained_eq_steps ; write(0,'(A)') msg___
+            write(msg___,665) whoami, restrained_eq_steps ; call plainmessage(msg___)
             restrained_eq0=0
  665 format(A, ' WILL ADJUST TO NEW RESTRAINTS OVER ', &
      & I7, ' STEPS.')
@@ -416,30 +418,30 @@
 !
         if (planar_on) then
             write (msg___,'(2A)') whoami, &
-     & ' WILL RESTRAIN SYSTEM IN PLANE PERPENDICULAR TO PATH.' ; write(0,'(A)') msg___
+     & ' WILL RESTRAIN SYSTEM IN PLANE PERPENDICULAR TO PATH.' ; call plainmessage(msg___)
         endif
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
         if (stat_on) then
-            write(msg___,668) whoami, stat_freq ; write(0,'(A)') msg___
+            write(msg___,668) whoami, stat_freq ; call plainmessage(msg___)
  668 format(A, ' WILL OUTPUT STRING STATISTICS EVERY ', &
      & I7, ' STEPS.')
         endif
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
         if (repl_x_on) then
-            write(msg___,691) whoami, whoami, repl_x_freq, repl_x_temp ; write(0,'(A)') msg___
+            write(msg___,691) whoami, whoami, repl_x_freq, repl_x_temp ; call plainmessage(msg___)
  691 format(A, ' WILL ATTEMPT TO EXCHANGE NEIGHBORING REPLICAS ',/ &
      & A, ' ONCE IN EVERY ',I6,' ITERATIONS AT ',F8.3, ' K.')
         endif ! repl_x_on
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
         if (voronoi_hist_on) then
-            write(msg___,670) whoami ; write(0,'(A)') msg___
+            write(msg___,670) whoami ; call plainmessage(msg___)
  670 format(A, ' WILL COMPUTE FREE ENERGY ALONG STRING ', &
      & 'USING VORONOI TESSELLATION.' )
          if (voronoi_allow_cross) then
-          write(msg___,601) whoami ; write(0,'(A)') msg___
-          write(msg___,602) whoami, whoami, voronoi_update_freq ; write(0,'(A)') msg___
+          write(msg___,601) whoami ; call plainmessage(msg___)
+          write(msg___,602) whoami, whoami, voronoi_update_freq ; call plainmessage(msg___)
           if (voronoi_nocross_ini.gt.0) then
-           write(msg___, 603) whoami, whoami, voronoi_nocross_ini ; write(0,'(A)') msg___
+           write(msg___, 603) whoami, whoami, voronoi_nocross_ini ; call plainmessage(msg___)
           endif
  601 format(A, ' WILL ALLOW REPLICAS TO CROSS BETWEEN V. CELLS.')
  602 format(A, ' WILL UPDATE CROSSING STATISTICS ONCE IN EVERY',/, &
@@ -450,23 +452,23 @@
          if (voro_cut.gt.0d0) then
           write(msg___,'(2A,/2A,F11.7,A)') &
      & whoami,' STRING WILL BE RESTRICTED TO STAY WITHIN ', &
-     & whoami,' THE WEIGHTED DISTANCE ',voro_cut,' OF THE CELL CENTERS.' ; write(0,'(A)') msg___
+     & whoami,' THE WEIGHTED DISTANCE ',voro_cut,' OF THE CELL CENTERS.' ; call plainmessage(msg___)
          endif
          if (restrained_on.or.unrestrained_on) then
           write(msg___,'(2A,/2A)') &
      & whoami, ' STRING DYNAMICS SHOULD BE USED WITH CAUTION', &
-     & whoami, ' DURING VORONOI FE COMPUTATION.' ; write(0,'(A)') msg___
+     & whoami, ' DURING VORONOI FE COMPUTATION.' ; call plainmessage(msg___)
          endif
          if (evolve_cv_on.or.repa_on) then
           if (.not.voronoi_allow_cross) then
            write(msg___,'(2A,/2A)') &
      & whoami, ' STRING EVOLUTION AND REPARAMETRIZATION SHOULD', &
-     & whoami, ' BE USED WITH CAUTION DURING VORONOI FE COMPUTATION.' ; write(0,'(A)') msg___
+     & whoami, ' BE USED WITH CAUTION DURING VORONOI FE COMPUTATION.' ; call plainmessage(msg___)
           else
            write(msg___,'(2A,/2A,/2A)') &
      & whoami, ' STRING EVOLUTION AND REPARAMETRIZATION CANNOT', &
      & whoami, ' BE USED IF VORONOI CELL CROSSING IS ALLOWED.', &
-     & whoami, ' VORONOI CELL CROSSING WILL BE OFF.' ; write(0,'(A)') msg___
+     & whoami, ' VORONOI CELL CROSSING WILL BE OFF.' ; call plainmessage(msg___)
            voronoi_allow_cross=.false.
           endif ! voronoi_allow_cross
          endif ! evolve_cv_on
@@ -548,7 +550,7 @@
 !
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       elseif (( keyword(1:4).eq.'CLEA'(1:4) )) then ! initialize
-       if (qprint) then ; write(msg___,6666) whoami ; write(0,'(A)') msg___ ; endif
+       if (qprint) then ; write(msg___,6666) whoami ; call plainmessage(msg___) ; endif
  6666 format(/A,' WILL REMOVE ALL CV.')
        call frames_done()
        call quat_done()
@@ -562,7 +564,7 @@
        keyword=pop_string(comlyn,comlen) ; comlen=len_trim(comlyn)
        if (( keyword(1:4).eq.'VMAP'(1:4) )) then
         if (remove_tag(comlyn,'CALC',comlen).gt.0) then
-          if (qprint) then ; write(msg___,6010) whoami ; write(0,'(A)') msg___ ; endif
+          if (qprint) then ; write(msg___,6010) whoami ; call plainmessage(msg___) ; endif
  6010 format(A,' WILL CALCULATE VORONOI MAP FROM MAIN COORDINATES.')
           call smcv_voronoi_whereami(r(1,:),r(2,:),r(3,:),m)
 ! put 'whereami' into the map
@@ -585,13 +587,13 @@
            if (flen.GT.0) then
             if (qprint) then
              call files_open(ifile, fname, 'FORMATTED', 'WRITE')
-             write(msg___,6011) whoami, fname(1:flen) ; write(0,'(A)') msg___
+             write(msg___,6011) whoami, fname(1:flen) ; call plainmessage(msg___)
             endif
  6011 format(A,' WRITING VORONOI MAP TO FILE ',A,'.')
             call cv_common_print_voro_map(ifile)
             if (qprint) then ; call files_close(ifile) ; endif
            else
-            write(0,*) 'WARNING FROM: ',whoami,': ','FILE NAME NOT SPECIFIED. NOTHING DONE.'
+            call warning(whoami, 'FILE NAME NOT SPECIFIED. NOTHING DONE.', 0)
            endif ! flen
           endif ! qroot
 ! read ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -602,14 +604,14 @@
           if (flen.GT.0) then
             if (qprint) then
             call files_open(ifile, fname, 'FORMATTED', 'WRITE')
-             write(msg___,6013) whoami, fname(1:flen) ; write(0,'(A)') msg___
+             write(msg___,6013) whoami, fname(1:flen) ; call plainmessage(msg___)
             endif
 !
  6013 format(A,' READING VORONOI MAP FROM FILE ',A,'.')
             call cv_common_read_voro_map(ifile)
             if (qprint) then ; call files_close(ifile) ; endif
            else
-            write(0,*) 'WARNING FROM: ',whoami,': ','FILE NAME NOT SPECIFIED. NOTHING DONE.'
+            call warning(whoami, 'FILE NAME NOT SPECIFIED. NOTHING DONE.', 0)
            endif ! flen
         endif ! CALC
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -621,13 +623,13 @@
          if (flen.GT.0) then
           if (qprint) then
            call files_open(ifile, fname, 'FORMATTED', 'WRITE')
-           write(msg___,6014) whoami, fname(1:flen) ; write(0,'(A)') msg___
+           write(msg___,6014) whoami, fname(1:flen) ; call plainmessage(msg___)
           endif
  6014 format(A,' READING VORONOI CROSSING DATA FROM FILE ',A,'.')
           call cv_common_read_voro_data(ifile)
           if (qprint) then ; call files_close(ifile) ; endif
          else
-          write(0,*) 'WARNING FROM: ',whoami,': ','FILE NAME NOT SPECIFIED. NOTHING DONE.'
+          call warning(whoami, 'FILE NAME NOT SPECIFIED. NOTHING DONE.', 0)
          endif ! flen
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        elseif (( keyword(1:4).eq.'PRIN'(1:4) )) then
@@ -637,13 +639,13 @@
          if (flen.gt.0) then
            if (qprint) then
             call files_open(ifile, fname, 'FORMATTED', 'WRITE')
-            write(msg___,6015) whoami, fname(1:flen) ; write(0,'(A)') msg___
+            write(msg___,6015) whoami, fname(1:flen) ; call plainmessage(msg___)
  6015 format(A,' WRITING VORONOI CROSSING DATA TO FILE ',A,'.')
            endif
            call cv_common_print_voro_data(ifile)
            if (qprint) then ; call files_close(ifile) ; endif
          else
-            write(0,*) 'WARNING FROM: ',whoami,': ','FILE NAME NOT SPECIFIED. NOTHING DONE.'
+            call warning(whoami, 'FILE NAME NOT SPECIFIED. NOTHING DONE.', 0)
          endif ! flen
        endif ! VMAP
 !cccccccccccccccccccc FRAMES PARSER ccccccccccccccccccccccccccccccccccccc
@@ -652,13 +654,13 @@
        keyword=pop_string(comlyn,comlen) ; comlen=len_trim(comlyn)
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        if (( keyword(1:4).eq.'CLEA'(1:4) )) then ! initialize
-        if (qprint) then ; write(msg___,6667) whoami ; write(0,'(A)') msg___ ; endif
+        if (qprint) then ; write(msg___,6667) whoami ; call plainmessage(msg___) ; endif
  6667 format(/A,' WILL REMOVE ALL LOCAL FRAMES.')
         call frames_done()
         call frames_init()
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        elseif (( keyword(1:4).eq.'RESE'(1:4) )) then ! initialize
-        if (qprint) then ; write(msg___,6650) whoami ; write(0,'(A)') msg___ ; endif
+        if (qprint) then ; write(msg___,6650) whoami ; call plainmessage(msg___) ; endif
  6650 format(/A,' WILL FORCE RECALCULATION OF FRAME AXES.')
         call frames_reset_calculate(.true.)
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -667,7 +669,7 @@
         qcomp=(remove_tag(comlyn,'COMP',comlen).gt.0) ! compute CV from comp set?
 !
         if (frames%num_frames.lt.1) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','NO FRAMES DEFINED. NOTHING DONE.'
+         call warning(whoami, 'NO FRAMES DEFINED. NOTHING DONE.', 0)
         else
 ! first process special option: ALIGn
 ! frame axes will be calculated based on the main set, but `consistently' with the comparison set;
@@ -675,12 +677,12 @@
 ! to the best-fit-RMSD rotation matrix
          if (remove_tag(comlyn,'ALIG',comlen).gt.0) then
           if (any(rcomp(1,:).eq.unknownf)) then
-           write(0,*) 'WARNING FROM: ',whoami,': ','MAIN X SET HAS UNDEFINED VALUES. NOTHING DONE.'
+           call warning(whoami, 'MAIN X SET HAS UNDEFINED VALUES. NOTHING DONE.', 0)
           elseif (any(r(1,:).eq.unknownf)) then
-           write(0,*) 'WARNING FROM: ',whoami,': ','COMPARISON X SET HAS UNDEFINED VALUES. NOTHING DONE.'
+           call warning(whoami, 'COMPARISON X SET HAS UNDEFINED VALUES. NOTHING DONE.', 0)
           else
            if (qcomp) then
-            if (qprint) then ; write(msg___,6651) whoami, whoami ; write(0,'(A)') msg___ ; endif
+            if (qprint) then ; write(msg___,6651) whoami, whoami ; call plainmessage(msg___) ; endif
  6651 format(/A,' WILL CALCULATE FRAME AXES FROM', &
      & ' COMPARISON COORDINATES USING', &
      & /A,' BEST-FIT ALIGNMENT WITH MAIN COORDINATES.')
@@ -689,7 +691,7 @@
      & i,rcomp(1,:),rcomp(2,:),rcomp(3,:),r(1,:),r(2,:),r(3,:),m,.true.)
             enddo
            else ! qcomp
-            if (qprint) then ; write(msg___,6652) whoami, whoami ; write(0,'(A)') msg___ ; endif
+            if (qprint) then ; write(msg___,6652) whoami, whoami ; call plainmessage(msg___) ; endif
  6652 format(/A,' WILL CALCULATE FRAME AXES FROM', &
      & ' MAIN COORDINATES USING BEST-FIT', &
      & /A,' ALIGNMENT WITH COMPARISON COORDINATES.')
@@ -705,9 +707,9 @@
          elseif (qcomp) then
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
           if (any(rcomp(1,:).eq.unknownf)) then
-           write(0,*) 'WARNING FROM: ',whoami,': ','COMPARISON X SET HAS UNDEFINED VALUES. NOTHING DONE.'
+           call warning(whoami, 'COMPARISON X SET HAS UNDEFINED VALUES. NOTHING DONE.', 0)
           else
-           if (qprint) then ; write(msg___,6656) whoami ; write(0,'(A)') msg___ ; endif
+           if (qprint) then ; write(msg___,6656) whoami ; call plainmessage(msg___) ; endif
  6656 format(/A,' WILL CALCULATE FRAME AXES FROM COMPARISON COORDINATES.')
            do i=1, frames%num_frames
             call frames_calc(i,rcomp(1,:),rcomp(2,:),rcomp(3,:),m,.true.)
@@ -717,9 +719,9 @@
          else ! qcomp false -- use main coords
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
           if (any(r(1,:).eq.unknownf)) then
-           write(0,*) 'WARNING FROM: ',whoami,': ','MAIN X SET HAS UNDEFINED VALUES. NOTHING DONE.'
+           call warning(whoami, 'MAIN X SET HAS UNDEFINED VALUES. NOTHING DONE.', 0)
           else
-           if (qprint) then ; write(msg___,6668) whoami ; write(0,'(A)') msg___ ; endif
+           if (qprint) then ; write(msg___,6668) whoami ; call plainmessage(msg___) ; endif
  6668 format(/A,' WILL CALCULATE FRAME AXES FROM MAIN COORDINATES.')
            do i=1, frames%num_frames
             call frames_calc(i,r(1,:),r(2,:),r(3,:),m,.true.)
@@ -745,7 +747,7 @@
           if (ifile .eq. -1) ifile=fout ! write to output stream
          endif
 !---------------------------- assume file is open, write -------------------------
-         if (qprint) then ; write(msg___,6669) whoami ; write(0,'(A)') msg___ ; endif
+         if (qprint) then ; write(msg___,6669) whoami ; call plainmessage(msg___) ; endif
  6669 format(/A,' WRITING LOCAL FRAME AXES.')
          if (all.eq.0) then ; call frames_print_global(ifile) ;
          else ; call frames_print_local(ifile) ; endif
@@ -771,7 +773,7 @@
           Ifile=5 ! read from input file
          endif
 !cccccccccccccccccc assume file is open, read ccccccccccccccccccc
-         if (qprint) then ; write(msg___,6670) whoami ; write(0,'(A)') msg___ ; endif
+         if (qprint) then ; write(msg___,6670) whoami ; call plainmessage(msg___) ; endif
  6670 format(A,' READING LOCAL FRAME AXES.')
          if (all.gt.0) then ; call frames_read_local(ifile) ;
          else ; call frames_read_global(ifile) ; endif
@@ -814,7 +816,7 @@
 !
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        elseif (( keyword(1:4).eq.'LIST'(1:4) )) then ! list frames
-        if (qprint) then ; write(msg___,6671) whoami ; write(0,'(A)') msg___ ; endif
+        if (qprint) then ; write(msg___,6671) whoami ; call plainmessage(msg___) ; endif
  6671 format(/A,' WILL LIST LOCAL FRAMES.')
        call frames_list() ! list local frames
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -823,20 +825,20 @@
 ! (optional) to mimimize DIST(z,theta(x))
         min_rmsd=(remove_tag(comlyn,'RMSD',comlen).gt.0) ! look for optimal RMSD alignment : i.e. minimize DIST(z,theta(x)) ?
 !
-        if (qprint) then ; write(msg___,6672) whoami ; write(0,'(A)') msg___ ; endif
+        if (qprint) then ; write(msg___,6672) whoami ; call plainmessage(msg___) ; endif
  6672 format(/A,' WILL ALIGN LOCAL FRAMES.')
         if (remove_tag(comlyn,'VORO',comlen).gt.0) then
-          if (qprint) then ; write(msg___,6673) whoami ; write(0,'(A)') msg___ ; endif
+          if (qprint) then ; write(msg___,6673) whoami ; call plainmessage(msg___) ; endif
  6673 format(A,' WILL FIT THE VORONOI MAP.')
           call frame_align_voro(r(1,:),r(2,:),r(3,:),m)
         else
-          if (min_rmsd.and.qprint) then ; write(msg___,6674) whoami ; write(0,'(A)') msg___ ; endif
+          if (min_rmsd.and.qprint) then ; write(msg___,6674) whoami ; call plainmessage(msg___) ; endif
  6674 format(A,' WILL CHECK RMSD(Z,THETA[X]).')
           call frames_align_string(r(1,:),r(2,:),r(3,:),m,min_rmsd) ! subroutine moved to sm_util to resolve dependency problems
         endif
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        else
-            write(msg___,*)'UNRECOGNIZED SUBCOMMAND: ',keyword;write(0,*) 'WARNING FROM: ',whoami,': ',msg___
+            write(msg___,*)'UNRECOGNIZED SUBCOMMAND: ',keyword;call warning(whoami, msg___, 0)
        endif ! frames parser
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -846,20 +848,20 @@
 !
        if (qcomp) then
         if (any(rcomp(1,:).eq.unknownf)) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','COMPARISON X SET HAS UNDEFINED VALUES. NOTHING DONE.'
+         call warning(whoami, 'COMPARISON X SET HAS UNDEFINED VALUES. NOTHING DONE.', 0)
         else
-         if (qprint) then ; write(msg___,6657) whoami ; write(0,'(A)') msg___ ; endif
+         if (qprint) then ; write(msg___,6657) whoami ; call plainmessage(msg___) ; endif
  6657 format(/A,' WILL OBTAIN CV VALUES FROM COMPARISON COORDINATES.')
 ! check for column spec
          c1=atoi(get_remove_parameter(comlyn, 'COL', comlen), -1)
          if (c1.gt.0) then
-          if (qprint) then ; write(msg___,6661) whoami, c1 ; write(0,'(A)') msg___ ; endif
+          if (qprint) then ; write(msg___,6661) whoami, c1 ; call plainmessage(msg___) ; endif
           call smcv_fill(rcomp(1,:),rcomp(2,:),rcomp(3,:),m,c1)
           call quat_reset_calculate(.true.)
           call frames_reset_calculate(.true.)
           call cv_common_unwrap_angles(c1) ! in case they are present
          else
-          if (qprint) then ; write(msg___,6662) whoami ; write(0,'(A)') msg___ ; endif
+          if (qprint) then ; write(msg___,6662) whoami ; call plainmessage(msg___) ; endif
           call smcv_fill(rcomp(1,:),rcomp(2,:),rcomp(3,:),m)
           call quat_reset_calculate(.true.)
           call frames_reset_calculate(.true.)
@@ -868,21 +870,21 @@
         endif ! x.eq.unknownf
        else ! ~qcomp -- use main coirdinates
         if (any(r(1,:).eq.unknownf)) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','MAIN X SET HAS UNDEFINED VALUES. NOTHING DONE.'
+         call warning(whoami, 'MAIN X SET HAS UNDEFINED VALUES. NOTHING DONE.', 0)
         else
-         if (qprint) then ; write(msg___,6660) whoami ; write(0,'(A)') msg___ ; endif
+         if (qprint) then ; write(msg___,6660) whoami ; call plainmessage(msg___) ; endif
  6660 format(/A,' WILL OBTAIN CV VALUES FROM MAIN COORDINATES.')
 ! check for column spec
          c1=atoi(get_remove_parameter(comlyn, 'COL', comlen), -1)
          if (c1.gt.0) then
-          if (qprint) then ; write(msg___,6661) whoami, c1 ; write(0,'(A)') msg___ ; endif
+          if (qprint) then ; write(msg___,6661) whoami, c1 ; call plainmessage(msg___) ; endif
  6661 format(/A,' WILL FILL COLUMN ',I3,'.')
           call smcv_fill(r(1,:),r(2,:),r(3,:),m,c1)
           call quat_reset_calculate(.true.)
           call frames_reset_calculate(.true.)
           call cv_common_unwrap_angles(c1) ! in case they are present
          else
-          if (qprint) then ; write(msg___,6662) whoami ; write(0,'(A)') msg___ ; endif
+          if (qprint) then ; write(msg___,6662) whoami ; call plainmessage(msg___) ; endif
  6662 format(/A,' WILL FILL DEFAULT COLUMN.')
           call smcv_fill(r(1,:),r(2,:),r(3,:),m)
           call quat_reset_calculate(.true.)
@@ -896,31 +898,31 @@
        if (remove_tag(comlyn,'GRAD',comlen).gt.0) then ! finite-difference gradient test
 ! check fd spec
         step=atof(get_remove_parameter(comlyn, 'STEP', comlen), finite_difference_d)
-        if (qprint) then ; write(msg___, 7001) whoami,whoami,step,whoami,whoami ; write(0,'(A)') msg___ ; endif
+        if (qprint) then ; write(msg___, 7001) whoami,whoami,step,whoami,whoami ; call plainmessage(msg___) ; endif
  7001 format(/A,' WILL TEST GRADIENTS USING FINITE DIFFERENCES', &
      & /A,' USING DX = DY = DZ = ',F15.9,'.', &
      & /A,' MAIN COORDINATE SET MUST BE DEFINED.', &
      & /A,' WILL OVERWRITE "MAIN", "ZCUR", AND "ZOLD" CV ARRAYS')
         if (any(r(1,:).eq.unknownf)) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','MAIN X SET HAS UNDEFINED VALUES. NOTHING DONE.'
+         call warning(whoami, 'MAIN X SET HAS UNDEFINED VALUES. NOTHING DONE.', 0)
         else
          fd_error=>smcv_test_grad_fd(r(1,:),r(2,:),r(3,:),m,step)
          if (qprint) then
-          write(msg___,7002) whoami, whoami ; write(0,'(A)') msg___
+          write(msg___,7002) whoami, whoami ; call plainmessage(msg___)
  7002 format(/A,' CV#, DGRAD_X_MAX, DGRAD_Y_MAX, DGRAD_Z_MAX', &
      & /A,' ==========================================')
           do i=1, cv%num_cv
-         write(msg___,'(A," ",I5," ",3(F15.9," "))')whoami,i,fd_error(i,:) ; write(0,'(A)') msg___
+         write(msg___,'(A," ",I5," ",3(F15.9," "))')whoami,i,fd_error(i,:) ; call plainmessage(msg___)
 ! write(msg___,*), i, fd_error(i,:)
           enddo
          endif ! qprint
 ! decide whether the test was passed
          zval=abs(maxval(fd_error))
          if (zval.lt.abs(step)*1d0) then
-          write(msg___,7003) whoami, zval, whoami ; write(0,'(A)') msg___
+          write(msg___,7003) whoami, zval, whoami ; call plainmessage(msg___)
          else
-          write(msg___,7004) whoami, zval, whoami ; write(0,'(A)') msg___
-          write(0,*) 'WARNING FROM: ',whoami,': ','FINITE DERIVATIVE TEST FAILED.'
+          write(msg___,7004) whoami, zval, whoami ; call plainmessage(msg___)
+          call warning(whoami, 'FINITE DERIVATIVE TEST FAILED.', 0)
          endif ! report test result
  7003 format(/A, ' THE MAXIMUM GRADIENT ierror IS ',F15.9,', ', &
      & /A, ' WHICH IS SMALLER THAN STEP. TEST PASSED.')
@@ -931,30 +933,30 @@
        endif ! grad
 !
        if (remove_tag(comlyn,'PARA',comlen).gt.0) then ! parallel communication test
-        if (qprint) then ; write(msg___, 7005) whoami,whoami,whoami ; write(0,'(A)') msg___ ; endif
+        if (qprint) then ; write(msg___, 7005) whoami,whoami,whoami ; call plainmessage(msg___) ; endif
  7005 format(/A,' WILL COMPARE PARALLEL AND SERIAL CV COMPUTATION', &
      & /A,' MAIN COORDINATE SET MUST BE DEFINED.', &
      & /A,' WILL OVERWRITE "ZCUR" CV ARRAY')
         if (any(r(1,:).eq.unknownf)) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','MAIN X SET HAS UNDEFINED VALUES. NOTHING DONE.'
+         call warning(whoami, 'MAIN X SET HAS UNDEFINED VALUES. NOTHING DONE.', 0)
         else
          fd_error=>smcv_test_parallel(r(1,:),r(2,:),r(3,:),m) ! use the same array as above
          if (qprint) then
-          write(msg___,7006) whoami, whoami ; write(0,'(A)') msg___
+          write(msg___,7006) whoami, whoami ; call plainmessage(msg___)
  7006 format(/A,' CV#, DCV, DGRAD_X_MAX, DGRAD_Y_MAX, DGRAD_Z_MAX', &
      & /A,' ===============================================')
           do i=1, cv%num_cv
-         write(msg___,'(A," ",I5," ",4(F15.9," "))')whoami,i,fd_error(i,:) ; write(0,'(A)') msg___
+         write(msg___,'(A," ",I5," ",4(F15.9," "))')whoami,i,fd_error(i,:) ; call plainmessage(msg___)
 ! write(msg___,*), i, fd_error(i,:)
           enddo
          endif ! qprint
 ! decide whether the test was passed
          zval=abs(maxval(fd_error))
          if (zval.lt.parallel_tolerance) then
-          write(msg___,7007) whoami, zval, whoami, parallel_tolerance ; write(0,'(A)') msg___
+          write(msg___,7007) whoami, zval, whoami, parallel_tolerance ; call plainmessage(msg___)
          else
-          write(msg___,7008) whoami, zval, whoami, parallel_tolerance ; write(0,'(A)') msg___
-          write(0,*) 'WARNING FROM: ',whoami,': ','PARALLEL COMPUTATION TEST FAILED.'
+          write(msg___,7008) whoami, zval, whoami, parallel_tolerance ; call plainmessage(msg___)
+          call warning(whoami, 'PARALLEL COMPUTATION TEST FAILED.', 0)
          endif ! report test result
  7007 format(/A, ' THE MAXIMUM ierror IS ',E12.5,', ', &
      & /A, ' WHICH IS SMALLER THAN ',E12.5,'. TEST PASSED.')
@@ -965,20 +967,20 @@
        endif ! para
 !
        if (remove_tag(comlyn,'MINV',comlen).gt.0) then ! finite-difference gradient test
-        if (qprint) then ; write(msg___, 7010) whoami,whoami,whoami, whoami ; write(0,'(A)') msg___ ; endif
+        if (qprint) then ; write(msg___, 7010) whoami,whoami,whoami, whoami ; call plainmessage(msg___) ; endif
  7010 format(/A,' WILL COMPARE M TENSOR INVERSE COMPUTATION', &
      & /A,' USING LU DECOMPOSITION AND MULTIDIAGONAL', &
      & /A,' MATRIX INVERSION.' &
      & /A,' MAIN COORDINATE SET MUST BE DEFINED.')
         if (any(r(1,:).eq.unknownf)) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','MAIN X SET HAS UNDEFINED VALUES. NOTHING DONE.'
+         call warning(whoami, 'MAIN X SET HAS UNDEFINED VALUES. NOTHING DONE.', 0)
         else
          zval=smcv_test_Minv(r(1,:),r(2,:),r(3,:),m)
          if (zval.lt.parallel_tolerance) then
-          write(msg___,7011) whoami, zval, whoami, parallel_tolerance ; write(0,'(A)') msg___
+          write(msg___,7011) whoami, zval, whoami, parallel_tolerance ; call plainmessage(msg___)
          else
-          write(msg___,7012) whoami, zval, whoami, parallel_tolerance ; write(0,'(A)') msg___
-          write(0,*) 'WARNING FROM: ',whoami,': ','M INVERSE TEST FAILED.'
+          write(msg___,7012) whoami, zval, whoami, parallel_tolerance ; call plainmessage(msg___)
+          call warning(whoami, 'M INVERSE TEST FAILED.', 0)
          endif ! report test result
 !
  7011 format(/A, ' THE MAXIMUM DIFFERENCE IS ',E12.5,', ', &
@@ -999,63 +1001,63 @@
           select case(keyword)
            case('YES','ON','TRUE','T','yes','on','true','t')
             keyword='ENABLED '; calc_qt_para=.true.
-            if (qprint) then ; write(msg___,7009) whoami, 'QUATERNIONS', keyword ; write(0,'(A)') msg___ ; endif
+            if (qprint) then ; write(msg___,7009) whoami, 'QUATERNIONS', keyword ; call plainmessage(msg___) ; endif
            case('NO','OFF','FALSE','F','no','off','false','f')
             keyword='DISABLED' ; calc_qt_para=.false.
-            if (qprint) then ; write(msg___,7009) whoami, 'QUATERNIONS', keyword ; write(0,'(A)') msg___ ; endif
+            if (qprint) then ; write(msg___,7009) whoami, 'QUATERNIONS', keyword ; call plainmessage(msg___) ; endif
            case default
-            write(0,*) 'WARNING FROM: ',whoami,': ','UNKNOWN OPTION SPECIFIED FOR "QUAT"'
+            call warning(whoami, 'UNKNOWN OPTION SPECIFIED FOR "QUAT"', 0)
           end select
          case('FRAM');
           keyword=pop_string(comlyn,comlen) ; comlen=len_trim(comlyn)
           select case(keyword)
            case('YES','ON','TRUE','T','yes','on','true','t')
             keyword='ENABLED '; calc_fr_para=.true.
-            if (qprint) then ; write(msg___,7009) whoami, 'FRAMES', keyword ; write(0,'(A)') msg___ ; endif
+            if (qprint) then ; write(msg___,7009) whoami, 'FRAMES', keyword ; call plainmessage(msg___) ; endif
            case('NO','OFF','FALSE','F','no','off','false','f')
             keyword='DISABLED' ; calc_fr_para=.false.
-            if (qprint) then ; write(msg___,7009) whoami, 'FRAMES', keyword ; write(0,'(A)') msg___ ; endif
+            if (qprint) then ; write(msg___,7009) whoami, 'FRAMES', keyword ; call plainmessage(msg___) ; endif
            case default
-            write(0,*) 'WARNING FROM: ',whoami,': ','UNKNOWN OPTION SPECIFIED FOR "FRAM"'
+            call warning(whoami, 'UNKNOWN OPTION SPECIFIED FOR "FRAM"', 0)
           end select
          case('COLV');
           keyword=pop_string(comlyn,comlen) ; comlen=len_trim(comlyn)
           select case(keyword)
            case('YES','ON','TRUE','T','yes','on','true','t')
             keyword='ENABLED '; calc_cv_para=.true.
-            if (qprint) then ; write(msg___,7009) whoami, 'CV', keyword ; write(0,'(A)') msg___ ; endif
+            if (qprint) then ; write(msg___,7009) whoami, 'CV', keyword ; call plainmessage(msg___) ; endif
            case('NO','OFF','FALSE','F','no','off','false','f')
             keyword='DISABLED' ; calc_cv_para=.false.
-            if (qprint) then ; write(msg___,7009) whoami, 'CV', keyword ; write(0,'(A)') msg___ ; endif
+            if (qprint) then ; write(msg___,7009) whoami, 'CV', keyword ; call plainmessage(msg___) ; endif
            case default
-            write(0,*) 'WARNING FROM: ',whoami,': ','UNKNOWN OPTION SPECIFIED FOR "COLV"'
+            call warning(whoami, 'UNKNOWN OPTION SPECIFIED FOR "COLV"', 0)
           end select
          case('MMAT');
           keyword=pop_string(comlyn,comlen) ; comlen=len_trim(comlyn)
           select case(keyword)
            case('YES','ON','TRUE','T','yes','on','true','t')
             keyword='ENABLED '; calc_Mtensor_para=.true.
-            if (qprint) then ; write(msg___,7009) whoami, 'M TENSOR', keyword ; write(0,'(A)') msg___ ; endif
+            if (qprint) then ; write(msg___,7009) whoami, 'M TENSOR', keyword ; call plainmessage(msg___) ; endif
            case('NO','OFF','FALSE','F','no','off','false','f')
             keyword='DISABLED' ; calc_Mtensor_para=.false.
-            if (qprint) then ; write(msg___,7009) whoami, 'M TENSOR', keyword ; write(0,'(A)') msg___ ; endif
+            if (qprint) then ; write(msg___,7009) whoami, 'M TENSOR', keyword ; call plainmessage(msg___) ; endif
            case default
-            write(0,*) 'WARNING FROM: ',whoami,': ','UNKNOWN OPTION SPECIFIED FOR "MMAT"'
+            call warning(whoami, 'UNKNOWN OPTION SPECIFIED FOR "MMAT"', 0)
           end select
          case('VORO');
           keyword=pop_string(comlyn,comlen) ; comlen=len_trim(comlyn)
           select case(keyword)
            case('YES','ON','TRUE','T','yes','on','true','t')
             keyword='ENABLED '; calc_voronoi_para=.true.
-            if (qprint) then ; write(msg___,7009) whoami, 'VORONOI NORM', keyword ; write(0,'(A)') msg___ ; endif
+            if (qprint) then ; write(msg___,7009) whoami, 'VORONOI NORM', keyword ; call plainmessage(msg___) ; endif
            case('NO','OFF','FALSE','F','no','off','false','f')
             keyword='DISABLED' ; calc_voronoi_para=.false.
-            if (qprint) then ; write(msg___,7009) whoami, 'VORONOI NORM', keyword ; write(0,'(A)') msg___ ; endif
+            if (qprint) then ; write(msg___,7009) whoami, 'VORONOI NORM', keyword ; call plainmessage(msg___) ; endif
            case default
-            write(0,*) 'WARNING FROM: ',whoami,': ','UNKNOWN OPTION SPECIFIED FOR "VORO"'
+            call warning(whoami, 'UNKNOWN OPTION SPECIFIED FOR "VORO"', 0)
           end select
          case default
-          write(0,*) 'WARNING FROM: ',whoami,': ','UNKNOWN OPTION SPECIFIED FOR "PARA"'
+          call warning(whoami, 'UNKNOWN OPTION SPECIFIED FOR "PARA"', 0)
         end select
        enddo ! comlen
  7009 format(/A, ' PARALLEL COMPUTATION OF ',A,' ',A)
@@ -1065,17 +1067,17 @@
        select case(keyword)
         case('LU','lu')
           keyword='LU'; inverse_LU=.true.
-          if (qprint) then ; write(msg___,7013) whoami, keyword ; write(0,'(A)') msg___ ; endif
+          if (qprint) then ; write(msg___,7013) whoami, keyword ; call plainmessage(msg___) ; endif
         case('DIAG','diag')
           keyword='MULTDIAG' ; inverse_LU=.false.
-          if (qprint) then ; write(msg___,7013) whoami, keyword ; write(0,'(A)') msg___ ; endif
+          if (qprint) then ; write(msg___,7013) whoami, keyword ; call plainmessage(msg___) ; endif
         case default
-          write(0,*) 'WARNING FROM: ',whoami,': ','UNKNOWN MATRIX INVERSION OPTION SPECIFIED.'
+          call warning(whoami, 'UNKNOWN MATRIX INVERSION OPTION SPECIFIED.', 0)
        end select
  7013 format(/A, ' MATRIX INVERSION WILL USE ',A,' ROUTINES.')
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       elseif (( keyword(1:3).eq.'FIX'(1:3) )) then ! tell cv_posi about fixed "virtual" replicas
-       if (qprint) then ; write(msg___, 6665) whoami, whoami ; write(0,'(A)') msg___ ; endif
+       if (qprint) then ; write(msg___, 6665) whoami, whoami ; call plainmessage(msg___) ; endif
        fixed_bc_0=(remove_tag(comlyn,'FIRS',comlen).gt.0)
        fixed_bc_1=(remove_tag(comlyn,'LAST',comlen).gt.0)
        if (fixed_bc_0) then
@@ -1085,7 +1087,7 @@
          fixbc=' NOT '
          flen=5
        endif
-       if (qprint) then ; write(msg___,6663) whoami, fixbc(1:flen) ; write(0,'(A)') msg___ ; endif
+       if (qprint) then ; write(msg___,6663) whoami, fixbc(1:flen) ; call plainmessage(msg___) ; endif
        if (fixed_bc_1) then
          fixbc=' '
          flen=1
@@ -1093,7 +1095,7 @@
          fixbc=' NOT '
          flen=5
        endif
-       if (qprint) then ; write(msg___,6664) whoami, fixbc(1:flen) ; write(0,'(A)') msg___ ; endif
+       if (qprint) then ; write(msg___,6664) whoami, fixbc(1:flen) ; call plainmessage(msg___) ; endif
        call cv_common_set_bc(fixed_bc_0, fixed_bc_1)
  6663 format(/A,' FIRST REPLICA OF STRING WILL',A,'BE FIXED.')
  6664 format(A,' LAST REPLICA OF STRING WILL',A,'BE FIXED.'/)
@@ -1119,12 +1121,12 @@
 ! check for column spec
         c1=atoi(get_remove_parameter(comlyn, 'COL', comlen), -1)
         if (c1.gt.0) then
-         if (qprint) then ; write(msg___,6679) whoami, c1 ; write(0,'(A)') msg___ ; endif
+         if (qprint) then ; write(msg___,6679) whoami, c1 ; call plainmessage(msg___) ; endif
  6679 format(/A,' WRITING COORDINATES FROM COLUMN ',I3)
          if (all.eq.0) then ; call cv_common_print_global(ifile, c1) ;
          else ; call cv_common_print_local(ifile,c1) ; endif
         else
-         if (qprint) then ; write(msg___,6689) whoami ; write(0,'(A)') msg___ ; endif
+         if (qprint) then ; write(msg___,6689) whoami ; call plainmessage(msg___) ; endif
  6689 format(/A,' WRITING COORDINATES FROM DEFAULT COLUMN.')
          if (all.eq.0) then ; call cv_common_print_global(ifile) ;
          else ; call cv_common_print_local(ifile) ; endif
@@ -1143,16 +1145,16 @@
         scol=atoi(get_remove_parameter(comlyn, 'SCOL', comlen), 0)
         if (scol.ge.1) then ! need to know total number of replicas in CV file
          if (all.gt.0) then
-          write(0,*) 'WARNING FROM: ',whoami,': ','ALL AND SCOL CANNOT BOTH BE SPECIFIED.'
+          call warning(whoami, 'ALL AND SCOL CANNOT BOTH BE SPECIFIED.', 0)
           return
          endif
          totcol=atoi(get_remove_parameter(comlyn, 'TCOL', comlen), 0)
          if (totcol.le.0) then
-          write(0,*) 'WARNING FROM: ',whoami,': ','MUST PROVIDE TOTAL NUMBER OF COLUMNS IN CV DATA FILE.'
+          call warning(whoami, 'MUST PROVIDE TOTAL NUMBER OF COLUMNS IN CV DATA FILE.', 0)
           return
          endif
         else ! scol.ge.1
-         write(0,*) 'WARNING FROM: ',whoami,': ','SCOL MUST BE A POSITIVE INTEGER.'
+         call warning(whoami, 'SCOL MUST BE A POSITIVE INTEGER.', 0)
          return
         endif
        endif ! SCOL present
@@ -1173,14 +1175,14 @@
         endif
 !cccccccccccccccccc assume file is open, read ccccccccccccccccccc
         if (c1.gt.0) then ! column spec
-         if (qprint) then ; write(msg___,6699) whoami, c1 ; write(0,'(A)') msg___ ; endif
+         if (qprint) then ; write(msg___,6699) whoami, c1 ; call plainmessage(msg___) ; endif
  6699 format(A,' READING COORDINATES INTO COLUMN ',I3)
          if (all.gt.0) then ; call cv_common_read_local(ifile, c1) ;
          elseif (scol.ge.1) then
           call cv_common_read_local_from_global(ifile, totcol, scol, c1)
          else; call cv_common_read_global(ifile,c1) ; endif
         else
-         if (qprint) then ; write(msg___,6709) whoami ; write(0,'(A)') msg___ ; endif
+         if (qprint) then ; write(msg___,6709) whoami ; call plainmessage(msg___) ; endif
  6709 format(A,' READING COORDINATES INTO DEFAULT COLUMN.')
          if (all.gt.0) then ; call cv_common_read_local(ifile) ;
          elseif (scol.ge.1) then
@@ -1213,7 +1215,7 @@
 ! read column spec
         c1=atoi(pop_string(comlyn,comlen)) ; comlen=len_trim(comlyn)
         c2=atoi(pop_string(comlyn,comlen)) ; comlen=len_trim(comlyn)
-        if (qprint) then ; write(msg___,6729) whoami, c1, c2 ; write(0,'(A)') msg___ ; endif
+        if (qprint) then ; write(msg___,6729) whoami, c1, c2 ; call plainmessage(msg___) ; endif
  6729 format(/A,' WILL SWAP COLUMNS ',I3,' AND ',I3,' ')
         call cv_common_swap(c1,c2)
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -1221,7 +1223,7 @@
 ! read column spec
         c1=atoi(pop_string(comlyn,comlen)) ; comlen=len_trim(comlyn)
         c2=atoi(pop_string(comlyn,comlen)) ; comlen=len_trim(comlyn)
-        if (qprint) then ; write(msg___,6739) whoami, c1, c2 ; write(0,'(A)') msg___ ; endif
+        if (qprint) then ; write(msg___,6739) whoami, c1, c2 ; call plainmessage(msg___) ; endif
  6739 format(/A,' WILL COPY COLUMN ',I3,' TO ',I3,' ')
         call cv_common_copy(c1,c2)
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -1229,9 +1231,9 @@
         keyword=pop_string(comlyn,comlen) ; comlen=len_trim(comlyn)
         if (( keyword(1:3).eq.'ADD'(1:3) )) then ! save current CV values to history
          if (any(r(1,:).eq.unknownf)) then
-          write(0,*) 'WARNING FROM: ',whoami,': ','MAIN X SET HAS UNDEFINED VALUES. NOTHING DONE.'
+          call warning(whoami, 'MAIN X SET HAS UNDEFINED VALUES. NOTHING DONE.', 0)
          else
-          if (qprint) then ; write(msg___,674) whoami ; write(0,'(A)') msg___ ; endif
+          if (qprint) then ; write(msg___,674) whoami ; call plainmessage(msg___) ; endif
  674 format(A,' WILL ADD CV VALUES FROM MAIN COOR. SET INTO HISTORY.')
 ! last argument tells routine to add the calculated cv/derivative values to the history
           call smcv_add_hist(r(1,:),r(2,:),r(3,:),m,.true.)
@@ -1253,7 +1255,7 @@
           if (flen.gt.0) then ; call files_open(ifile, fname, 'FORMATTED', 'WRITE') ; endif
           if (ifile .eq. -1) ifile=fout ! write to output stream
 !---------------------------- assume file is open, write -------------------------
-          if (qprint) then ; write(msg___,676) whoami, nskip ; write(0,'(A)') msg___ ; endif
+          if (qprint) then ; write(msg___,676) whoami, nskip ; call plainmessage(msg___) ; endif
  676 format(A,' WRITING CV HISTORY. SKIPPING ',I5,' ENTRIES.')
           if (all.eq.0) then;call cv_common_print_hist_global(ifile,nskip)
           else ; call cv_common_print_hist_local(ifile,nskip) ; endif
@@ -1264,7 +1266,7 @@
          delta=atoi(get_remove_parameter(comlyn, 'DELT', comlen), 10) ! filter width
          nskip=atoi(get_remove_parameter(comlyn, 'SKIP', comlen), 0) ! number of entries to skip
 !
-         if (qprint) then ; write(msg___,675) whoami, delta, nskip ; write(0,'(A)') msg___ ; endif
+         if (qprint) then ; write(msg___,675) whoami, delta, nskip ; call plainmessage(msg___) ; endif
  675 format(A,' SMOOTHING CV HISTORY. FILTER WIDTH =',I5,'.', &
      & / ,' SKIPPING ',I5,' ENTRIES.')
          call cv_common_smooth_hist(delta,nskip)
@@ -1273,7 +1275,7 @@
          expo_memory=atof(get_remove_parameter(comlyn, 'MEMO', comlen), 0.99d0) ! memory in the exp. conv. kernel
          nskip=atoi(get_remove_parameter(comlyn, 'SKIP', comlen), 0) ! number of entries to skip
 !
-         if (qprint) then ; write(msg___,701) whoami, expo_memory, nskip ; write(0,'(A)') msg___ ; endif
+         if (qprint) then ; write(msg___,701) whoami, expo_memory, nskip ; call plainmessage(msg___) ; endif
  701 format(A,' EVOLVING CV: Z(N+1)=A*Z(N)+(1-A)*<THETA>, A=',F7.3,'.',&
      & / ,' SKIPPING ',I5,' ENTRIES.')
          call cv_common_evolve_expo(expo_memory,nskip)
@@ -1285,7 +1287,7 @@
         step=atof(get_remove_parameter(comlyn, 'STEP', comlen), 0.0d0) ! evolution step
         if (qprint) then
          if (step.eq.0.0d0) then
-          write(0,*) 'WARNING FROM: ',whoami,': ','CV EVOLUTION STEP ZERO OR UNSPECIFIED.'
+          call warning(whoami, 'CV EVOLUTION STEP ZERO OR UNSPECIFIED.', 0)
          endif
          write(msg___,677) whoami, step
  677 format(A,' EVOLVING CV USING AVERAGE FORCE. STEP =',F7.3,'.')
@@ -1299,10 +1301,10 @@
           num_ave_samples=atoi(get_remove_parameter(comlyn, 'NAVE', comlen), -1)
           if (num_ave_samples.gt.0) then
            call cv_common_set_ave_samples(num_ave_samples)
-           if (qprint) then ; write(msg___,6748) whoami, num_ave_samples ; write(0,'(A)') msg___ ; endif
+           if (qprint) then ; write(msg___,6748) whoami, num_ave_samples ; call plainmessage(msg___) ; endif
  6748 format(A,' SETTING NUMBER OF SAMPLES IN THE AVERAGE SET TO ',I7)
           else
-           if (qprint) then ; write(msg___,6749) whoami, num_ave_samples; write(0,'(A)') msg___ ; endif
+           if (qprint) then ; write(msg___,6749) whoami, num_ave_samples; call plainmessage(msg___) ; endif
  6749 format(A,' INVALID NUMBER OF SAMPLES SPECIFIED: ',I7)
           endif
         endif
@@ -1311,10 +1313,10 @@
           k=atof(get_remove_parameter(comlyn, 'KPAR', comlen), -1d0)
           if (k.ge.0d0) then
            call cv_common_set_kpara(k)
-           if (qprint) then ; write(msg___,6756) whoami, k; write(0,'(A)') msg___ ; endif
+           if (qprint) then ; write(msg___,6756) whoami, k; call plainmessage(msg___) ; endif
  6756 format(A,' SETTING PARALLEL FORCE CONSTANT TO ',F11.5)
           else
-           if (qprint) then ; write(msg___,6757) whoami, k; write(0,'(A)') msg___ ; endif
+           if (qprint) then ; write(msg___,6757) whoami, k; call plainmessage(msg___) ; endif
  6757 format(A,' INVALID FORCE CONSTANT SPECIFIED: ',F11.5)
           endif
         endif ! kpara
@@ -1323,10 +1325,10 @@
           k=atof(get_remove_parameter(comlyn, 'KPRP', comlen), -1d0)
           if (k.ge.0d0) then
            call cv_common_set_kperp(k)
-           if (qprint) then ; write(msg___,6746) whoami, k; write(0,'(A)') msg___ ; endif
+           if (qprint) then ; write(msg___,6746) whoami, k; call plainmessage(msg___) ; endif
  6746 format(A,' SETTING PERPENDICULAR FORCE CONSTANT TO ',F11.5)
           else
-           if (qprint) then ; write(msg___,6747) whoami, k; write(0,'(A)') msg___ ; endif
+           if (qprint) then ; write(msg___,6747) whoami, k; call plainmessage(msg___) ; endif
  6747 format(A,' INVALID FORCE CONSTANT SPECIFIED: ',F11.5)
           endif
         endif ! kperp
@@ -1338,15 +1340,15 @@
         if (all.gt.0) then ! will loop over all cv
          ibeg=1
          iend=cv%num_cv
-         if (qprint) then ; write(msg___,6750) whoami ; write(0,'(A)') msg___ ; endif
+         if (qprint) then ; write(msg___,6750) whoami ; call plainmessage(msg___) ; endif
  6750 format(A,' ALL CV INDICES SELECTED.')
         elseif (ind.gt.0.and.ind.le.cv%num_cv) then
          ibeg=ind
          iend=ind
-         if (qprint) then ; write(msg___,6751) whoami, ind ; write(0,'(A)') msg___ ; endif
+         if (qprint) then ; write(msg___,6751) whoami, ind ; call plainmessage(msg___) ; endif
  6751 format(A,' CV INDEX ',I5,' SELECTED.')
         else ! no indices specified
-         write(0,*) 'WARNING FROM: ',whoami,': ',' INVALID CV INDEX SPECIFIED'
+         call warning(whoami, ' INVALID CV INDEX SPECIFIED', 0)
          ibeg=0
          iend=-1
         endif
@@ -1354,7 +1356,7 @@
         if (iend.gt.0) then ! skip this for invalid indices
          if (find_tag(comlyn, 'FORC', comlen).gt.0) then
           k=atof(get_remove_parameter(comlyn, 'FORC', comlen), 0.0d0)
-          if (qprint) then ; write(msg___,6752) whoami, k ; write(0,'(A)') msg___ ; endif
+          if (qprint) then ; write(msg___,6752) whoami, k ; call plainmessage(msg___) ; endif
  6752 format(A,' WILL SET K TO ',F11.5,'.')
           do i=ibeg,iend
            call cv_common_set_k(i,k)
@@ -1363,7 +1365,7 @@
 !
          if (find_tag(comlyn, 'GAMM', comlen).gt.0) then
           gam=atof(get_remove_parameter(comlyn, 'GAMM', comlen), 1.0d0)
-          if (qprint) then ; write(msg___,6753) whoami, gam ; write(0,'(A)') msg___ ; endif
+          if (qprint) then ; write(msg___,6753) whoami, gam ; call plainmessage(msg___) ; endif
  6753 format(A,' WILL SET GAMMA TO ',F7.3,'.')
           do i=ibeg,iend
            call cv_common_set_g(i,gam)
@@ -1372,7 +1374,7 @@
 !
          if (find_tag(comlyn, 'WEIG', comlen).gt.0) then ! weighting by a real
           w=atof(get_remove_parameter(comlyn, 'WEIG', comlen), -1.0d0)
-          if (qprint) then ; write(msg___,6755) whoami,w ; write(0,'(A)') msg___ ; endif
+          if (qprint) then ; write(msg___,6755) whoami,w ; call plainmessage(msg___) ; endif
  6755 format(A,' WILL SET WEIGHT TO ',F7.3,'.')
           do i=ibeg,iend
            call cv_common_set_w(i,w)
@@ -1384,14 +1386,14 @@
 ! check replica spec
           irep=atoi(get_remove_parameter(comlyn, 'REP', comlen), -1)
           if (irep.lt.0.or.irep.ge.nstring) then
-           write(0,*) 'WARNING FROM: ',whoami,': ','REPLICA NUMBER INVALID OR UNSPECIFIED.'
+           call warning(whoami, 'REPLICA NUMBER INVALID OR UNSPECIFIED.', 0)
           else
 ! check column spec
            c1=atoi(get_remove_parameter(comlyn, 'COL', comlen), -1)
            if (c1.gt.0) then
             if (qprint) then
              write(msg___,6774) whoami, irep,c1, zval
-             write(0,'(A)') msg___
+             call plainmessage(msg___)
             endif
  6774 format(A,' WILL SET REPLICA ',I5,' CV VALUE IN COLUMN ', &
      & I3, ' TO ',F7.3,'.')
@@ -1399,7 +1401,7 @@
                                        call cv_common_set_r(i,zval,c1)
                                       enddo; endif
            else
-            if (qprint) then ; write(msg___,6773) whoami, irep, zval ; write(0,'(A)') msg___ ; endif
+            if (qprint) then ; write(msg___,6773) whoami, irep, zval ; call plainmessage(msg___) ; endif
  6773 format(A,' WILL SET REPLICA ',I5,' CV VALUE IN DEFAULT COLUMN TO '&
      & ,F7.3,'.')
             if (mestring.eq.irep) then ;do i=ibeg,iend
@@ -1414,7 +1416,7 @@
 !cccccccccccccccccccccccccccccccccccc M matrix cccccccccccccccccccccccccccccccccccccc
       elseif (( keyword(1:4).eq.'MMAT'(1:4) )) then
         if (remove_tag(comlyn,'CALC',comlen).gt.0) then
-          if (qprint) then ; write(msg___,6854) whoami ; write(0,'(A)') msg___ ; endif
+          if (qprint) then ; write(msg___,6854) whoami ; call plainmessage(msg___) ; endif
  6854 format(A,' COMPUTING M(X) FROM ATOMIC COORDINATES.')
           call smcv_compute_M(r(1,:),r(2,:),r(3,:),m,.true.) ! compute M and M inverse
 ! print
@@ -1444,13 +1446,13 @@
             call files_open(ifile, fname, 'FORMATTED', 'WRITE')
             if (qprint) then
              write(msg___,6859) whoami, keyword(1:klen), fname(1:flen)
-             write(0,'(A)') msg___
+             call plainmessage(msg___)
             endif
  6859 format(A,' WRITING M MATRIX ',A,'TO FILE ',A,'.')
             call cv_common_print_M_global(ifile, ind)
             call files_close(ifile)
            else
-            write(0,*) 'WARNING FROM: ',whoami,': ','FILE NAME NOT SPECIFIED. NOTHING DONE.'
+            call warning(whoami, 'FILE NAME NOT SPECIFIED. NOTHING DONE.', 0)
            endif ! flen
           endif ! qroot
 ! read cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -1471,13 +1473,13 @@
             if (qprint) then
             call files_open(ifile, fname, 'FORMATTED', 'WRITE')
              write(msg___,6858) whoami, keyword(1:klen), fname(1:flen)
-             write(0,'(A)') msg___
+             call plainmessage(msg___)
             endif
  6858 format(A,' READING M MATRIX ',A,'FROM FILE ',A,'.')
             call cv_common_read_M_global(ifile, ind)
             if (qprint) then ; call files_close(ifile) ; endif
            else
-            write(0,*) 'WARNING FROM: ',whoami,': ','FILE NAME NOT SPECIFIED. NOTHING DONE.'
+            call warning(whoami, 'FILE NAME NOT SPECIFIED. NOTHING DONE.', 0)
            endif ! flen
 ! change calculation algorithm ccccccccccccccccccccccccccccccccccccc
         elseif (remove_tag(comlyn,'FAST',comlen).gt.0) then
@@ -1485,19 +1487,19 @@
           select case(keyword)
            case('YES','ON','TRUE','T','yes','on','true','t')
             keyword='ENABLED '; calc_Mtensor_fast=.true.
-            if (qprint) then ; write(msg___,7014) whoami, keyword ; write(0,'(A)') msg___ ; endif
+            if (qprint) then ; write(msg___,7014) whoami, keyword ; call plainmessage(msg___) ; endif
            case('NO','OFF','FALSE','F','no','off','false','f')
             keyword='DISABLED' ; calc_Mtensor_fast=.false.
-            if (qprint) then ; write(msg___,7014) whoami, keyword ; write(0,'(A)') msg___ ; endif
+            if (qprint) then ; write(msg___,7014) whoami, keyword ; call plainmessage(msg___) ; endif
            case default
-            write(0,*) 'WARNING FROM: ',whoami,': ','UNKNOWN OPTION SPECIFIED FOR "FAST"'
+            call warning(whoami, 'UNKNOWN OPTION SPECIFIED FOR "FAST"', 0)
           end select
  7014 format(/A,' SPARSE MATRIX ROUTINE FOR M TENSOR COMPUTATION ',A)
         endif
 !cccccccccccccccccccccccccccccccccccc CV WEIGHTS cccccccccccccccccccccccccccccccccccc
       elseif (( keyword(1:4).eq.'WEIG'(1:4) )) then
         if (remove_tag(comlyn,'CALC',comlen).gt.0) then
-          if (qprint) then ; write(msg___,6754) whoami ; write(0,'(A)') msg___ ; endif
+          if (qprint) then ; write(msg___,6754) whoami ; call plainmessage(msg___) ; endif
  6754 format(A,' COMPUTING CV WEIGHTS FROM M(X).')
           call smcv_compute_wgt(r(1,:),r(2,:),r(3,:),m)
 ! print
@@ -1510,10 +1512,10 @@
            if (flen.gt.0) then ; call files_open(ifile, fname, 'FORMATTED', 'WRITE') ; endif
            if (ifile .eq. -1) then
             ifile=fout ! write to output stream
-            if (qprint) then ; write(msg___,6758) whoami ; write(0,'(A)') msg___ ; endif
+            if (qprint) then ; write(msg___,6758) whoami ; call plainmessage(msg___) ; endif
  6758 format(A,' WRITING CV WEIGHTS TO STDOUT.')
            else
-            if (qprint) then ; write(msg___,6759) whoami, fname(1:flen) ; write(0,'(A)') msg___ ; endif
+            if (qprint) then ; write(msg___,6759) whoami, fname(1:flen) ; call plainmessage(msg___) ; endif
  6759 format(A,' WRITING CV WEIGHTS TO FILE ',A,'.')
            endif
            if (qprint) call cv_common_print_wgt(ifile) ! only root node writes
@@ -1529,10 +1531,10 @@
            if (flen.gt.0) then ; call files_open(ifile, fname, 'FORMATTED', 'READ') ; endif
            if (ifile .eq. -1) then
              ifile=5 ! read from input file
-             write(msg___,6760) whoami ; write(0,'(A)') msg___
+             write(msg___,6760) whoami ; call plainmessage(msg___)
  6760 format(A,' READING CV WEIGHTS FROM STDIN.')
            else
-             write(msg___,6761) whoami, fname(1:flen) ; write(0,'(A)') msg___
+             write(msg___,6761) whoami, fname(1:flen) ; call plainmessage(msg___)
  6761 format(A,' READING CV WEIGHTS FROM FILE ',A,'.')
            endif
           endif ! qprint
@@ -1545,16 +1547,16 @@
          k=atof(get_remove_parameter(comlyn, 'SET', comlen), -1d0)
          if (k.ge.0d0) then
           call cv_common_set_kpara(k)
-          if (qprint) then ; write(msg___,6763) whoami, k ; write(0,'(A)') msg___ ; endif
+          if (qprint) then ; write(msg___,6763) whoami, k ; call plainmessage(msg___) ; endif
  6763 format(A,' SETTING PARALLEL FORCE CONSTANT TO ',F11.5)
          else
-          if (qprint) then ; write(msg___,6764) whoami, k ; write(0,'(A)') msg___ ; endif
+          if (qprint) then ; write(msg___,6764) whoami, k ; call plainmessage(msg___) ; endif
  6764 format(A,' INVALID FORCE CONSTANT SPECIFIED: ',F11.5)
          endif
        endif ! set
 !
        if (remove_tag(comlyn,'CALC',comlen).gt.0) then
-        if (qprint) then ; write(msg___, 6765) whoami, whoami, whoami ; write(0,'(A)') msg___ ; endif
+        if (qprint) then ; write(msg___, 6765) whoami, whoami, whoami ; call plainmessage(msg___) ; endif
  6765 format(/A, ' COMPUTING FORCE CONSTANTS FOR RESTRAINED ',/, &
      & A, ' DYNAMICS BY SCALING KPAR WITH CV WEIGHTS.',/, &
      & A, ' OVERWRITING PREVIOUSLY DEFINED FORCE CONSTANTS.')
@@ -1563,7 +1565,7 @@
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       elseif (( keyword(1:4).eq.'TANV'(1:4) )) then ! print/read/compute tangent to path
        if (remove_tag(comlyn,'CALC',comlen).gt.0) then ! calculate
-        if (qprint) then ; write(msg___,6766) whoami ; write(0,'(A)') msg___ ; endif
+        if (qprint) then ; write(msg___,6766) whoami ; call plainmessage(msg___) ; endif
  6766 format(/A,' WILL COMPUTE TANGENT TO PATH.')
         call cv_common_compute_dr()
 !
@@ -1597,7 +1599,7 @@
          if (flen.gt.0) then ; call files_open(ifile, fname, 'FORMATTED', 'WRITE') ; endif
          if (ifile .eq. -1) ifile=fout ! write to output stream
 !---------------------------- assume file is open, write -------------------------
-         write(msg___,6768) whoami ; write(0,'(A)') msg___
+         write(msg___,6768) whoami ; call plainmessage(msg___)
  6768 format(/A,' WRITING VECTORS TANGENT TO PATH.')
         endif ! qprint
         if (qroot) call cv_common_print_dr(ifile)
@@ -1605,7 +1607,7 @@
        endif ! TANV
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       elseif (( keyword(1:4).eq.'LIST'(1:4) )) then ! list CV
-       if (qprint) then ; write(msg___,6762) whoami ; write(0,'(A)') msg___ ; endif
+       if (qprint) then ; write(msg___,6762) whoami ; call plainmessage(msg___) ; endif
  6762 format(/A,' WILL LIST CV.')
        call smcv_list() ! this routine deals with the various CV
 ! write(0,*) 'ME_LOCAL: ',ME_LOCAL, 'SIZE_LOCAL:', SIZE_LOCAL
@@ -1626,7 +1628,7 @@
          else
           write(msg___, 6802) whoami
          endif
-         write(0,'(A)') msg___
+         call plainmessage(msg___)
         endif
 !
  6801 format(A,' WILL OBTAIN NEW CV VALUES BY INTERPOLATION.')
@@ -1663,7 +1665,7 @@
  6772 format(/A,' UNSPECIFIED INTERPOLATION METHOD.',/, &
      & A, ' WILL INTERPOLATE CV USING LINEAR INTERPOLATION')
              endif ! length
-             write(0,'(A)') msg___
+             call plainmessage(msg___)
            endif ! int_method
          endif ! prnlev
          if (int_method.eq.0) int_method=linear ! choose linear interpolation as default
@@ -1673,26 +1675,26 @@
         if (find_tag(comlyn, 'NIN', comlen).gt.0) then
           num_rep_in=atoi(get_remove_parameter(comlyn, 'NIN', comlen), 0)
           if (num_rep_in.le.0) then
-            if (qprint) then ; write(msg___, 6781) whoami ; write(0,'(A)') msg___ ; endif
+            if (qprint) then ; write(msg___, 6781) whoami ; call plainmessage(msg___) ; endif
  6781 format(A,' NUMBER OF INPUT REPLICAS MUST BE > 0. ',/, &
      & ' NOTHING DONE.')
             return
           else
             name_cv_in=get_remove_parameter(comlyn,'CVIN',comlen); len_cv_in=len_trim(name_cv_in)
             if (len_cv_in.le.0) then
-              if (qprint) then ; write(msg___, 6782) whoami ; write(0,'(A)') msg___ ; endif
+              if (qprint) then ; write(msg___, 6782) whoami ; call plainmessage(msg___) ; endif
  6782 format(A,' INPUT CV FILE NAME UNSPECIFIED.',/, &
      & ' NOTHING DONE.')
               return
             else
               if (qprint) then ; write(msg___,6783) &
-     & whoami, num_rep_in, whoami, name_cv_in(1:len_cv_in) ; write(0,'(A)') msg___ ; endif
+     & whoami, num_rep_in, whoami, name_cv_in(1:len_cv_in) ; call plainmessage(msg___) ; endif
  6783 format(A,' INITIAL STRING RESOLUTION: ', I5, ' REPLICAS.',/, &
      & A,' INPUT CV FILE IS ', A)
             endif ! len_cv_in<=0
           endif ! num_rep_in<=0
         else
-          if (qprint) then ; write(msg___, 6784) whoami, whoami ; write(0,'(A)') msg___ ; endif
+          if (qprint) then ; write(msg___, 6784) whoami, whoami ; call plainmessage(msg___) ; endif
  6784 format(A,' NUMBER OF INPUT REPLICAS UNSPECIFIED',/, &
      & A,' NOTHING DONE.')
           return
@@ -1702,28 +1704,28 @@
         if (find_tag(comlyn, 'NOUT', comlen).gt.0) then
           num_rep_out=atoi(get_remove_parameter(comlyn, 'NOUT', comlen), 0)
           if (num_rep_out.le.0) then
-            if (qprint) then ; write(msg___, 6785) whoami, whoami ; write(0,'(A)') msg___ ; endif
+            if (qprint) then ; write(msg___, 6785) whoami, whoami ; call plainmessage(msg___) ; endif
  6785 format(A,' NUMBER OF OUTPUT REPLICAS MUST BE > 0. ',/,A, &
      & ' NOTHING DONE.')
             return
           else
             name_cv_out=get_remove_parameter(comlyn,'CVOUT',comlen); len_cv_out=len_trim(name_cv_out)
             if (len_cv_out.le.0) then
-              if (qprint) then ; write(msg___, 6786) whoami, whoami ; write(0,'(A)') msg___ ; endif
+              if (qprint) then ; write(msg___, 6786) whoami, whoami ; call plainmessage(msg___) ; endif
  6786 format(A,' OUTPUT CV FILE NAME UNSPECIFIED.',/,A, &
      & ' NOTHING DONE.')
               return
             else
               if (qprint) then
                write(msg___,6787) whoami, num_rep_out, whoami, name_cv_out(1:len_cv_out)
-               write(0,'(A)') msg___
+               call plainmessage(msg___)
               endif
  6787 format(A,' OUTPUT STRING RESOLUTION: ', I5, ' REPLICAS.',/, &
      & A,' OUPUT CV FILE IS ', A)
             endif ! len_cv_out
           endif ! num_rep_out
         else ! num_rep_out
-          if (qprint) then ; write(msg___, 6788) whoami, whoami ; write(0,'(A)') msg___ ; endif
+          if (qprint) then ; write(msg___, 6788) whoami, whoami ; call plainmessage(msg___) ; endif
  6788 format(A,' NUMBER OF OUTPUT REPLICAS UNSPECIFIED',/, &
      & A,' NOTHING DONE.')
           return
@@ -1731,13 +1733,13 @@
 !ccccccccccccc coordinate file specification
         inte_get_coor=(remove_tag(comlyn,'COOR',comlen).gt.0)
         if (inte_get_coor) then ! look for input and output coordinate files
-          if (qprint) then ; write(msg___,6800) whoami ; write(0,'(A)') msg___ ; endif
+          if (qprint) then ; write(msg___,6800) whoami ; call plainmessage(msg___) ; endif
  6800 format(A,' WILL GENERATE REPLICA COORDINATE SETS.')
           inte_get_coor=.true.
 ! will also interpolate coordinates
           name_cor_in=get_remove_parameter(comlyn,'CRIN',comlen); len_cor_in=len_trim(name_cor_in) ! text file which contains a list of file names (6/20/2011)
           if (len_cor_in.le.0) then
-            if (qprint) then ; write(msg___, 6789) whoami ; write(0,'(A)') msg___ ; endif
+            if (qprint) then ; write(msg___, 6789) whoami ; call plainmessage(msg___) ; endif
  6789 format(A,' INPUT COORDINATES FILE NAME UNSPECIFIED.',/, &
      & '  NOTHING DONE.')
             return
@@ -1745,7 +1747,7 @@
 !
           name_cor_out=get_remove_parameter(comlyn,'CROUT',comlen); len_cor_out=len_trim(name_cor_out)
           if (len_cor_out.le.0) then
-            if (qprint) then ; write(msg___, 6790) whoami ; write(0,'(A)') msg___ ; endif
+            if (qprint) then ; write(msg___, 6790) whoami ; call plainmessage(msg___) ; endif
  6790 format(A,' OUTPUT COORDINATES FILE NAME UNSPECIFIED.',/, &
      & ' NOTHING DONE.')
             return
@@ -1777,12 +1779,12 @@
            enddo
            call files_close(ifile)
 !
-           write(msg___,6791) whoami ; write(0,'(A)') msg___
+           write(msg___,6791) whoami ; call plainmessage(msg___)
  6791 format(A,' COORDINATE SETS WILL BE READ FROM', &
      & ' THE FOLLOWING FILES:' )
 !
            do j=1, num_rep_in
-            write(msg___,'(A1,I5," ",A80)') char(9), j, fname_cor_in(j) ; write(0,'(A)') msg___
+            write(msg___,'(A1,I5," ",A80)') char(9), j, fname_cor_in(j) ; call plainmessage(msg___)
            enddo
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
            call files_open(ofile, name_cor_out(1:len_cor_out), 'FORMATTED', 'READ')
@@ -1794,12 +1796,12 @@
            enddo
            call files_close(ofile)
 !
-           write(msg___,6791) whoami ; write(0,'(A)') msg___
+           write(msg___,6791) whoami ; call plainmessage(msg___)
  6793 format(A,' COORDINATE SETS WILL BE WRITTEN TO', &
      & ' THE FOLLOWING FILES:' )
 !
            do j=1, num_rep_out
-            write(msg___,'(A1,I5," ",A80)') char(9), j, fname_cor_out(j) ; write(0,'(A)') msg___
+            write(msg___,'(A1,I5," ",A80)') char(9), j, fname_cor_out(j) ; call plainmessage(msg___)
            enddo
 !
           endif ! qprint
@@ -1807,14 +1809,14 @@
 !
         if (.not.(interp_cv.or.inte_get_coor)) then ! nothing to do
          write(msg___,'(A," NOTHING TO DO")') whoami
-         write(0,'(A)') msg___
+         call plainmessage(msg___)
          return
         endif
 !ccccccccccccccccccccccccc do work
 ! interpolate CV first
 ! compute cv weights, if needed
         if (.not.cv_common_weights_initialized) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','CV WEIGHTS NOT INITIALIZED. WILL COMPUTE FROM M(X)'
+         call warning(whoami, 'CV WEIGHTS NOT INITIALIZED. WILL COMPUTE FROM M(X)', 0)
          call smcv_compute_wgt(r(1,:),r(2,:),r(3,:),m)
         endif
 !
@@ -1859,7 +1861,7 @@
            rtemp(:,j)=cv%r(:,comp)
          enddo
 !
-         if (qprint) then ; write(msg___,6974) whoami ; write(0,'(A)') msg___ ; endif
+         if (qprint) then ; write(msg___,6974) whoami ; call plainmessage(msg___) ; endif
  6974 format(A,' READING COORDINATE FILES')
 !
          do j=1, num_rep_in
@@ -1925,7 +1927,7 @@
         endif ! inte_get_coor
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       else
-            write(msg___,*)'UNRECOGNIZED SUBCOMMAND: ',keyword;write(0,*) 'WARNING FROM: ',whoami,': ',msg___
+            write(msg___,*)'UNRECOGNIZED SUBCOMMAND: ',keyword;call warning(whoami, msg___, 0)
       endif
       end subroutine smcv
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -1960,13 +1962,13 @@
         write(msg___, 111) whoami, ME_GLOBAL, whoami
  111 FORMAT(A, ' WORLD REPLICA ',I5, ' HAS ZERO GROUP ID', &
      & /,A,' BUT INVALID STRING ID (MAY BE OK).')
-        write(0,'(A)') msg___
+        call plainmessage(msg___)
       elseif (ME_STRNG.ne.MPI_UNDEFINED.and. &
      & (ME_LOCAL.ne.0.or.MPI_COMM_LOCAL.eq.MPI_COMM_NULL)) then
         write(msg___, 112) whoami, ME_GLOBAL, whoami
  112 FORMAT(A, ' WORLD REPLICA ',I5, ' HAS A VALID STRING ID', &
      & /,A,' BUT A NONZERO GROUP ID. ABORTING.')
-        write(0,'(A)') msg___
+        call plainmessage(msg___)
        return
       endif
 !
@@ -1978,7 +1980,7 @@
         if (ME_STRNG.eq.0) then
           write(msg___,'(2A)') &
      & whoami, ' SMCV ALREADY INITIALIZED. CALL "DONE" TO CLEAN UP.'
-          write(0,'(A)') msg___
+          call plainmessage(msg___)
         endif ! ME_STRNG
        endif ! qroot
        return
@@ -1999,7 +2001,7 @@
         if (ME_STRNG.eq.0) then
           write(msg___,'(2A,I5, A)') &
      & whoami, ' FOUND ',nstring,' REPLICAS.'
-          write(0,'(A)') msg___
+          call plainmessage(msg___)
         endif
       endif
 !
@@ -2120,7 +2122,7 @@
       data whoami /' SMCV_DONE>'/
 !
       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.ME_STRNG.eq.0) then
-        write(msg___,'(2A,I5, A)') whoami, ' CLEANING UP.' ; write(0,'(A)') msg___
+        write(msg___,'(2A,I5, A)') whoami, ' CLEANING UP.' ; call plainmessage(msg___)
       endif
 !
       call cv_common_done()
@@ -2223,7 +2225,7 @@
 ! did the user specify filter cutoff?
        dst_cutoff=atof(get_remove_parameter(comlyn, 'WNCT', comlen), -1.0d0)
        if (dst_cutoff.lt.0.0d0) then
-        if (qprint) then ; write(msg___,664) whoami, whoami ; write(0,'(A)') msg___ ; endif
+        if (qprint) then ; write(msg___,664) whoami, whoami ; call plainmessage(msg___) ; endif
  664 FORMAT(A,' DST REQUESTED BUT FILTER CUTOFF', &
      & A, ' NOT SPECIFIED.',/,' WILL USE 0.500')
         dst_cutoff=0.5d0
@@ -2231,18 +2233,18 @@
       endif
 !ccccccc CHECK FOR MULTIPLE OPTIONS
       if ((qspline+qlinear+qbspline+qdst) .eq. 0) then
-       if (qprint) then ; write(msg___,665) whoami, whoami ; write(0,'(A)') msg___ ; endif
+       if (qprint) then ; write(msg___,665) whoami, whoami ; call plainmessage(msg___) ; endif
  665 FORMAT(A,' INTERPOLATION METHOD NOT SPECIFIED.',/, &
      & A,' WILL USE LINEAR INTERPOLATION.')
        interp_method=linear
       elseif ((qdst+qspline+qlinear+qbspline) .gt. 1) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','TOO MANY INTERPOLATION OPTIONS.'
+       call warning(whoami, 'TOO MANY INTERPOLATION OPTIONS.', 0)
       endif
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 ! did the user specify a tolerance?
       def=atof(get_remove_parameter(comlyn, 'DEFI', comlen), 1.1d0)
       if (def.lt.1.0d0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','INTERPOLATION TOLERANCE MUST BE >= 1.'
+         call warning(whoami, 'INTERPOLATION TOLERANCE MUST BE >= 1.', 0)
 ! return
       endif
 ! did the user specify a maximum number of iterations?
@@ -2252,12 +2254,12 @@
       if (qprint) then
        mlen=len(methods(interp_method))
        write(msg___,667) whoami,methods(interp_method)(1:mlen),whoami, &
-     & def ; write(0,'(A)') msg___
+     & def ; call plainmessage(msg___)
  667 format(A,' WILL REPARAMETRIZE STRING USING ',A,/, &
      &A,' INTERPOLATION TO WITHIN MAX(DS)/MIN(DS) < ',F7.3,' TOLERANCE')
-      if (iterations.gt.0) then ; write(msg___,668) whoami, iterations ; write(0,'(A)') msg___ ; endif
+      if (iterations.gt.0) then ; write(msg___,668) whoami, iterations ; call plainmessage(msg___) ; endif
  668 format(A,' WITH A MAXIMUM OF ',I5,' ITERATIONS')
-      if(interp_method.eq.dst) then ; write(msg___,6680) whoami,dst_cutoff*100.0 ; write(0,'(A)') msg___ ; endif
+      if(interp_method.eq.dst) then ; write(msg___,6680) whoami,dst_cutoff*100.0 ; call plainmessage(msg___) ; endif
  6680 format(A,' DST INTERPOLATION WILL USE THE LOWER ',F8.4, &
      & '% OF WAVENUMBERS')
       endif
@@ -2313,7 +2315,7 @@
       stat_iteration_counter=atoi(get_remove_parameter(comlyn, 'COUN', comlen), -1)
       stat_iteration_counter=max(stat_iteration_counter,0)
       if (stat_iteration_counter.gt.0) then
-       if (qprint) then ; write(msg___,639) whoami, stat_iteration_counter ; write(0,'(A)') msg___ ; endif
+       if (qprint) then ; write(msg___,639) whoami, stat_iteration_counter ; call plainmessage(msg___) ; endif
  639 format(A,' SETTING ITERATION COUNTER TO ',I7)
       endif
 !
@@ -2364,7 +2366,7 @@
        output_rmsd0=.true.
        rmsd0_fname=get_remove_parameter(COMLYN,'RNAM',COMLEN); rmsd0_flen=len_trim(rmsd0_fname)
        if (rmsd0_flen.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','NO RMSD FILE NAME SPECIFIED. WILL WRITE TO STDOUT.'
+         call warning(whoami, 'NO RMSD FILE NAME SPECIFIED. WILL WRITE TO STDOUT.', 0)
          rmsd0_funit=fout
        else
          if (remove_tag(comlyn,'RAPP',comlen).gt.0) then ! APPEND?
@@ -2380,7 +2382,7 @@
          else
           write(msg___,661 ) whoami
          endif
-         write(0,'(A)') msg___
+         call plainmessage(msg___)
        endif
  660 format(A,' WILL WRITE STRING RMSD TO FILE ',A)
  661 format(A,' WILL WRITE STRING RMSD TO STDOUT.')
@@ -2391,7 +2393,7 @@
         output_dsdt=.true.
         dsdt_fname=get_remove_parameter(COMLYN,'DNAM',COMLEN); dsdt_flen=len_trim(dsdt_fname)
         if (dsdt_flen.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','NO DELS FILE NAME SPECIFIED. WILL WRITE TO STDOUT.'
+         call warning(whoami, 'NO DELS FILE NAME SPECIFIED. WILL WRITE TO STDOUT.', 0)
          dsdt_funit=fout
         else
          if (remove_tag(comlyn,'DAPP',comlen).gt.0) then ! APPEND?
@@ -2407,7 +2409,7 @@
          else
           write(msg___,651 ) whoami
          endif
-         write(0,'(A)') msg___
+         call plainmessage(msg___)
         endif
  650 format(A,' WILL WRITE STRING RMSD(I,I+1) TO FILE ',A)
  651 format(A,' WILL WRITE STRING RMSD(I,I+1) TO STDOUT.')
@@ -2418,7 +2420,7 @@
         output_rmsd_ave=.true.
         rmsd_ave_fname=get_remove_parameter(COMLYN,'RANM',COMLEN); rmsd_ave_flen=len_trim(rmsd_ave_fname)
         if (rmsd_ave_flen.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','NO RMSA FILE NAME SPECIFIED. WILL WRITE TO STDOUT.'
+         call warning(whoami, 'NO RMSA FILE NAME SPECIFIED. WILL WRITE TO STDOUT.', 0)
          rmsd_ave_funit=fout
         else
          if (remove_tag(comlyn,'RAAP',comlen).gt.0) then ! APPEND?
@@ -2434,7 +2436,7 @@
          else
           write(msg___,6510 ) whoami
          endif
-         write(0,'(A)') msg___
+         call plainmessage(msg___)
         endif
  6500 format(A,' WILL WRITE STRING RMSD FROM AVERAGE STRUC. TO FILE ',A)
  6510 format(A,' WILL WRITE STRING RMSD FROM AVERAGE STRUC. TO STDOUT.')
@@ -2443,7 +2445,7 @@
         num_average_samples=max(atoi(get_remove_parameter(comlyn, 'NAVE', comlen), 0),0)
 ! same value for cv
         call cv_set_ave_samples(num_average_samples)
-        if (qprint) then ; write(msg___,6511) whoami, num_average_samples ; write(0,'(A)') msg___ ; endif
+        if (qprint) then ; write(msg___,6511) whoami, num_average_samples ; call plainmessage(msg___) ; endif
  6511 format(A,' SETTING NUMBER OF SAMPLES IN THE AVERAGE SET TO ',I7)
 !
       endif !
@@ -2452,7 +2454,7 @@
         output_arclength=.true.
         s_fname=get_remove_parameter(COMLYN,'ANAM',COMLEN); s_flen=len_trim(s_fname)
         if (s_flen.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','STRING LENGTH FILE NAME NOT SPECIFIED. WILL WRITE TO STDOUT.'
+         call warning(whoami, 'STRING LENGTH FILE NAME NOT SPECIFIED. WILL WRITE TO STDOUT.', 0)
          s_funit=fout
         else
          if (remove_tag(comlyn,'AAPP',comlen).gt.0) then ! APPEND?
@@ -2468,7 +2470,7 @@
          else
           write(msg___,653) whoami
          endif
-         write(0,'(A)') msg___
+         call plainmessage(msg___)
         endif
  652 format(A,' WILL WRITE STRING LENGTH TO FILE ',A)
  653 format(A,' WILL WRITE STRING LENGTH TO STDOUT.')
@@ -2479,7 +2481,7 @@
         output_curvature=.true.
         c_fname=get_remove_parameter(COMLYN,'CVNM',COMLEN); c_flen=len_trim(c_fname)
         if (c_flen.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','CURVATURE FILE NAME NOT SPECIFIED. WILL WRITE TO STDOUT.'
+         call warning(whoami, 'CURVATURE FILE NAME NOT SPECIFIED. WILL WRITE TO STDOUT.', 0)
          c_funit=fout
         else
          if (remove_tag(comlyn,'CAPP',comlen).gt.0) then ! APPEND?
@@ -2495,7 +2497,7 @@
          else
           write(msg___,6531) whoami
          endif
-         write(0,'(A)') msg___
+         call plainmessage(msg___)
         endif
  6521 format(A,' WILL WRITE CURVATURE TO FILE ',A)
  6531 format(A,' WILL WRITE CURVATURE TO STDOUT.')
@@ -2506,7 +2508,7 @@
         output_fe=.true.
         fe_fname=get_remove_parameter(COMLYN,'FENM',COMLEN); fe_flen=len_trim(fe_fname)
         if (fe_flen.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','NO F.E. FILE NAME SPECIFIED. WILL WRITE TO STDOUT.'
+         call warning(whoami, 'NO F.E. FILE NAME SPECIFIED. WILL WRITE TO STDOUT.', 0)
          fe_funit=fout
         else
          if (remove_tag(comlyn,'FAPP',comlen).gt.0) then ! APPEND?
@@ -2522,7 +2524,7 @@
          else
           write(msg___,6530) whoami
          endif
-         write(0,'(A)') msg___
+         call plainmessage(msg___)
         endif
  6520 format(A,' WILL WRITE FREE ENERGY TO FILE ',A)
  6530 format(A,' WILL WRITE FREE ENERGY TO STDOUT.')
@@ -2534,7 +2536,7 @@
         call cv_common_neq_work_init() ! initialize force and position arrays
         work_fname=get_remove_parameter(COMLYN,'WKNM',COMLEN); work_flen=len_trim(work_fname)
         if (work_flen.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','NO F.E. FILE NAME SPECIFIED. WILL WRITE TO STDOUT.'
+         call warning(whoami, 'NO F.E. FILE NAME SPECIFIED. WILL WRITE TO STDOUT.', 0)
          work_funit=fout
         else
          if (remove_tag(comlyn,'WKAP',comlen).gt.0) then ! APPEND?
@@ -2546,7 +2548,7 @@
 ! specify tag that identifies the work calculated with a particular process
         work_tag=get_remove_parameter(COMLYN,'WTAG',COMLEN); wtag_len=len_trim(work_tag)
         if (wtag_len.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','WORK TAG NOT SPECIFIED.'
+         call warning(whoami, 'WORK TAG NOT SPECIFIED.', 0)
         endif
 !ccccccccccc print summary
         if (qprint) then
@@ -2555,7 +2557,7 @@
          else
           write(msg___,6533) whoami
          endif
-         write(0,'(A)') msg___
+         call plainmessage(msg___)
         endif
  6523 format(A,' WILL WRITE NON-EQ. WORK TO FILE ',A)
  6533 format(A,' WILL WRITE NON-EQ. WORK TO STDOUT.')
@@ -2570,7 +2572,7 @@
          output_cv=.true.
          if (qprint) then
            write(msg___,6620 ) whoami,cv_fname(1:cv_flen)
-           write(0,'(A)') msg___
+           call plainmessage(msg___)
          endif
          if (remove_tag(comlyn,'CVAP',comlen).gt.0) then ! APPEND?
            cvform='APPEND'
@@ -2578,7 +2580,7 @@
            cvform='WRITE'
          endif
         else
-          write(0,*) 'WARNING FROM: ',whoami,': ','NO FILE NAME GIVEN. WILL NOT WRITE CV.'
+          call warning(whoami, 'NO FILE NAME GIVEN. WILL NOT WRITE CV.', 0)
         endif
  6620 format(A,' WILL WRITE CV TIME SERIES TO FILE ',A,'.')
 !
@@ -2592,7 +2594,7 @@
          output_wgt=.true.
          if (qprint) then
           write(msg___,6621) whoami,wgt_fname(1:wgt_flen)
-          write(0,'(A)') msg___
+          call plainmessage(msg___)
          endif
          if (remove_tag(comlyn,'WTAP',comlen).gt.0) then ! APPEND?
            wgtform='APPEND'
@@ -2600,7 +2602,7 @@
            wgtform='WRITE'
          endif
         else
-          write(0,*) 'WARNING FROM: ',whoami,': ','NO FILE NAME GIVEN. WILL NOT WRITE CV WEIGHTS.'
+          call warning(whoami, 'NO FILE NAME GIVEN. WILL NOT WRITE CV WEIGHTS.', 0)
         endif
  6621 format(A,' WILL WRITE CV WEIGHTS TO FILE ',A,'.')
 !
@@ -2617,7 +2619,7 @@
           write(msg___,6622) whoami,voronoi_fname(1:voronoi_flen)
          endif
         else
-         write(0,*) 'WARNING FROM: ',whoami,': ','NO FILE NAME GIVEN. WILL NOT WRITE VORONOI HISTOGRAMS.'
+         call warning(whoami, 'NO FILE NAME GIVEN. WILL NOT WRITE VORONOI HISTOGRAMS.', 0)
         endif
  6622 format(A,' WILL WRITE VORONOI HISTOGRAMS TO FILE ',A,'.DAT')
 !
@@ -2633,10 +2635,10 @@
          output_voronoi_map=.true.
          if (qprint) then
           write(msg___,6627) whoami,voronoi_fname(1:voronoi_flen)
-          write(0,'(A)') msg___
+          call plainmessage(msg___)
          endif
         else
-          write(0,*) 'WARNING FROM: ',whoami,': ','NO FILE NAME GIVEN. WILL NOT WRITE VORONOI MAP.'
+          call warning(whoami, 'NO FILE NAME GIVEN. WILL NOT WRITE VORONOI MAP.', 0)
         endif
  6627 format(A,' WILL WRITE VORONOI MAP TO FILE ',A,'.MAP')
 !
@@ -2650,7 +2652,7 @@
 ! check for timestep offset
         vtime_offset=atoi(get_remove_parameter(comlyn, 'VOFF', comlen), 0);
         if (vtime_offset.gt.0) then
-         if (qprint) then ; write(msg___,6624) whoami, vtime_offset ; write(0,'(A)') msg___ ; endif
+         if (qprint) then ; write(msg___,6624) whoami, vtime_offset ; call plainmessage(msg___) ; endif
  6624 format(A,' WILL OFFSET STEP COUNTER IN VORONOI LOG BY ',I10)
         endif
 !
@@ -2658,7 +2660,7 @@
          output_voronoi_log=.true.
          if (qprint) then
           write(msg___,6623) whoami,voronoi_fname(1:voronoi_flen)
-          write(0,'(A)') msg___
+          call plainmessage(msg___)
          endif
          if (remove_tag(comlyn,'VLAP',comlen).gt.0) then ! APPEND?
            vlform='APPEND'
@@ -2667,7 +2669,7 @@
          endif ! vlap
 !
         else
-          write(0,*) 'WARNING FROM: ',whoami,': ','NO FILE NAME GIVEN. WILL NOT WRITE VORONOI LOG.'
+          call warning(whoami, 'NO FILE NAME GIVEN. WILL NOT WRITE VORONOI LOG.', 0)
         endif ! voronoi_flen.gt.0
  6623 format(A,' WILL WRITE VORONOI LOG TO BINARY FILE ',A,'.DAT')
 !
@@ -2684,11 +2686,11 @@
          output_rex_map=.true.
          if (qprint) then
           write(msg___,6721) whoami,rex_fname(1:rex_flen)
-          write(0,'(A)') msg___
+          call plainmessage(msg___)
          endif
          if (rex_flen_old.gt.0) then
           if (qprint) then
-            write(msg___,6722) whoami,rex_fname_old(1:rex_flen_old) ; write(0,'(A)') msg___
+            write(msg___,6722) whoami,rex_fname_old(1:rex_flen_old) ; call plainmessage(msg___)
             rex_funit=-1
             call files_open(rex_funit, rex_fname_old(1:rex_flen_old), 'FORMATTED', 'READ')
           endif
@@ -2697,7 +2699,7 @@
          endif
 !
         else
-          write(0,*) 'WARNING FROM: ',whoami,': ','NO FILE NAME GIVEN. WILL NOT WRITE REPLICA EXCHANGE MAP.'
+          call warning(whoami, 'NO FILE NAME GIVEN. WILL NOT WRITE REPLICA EXCHANGE MAP.', 0)
         endif
  6721 format(A,' WILL WRITE REPLICA EXCHANGE MAP TO FILE ',A,'.MAP')
  6722 format(A,' WILL RESTART FROM REPLICA EXCHANGE MAP IN FILE ',A)
@@ -2712,7 +2714,7 @@
 ! check for timestep offset
         rextime_offset=atoi(get_remove_parameter(comlyn, 'ROFF', comlen), 0);
         if (rextime_offset.gt.0) then
-         if (qprint) then ; write(msg___,6724) whoami, whoami,rextime_offset ; write(0,'(A)') msg___ ; endif
+         if (qprint) then ; write(msg___,6724) whoami, whoami,rextime_offset ; call plainmessage(msg___) ; endif
  6724 format(A,' WILL OFFSET STEP COUNTER IN REPLICA EXCHANGE LOG BY ' &
      & /,A,' ',I10)
         endif
@@ -2721,7 +2723,7 @@
          output_rex_log=.true.
          if (qprint) then
            write(msg___,6723) whoami,whoami,rex_fname(1:rex_flen)
-           write(0,'(A)') msg___
+           call plainmessage(msg___)
          endif
          if (remove_tag(comlyn,'RXAP',comlen).gt.0) then ! APPEND?
            rxlform='APPEND'
@@ -2729,7 +2731,7 @@
            rxlform='WRITE'
          endif ! rxap
         else
-          write(0,*) 'WARNING FROM: ',whoami,': ','NO FILE NAME GIVEN. WILL NOT WRITE REPLICA EXCHANGE LOG.'
+          call warning(whoami, 'NO FILE NAME GIVEN. WILL NOT WRITE REPLICA EXCHANGE LOG.', 0)
         endif ! rex_flen.gt.0
  6723 format(A,' WILL WRITE REPLICA EXCHANGE LOG TO FILE ',/, &
      & A,' ',A,'.DAT')
@@ -2744,7 +2746,7 @@
          output_forces=.true.
          if (qprint) then
           write(msg___,6625) whoami,forces_fname(1:forces_flen)
-         write(0,'(A)') msg___
+         call plainmessage(msg___)
          endif
          if (remove_tag(comlyn,'FCAP',comlen).gt.0) then ! APPEND?
            fform='APPEND'
@@ -2752,7 +2754,7 @@
            fform='WRITE'
          endif
         else
-         write(0,*) 'WARNING FROM: ',whoami,': ','NO FILE NAME GIVEN. WILL NOT WRITE AVERAGE FORCE.'
+         call warning(whoami, 'NO FILE NAME GIVEN. WILL NOT WRITE AVERAGE FORCE.', 0)
         endif
  6625 format(A,' WILL WRITE AVERAGE FORCE TO FILE ',A,'.')
       endif ! forces
@@ -2762,9 +2764,9 @@
         M_fname=get_remove_parameter(COMLYN,'MNAM',COMLEN); M_flen=len_trim(M_fname)
         if (M_flen.gt.0) then
          output_M=.true.
-         if (qprint) then ; write(msg___,6626) whoami,M_fname(1:M_flen) ; write(0,'(A)') msg___ ; endif
+         if (qprint) then ; write(msg___,6626) whoami,M_fname(1:M_flen) ; call plainmessage(msg___) ; endif
         else
-         write(0,*) 'WARNING FROM: ',whoami,': ','NO FILE NAME GIVEN. WILL NOT WRITE M TENSOR.'
+         call warning(whoami, 'NO FILE NAME GIVEN. WILL NOT WRITE M TENSOR.', 0)
         endif
  6626 format(A,' WILL WRITE TENSOR M TO FILE ',A,'.')
       endif
@@ -2807,7 +2809,7 @@
 ! check if the user has made an initialization call
       if (.not.smcv_initialized) call smcv_init()
       if (.not.stat_initialized) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','NO OUTPUT OPTIONS SELECTED. NOTHING DONE'
+       call warning(whoami, 'NO OUTPUT OPTIONS SELECTED. NOTHING DONE', 0)
        return
       endif
 !
@@ -2999,7 +3001,7 @@
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       if (output_voronoi_hist) then ! output voronoi data
         if (voronoi_flen.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','NO FILE NAME SPECIFIED. WILL NOT WRITE VORONOI DATA.'
+         call warning(whoami, 'NO FILE NAME SPECIFIED. WILL NOT WRITE VORONOI DATA.', 0)
         else
          if (qprint) then
           ifile=-1
@@ -3014,7 +3016,7 @@
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       if (output_voronoi_log) then
        if (voronoi_flen.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','NO FILE NAME SPECIFIED. WILL NOT WRITE VORONOI LOG.'
+         call warning(whoami, 'NO FILE NAME SPECIFIED. WILL NOT WRITE VORONOI LOG.', 0)
        else
          if (qprint) then
            vlog_funit=-1
@@ -3031,7 +3033,7 @@
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       if (output_voronoi_map) then ! output voronoi map
         if (voronoi_flen.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','NO FILE NAME SPECIFIED. WILL NOT WRITE VORONOI MAP.'
+         call warning(whoami, 'NO FILE NAME SPECIFIED. WILL NOT WRITE VORONOI MAP.', 0)
         else
 ! put 'whereami' into the map
           if (qroot.and.SIZE_STRNG.gt.1) then
@@ -3059,7 +3061,7 @@
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       if (output_rex_map) then ! output replica exchange map
         if (rex_flen.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','NO FILE NAME SPECIFIED. WILL NOT WRITE REPLICA EXCHANGE MAP.'
+         call warning(whoami, 'NO FILE NAME SPECIFIED. WILL NOT WRITE REPLICA EXCHANGE MAP.', 0)
         else
          if (qprint) then
           rex_funit=-1
@@ -3076,7 +3078,7 @@
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       if (output_rex_log) then
        if (rex_flen.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','NO FILE NAME SPECIFIED. WILL NOT WRITE REPLICA EXCHANGE LOG.'
+         call warning(whoami, 'NO FILE NAME SPECIFIED. WILL NOT WRITE REPLICA EXCHANGE LOG.', 0)
        else
         if (qprint) then
          rex_funit=-1
@@ -3141,7 +3143,7 @@
 !
        if (qroot) then
         if (M_flen.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','NO FILE NAME SPECIFIED. WILL NOT WRITE M TENSOR.'
+         call warning(whoami, 'NO FILE NAME SPECIFIED. WILL NOT WRITE M TENSOR.', 0)
         else
          ifile=-1
          call files_open(ifile, M_fname(1:M_flen), 'FORMATTED', 'WRITE')
@@ -3175,7 +3177,7 @@
       qprint=(MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.ME_STRNG.eq.0)
 !
       if (.not.repa_initialized) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','NO REPARAMETRIZATION OPTIONS SELECTED. NOTHING DONE.'
+       call warning(whoami, 'NO REPARAMETRIZATION OPTIONS SELECTED. NOTHING DONE.', 0)
        return
       endif
       if (qprint) then ; write(msg___,690) whoami ; call plainmessage(msg___,5) ; endif

@@ -1,3 +1,5 @@
+/*#define __WRN(__WHO,__MSG) write(0,*) 'WARNING FROM: ',__WHO,': ',__MSG*/
+/*#define __PRINT(__MSG) write(0,'(A)') __MSG*/
 /*COORDINATES AND MASSES:*/
 /*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
 /*
@@ -60,7 +62,7 @@
         case (posi_com_y); pos='Y'
         case (posi_com_z); pos='Z'
         case default;
-         write(0,*) 'WARNING FROM: ',whoami,': ','UNKNOWN CV TYPE. NOTHING DONE.'
+         call warning(whoami, 'UNKNOWN CV TYPE. NOTHING DONE.', 0)
          return
        end select
 !
@@ -95,7 +97,7 @@
          ind=2
          do j=1,ncom
            m=atom_list%i(j)
-           if (m.le.0) write(0,*) 'WARNING FROM: ',whoami,': ',' INVALID ATOM INDEX SPECIFIED.'
+           if (m.le.0) call warning(whoami, ' INVALID ATOM INDEX SPECIFIED.', 0)
            cv%priv(l)%p(ind)=int_vlist_uaddu(cv%amap,m,l) ! add indices into unique map (which also stores this cv index)
            m=int_vector_uadd(unique_amap_ptr,cv%priv(l)%p(ind))
            ind=ind+1
@@ -118,7 +120,7 @@
           deallocate(indf)
 !*****************************************************************************************
           else
- write(0,*) 'WARNING FROM: ',whoami,': ',' INVALID FRAME SPECIFIED. WILL USE FIXED COORDINATE SYSTEM.'
+ call warning(whoami, ' INVALID FRAME SPECIFIED. WILL USE FIXED COORDINATE SYSTEM.', 0)
            cv%priv(l)%p(ind)=0
           endif
          else
@@ -134,11 +136,11 @@
          cv_posi_com_add=.true.
 !
         else ! out of bounds
-write(msg___,*)'ERROR ADDING POSITION_COM_',pos,' CV. NOTHING DONE.';write(0,*) 'WARNING FROM: ',whoami,': ',msg___
+write(msg___,*)'ERROR ADDING POSITION_COM_',pos,' CV. NOTHING DONE.';call warning(whoami, msg___, 0)
          cv_posi_com_add=.false.
         endif
        else ! found
-write(msg___,*)' POSITION_COM_',pos,' CV ALREADY PRESENT. NOTHING DONE.';write(0,*) 'WARNING FROM: ',whoami,': ',msg___
+write(msg___,*)' POSITION_COM_',pos,' CV ALREADY PRESENT. NOTHING DONE.';call warning(whoami, msg___, 0)
          cv_posi_com_add=.false.
        endif
        end function cv_posi_com_add
@@ -390,7 +392,7 @@ write(msg___,*)' POSITION_COM_',pos,' CV ALREADY PRESENT. NOTHING DONE.';write(0
         case (posi_com_y); pos='Y'
         case (posi_com_z); pos='Z'
         case default;
-         write(0,*) 'WARNING FROM: ',whoami,': ',' UNKNOWN POSITION_COM CV. NOTHING DONE.'
+         call warning(whoami, ' UNKNOWN POSITION_COM CV. NOTHING DONE.', 0)
          return
        end select
 !
@@ -406,16 +408,16 @@ write(msg___,*)' POSITION_COM_',pos,' CV ALREADY PRESENT. NOTHING DONE.';write(0
         if (frame.ge.1) then
          write(msg___,'(A, I3)') &
      & '\t '//pos//' POSITION-COM RELATIVE TO LOCAL FRAME ',frame
-         write(0,'(A)') msg___
+         call plainmessage(msg___)
         else
          write(msg___,'(A)') '\t '//pos//' POSITION-COM'
-         write(0,'(A)') msg___
+         call plainmessage(msg___)
         endif
 !
         do j=1, ncom1;
          iatom=cv%amap%i(ind1(j)) ! actual psf index
  sid=atoms%segid(iatom); rid=atoms%resid(iatom); ren=atoms%resname(iatom); ac=atoms%aname(iatom);
-         write(msg___,667) '\t',j, iatom, sid, rid, ren, ac ; write(0,'(A)') msg___
+         write(msg___,667) '\t',j, iatom, sid, rid, ren, ac ; call plainmessage(msg___)
         enddo
         deallocate(ind1)
        endif

@@ -1,3 +1,5 @@
+/*#define __WRN(__WHO,__MSG) write(0,*) 'WARNING FROM: ',__WHO,': ',__MSG*/
+/*#define __PRINT(__MSG) write(0,'(A)') __MSG*/
 /*COORDINATES AND MASSES:*/
 /*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
 /*
@@ -86,7 +88,7 @@
      & associated(ind_f).and. &
      & associated(ow).and. &
      & associated(fw))) then
-        write(0,*) 'WARNING FROM: ',whoami,': ','UNALLOCATED POINTER ARRAY. ABORT.'
+        call warning(whoami, 'UNALLOCATED POINTER ARRAY. ABORT.', 0)
         cv_drmsd_add=.false.
         return
        endif
@@ -101,7 +103,7 @@
        deallocate(rtemp_f)
 ! write(0,*) oorho12 ! aa
        if (oorho12.le.tol) then
-        write(0,*) 'WARNING FROM: ',whoami,': ',' TARGET STRUCTURES HAVE PERFECT OVERLAP. QUITTING';
+        call warning(whoami, ' TARGET STRUCTURES HAVE PERFECT OVERLAP. QUITTING', 0);
         return
        else
         oorho12=1d0/oorho12
@@ -154,7 +156,7 @@
          do j=1,norient
            m=ind_o(j)
            if (m.le.0) then
-             write(0,*) 'WARNING FROM: ',whoami,': ',' NONPOSITIVE ATOM INDEX.'
+             call warning(whoami, ' NONPOSITIVE ATOM INDEX.', 0)
            endif
            cv%priv(l)%p(ind)=int_vlist_uaddu(cv%amap,m,l) ! add indices into unique map
            m=int_vector_uadd(unique_amap_ptr,cv%priv(l)%p(ind))
@@ -164,7 +166,7 @@
          do j=1,nforced
            m=ind_f(j)
            if (m.le.0) then
-             write(0,*) 'WARNING FROM: ',whoami,': ',' NONPOSITIVE ATOM INDEX.'
+             call warning(whoami, ' NONPOSITIVE ATOM INDEX.', 0)
            endif
            cv%priv(l)%p(ind)=int_vlist_uaddu(cv%amap,m,l) ! add indices into unique map
            m=int_vector_uadd(unique_amap_ptr,cv%priv(l)%p(ind))
@@ -210,11 +212,11 @@
 ! write(0,*) whoami, size(cv%priv(l)%amap_ptr(:)) !aa
 !
         else ! out of bounds
- write(msg___,*)' ERROR ADDING',cvname,'CV. NOTHING DONE.';write(0,*) 'WARNING FROM: ',whoami,': ',msg___
+ write(msg___,*)' ERROR ADDING',cvname,'CV. NOTHING DONE.';call warning(whoami, msg___, 0)
          cv_drmsd_add=.false.
         endif
        else ! found
- write(msg___,*)cvname,'CV ALREADY PRESENT. NOTHING DONE.';write(0,*) 'WARNING FROM: ',whoami,': ',msg___
+ write(msg___,*)cvname,'CV ALREADY PRESENT. NOTHING DONE.';call warning(whoami, msg___, 0)
          cv_drmsd_add=.false.
        endif
 !
@@ -573,7 +575,7 @@
 ! check type just in case
        type=cv%type(i)
        if (type.ne.whichcv) then
-        write(0,*) 'WARNING FROM: ',whoami,': ',' WRONG CV TYPE RECEIVED.'
+        call warning(whoami, ' WRONG CV TYPE RECEIVED.', 0)
        endif
 !
        if (ME_STRNG.eq.0) then
@@ -590,18 +592,18 @@
          write(msg___,'(A)') &
      & '\t PROJECTION ONTO VECTOR BETWEEN TWO REF. STRUCTURES, '//        &
      & 'ORIENTATION ATOMS'
-        write(0,'(A)') msg___
+        call plainmessage(msg___)
         else
          write(msg___,'(A)') &
      & '\t RMSD DIFFERENCE FROM TWO REF. STRUCTURES, ORIENTATION ATOMS'
-        write(0,'(A)') msg___
+        call plainmessage(msg___)
         endif
 !
         do j=1, norient;
          iatom=cv%amap%i(ind_o(j))
          call atomid(iatom, sid, rid, ren, ac)
          write(msg___,667) '\t',j, iatom, sid, rid, ren, ac
-        write(0,'(A)') msg___
+        call plainmessage(msg___)
         enddo
         deallocate(ind_o)
 !
@@ -612,23 +614,23 @@
           write(msg___,'(A)') &
      & '\t PROJECTION ONTO VECTOR BETWEEN TWO REF. STRUCTURES, '//    &
      & 'FORCED ATOMS'
-         write(0,'(A)') msg___
+         call plainmessage(msg___)
          else
           write(msg___,'(A)') &
      & '\t RMSD DIFFERENCE FROM TWO REF. STRUCTURES, FORCED ATOMS'
-         write(0,'(A)') msg___
+         call plainmessage(msg___)
          endif
 !
          do j=1, nforced;
           iatom=cv%amap%i(ind_f(j)) ! actual psf index
           call atomid(iatom, sid, rid, ren, ac)
           write(msg___,667) '\t',j, iatom, sid, rid, ren, ac
-          write(0,'(A)') msg___
+          call plainmessage(msg___)
          enddo
          deallocate(ind_f)
         else
          write(msg___,'(A)')'\t FORCED AND ORIENTATION ATOMS ARE THE SAME'
-         write(0,'(A)') msg___
+         call plainmessage(msg___)
         endif
        endif ! ME_STRING
 !

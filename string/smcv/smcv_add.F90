@@ -1,3 +1,5 @@
+/*#define __WRN(__WHO,__MSG) write(0,*) 'WARNING FROM: ',__WHO,': ',__MSG*/
+/*#define __PRINT(__MSG) write(0,'(A)') __MSG*/
 /*COORDINATES AND MASSES:*/
 /*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
 /*
@@ -102,7 +104,7 @@
        call smcv_cvrms_add(comlyn, comlen) ! rtmd-like variable (compatibility limited to steered dynamics as of 7.2010):
 ! z=sqrt( 1/N sum^N_i (z_i - z^0_i)^2 )
       else
-        write(msg___,*)'UNRECOGNIZED CV TYPE: ',keyword;write(0,*) 'WARNING FROM: ',whoami,': ',msg___
+        write(msg___,*)'UNRECOGNIZED CV TYPE: ',keyword;call warning(whoami, msg___, 0)
       endif
 !
       end subroutine smcv_add
@@ -146,7 +148,7 @@
        case (posi_com_y); cv_name=' POSI_COM_Y'
        case (posi_com_z); cv_name=' POSI_COM_Z'
        case default;
-        write(0,*) 'WARNING FROM: ',whoami,': ','UNKNOWN CV TYPE. NOTHING DONE.'
+        call warning(whoami, 'UNKNOWN CV TYPE. NOTHING DONE.', 0)
         return
       end select
 ! first check for CV options
@@ -178,13 +180,13 @@
       if (associated(iselct)) then ; nslct=size(iselct) ; else ; nslct=0 ; endif
 !
       if(nslct.eq.0) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','ZERO ATOMS SELECTED'
+       call warning(whoami, 'ZERO ATOMS SELECTED', 0)
       endif
 !
       call int_vector_init(posi_com_list)
       do i=1,size(iselct)
        j=int_vector_add(posi_com_list,iselct(i))
-       if (j.le.0) then ; write(0,*) 'WARNING FROM: ',whoami,': ','COULD NOT ADD ATOM INDEX TO COM LIST' ; endif
+       if (j.le.0) then ; call warning(whoami, 'COULD NOT ADD ATOM INDEX TO COM LIST', 0) ; endif
       enddo
       if (associated(iselct)) deallocate(iselct)
 !
@@ -195,14 +197,14 @@
        else
         write(msg___, 665) whoami,cv_name,k,w,gam
        endif
-       write(0,'(A)') msg___
+       call plainmessage(msg___)
 !
        if (frame.ge.1) then
         write(msg___,'(A,I3)') whoami//' RELATIVE TO LOCAL FRAME ',frame
        else
         write(msg___,'(A)') whoami//' RELATIVE TO THE ABSOLUTE FRAME'
        endif
-       write(0,'(A)') msg___
+       call plainmessage(msg___)
 !
       endif
 !
@@ -214,7 +216,7 @@
 ! now attempt to add CV
       ok=cv_posi_com_add(cvtype,posi_com_list,k,gam,w,max(frame,0)) ! no mass weighting; disallow negative frame indices
       if (.not.ok) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','COULD NOT ADD CV'
+       call warning(whoami, 'COULD NOT ADD CV', 0)
       endif
 ! deallocate lists
       call int_vector_done(posi_com_list)
@@ -288,11 +290,9 @@
 !
        call int_vector_init(dihe_com_list(atom_group))
 
-
-
        do i=1,size(iselct)
         j=int_vector_add(dihe_com_list(atom_group),iselct(i))
-        if (j.le.0) then ; write(0,*) 'WARNING FROM: ',whoami,': ','COULD NOT ADD ATOM INDEX TO COM LIST' ; endif
+        if (j.le.0) then ; call warning(whoami, 'COULD NOT ADD ATOM INDEX TO COM LIST', 0) ; endif
        enddo
        if (associated(iselct)) deallocate(iselct)
 
@@ -305,7 +305,7 @@
        else
         write(msg___, 665) whoami,cv_name,k,w,gam
        endif
-       write(0,'(A)') msg___
+       call plainmessage(msg___)
       endif
 !
   664 format(/A,' WILL ADD ',A,' CV WITH K =',F7.3, &
@@ -316,7 +316,7 @@
 ! now attempt to add CV
       ok=cv_dihe_com_add(dihe_com_list,k,gam,w) ! no mass weighting
       if (.not.ok) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','COULD NOT ADD CV'
+       call warning(whoami, 'COULD NOT ADD CV', 0)
       endif
 ! deallocate lists
       do i=1,4; call int_vector_done(dihe_com_list(i)); enddo
@@ -388,7 +388,7 @@
       if (associated(iselct)) then ; nslct=size(iselct) ; else ; nslct=0 ; endif
 !
        if (nslct.eq.0) then
-        write(0,*) 'WARNING FROM: ',whoami,': ','ZERO ATOMS SELECTED'
+        call warning(whoami, 'ZERO ATOMS SELECTED', 0)
        endif
 !
        call int_vector_init(angle_com_list(atom_group))
@@ -399,7 +399,7 @@
 
        do i=1,size(iselct)
         j=int_vector_add(angle_com_list(atom_group),iselct(i))
-        if (j.le.0) then ; write(0,*) 'WARNING FROM: ',whoami,': ','COULD NOT ADD ATOM INDEX TO COM LIST' ; endif
+        if (j.le.0) then ; call warning(whoami, 'COULD NOT ADD ATOM INDEX TO COM LIST', 0) ; endif
        enddo
        if (associated(iselct)) deallocate(iselct)
 
@@ -413,7 +413,7 @@
         write(msg___, 665) whoami,cv_name,k,w,gam
        endif
       endif
-      write(0,'(A)') msg___
+      call plainmessage(msg___)
 !
   664 format(/A,' WILL ADD ',A,' CV WITH K =',F7.3, &
      & ' AND GAMMA =',F7.3,'.')
@@ -423,7 +423,7 @@
 ! now attempt to add CV
       ok=cv_angle_com_add(angle_com_list,k,gam,w) ! no mass weighting
       if (.not.ok) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','COULD NOT ADD CV'
+       call warning(whoami, 'COULD NOT ADD CV', 0)
       endif
 ! deallocate lists
       do i=1,3; call int_vector_done(angle_com_list(i)); enddo
@@ -496,7 +496,7 @@
       if (associated(iselct)) then ; nslct=size(iselct) ; else ; nslct=0 ; endif
 !
        if (nslct.eq.0) then
-        write(0,*) 'WARNING FROM: ',whoami,': ','ZERO ATOMS SELECTED'
+        call warning(whoami, 'ZERO ATOMS SELECTED', 0)
        endif
 !
        call int_vector_init(dist_com_list(atom_group))
@@ -509,7 +509,7 @@
 
        do i=1,size(iselct)
         j=int_vector_add(dist_com_list(atom_group),iselct(i))
-        if (j.le.0) then ; write(0,*) 'WARNING FROM: ',whoami,': ','COULD NOT ADD ATOM INDEX TO COM LIST' ; endif
+        if (j.le.0) then ; call warning(whoami, 'COULD NOT ADD ATOM INDEX TO COM LIST', 0) ; endif
        enddo
        if (associated(iselct)) deallocate(iselct)
 
@@ -522,7 +522,7 @@
        else
         write(msg___, 665) whoami,cv_name,k,w,gam
        endif
-       write(0,'(A)') msg___
+       call plainmessage(msg___)
       endif
 !
   664 format(/A,' WILL ADD ',A,' CV WITH K =',F7.3, &
@@ -533,7 +533,7 @@
 ! now attempt to add CV
       ok=cv_dist_com_add(dist_com_list,k,gam,w) ! no mass weighting
       if (.not.ok) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','COULD NOT ADD CV'
+       call warning(whoami, 'COULD NOT ADD CV', 0)
       endif
 ! deallocate lists
       do i=1,2; call int_vector_done(dist_com_list(i)); enddo
@@ -606,7 +606,7 @@
        elseif (( key(1:2).eq.'P4'(1:2) )) then
         ipt=4 ; qp4=.true.
        else
-        write(msg___,*)'VECTOR DEFINITION ERROR. EXPECTED "P[1-4]", GOT "',key,'"';write(0,*) 'WARNING FROM: ',whoami,': ',msg___
+        write(msg___,*)'VECTOR DEFINITION ERROR. EXPECTED "P[1-4]", GOT "',key,'"';call warning(whoami, msg___, 0)
        endif
 !
        comlen=min(max(0,comlen),len(comlyn));comlyn(comlen+1:)='';call adjustleft(comlyn,(/' ',tab/));comlen=len_trim(comlyn)
@@ -632,7 +632,7 @@
       if (associated(iselct)) then ; nslct=size(iselct) ; else ; nslct=0 ; endif
 !
         IF(NSLCT.EQ.0) THEN
-         write(0,*) 'WARNING FROM: ',whoami,': ','ZERO ATOMS SELECTED'
+         call warning(whoami, 'ZERO ATOMS SELECTED', 0)
         endif
 !
 
@@ -644,7 +644,7 @@
 
        do i=1,size(iselct)
         j=int_vector_add(atom_list(ipt),iselct(i))
-        if (j.le.0) then ; write(0,*) 'WARNING FROM: ',whoami,': ','COULD NOT ADD ATOM INDEX TO COM LIST' ; endif
+        if (j.le.0) then ; call warning(whoami, 'COULD NOT ADD ATOM INDEX TO COM LIST', 0) ; endif
        enddo
        if (associated(iselct)) deallocate(iselct)
 
@@ -655,7 +655,7 @@
       enddo
 ! check that all four points have been added
       if (.not.(qp1.and.qp2.and.qp3.and.qp4)) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','SOME POINTS WERE NOT DEFINED. NOTHING DONE'
+       call warning(whoami, 'SOME POINTS WERE NOT DEFINED. NOTHING DONE', 0)
        return
       endif
 !
@@ -666,7 +666,7 @@
        else
         write(msg___, 665) whoami,cv_name,k,w,gam
        endif
-       write(0,'(A)') msg___
+       call plainmessage(msg___)
       endif
 !
   664 format(/A,' WILL ADD ',A,' CV WITH K =',F7.3, &
@@ -677,7 +677,7 @@
 ! now attempt to add CV
       ok=cv_anglvec_add(atom_list,p,f1,f2,k,gam,w) ! no mass weighting
       if (.not.ok) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','COULD NOT ADD CV'
+       call warning(whoami, 'COULD NOT ADD CV', 0)
       endif
 ! deallocate lists
       do i=1,4; call int_vector_done(atom_list(i)); enddo
@@ -737,28 +737,28 @@
       if (associated(iselct)) then ; nslct=size(iselct) ; else ; nslct=0 ; endif
 !
       if (nslct.lt.4) then ! require at least four atoms, otherwise, can never define frame uniquely
-       write(0,*) 'WARNING FROM: ',whoami,': ',' FEWER THAN FOUR ATOMS SELECTED.'
+       call warning(whoami, ' FEWER THAN FOUR ATOMS SELECTED.', 0)
       endif
 !
       call int_vector_init(frame_list)
       do i=1,size(iselct)
        j=int_vector_add(frame_list,iselct(i))
        if (j.le.0) then
-        write(0,*) 'WARNING FROM: ',whoami,': ','COULD NOT ADD ATOM INDEX TO FRAME LIST'
+        call warning(whoami, 'COULD NOT ADD ATOM INDEX TO FRAME LIST', 0)
        endif
       enddo
       if (associated(iselct)) deallocate(iselct)
 !
 ! print short summary
       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.ME_STRNG.eq.0) then
-       write(msg___, 665) whoami ; write(0,'(A)') msg___
+       write(msg___, 665) whoami ; call plainmessage(msg___)
       endif
 !
   665 format(/A,' WILL ADD NEW REFERENCE FRAME')
 ! now attempt to add frame
       ok=(frames_add(frame_list).gt.0) !
       if (.not.ok) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','COULD NOT ADD FRAME'
+       call warning(whoami, 'COULD NOT ADD FRAME', 0)
       endif
 ! deallocate lists
       call int_vector_done(frame_list)
@@ -804,21 +804,21 @@
        else
         write(msg___, 665) whoami,cv_name,k,w,gam
        endif
-       write(0,'(A)') msg___
+       call plainmessage(msg___)
 !
        if (f1.ge.1) then
         write(msg___,'(A,I3)') whoami//' FRAME1: LOCAL FRAME #',f1
        else
         write(msg___,'(A)') whoami//' FRAME1: ABSOLUTE FRAME'
        endif
-       write(0,'(A)') msg___
+       call plainmessage(msg___)
 !
        if (f2.ge.1) then
         write(msg___,'(A,I3)') whoami//' FRAME2: LOCAL FRAME #',f2
        else
         write(msg___,'(A)') whoami//' FRAME2: ABSOLUTE FRAME'
        endif
-       write(0,'(A)') msg___
+       call plainmessage(msg___)
 !
       endif
 !
@@ -834,7 +834,7 @@
      & .and.cv_qcomp_add(qcomp_4, f1, f2, k, gam, w)
 !
       if (.not.ok) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','COULD NOT ADD QUATERNION CV'
+       call warning(whoami, 'COULD NOT ADD QUATERNION CV', 0)
       endif
 ! done!
       end subroutine smcv_quaternion_add
@@ -880,7 +880,7 @@
         write(msg___, 665) whoami,cv_name,k,w,gam
        endif
       endif
-      write(0,'(A)') msg___
+      call plainmessage(msg___)
 !
   664 format(/A,' WILL ADD ',A,' CV WITH K =',F8.3, &
      & ' AND GAMMA =',F8.3,'.')
@@ -890,7 +890,7 @@
 ! now attempt to add CV
       ok=cv_cvrms_add(cv_list,k,gam,w) ! no mass weighting
       if (.not.ok) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','COULD NOT ADD CV'
+       call warning(whoami, 'COULD NOT ADD CV', 0)
       endif
 ! deallocate list
       call int_vector_done(cv_list)
@@ -944,7 +944,7 @@
        case(drmsd); cv_name='DRMSD'; qtwo=.true.
        case(proj ); cv_name='PROJ '; qtwo=.true.
        case default
-        write(0,*) 'WARNING FROM: ',whoami,': ','UNKNOWN CV REQUESTED. NOTHING DONE.';
+        call warning(whoami, 'UNKNOWN CV REQUESTED. NOTHING DONE.', 0);
         return
       end select
 !
@@ -969,7 +969,7 @@
        n=comlen-i+1
        j=find_tag(comlyn(i:comlen), 'SELE', n)
        if (j.le.0) then ! only if the ORIE directive exists
-         write(0,*) 'WARNING FROM: ',whoami,': ','ATOM SELECTION MUST BE SPECIFIED AFTER ORIE.'
+         call warning(whoami, 'ATOM SELECTION MUST BE SPECIFIED AFTER ORIE.', 0)
          return
         endif
       endif
@@ -978,7 +978,7 @@
 !*************************************************************************************
       j=find_tag(comlyn, 'SELE', comlen)
       if (j.eq.0) then ! sele keyword does not exist
-       write(0,*) 'WARNING FROM: ',whoami,': ','RMSD ATOMS NOT SPECIFIED. NOTHING DONE.';
+       call warning(whoami, 'RMSD ATOMS NOT SPECIFIED. NOTHING DONE.', 0);
        return
       elseif (j.le.i.or..not.oset) then ! no 'orie', or first occurrence of sele before orie (deleted by __INDXa above)
 ! assume that this is the forcing set selection
@@ -1069,7 +1069,7 @@
       endif
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
       if (nforced.eq.0) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','RMSD ATOMS NOT SPECIFIED. NOTHING DONE.'
+       call warning(whoami, 'RMSD ATOMS NOT SPECIFIED. NOTHING DONE.', 0)
        return
       endif
 !
@@ -1085,7 +1085,7 @@
 ! currently we require at least three atoms for orientation
 !
       if (norient.lt.3) then
-        write(0,*) 'WARNING FROM: ',whoami,': ',' FEWER THAN THREE ATOMS SELECTED FOR ORIENTATION. ABORT.'
+        call warning(whoami, ' FEWER THAN THREE ATOMS SELECTED FOR ORIENTATION. ABORT.', 0)
         return
       endif
 !
@@ -1129,7 +1129,7 @@
       use_comp=((remove_tag(comlyn,'COMP',comlen)).gt.0)
       if (use_comp) then
         if (use_main) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','MAIN AND COMP CANNOT BOTH BE SPECIFIED. USING MAIN.'
+         call warning(whoami, 'MAIN AND COMP CANNOT BOTH BE SPECIFIED. USING MAIN.', 0)
          use_comp=.false.
         endif
       else
@@ -1196,11 +1196,11 @@
 !
 ! check for undefined values
       if (any(rtarget_o.eq.unknownf).or.any(rtarget_f.eq.unknownf)) then
-        write(0,*) 'WARNING FROM: ',whoami,': ','FIRST TARGET STRUCTURE HAS UNDEFINED COORDINATES. QUITTING.'
+        call warning(whoami, 'FIRST TARGET STRUCTURE HAS UNDEFINED COORDINATES. QUITTING.', 0)
         return
       elseif (qtwo) then
        if (any(rtarget1_o.eq.unknownf).or.any(rtarget1_f.eq.unknownf)) then
-        write(0,*) 'WARNING FROM: ',whoami,': ','SECOND TARGET STRUCTURE HAS UNDEFINED COORDINATES. QUITTING.'
+        call warning(whoami, 'SECOND TARGET STRUCTURE HAS UNDEFINED COORDINATES. QUITTING.', 0)
         return
        endif
       endif
@@ -1251,11 +1251,11 @@
        else
         write(msg___, 665) whoami,cv_name,k,w,gam
        endif
-       write(0,'(A)') msg___
+       call plainmessage(msg___)
 !
-       write(msg___,103) whoami, nforced ; write(0,'(A)') msg___
-       write(msg___,100) whoami, norient ; write(0,'(A)') msg___
-       if (qmass) then ; write(msg___,102) whoami ; write(0,'(A)') msg___ ; endif
+       write(msg___,103) whoami, nforced ; call plainmessage(msg___)
+       write(msg___,100) whoami, norient ; call plainmessage(msg___)
+       if (qmass) then ; write(msg___,102) whoami ; call plainmessage(msg___) ; endif
        if (qtwo) then
         if (use_comp) then
          write(msg___,105) whoami, 'COMP'
@@ -1269,7 +1269,7 @@
          write(msg___,104) whoami, 'MAIN'
         endif
        endif
-       write(0,'(A)') msg___!
+       call plainmessage(msg___)!
   664 format(/A,' WILL ADD ',A,' CV WITH K =',F8.3, &
      & ' AND GAMMA =',F8.3,'.')
   665 format(/A,' WILL ADD ',A,' CV WITH K =',F8.3, &
@@ -1303,7 +1303,7 @@
       end select
 !
       if (.not.ok) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','COULD NOT ADD CV'
+       call warning(whoami, 'COULD NOT ADD CV', 0)
       endif
 ! deallocate variables
       deallocate(iatom_o, iatom_f, rtarget_o, rtarget_f, &

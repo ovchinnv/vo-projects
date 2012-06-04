@@ -96,15 +96,10 @@ $(ROOT)/$(NAME).stamp:: $(OBJS)
 source: $(SOURCES)
 $(OBJS):$(addsuffix .stamp, $(DEPS))
 
-$(DIRS): force_look
-	$(MAKE) -C $@ modules
-
-psf:
-	$(MAKE) -C $(ROOT)/dynamol/struc psf.o modules
-coor:
-	$(MAKE) -C $(ROOT)/dynamol/coor all modules
 dynamol:
-	$(MAKE) -C $(ROOT)/dynamol molsim.o modules
+	$(MAKE) -C $(ROOT)/dynamol
+string:
+	$(MAKE) -C $(ROOT)/dynamol
 
 
 force_look:
@@ -120,5 +115,5 @@ libs : libraries
 libraries: $(OBJS) lib
 	for d in $(DIRS); do (cd $$d; $(MAKE) libraries); done
 .SILENT : %.stamp
-clean: 
+clean::
 	rm -f *.mod *.h $(ROOT)/$(NAME).stamp $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(EXE)

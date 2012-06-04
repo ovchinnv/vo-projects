@@ -1,3 +1,5 @@
+/*#define __WRN(__WHO,__MSG) write(0,*) 'WARNING FROM: ',__WHO,': ',__MSG*/
+/*#define __PRINT(__MSG) write(0,'(A)') __MSG*/
 /*COORDINATES AND MASSES:*/
 /*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
 /*
@@ -85,7 +87,7 @@
          do i=1,2
           do j=1,ncom(i)
            m=atom_list(i)%i(j)
-           if (m.le.0) write(0,*) 'WARNING FROM: ',whoami,': ',' INVALID ATOM INDEX SPECIFIED.'
+           if (m.le.0) call warning(whoami, ' INVALID ATOM INDEX SPECIFIED.', 0)
            cv%priv(l)%p(ind)=int_vlist_uaddu(cv%amap,m,l) ! add indices into unique map
            m=int_vector_uadd(unique_amap_ptr,cv%priv(l)%p(ind))
            ind=ind+1
@@ -100,11 +102,11 @@
 !
          cv_dist_com_add=.true.
         else ! out of bounds
-         write(0,*) 'WARNING FROM: ',whoami,': ',' ERROR ADDING DIST_COM CV. NOTHING DONE.'
+         call warning(whoami, ' ERROR ADDING DIST_COM CV. NOTHING DONE.', 0)
          cv_dist_com_add=.false.
         endif
        else ! found
-         write(0,*) 'WARNING FROM: ',whoami,': ',' DIST_COM CV ALREADY PRESENT. NOTHING DONE.'
+         call warning(whoami, ' DIST_COM CV ALREADY PRESENT. NOTHING DONE.', 0)
          cv_dist_com_add=.false.
        endif
        end function cv_dist_com_add
@@ -321,7 +323,7 @@
 ! check type just in case
        type=cv%type(i)
        if (type.ne.dist_com) then
-        write(0,*) 'WARNING FROM: ',whoami,': ',' WRONG CV TYPE RECEIVED.'
+        call warning(whoami, ' WRONG CV TYPE RECEIVED.', 0)
        endif
 !
        if (ME_STRNG.eq.0) then
@@ -334,17 +336,17 @@
         ii=3; jj=ii+ncom1-1; ind1=cv%priv(i)%p(ii:jj)
         ii=jj+1; jj=ii+ncom2-1; ind2=cv%priv(i)%p(ii:jj)
 !
-        write(msg___,'(A)') '\t DISTANCE-COM, GROUP 1' ; write(0,'(A)') msg___
+        write(msg___,'(A)') '\t DISTANCE-COM, GROUP 1' ; call plainmessage(msg___)
         do j=1, ncom1;
          iatom=cv%amap%i(ind1(j)) ! actual psf index
          sid=atoms%segid(iatom); rid=atoms%resid(iatom); ren=atoms%resname(iatom); ac=atoms%aname(iatom);
-         write(msg___,667) '\t',j, iatom, sid, rid, ren, ac ; write(0,'(A)') msg___
+         write(msg___,667) '\t',j, iatom, sid, rid, ren, ac ; call plainmessage(msg___)
         enddo
-        write(msg___,'(A)') '\t DISTANCE-COM, GROUP 2' ; write(0,'(A)') msg___
+        write(msg___,'(A)') '\t DISTANCE-COM, GROUP 2' ; call plainmessage(msg___)
         do j=1, ncom2;
          iatom=cv%amap%i(ind2(j))
          sid=atoms%segid(iatom); rid=atoms%resid(iatom); ren=atoms%resname(iatom); ac=atoms%aname(iatom);
-         write(msg___,667) '\t',j, iatom, sid, rid, ren, ac ; write(0,'(A)') msg___
+         write(msg___,667) '\t',j, iatom, sid, rid, ren, ac ; call plainmessage(msg___)
         enddo
         deallocate(ind1,ind2)
        endif

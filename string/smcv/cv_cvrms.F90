@@ -1,3 +1,5 @@
+/*#define __WRN(__WHO,__MSG) write(0,*) 'WARNING FROM: ',__WHO,': ',__MSG*/
+/*#define __PRINT(__MSG) write(0,'(A)') __MSG*/
 /*COORDINATES AND MASSES:*/
 /*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
 /*
@@ -83,11 +85,11 @@
          do j=1,ncv
            m=cv_list%i(j)
            if ( (m.le.0) .or. (m.gt.cv%num_cv) .or. (m.eq.l) ) then
-             write(0,*) 'WARNING FROM: ',whoami,': ',' CV INDEX OUT OF BOUNDS.'
+             call warning(whoami, ' CV INDEX OUT OF BOUNDS.', 0)
            elseif (cv%type(m).eq.cvrms) then
-             write(0,*) 'WARNING FROM: ',whoami,': ',' SELECTED CV IS COLLECTIVE.'
+             call warning(whoami, ' SELECTED CV IS COLLECTIVE.', 0)
 ! elseif (.not.cv%active(m)) then ! this should be OK
-! write(0,*) 'WARNING FROM: ',whoami,': ',' SELECTED CV IS MARKED INACTIVE.'
+! call warning(whoami, ' SELECTED CV IS MARKED INACTIVE.', 0)
            endif
            cv%priv(l)%p(ind)=m
            cv%active(m)=.false. ! mark slave CV inactive, so that it does not add forces on its own (default behaviour in master)
@@ -107,11 +109,11 @@
          call int_vector_done(unique_amap_ptr)
 !
         else ! out of bounds
-         write(0,*) 'WARNING FROM: ',whoami,': ',' ERROR ADDING CVRMS CV. NOTHING DONE.'
+         call warning(whoami, ' ERROR ADDING CVRMS CV. NOTHING DONE.', 0)
          cv_cvrms_add=.false.
         endif
        else ! found
-         write(0,*) 'WARNING FROM: ',whoami,': ',' CVRMS CV ALREADY PRESENT. NOTHING DONE.'
+         call warning(whoami, ' CVRMS CV ALREADY PRESENT. NOTHING DONE.', 0)
          cv_cvrms_add=.false.
        endif
        end function cv_cvrms_add
@@ -333,7 +335,7 @@
             call cv_cvrms_calc(j,x,y,z,mass,fx,fy,fz, &
      & calctheta2,deriv2,addforce2,f*dummy)
            case default
-            write(0,*) 'WARNING FROM: ',' CV_CVRMS_CALC>',': ','UNKNOWN CV SPECIFIED.'
+            call warning(' CV_CVRMS_CALC>', 'UNKNOWN CV SPECIFIED.', 0)
           end select
          enddo ! over all cv
 !
@@ -373,7 +375,7 @@
 !
 ! check type just in case
        if (cv%type(i).ne.cvrms) then
-        write(0,*) 'WARNING FROM: ',whoami,': ',' WRONG CV TYPE RECEIVED.'
+        call warning(whoami, ' WRONG CV TYPE RECEIVED.', 0)
        endif
 !
        if (ME_STRNG.eq.0) then
@@ -383,10 +385,10 @@
 !
         ind=cv%priv(i)%p(2:ncv+1)
 !
-        write(msg___,'(A)') '\t CV RMSD FROM REFERENCE' ; write(0,'(A)') msg___
+        write(msg___,'(A)') '\t CV RMSD FROM REFERENCE' ; call plainmessage(msg___)
         do jj=1, ncv;
          j=ind(jj)
-         write(msg___,667) '\t INDEX: ',j ; write(0,'(A)') msg___
+         write(msg___,667) '\t INDEX: ',j ; call plainmessage(msg___)
         enddo
         deallocate(ind)
        endif

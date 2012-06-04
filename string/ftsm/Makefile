@@ -1,27 +1,17 @@
 ROOT=../..
 OBJS=ftsm_var.o ftsm_rex.o ftsm.o
-
+NAME=string/ftsm
 COMMON=..
-INCLUDES= -I $(COMMON) -I $(ROOT)/modules
+DEPS=constants vectors
+INCLUDES= -I $(COMMON)
 
 LOCALMACROS=-include source.defs -include ../source.defs
 LOCALDEPS=source.defs ../source.defs
 
 include $(ROOT)/Makefile.inc
+include $(COMMON)/Makefile.inc
 
+ftsm_var.o: $(COMMON)/sm_config.mod $(COMMON)/sm_var.mod
 ftsm.o: ftsm_var.o ftsm_rex.o
-ftsm_var.o: sm_common_vars
-ftsm_rex.o: constants ivector ftsm_var.o
+ftsm_rex.o: ftsm_var.o
 
-sm_common_vars:
-	$(MAKE) -C $(COMMON) sm_var.o sm_config.o 
-
-constants:
-	$(MAKE) -C $(ROOT)/constants all modules 
-
-ivector:
-	$(MAKE) -C $(ROOT)/vectors all modules
-
-charmm: $(CHARMM_SOURCES)
-
-.PHONY : sm_common_vars constants ivector

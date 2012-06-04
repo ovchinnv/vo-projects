@@ -1,3 +1,5 @@
+/*#define __WRN(__WHO,__MSG) write(0,*) 'WARNING FROM: ',__WHO,': ',__MSG*/
+/*#define __PRINT(__MSG) write(0,'(A)') __MSG*/
 /*COORDINATES AND MASSES:*/
 /*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
 /*
@@ -58,7 +60,7 @@
      & associated(ind_f).and. &
      & associated(ow).and. &
      & associated(fw))) then
-        write(0,*) 'WARNING FROM: ',whoami,': ',' UNALLOCATED POINTER ARRAY. ABORT.'
+        call warning(whoami, ' UNALLOCATED POINTER ARRAY. ABORT.', 0)
         cv_rmsd_add=.false.
         return
        endif
@@ -111,7 +113,7 @@
          do j=1,norient
            m=ind_o(j)
            if (m.le.0) then
-             write(0,*) 'WARNING FROM: ',whoami,': ',' NONPOSITIVE ATOM INDEX.'
+             call warning(whoami, ' NONPOSITIVE ATOM INDEX.', 0)
            endif
            cv%priv(l)%p(ind)=int_vlist_uaddu(cv%amap,m,l) ! add indices into unique map
            m=int_vector_uadd(unique_amap_ptr,cv%priv(l)%p(ind))
@@ -121,7 +123,7 @@
          do j=1,nforced
            m=ind_f(j)
            if (m.le.0) then
-             write(0,*) 'WARNING FROM: ',whoami,': ',' NONPOSITIVE ATOM INDEX.'
+             call warning(whoami, ' NONPOSITIVE ATOM INDEX.', 0)
            endif
            cv%priv(l)%p(ind)=int_vlist_uaddu(cv%amap,m,l) ! add indices into unique map
            m=int_vector_uadd(unique_amap_ptr,cv%priv(l)%p(ind))
@@ -165,11 +167,11 @@
 ! write(0,*) whoami, size(cv%priv(l)%amap_ptr(:)) !aa
 !
         else ! out of bounds
-         write(0,*) 'WARNING FROM: ',whoami,': ',' ERROR ADDING RMSD CV. NOTHING DONE.'
+         call warning(whoami, ' ERROR ADDING RMSD CV. NOTHING DONE.', 0)
          cv_rmsd_add=.false.
         endif
        else ! found
-         write(0,*) 'WARNING FROM: ',whoami,': ',' RMSD CV ALREADY PRESENT. NOTHING DONE.'
+         call warning(whoami, ' RMSD CV ALREADY PRESENT. NOTHING DONE.', 0)
          cv_rmsd_add=.false.
        endif
 !
@@ -453,7 +455,7 @@
 ! check type just in case
        type=cv%type(i)
        if (type.ne.rmsd) then
-        write(0,*) 'WARNING FROM: ',whoami,': ',' WRONG CV TYPE RECEIVED.'
+        call warning(whoami, ' WRONG CV TYPE RECEIVED.', 0)
        endif
 !
        if (ME_STRNG.eq.0) then
@@ -466,26 +468,26 @@
 !
         allocate(ind_o(norient))
         ii=4; jj=ii+norient-1; ind_o=cv%priv(i)%p(ii:jj)
-        write(msg___,'(A)') '\t RMSD FROM REFERENCE, ORIENTATION ATOMS' ; write(0,'(A)') msg___
+        write(msg___,'(A)') '\t RMSD FROM REFERENCE, ORIENTATION ATOMS' ; call plainmessage(msg___)
         do j=1, norient;
          iatom=cv%amap%i(ind_o(j))
          sid=atoms%segid(iatom); rid=atoms%resid(iatom); ren=atoms%resname(iatom); ac=atoms%aname(iatom);
-         write(msg___,667) '\t',j, iatom, sid, rid, ren, ac ; write(0,'(A)') msg___
+         write(msg___,667) '\t',j, iatom, sid, rid, ren, ac ; call plainmessage(msg___)
         enddo
         deallocate(ind_o)
 !
         if (qdiffrot) then
          allocate(ind_f(nforced))
          ii=jj+1; jj=ii+nforced-1; ind_f=cv%priv(i)%p(ii:jj)
-         write(msg___,'(A)') '\t RMSD FROM REFERENCE, FORCED ATOMS' ; write(0,'(A)') msg___
+         write(msg___,'(A)') '\t RMSD FROM REFERENCE, FORCED ATOMS' ; call plainmessage(msg___)
          do j=1, nforced;
           iatom=cv%amap%i(ind_f(j)) ! actual psf index
           sid=atoms%segid(iatom); rid=atoms%resid(iatom); ren=atoms%resname(iatom); ac=atoms%aname(iatom);
-          write(msg___,667) '\t',j, iatom, sid, rid, ren, ac ; write(0,'(A)') msg___
+          write(msg___,667) '\t',j, iatom, sid, rid, ren, ac ; call plainmessage(msg___)
          enddo
          deallocate(ind_f)
         else
-         write(msg___,'(A)')'\t FORCED AND ORIENTATION ATOMS ARE THE SAME' ; write(0,'(A)') msg___
+         write(msg___,'(A)')'\t FORCED AND ORIENTATION ATOMS ARE THE SAME' ; call plainmessage(msg___)
         endif
        endif ! ME_STRING
 !

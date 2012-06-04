@@ -1,3 +1,5 @@
+/*#define __WRN(__WHO,__MSG) write(0,*) 'WARNING FROM: ',__WHO,': ',__MSG*/
+/*#define __PRINT(__MSG) write(0,'(A)') __MSG*/
 /*COORDINATES AND MASSES:*/
 /*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
 /*
@@ -71,19 +73,19 @@
        if (fr1.ge.0.and.fr1.le.frames%num_frames) then
         f1=fr1
        else
-        write(0,*) 'WARNING FROM: ',whoami,': ',' INVALID FRAME SPECIFIED. WILL USE FIXED COORDINATE SYSTEM.'
+        call warning(whoami, ' INVALID FRAME SPECIFIED. WILL USE FIXED COORDINATE SYSTEM.', 0)
         f1=0
        endif
 !
        if (fr2.ge.0.and.fr2.le.frames%num_frames) then
         f2=fr2
        else
-        write(0,*) 'WARNING FROM: ',whoami,': ',' INVALID FRAME SPECIFIED. WILL USE FIXED COORDINATE SYSTEM.'
+        call warning(whoami, ' INVALID FRAME SPECIFIED. WILL USE FIXED COORDINATE SYSTEM.', 0)
         f2=0
        endif
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        if ( (f1.eq.f2) .and. (f1.ne.0) ) then
-        write(0,*) 'WARNING FROM: ',whoami,': ',' FRAMES ARE THE SAME. ABSOLUTE FRAME WILL BE USED.'
+        call warning(whoami, ' FRAMES ARE THE SAME. ABSOLUTE FRAME WILL BE USED.', 0)
         f1=0; f2=0;
        endif
 !
@@ -92,14 +94,14 @@
        if (ncom(1).eq.0.and.ncom(2).eq.0) then
         rn=sqrt( sum( (p(2,:)-p(1,:))**2) );
         if (rn.lt.errtol) then
-          write(0,*) 'WARNING FROM: ',whoami,': ',' FIRST VECTOR HAS NEARLY ZERO LENGTH. NOTHING DONE'
+          call warning(whoami, ' FIRST VECTOR HAS NEARLY ZERO LENGTH. NOTHING DONE', 0)
           return
         endif
        endif
        if (ncom(3).eq.0.and.ncom(4).eq.0) then
         rn=sqrt( sum( (p(4,:)-p(3,:))**2) );
         if (rn.lt.errtol) then
-          write(0,*) 'WARNING FROM: ',whoami,': ',' SECOND VECTOR HAS NEARLY ZERO LENGTH. NOTHING DONE'
+          call warning(whoami, ' SECOND VECTOR HAS NEARLY ZERO LENGTH. NOTHING DONE', 0)
           return
         endif
        endif
@@ -151,7 +153,7 @@
          do i=1,4
           do j=1,ncom(i)
            m=atom_list(i)%i(j)
-           if (m.le.0) write(0,*) 'WARNING FROM: ',whoami,': ',' INVALID ATOM INDEX SPECIFIED.'
+           if (m.le.0) call warning(whoami, ' INVALID ATOM INDEX SPECIFIED.', 0)
            cv%priv(l)%p(ind)=int_vlist_uaddu(cv%amap,m,l) ! add indices into unique map
            m=int_vector_uadd(unique_amap_ptr,cv%priv(l)%p(ind))
            ind=ind+1
@@ -203,11 +205,11 @@
 !
          cv_anglvec_add=.true.
         else ! out of bounds
-         write(0,*) 'WARNING FROM: ',whoami,': ',' ERROR ADDING ANGLVEC CV. NOTHING DONE.'
+         call warning(whoami, ' ERROR ADDING ANGLVEC CV. NOTHING DONE.', 0)
          cv_anglvec_add=.false.
         endif
        else ! found
-         write(0,*) 'WARNING FROM: ',whoami,': ',' ANGLVEC CV ALREADY PRESENT. NOTHING DONE.'
+         call warning(whoami, ' ANGLVEC CV ALREADY PRESENT. NOTHING DONE.', 0)
          cv_anglvec_add=.false.
        endif
        end function cv_anglvec_add
@@ -644,7 +646,7 @@
 ! check type just in case
        type=cv%type(i)
        if (type.ne.anglvec) then
-        write(0,*) 'WARNING FROM: ',whoami,': ',' WRONG CV TYPE RECEIVED.'
+        call warning(whoami, ' WRONG CV TYPE RECEIVED.', 0)
        endif
 !
        if (ME_STRNG.eq.0) then
@@ -669,54 +671,54 @@
 ! output:
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 ! first vector:
-        write(msg___,'(A)') '\t ANGLE BETWEEN VECTORS, VECTOR 1' ; write(0,'(A)') msg___
-        write(msg___,'(A,I5)') '\t COORDINATE FRAME: ',f1 ; write(0,'(A)') msg___
+        write(msg___,'(A)') '\t ANGLE BETWEEN VECTORS, VECTOR 1' ; call plainmessage(msg___)
+        write(msg___,'(A,I5)') '\t COORDINATE FRAME: ',f1 ; call plainmessage(msg___)
 ! first point:
         if (ncom1.eq.0) then ! constant point
-         write(msg___,'(A,3(F11.5,", "))') '\t POINT 1, CONSTANT: ',p(1,:) ; write(0,'(A)') msg___
+         write(msg___,'(A,3(F11.5,", "))') '\t POINT 1, CONSTANT: ',p(1,:) ; call plainmessage(msg___)
         else
-         write(msg___,'(A)') '\t POINT 1, COM OF ATOM GROUP:' ; write(0,'(A)') msg___
+         write(msg___,'(A)') '\t POINT 1, COM OF ATOM GROUP:' ; call plainmessage(msg___)
          do j=1, ncom1;
           iatom=cv%amap%i(ind1(j)) ! actual psf index
           sid=atoms%segid(iatom); rid=atoms%resid(iatom); ren=atoms%resname(iatom); ac=atoms%aname(iatom);
-          write(msg___,667) '\t',j, iatom, sid, rid, ren, ac ; write(0,'(A)') msg___
+          write(msg___,667) '\t',j, iatom, sid, rid, ren, ac ; call plainmessage(msg___)
          enddo
         endif
 ! second point:
         if (ncom2.eq.0) then ! constant point
-         write(msg___,'(A,3(F11.5,", "))') '\t POINT 2, CONSTANT: ',p(2,:) ; write(0,'(A)') msg___
+         write(msg___,'(A,3(F11.5,", "))') '\t POINT 2, CONSTANT: ',p(2,:) ; call plainmessage(msg___)
         else
-         write(msg___,'(A)') '\t POINT 2, COM OF ATOM GROUP:' ; write(0,'(A)') msg___
+         write(msg___,'(A)') '\t POINT 2, COM OF ATOM GROUP:' ; call plainmessage(msg___)
          do j=1, ncom2;
           iatom=cv%amap%i(ind2(j)) ! actual psf index
           sid=atoms%segid(iatom); rid=atoms%resid(iatom); ren=atoms%resname(iatom); ac=atoms%aname(iatom);
-          write(msg___,667) '\t',j, iatom, sid, rid, ren, ac ; write(0,'(A)') msg___
+          write(msg___,667) '\t',j, iatom, sid, rid, ren, ac ; call plainmessage(msg___)
          enddo
         endif
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 ! second vector:
-        write(msg___,'(A)') '\t ANGLE BETWEEN VECTORS, VECTOR 2' ; write(0,'(A)') msg___
-        write(msg___,'(A,I5)') '\t COORDINATE FRAME: ',f2 ; write(0,'(A)') msg___
+        write(msg___,'(A)') '\t ANGLE BETWEEN VECTORS, VECTOR 2' ; call plainmessage(msg___)
+        write(msg___,'(A,I5)') '\t COORDINATE FRAME: ',f2 ; call plainmessage(msg___)
 ! third point:
         if (ncom3.eq.0) then ! constant point
-         write(msg___,'(A,3(F11.5,", "))') '\t POINT 3, CONSTANT: ',p(3,:) ; write(0,'(A)') msg___
+         write(msg___,'(A,3(F11.5,", "))') '\t POINT 3, CONSTANT: ',p(3,:) ; call plainmessage(msg___)
         else
-         write(msg___,'(A)') '\t POINT 3, COM OF ATOM GROUP:' ; write(0,'(A)') msg___
+         write(msg___,'(A)') '\t POINT 3, COM OF ATOM GROUP:' ; call plainmessage(msg___)
          do j=1, ncom3;
           iatom=cv%amap%i(ind3(j)) ! actual psf index
           sid=atoms%segid(iatom); rid=atoms%resid(iatom); ren=atoms%resname(iatom); ac=atoms%aname(iatom);
-          write(msg___,667) '\t',j, iatom, sid, rid, ren, ac ; write(0,'(A)') msg___
+          write(msg___,667) '\t',j, iatom, sid, rid, ren, ac ; call plainmessage(msg___)
          enddo
         endif
 ! fourth point:
         if (ncom4.eq.0) then ! constant point
-         write(msg___,'(A,3(F11.5,", "))') '\t POINT 4, CONSTANT: ',p(4,:) ; write(0,'(A)') msg___
+         write(msg___,'(A,3(F11.5,", "))') '\t POINT 4, CONSTANT: ',p(4,:) ; call plainmessage(msg___)
         else
-         write(msg___,'(A)') '\t POINT 4, COM OF ATOM GROUP:' ; write(0,'(A)') msg___
+         write(msg___,'(A)') '\t POINT 4, COM OF ATOM GROUP:' ; call plainmessage(msg___)
          do j=1, ncom4;
           iatom=cv%amap%i(ind4(j)) ! actual psf index
           sid=atoms%segid(iatom); rid=atoms%resid(iatom); ren=atoms%resname(iatom); ac=atoms%aname(iatom);
-          write(msg___,667) '\t',j, iatom, sid, rid, ren, ac ; write(0,'(A)') msg___
+          write(msg___,667) '\t',j, iatom, sid, rid, ren, ac ; call plainmessage(msg___)
          enddo
         endif
        endif

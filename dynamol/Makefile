@@ -27,6 +27,6 @@ libraries : libdynamol.a
 libdynamol.a: $(OBJS)  force_look                      #force relinking
 	$(AR) $(AFLAGS) $@ $(OBJS) $(LOBJS)
 	/bin/sh -c 'ln -fs `pwd`/libdynamol.a ${ROOT}/lib/libdynamol.a'
-clean: 
+clean::
 	for d in $(SUBDIRS); do (cd $$d; $(MAKE) clean); done
 	rm -f *.mod *.a $(OBJS) $(SOURCES)

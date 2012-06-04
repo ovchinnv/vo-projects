@@ -1,3 +1,5 @@
+/*#define __WRN(__WHO,__MSG) write(0,*) 'WARNING FROM: ',__WHO,': ',__MSG*/
+/*#define __PRINT(__MSG) write(0,'(A)') __MSG*/
 /*COORDINATES AND MASSES:*/
 /*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
 /*
@@ -173,7 +175,7 @@
          ind=2
          do j=1,ncom
            m=atom_list%i(j)
-           if (m.le.0) write(0,*) 'WARNING FROM: ',whoami,': ',' INVALID ATOM INDEX SPECIFIED.'
+           if (m.le.0) call warning(whoami, ' INVALID ATOM INDEX SPECIFIED.', 0)
            frames%priv(l)%p(ind)=int_vlist_uadd(cv%amap,m) ! add indices into map (note: the same map as the one used in CV)
            ind=ind+1
          enddo
@@ -181,11 +183,11 @@
          frames%r(:,:,l)=0d0 ! do NOT change this; otherwise the axes may not be right-handed (see calc)
          frames%o(:,l)=0d0
         else ! out of bounds
-         write(0,*) 'WARNING FROM: ',whoami,': ',' ERROR ADDING FRAME. NOTHING DONE.'
+         call warning(whoami, ' ERROR ADDING FRAME. NOTHING DONE.', 0)
          frames_add=0
         endif
        else ! found
-         write(0,*) 'WARNING FROM: ',whoami,': ',' IDENTICAL FRAME ALREADY PRESENT. NOTHING DONE.'
+         call warning(whoami, ' IDENTICAL FRAME ALREADY PRESENT. NOTHING DONE.', 0)
          frames_add=0
        endif
        end function frames_add
@@ -212,7 +214,7 @@ character(len=80) :: msg___
 !
 ! check for initialization
         if (.not.frames_initialized.or.frames%num_frames.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','NO FRAMES DEFINED.'
+         call warning(whoami, 'NO FRAMES DEFINED.', 0)
          return
         endif
 !
@@ -223,11 +225,11 @@ character(len=80) :: msg___
          ii=2; jj=ii+ncom1-1; ind1=frames%priv(i)%p(ii:jj)
 !
          write(msg___,'(A, I3)') '\t  ATOM LIST FOR COORDINATE FRAME #', i
-         write(0,'(A)') msg___
+         call plainmessage(msg___)
          do j=1, ncom1;
           iatom=cv%amap%i(ind1(j)) ! actual psf index
           sid=atoms%segid(iatom); rid=atoms%resid(iatom); ren=atoms%resname(iatom); ac=atoms%aname(iatom);
-          write(msg___,667) '\t',j, iatom, sid, rid, ren, ac ; write(0,'(A)') msg___
+          write(msg___,667) '\t',j, iatom, sid, rid, ren, ac ; call plainmessage(msg___)
          enddo
          deallocate(ind1)
         enddo
@@ -270,13 +272,13 @@ character(len=80) :: msg___
        data whoami /' FRAMES_CALC>'/
 ! check for initialization
        if (.not.frames_initialized) then
-        write(0,*) 'WARNING FROM: ',whoami,': ',' NO FRAMES DEFINED. NOTHING DONE.'
+        call warning(whoami, ' NO FRAMES DEFINED. NOTHING DONE.', 0)
         return
        endif
 !
 ! check frame number:
        if (i.lt.1.or.i.gt.frames%num_frames) then
-        write(0,*) 'WARNING FROM: ',whoami,': ',' OUT OF BOUNDS. NOTHING DONE.'
+        call warning(whoami, ' OUT OF BOUNDS. NOTHING DONE.', 0)
         return
        endif
 !
@@ -441,7 +443,7 @@ character(len=80) :: msg___
      & a13*(a21*a32-a22*a31)
 !
          if (abs(detA).lt.tol) then
-          write(0,*) 'WARNING FROM: ',whoami,': ',' EXCEPTION: A MATRIX IS SINGULAR. NOTHING DONE.'
+          call warning(whoami, ' EXCEPTION: A MATRIX IS SINGULAR. NOTHING DONE.', 0)
           return
          else
 ! compute inverse explicitly
@@ -778,14 +780,14 @@ character(len=80) :: msg___
 !
 ! check for initialization
        if (.not.frames_initialized) then
-! write(0,*) 'WARNING FROM: ',whoami,': ','NO FRAMES DEFINED. NOTHING DONE.'
+! call warning(whoami, 'NO FRAMES DEFINED. NOTHING DONE.', 0)
         return
        endif
 !
        if (present(i)) then ! reset ith frame
 ! check frame number:
         if (i.lt.1.or.i.gt.frames%num_frames) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','OUT OF BOUNDS. NOTHING DONE.'
+         call warning(whoami, 'OUT OF BOUNDS. NOTHING DONE.', 0)
          return
         endif
         frames%recalculate(i)=.true.
@@ -828,13 +830,13 @@ character(len=80) :: msg___
        data whoami /' FRAMES_CALC_ALIGN_COMP>'/
 ! check for initialization
        if (.not.frames_initialized) then
-        write(0,*) 'WARNING FROM: ',whoami,': ',' NO FRAMES DEFINED. NOTHING DONE.'
+        call warning(whoami, ' NO FRAMES DEFINED. NOTHING DONE.', 0)
         return
        endif
 !
 ! check frame number:
        if (i.lt.1.or.i.gt.frames%num_frames) then
-        write(0,*) 'WARNING FROM: ',whoami,': ',' OUT OF BOUNDS. NOTHING DONE.'
+        call warning(whoami, ' OUT OF BOUNDS. NOTHING DONE.', 0)
         return
        endif
 !
