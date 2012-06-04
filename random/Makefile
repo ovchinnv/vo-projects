@@ -9,6 +9,3 @@ include $(ROOT)/Makefile.inc
 
 rng.o : clcg.o 
 clcg.o : clcg.f clcg.h
-
-clean: 
-	rm -f *.mod $(SOURCES) $(OBJS) $(ROOT)/$(NAME).stamp

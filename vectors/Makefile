@@ -24,7 +24,7 @@ rvector_list.o: rvector.o rvector_list.F90
 rvector_list.F90: vector_list_template.ftn
 	$(FPP) $(FPPFLAGS) -P -D'__DATANAME=r' -D'__DATATYPE=float' -D'__TYPENAME=real' $(MSG) $< >$@
 ####################################################
-clean:
+clean::
 	rm -f *.mod *.o *.a ivector.F90 rvector.F90 ivector_list.F90 rvector_list.F90 $(CHARMM_SOURCES) *.tmp \
 	$(ROOT)/$(NAME).stamp
 

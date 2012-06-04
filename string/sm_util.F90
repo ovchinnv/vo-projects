@@ -1,3 +1,5 @@
+/*#define __WRN(__WHO,__MSG) write(0,*) 'WARNING FROM: ',__WHO,': ',__MSG*/
+/*#define __PRINT(__MSG) write(0,'(A)') __MSG*/
 /*COORDINATES AND MASSES:*/
 /*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
 /*
@@ -270,7 +272,7 @@
         rall(i,:)=rr
        enddo
       else
-       write(0,*) 'WARNING FROM: ','<INTERP_DRIVER>',': ','NO VALID INTERPOLATION METHODS SELECTED'
+       call warning('<INTERP_DRIVER>', 'NO VALID INTERPOLATION METHODS SELECTED', 0)
       endif
 !ccccc now scatter new coordinates into xout,yout,zout
       call mpi_alltoallv(rall,r_count,r_disp,MPI_REAL, &
@@ -383,7 +385,7 @@
       if (interp_method.eq.dst) then
        if (.not. present(dst_cutoff)) dst_cutoff=0.5 ! by default, only the lower half of wn kept
        if (dst_cutoff.gt.1) &
-       write(0,*) 'WARNING FROM: ',whoami,': ','SINE TRANSFORM CUTOFF > 1.0; WILL SET TO 0.5';
+       call warning(whoami, 'SINE TRANSFORM CUTOFF > 1.0; WILL SET TO 0.5', 0);
        npass=min(nrep,ceiling(nrep*dst_cutoff))
        allocate(sinvec(nrep,nrep))
        allocate(rh(nrep)) ! allocate wavenumber array
@@ -482,7 +484,7 @@
         rfine(i,:)=rrfine ! copy to fine array
        enddo ! loop over variables
       else
-        write(0,*) 'WARNING FROM: ',whoami,': ','NO VALID INTERPOLATION METHODS SELECTED'
+        call warning(whoami, 'NO VALID INTERPOLATION METHODS SELECTED', 0)
       endif
 ! now we have a finely spaced path
 !
@@ -582,7 +584,7 @@
         rfine(i,:)=rrfine ! copy to fine array
        enddo ! loop over variables
        else
-        write(0,*) 'WARNING FROM: ',whoami,': ','NO VALID INTERPOLATION METHODS SELECTED'
+        call warning(whoami, 'NO VALID INTERPOLATION METHODS SELECTED', 0)
        endif
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccc
        drfine=rfine(:,2:nfine)-rfine(:,1:nfine-1)
@@ -741,7 +743,7 @@
       if (interp_method.eq.dst) then
        if (.not. present(dst_cutoff)) dst_cutoff=0.5 ! by default, only the lower half of wn kept
        if (dst_cutoff.gt.1) &
-     & write(0,*) 'WARNING FROM: ',whoami,': ','SINE TRANSFORM CUTOFF > 1.0; WILL SET TO 0.5'
+     & call warning(whoami, 'SINE TRANSFORM CUTOFF > 1.0; WILL SET TO 0.5', 0)
        npass=min(nrep,ceiling(nrep*dst_cutoff))
        allocate(sinvec(nrep,nrep))
        allocate(rh(nrep)) ! allocate wavenumber array
@@ -827,7 +829,7 @@
          rfine(i,:)=rrfine ! copy to fine array
         enddo ! loop over variables
        else
-        write(0,*) 'WARNING FROM: ',whoami,': ','NO VALID INTERPOLATION METHODS SELECTED'
+        call warning(whoami, 'NO VALID INTERPOLATION METHODS SELECTED', 0)
 !
        endif
 ! now we have a finely spaced path
@@ -920,7 +922,7 @@
           rfine(i,:)=rrfine ! copy to fine array
          enddo ! loop over variables
         else
-         write(0,*) 'WARNING FROM: ',whoami,': ','NO VALID INTERPOLATION METHODS SELECTED'
+         call warning(whoami, 'NO VALID INTERPOLATION METHODS SELECTED', 0)
         endif
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccc
         drfine=rfine(:,2:nfine)-rfine(:,1:nfine-1)
@@ -1030,7 +1032,6 @@
       real*8, parameter :: errtol = 1d-8
       integer , parameter :: max_iterations = 200
 !
-
 !
       character(len=21) :: whoami
       data whoami /' INTERP_LINEAR_EXACT>'/
@@ -1133,7 +1134,7 @@
         if (err.lt.errtol) then
          exit
         elseif (iteration.gt.max_iterations) then
- write(0,*) 'WARNING FROM: ',whoami,': ','NO CONVERGENCE AFTER MAXIMUM NUMBER OF ITERATIONS.'
+ call warning(whoami, 'NO CONVERGENCE AFTER MAXIMUM NUMBER OF ITERATIONS.', 0)
 ! close(600+ME_GLOBAL)
          rall=rall_new
          exit
@@ -1178,7 +1179,6 @@
         dum=dot_product(drout,drout)
         drout=drout/sqrt(dum)
       endif ! drout present
-
 ! done!
 !cccccccccccccccccccccccccccccccccccccccccccccccccc
       deallocate(rall,drall,rall_new,drall_new)
@@ -1363,7 +1363,7 @@
 !
 ! check for initialization
        if (.not.frames_initialized) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','NO FRAMES DEFINED. NOTHING DONE.'
+         call warning(whoami, 'NO FRAMES DEFINED. NOTHING DONE.', 0)
          return
        endif
 !
@@ -1371,7 +1371,7 @@
        if (present(ind)) then ! reset ith frame
 ! check frame number:
          if (ind.lt.1.or.ind.gt.frames%num_frames) then
-          write(0,*) 'WARNING FROM: ',whoami,': ','OUT OF BOUNDS. NOTHING DONE.'
+          call warning(whoami, 'OUT OF BOUNDS. NOTHING DONE.', 0)
           return
          endif
 !
@@ -1379,7 +1379,7 @@
         else ! select all
          ibeg=1; iend=frames%num_frames
          if (ibeg.gt.iend) then
-          write(0,*) 'WARNING FROM: ',whoami,': ','NO FRAMES DEFINED. NOTHING DONE.'
+          call warning(whoami, 'NO FRAMES DEFINED. NOTHING DONE.', 0)
           return
          endif
        endif
@@ -1516,19 +1516,19 @@
           if (cmax.eq.corr1) then;
            frames%r(:,:,i)=A1; ! this is already true
            if (qrmsd.and.mrmsd.ne.rmsd1) &
-     & write(msg___,600) whoami,mestring,i,whoami; write(0,'(A)') msg___
+     & write(msg___,600) whoami,mestring,i,whoami; call plainmessage(msg___)
           elseif (cmax.eq.corr2) then
            frames%r(:,:,i)=A2; x1=x2; y1=y2; z1=z2;
            if (qrmsd.and.mrmsd.ne.rmsd2) &
-     & write(msg___,600) whoami,mestring,i,whoami; write(0,'(A)') msg___
+     & write(msg___,600) whoami,mestring,i,whoami; call plainmessage(msg___)
           elseif (cmax.eq.corr3) then
            frames%r(:,:,i)=A3; x1=x3; y1=y3; z1=z3;
            if (qrmsd.and.mrmsd.ne.rmsd3) &
-     & write(msg___,600) whoami,mestring,i,whoami; write(0,'(A)') msg___
+     & write(msg___,600) whoami,mestring,i,whoami; call plainmessage(msg___)
           elseif (cmax.eq.corr4) then
            frames%r(:,:,i)=A4; x1=x4; y1=y4; z1=z4;
            if (qrmsd.and.mrmsd.ne.rmsd4) &
-     & write(msg___,600) whoami,mestring,i,whoami; write(0,'(A)') msg___
+     & write(msg___,600) whoami,mestring,i,whoami; call plainmessage(msg___)
           endif
  600 FORMAT(A,' FOR REPLICA ',I3,', FRAME ',I3,', STRING ALIGNMENT AND'&
      & ,/,A,' MIN. CV RMSD CRITERIA DIFFER.')
@@ -1596,7 +1596,7 @@
 !
 ! check for initialization
        if (.not.frames_initialized) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','NO FRAMES DEFINED. NOTHING DONE.'
+         call warning(whoami, 'NO FRAMES DEFINED. NOTHING DONE.', 0)
          return
        endif
 !
@@ -1604,7 +1604,7 @@
        if (present(ind)) then ! reset ith frame
 ! check frame number:
          if (ind.lt.1.or.ind.gt.frames%num_frames) then
-          write(0,*) 'WARNING FROM: ',whoami,': ','OUT OF BOUNDS. NOTHING DONE.'
+          call warning(whoami, 'OUT OF BOUNDS. NOTHING DONE.', 0)
           return
          endif
 !
@@ -1612,7 +1612,7 @@
         else ! select all
          ibeg=1; iend=frames%num_frames
          if (ibeg.gt.iend) then
-          write(0,*) 'WARNING FROM: ',whoami,': ','NO FRAMES DEFINED. NOTHING DONE.'
+          call warning(whoami, 'NO FRAMES DEFINED. NOTHING DONE.', 0)
           return
          endif
        endif
@@ -1716,18 +1716,18 @@ character(len=80) :: msg___
 !
 ! check for initialization
        if (.not.frames_initialized) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','NO FRAMES DEFINED. NOTHING DONE.'
+         call warning(whoami, 'NO FRAMES DEFINED. NOTHING DONE.', 0)
          return
        endif
 !
        if (.not.cv_common_voronoi_initialized) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','VORONOI DATA NOT INITIALIZED. NOTHING DONE.'
+         call warning(whoami, 'VORONOI DATA NOT INITIALIZED. NOTHING DONE.', 0)
          return
        endif
 !
 ! check if a valid map is present
        if (any(cv%voronoi_map.eq.-1)) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','VORONOI MAP CONTAINS INVALID ENTRIES. NOTHING DONE.'
+         call warning(whoami, 'VORONOI MAP CONTAINS INVALID ENTRIES. NOTHING DONE.', 0)
          return
        endif
 !
@@ -1737,7 +1737,7 @@ character(len=80) :: msg___
        if (present(ind)) then ! reset ith frame
 ! check frame number:
          if (ind.lt.1.or.ind.gt.frames%num_frames) then
-          write(0,*) 'WARNING FROM: ',whoami,': ','OUT OF BOUNDS. NOTHING DONE.'
+          call warning(whoami, 'OUT OF BOUNDS. NOTHING DONE.', 0)
           return
          endif
 !
@@ -1745,7 +1745,7 @@ character(len=80) :: msg___
         else ! select all
          ibeg=1; iend=frames%num_frames
          if (ibeg.gt.iend) then
-          write(0,*) 'WARNING FROM: ',whoami,': ','NO FRAMES DEFINED. NOTHING DONE.'
+          call warning(whoami, 'NO FRAMES DEFINED. NOTHING DONE.', 0)
           return
          endif
        endif
@@ -1790,7 +1790,7 @@ character(len=80) :: msg___
          else
             frames%r(:,:,i)=A1; ! default (unsafe)
             cv%voronoi_whereami=where1
-            write(msg___,601) whoami,mestring ; write(0,'(A)') msg___
+            write(msg___,601) whoami,mestring ; call plainmessage(msg___)
  601 FORMAT(A,' REPLICA ',I3,' IS OUTSIDE OF ASSIGNED CELL.')
          endif ! mrmsd
 !

@@ -9,4 +9,7 @@ $(ROOT)/$(NAME).stamp :: interface.h
 	file=$< ; ln -fs `pwd`/$$file ${ROOT}/include/$$file;
 	echo -n > $@
 
+clean::
+	rm -f interface.h
+
 .SILENT : $(ROOT)/$(NAME).stamp

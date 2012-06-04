@@ -1,7 +1,7 @@
 ROOT=../..
 OBJS=sm0k.o
 NAME=string/sm0k
-DEPS=constants bestfit output dynamol/struc dynamol/coor multicom parser
+DEPS=constants bestfit output dynamol multicom parser
 COMMON=..
 
 LOCALMACROS=-include ../source.defs

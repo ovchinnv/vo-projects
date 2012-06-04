@@ -1,3 +1,5 @@
+/*#define __WRN(__WHO,__MSG) write(0,*) 'WARNING FROM: ',__WHO,': ',__MSG*/
+/*#define __PRINT(__MSG) write(0,'(A)') __MSG*/
 /*COORDINATES AND MASSES:*/
 /*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
 /*
@@ -217,7 +219,7 @@
 ! Check the input data.
 !
        if ( n .lt. 2 ) then
-write(0,*) 'WARNING FROM: ','RVEC_BRACKET3',': ','N must be at least 2. Dying.'
+call warning('RVEC_BRACKET3', 'N must be at least 2. Dying.', 0)
          return
        end if
 !
@@ -443,13 +445,12 @@ write(0,*) 'WARNING FROM: ','RVEC_BRACKET3',': ','N must be at least 2. Dying.'
 ! Check.
 !
        if ( n .le. 1 ) then
-write(0,*) 'WARNING FROM: ','SPLINE_CUBIC_SET',': ','N must be > 1. Dying'
+call warning('SPLINE_CUBIC_SET', 'N must be > 1. Dying', 0)
          return
        end if
-
        do i = 1, n-1
          if ( t(i) .ge. t(i+1) ) then
-write(0,*) 'WARNING FROM: ','SPLINE_CUBIC_SET',': ','Knots must be strictly increasing. Dying.'
+call warning('SPLINE_CUBIC_SET', 'Knots must be strictly increasing. Dying.', 0)
          return
          end if
        end do
@@ -478,12 +479,11 @@ write(0,*) 'WARNING FROM: ','SPLINE_CUBIC_SET',': ','Knots must be strictly incr
      & y(3)/((t(3)-t(1))*(t(3)-t(2))*(t(3)-t(4))) + &
      & y(4)/((t(4)-t(1))*(t(4)-t(2))*(t(4)-t(3))))
         else
-write(0,*) 'WARNING FROM: ','SPLINE_CUBIC_SET',': ','ibcbeg=3 requires N>3. Dying.'
+call warning('SPLINE_CUBIC_SET', 'ibcbeg=3 requires N>3. Dying.', 0)
          return
         endif
-
        else
-write(0,*) 'WARNING FROM: ','SPLINE_CUBIC_SET',': ','Invalid boundary flag IBCBEG. Dying.'
+call warning('SPLINE_CUBIC_SET', 'Invalid boundary flag IBCBEG. Dying.', 0)
          return
        end if
 !
@@ -522,12 +522,12 @@ write(0,*) 'WARNING FROM: ','SPLINE_CUBIC_SET',': ','Invalid boundary flag IBCBE
      & y(n-1)/((t(n-1)-t(n-3))*(t(n-1)-t(n-2))*(t(n-1)-t(n)))+&
      & y(n)/((t(n)-t(n-3))*(t(n)-t(n-2))*(t(n)-t(n-1))))
         else
-write(0,*) 'WARNING FROM: ','SPLINE_CUBIC_SET',': ','ibcend=3 requires N>3. Dying.'
+call warning('SPLINE_CUBIC_SET', 'ibcend=3 requires N>3. Dying.', 0)
          return
         endif
 
        else
-write(0,*) 'WARNING FROM: ','SPLINE_CUBIC_SET',': ','Invalid boundary flag IBCEND. Dying.'
+call warning('SPLINE_CUBIC_SET', 'Invalid boundary flag IBCEND. Dying.', 0)
          return
        end if
 !
@@ -804,7 +804,7 @@ write(0,*) 'WARNING FROM: ','SPLINE_CUBIC_SET',': ','Invalid boundary flag IBCEN
 !
        do i = 1, n
          if ( a2(i) .eq. 0.0E+00 ) then
-write(0,*) 'WARNING FROM: ','S3_FS',': ','Zero diagonal value. Dying'
+call warning('S3_FS', 'Zero diagonal value. Dying', 0)
            return
          end if
        end do
@@ -847,7 +847,7 @@ write(0,*) 'WARNING FROM: ','S3_FS',': ','Zero diagonal value. Dying'
       elseif (nin.eq.0) then
        yout=0.0
        if (present(dydxout)) dydxout=0.
-write(0,*) 'WARNING FROM: ','LINEAR_INTERP',': ','SOURCE ARRAY LENGTH IS ZERO. WILL RETURN ZEROS.'
+call warning('LINEAR_INTERP', 'SOURCE ARRAY LENGTH IS ZERO. WILL RETURN ZEROS.', 0)
        return
       endif
 !
@@ -891,7 +891,7 @@ write(0,*) 'WARNING FROM: ','LINEAR_INTERP',': ','SOURCE ARRAY LENGTH IS ZERO. W
       nx=size(x)
       nt=size(t)
       if (nx.ne.nt) then
-    write(0,*) 'WARNING FROM: ','SMOOTH2',': ','ARRAYS MUST BE OF THE SAME LENGTH'
+    call warning('SMOOTH2', 'ARRAYS MUST BE OF THE SAME LENGTH', 0)
        return
       endif
 !
@@ -899,11 +899,11 @@ write(0,*) 'WARNING FROM: ','LINEAR_INTERP',': ','SOURCE ARRAY LENGTH IS ZERO. W
 
       if (delta.gt.nx) then
        delta=max(1,floor(1.0d0*nx/3.0d0))
-write(msg___,*)'FILTER WIDTH TOO LARGE. SETTING TO ',delta,'.';write(0,*) 'WARNING FROM: ','SMOOTH2',': ',msg___
+write(msg___,*)'FILTER WIDTH TOO LARGE. SETTING TO ',delta,'.';call warning('SMOOTH2', msg___, 0)
 !
       elseif (delta.le.0) then
        delta=max(1,floor(1.0d0*nx/3.0d0))
-write(msg___,*)'FILTER WIDTH ZERO. SETTING TO ',delta,'.';write(0,*) 'WARNING FROM: ','SMOOTH2',': ',msg___
+write(msg___,*)'FILTER WIDTH ZERO. SETTING TO ',delta,'.';call warning('SMOOTH2', msg___, 0)
       endif
 !
       do i=1, delta

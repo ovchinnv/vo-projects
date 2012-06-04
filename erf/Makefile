@@ -5,8 +5,8 @@ NAME=erf
 
 include $(ROOT)/Makefile.inc
 
-$(ROOT)/$(NAME).stamp : erfsun_2_f90.o
+$(ROOT)/$(NAME).stamp :: erfsun_2_f90.o
 erfsun_2_f90.o : erfsun_2_f90.c
 
-clean: 
+clean::
 	rm -f $(ROOT)/$(NAME).stamp $(SOURCES) $(OBJS) erfsun_2_f90.o

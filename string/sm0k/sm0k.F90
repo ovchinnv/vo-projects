@@ -1,3 +1,5 @@
+/*#define __WRN(__WHO,__MSG) write(0,*) 'WARNING FROM: ',__WHO,': ',__MSG*/
+/*#define __PRINT(__MSG) write(0,'(A)') __MSG*/
 /*COORDINATES AND MASSES:*/
 /*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
 /*
@@ -196,7 +198,7 @@
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       else
-            write(msg___,*)'UNRECOGNIZED SUBCOMMAND: ',keyword;write(0,*) 'WARNING FROM: ',whoami,': ',msg___
+            write(msg___,*)'UNRECOGNIZED SUBCOMMAND: ',keyword;call warning(whoami, msg___, 0)
       endif
 !
       end subroutine sm0k_main
@@ -218,12 +220,12 @@
 !
 ! do a basic communicator check:
       if (ME_LOCAL.eq.0.and.ME_STRNG.eq.MPI_UNDEFINED) then
-        write(msg___, 111) whoami, ME_GLOBAL, whoami ; write(0,'(A)') msg___
+        write(msg___, 111) whoami, ME_GLOBAL, whoami ; call plainmessage(msg___)
  111 FORMAT(A, ' WORLD REPLICA ',I5, ' HAS ZERO GROUP ID', &
      & /,A,' BUT INVALID STRING ID (MAY BE OK).')
       elseif (ME_STRNG.ne.MPI_UNDEFINED.and. &
      & (ME_LOCAL.ne.0.or.MPI_COMM_LOCAL.eq.MPI_COMM_NULL)) then
-        write(msg___, 111) whoami, ME_GLOBAL, whoami ; write(0,'(A)') msg___
+        write(msg___, 111) whoami, ME_GLOBAL, whoami ; call plainmessage(msg___)
  112 FORMAT(A, ' WORLD REPLICA ',I5, ' HAS A VALID STRING ID', &
      & /,A,' BUT A NONZERO GROUP ID. ABORTING.')
        return
@@ -236,7 +238,7 @@
        if (qroot) then
         if (ME_STRNG.eq.0) then
           write(msg___,'(2A)') &
-     & whoami, ' SM0K ALREADY INITIALIZED. CALL "DONE" TO CLEAN UP.' ; write(0,'(A)') msg___
+     & whoami, ' SM0K ALREADY INITIALIZED. CALL "DONE" TO CLEAN UP.' ; call plainmessage(msg___)
         endif
        endif
        return
@@ -255,7 +257,7 @@
       if (qroot) then
         if (ME_STRNG.eq.0) then
           write(msg___,'(2A,I5, A)') &
-     & whoami, ' FOUND ',nstring,' REPLICAS.' ; write(0,'(A)') msg___
+     & whoami, ' FOUND ',nstring,' REPLICAS.' ; call plainmessage(msg___)
         endif
       endif
 ! store fixed atom indices
@@ -276,7 +278,7 @@
 !
       data whoami /' SM0K_DONE>'/
       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.ME_STRNG.eq.0) then
-       write(msg___,'(2A,I5, A)') whoami, ' CLEANING UP.' ; write(0,'(A)') msg___
+       write(msg___,'(2A,I5, A)') whoami, ' CLEANING UP.' ; call plainmessage(msg___)
       endif
       sm0k_initialized=.false.
       nstring=-1
@@ -395,14 +397,14 @@
      & A,' WILL USE LINEAR INTERPOLATION.')
        interp_method=linear
       elseif ((qdst+qspline+qlinear+qbspline+qlinear_exact) .gt. 1)then
-       write(0,*) 'WARNING FROM: ',whoami,': ','TOO MANY INTERPOLATION OPTIONS.'
+       call warning(whoami, 'TOO MANY INTERPOLATION OPTIONS.', 0)
       endif
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 ! did the user specify an interpolation tolerance?
       if (interp_method.ne.linear_exact) then ! options below are invalid for exact interpolation
        def=atof(get_remove_parameter(comlyn, 'DEFI', comlen), 1.1d0)
        if (def.lt.1.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','INTERPOLATION TOLERANCE MUST BE >= 1. EXITING.'
+         call warning(whoami, 'INTERPOLATION TOLERANCE MUST BE >= 1. EXITING.', 0)
          return
        endif
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -423,7 +425,7 @@
        orient=1
        j=find_tag(comlyn, 'SELE', comlen)
        if (j.gt.0.and.j.lt.i) then ! sele occurs before orie
-        write(0,*) 'WARNING FROM: ',whoami,': ','ATOM SELECTION MUST BE SPECIFIED AFTER ORIE.'
+        call warning(whoami, 'ATOM SELECTION MUST BE SPECIFIED AFTER ORIE.', 0)
         return
        endif
 !
@@ -466,7 +468,7 @@
       if (i.gt.0) then ! only if the MOVE directive exists
        j=find_tag(comlyn, 'SELE', comlen)
        if (j.gt.0.and.j.lt.i) then ! sele occurs before orie
-        write(0,*) 'WARNING FROM: ',whoami,': ','ATOM SELECTION MUST BE SPECIFIED AFTER MOVE.'
+        call warning(whoami, 'ATOM SELECTION MUST BE SPECIFIED AFTER MOVE.', 0)
         return
        endif
 !
@@ -500,10 +502,10 @@
       if (associated(iselct)) then ; norient=size(iselct) ; else ; norient=0 ; endif
 !
       if (norient.eq.0) then
-        write(0,*) 'WARNING FROM: ',whoami,': ','NO ATOMS SELECTED FOR ORIENTATION. WILL NOT ORIENT.'
+        call warning(whoami, 'NO ATOMS SELECTED FOR ORIENTATION. WILL NOT ORIENT.', 0)
         orient=0 ! invalid or missing selection for orientation
        elseif (norient.lt.3) then
-        write(0,*) 'WARNING FROM: ',whoami,': ','FEWER THAN FOUR ATOMS SELECTED FOR ORIENTATION. WILL NOT ORIENT.'
+        call warning(whoami, 'FEWER THAN FOUR ATOMS SELECTED FOR ORIENTATION. WILL NOT ORIENT.', 0)
         orient=0
       endif
 !
@@ -543,7 +545,7 @@
 !
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
       if (nmove.eq.0) then ! this will occur if all of the atoms selected are fixed
-        write(0,*) 'WARNING FROM: ',whoami,': ','NO ATOMS SELECTED FOR REPARAMETRIZATION. CANNOT CONTINUE.'
+        call warning(whoami, 'NO ATOMS SELECTED FOR REPARAMETRIZATION. CANNOT CONTINUE.', 0)
         if (associated(iselct)) deallocate(iselct)
         if (associated(jselct)) deallocate(jselct)
         return
@@ -712,7 +714,7 @@
 !
 ! check if the user has made an initialization call
       if (.not.repa_initialized) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','NO REPARAMETRIZATION OPTIONS SELECTED. NOTHING DONE.'
+       call warning(whoami, 'NO REPARAMETRIZATION OPTIONS SELECTED. NOTHING DONE.', 0)
        return
       endif
 !
@@ -989,15 +991,15 @@
        if (interp_method.gt.0) then
         length=len(methods(interp_method))
         length=min(max(0,length),len(methods(interp_method)));methods(interp_method)(length+1:)='';call adjustleft(methods(interp_method),(/' ',tab/));length=len_trim(methods(interp_method))
-        write(msg___,6770) whoami, methods(interp_method)(1:length) ; write(0,'(A)') msg___
+        write(msg___,6770) whoami, methods(interp_method)(1:length) ; call plainmessage(msg___)
  6770 format(/A,' WILL INTERPOLATE USING ',A,' INTERPOLATION')
        else
         if (length.gt.0) then
-         write(msg___,6771) whoami, method(1:length), whoami ; write(0,'(A)') msg___
+         write(msg___,6771) whoami, method(1:length), whoami ; call plainmessage(msg___)
  6771 format(/A,' UNRECOGNIZED INTERPOLATION METHOD: ',A,'.',/, &
      & A, ' WILL INTERPOLATE USING LINEAR INTERPOLATION')
         else
-         write(msg___,6772) whoami, whoami ; write(0,'(A)') msg___
+         write(msg___,6772) whoami, whoami ; call plainmessage(msg___)
  6772 format(/A,' UNSPECIFIED INTERPOLATION METHOD.',/, &
      & A, ' WILL INTERPOLATE USING LINEAR INTERPOLATION')
         endif ! length
@@ -1009,18 +1011,18 @@
       if (find_tag(comlyn, 'NIN', comlen).gt.0) then
        num_rep_in=atoi(get_remove_parameter(comlyn, 'NIN', comlen), 0)
        if (num_rep_in.le.0) then
-        if (qprint) then ; write(msg___, 6781) whoami ; write(0,'(A)') msg___ ; endif
+        if (qprint) then ; write(msg___, 6781) whoami ; call plainmessage(msg___) ; endif
  6781 format(A,' NUMBER OF INPUT REPLICAS MUST BE > 0. ',/, &
      & ' NOTHING DONE.')
         return
        else
         if (qprint) then
-          write(msg___,6783) whoami, num_rep_in ; write(0,'(A)') msg___
+          write(msg___,6783) whoami, num_rep_in ; call plainmessage(msg___)
         endif
  6783 format(A,' INITIAL STRING RESOLUTION: ', I5, ' REPLICAS.')
        endif ! num_rep_in<=0
       else
-        if (qprint) then ; write(msg___, 6784) whoami ; write(0,'(A)') msg___ ; endif
+        if (qprint) then ; write(msg___, 6784) whoami ; call plainmessage(msg___) ; endif
  6784 format(A,' NUMBER OF INPUT REPLICAS UNSPECIFIED',/, &
      & A,' NOTHING DONE.')
          return
@@ -1030,18 +1032,18 @@
       if (find_tag(comlyn, 'NOUT', comlen).gt.0) then
        num_rep_out=atoi(get_remove_parameter(comlyn, 'NOUT', comlen), 0)
        if (num_rep_out.le.0) then
-        if (qprint) then ; write(msg___, 6782) whoami ; write(0,'(A)') msg___ ; endif
+        if (qprint) then ; write(msg___, 6782) whoami ; call plainmessage(msg___) ; endif
  6782 format(A,' NUMBER OF OUTPUT REPLICAS MUST BE > 0. ',/, &
      & ' NOTHING DONE.')
         return
        else
         if (qprint) then
-          write(msg___,6785) whoami, num_rep_out ; write(0,'(A)') msg___
+          write(msg___,6785) whoami, num_rep_out ; call plainmessage(msg___)
         endif
  6785 format(A,' INTERPOLATED STRING RESOLUTION: ', I5, ' REPLICAS.')
        endif ! num_rep_in<=0
       else
-        if (qprint) then ; write(msg___, 6786) whoami ; write(0,'(A)') msg___ ; endif
+        if (qprint) then ; write(msg___, 6786) whoami ; call plainmessage(msg___) ; endif
  6786 format(A,' NUMBER OF OUTPUT REPLICAS UNSPECIFIED',/, &
      & A,' NOTHING DONE.')
          return
@@ -1050,7 +1052,7 @@
 ! get input coordinate file info
       name_cor_in=get_remove_parameter(comlyn,'CRIN',comlen); len_cor_in=len_trim(name_cor_in)
       if (len_cor_in.le.0) then
-       if (qprint) then ; write(msg___, 6789) whoami ; write(0,'(A)') msg___ ; endif
+       if (qprint) then ; write(msg___, 6789) whoami ; call plainmessage(msg___) ; endif
  6789 format(A,' INPUT COORDINATE FILE NAME UNSPECIFIED.',/, &
      & '  NOTHING DONE.')
        return
@@ -1058,7 +1060,7 @@
 ! get output coordinate file info
       name_cor_out=get_remove_parameter(comlyn,'CROUT',comlen); len_cor_out=len_trim(name_cor_out)
       if (len_cor_out.le.0) then
-       if (qprint) then ; write(msg___, 6790) whoami ; write(0,'(A)') msg___ ; endif
+       if (qprint) then ; write(msg___, 6790) whoami ; call plainmessage(msg___) ; endif
  6790 format(A,' OUTPUT COORDINATE FILE NAME UNSPECIFIED.',/, &
      & ' NOTHING DONE.')
        return
@@ -1092,12 +1094,12 @@
        enddo
        call files_close(ifile)
 !
-       write(msg___,6791) whoami ; write(0,'(A)') msg___
+       write(msg___,6791) whoami ; call plainmessage(msg___)
  6791 format(A,' COORDINATE SETS WILL BE READ FROM', &
      & ' THE FOLLOWING FILES:' )
 !
        do j=1, num_rep_in
-        write(msg___,'(A1,I5," ",A80)') tab, j, fname_cor_in(j) ; write(0,'(A)') msg___
+        write(msg___,'(A1,I5," ",A80)') tab, j, fname_cor_in(j) ; call plainmessage(msg___)
        enddo
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        call files_open(ofile, name_cor_out(1:len_cor_out), 'FORMATTED', 'READ')
@@ -1109,12 +1111,12 @@
        enddo
        call files_close(ofile)
 !
-       write(msg___,6791) whoami ; write(0,'(A)') msg___
+       write(msg___,6791) whoami ; call plainmessage(msg___)
  6793 format(A,' COORDINATE SETS WILL BE WRITTEN TO', &
      & ' THE FOLLOWING FILES:' )
 !
        do j=1, num_rep_out
-        write(msg___,'(A1,I5," ",A80)') tab, j, fname_cor_out(j) ; write(0,'(A)') msg___
+        write(msg___,'(A1,I5," ",A80)') tab, j, fname_cor_out(j) ; call plainmessage(msg___)
        enddo
 !
       endif ! qprint
@@ -1128,7 +1130,7 @@
        orient=1
        j=find_tag(comlyn, 'SELE', comlen)
        if (j.gt.0.and.j.lt.i) then ! sele occurs before orie
-        write(0,*) 'WARNING FROM: ',whoami,': ','ATOM SELECTION MUST BE SPECIFIED AFTER ORIE.'
+        call warning(whoami, 'ATOM SELECTION MUST BE SPECIFIED AFTER ORIE.', 0)
          return
        endif
 !
@@ -1152,10 +1154,10 @@
        if (associated(iselct)) then ; norient=size(iselct) ; else ; norient=0 ; endif
 !
        if (norient.eq.0) then
-        write(0,*) 'WARNING FROM: ',whoami,': ','NO ATOMS SELECTED FOR ORIENTATION. WILL NOT ORIENT.'
+        call warning(whoami, 'NO ATOMS SELECTED FOR ORIENTATION. WILL NOT ORIENT.', 0)
         orient=0 ! invalid or missing selection for orientation
        elseif (norient.lt.3) then
-        write(0,*) 'WARNING FROM: ',whoami,': ','FEWER THAN FOUR ATOMS SELECTED FOR ORIENTATION. WILL NOT ORIENT.'
+        call warning(whoami, 'FEWER THAN FOUR ATOMS SELECTED FOR ORIENTATION. WILL NOT ORIENT.', 0)
         orient=0
        endif
 !
@@ -1182,7 +1184,7 @@
 !
       if (qprint) then ! using qprint as a root flag -- not great
 !
-       if (repa_mass.eq.1) then ; write(msg___,6720) whoami ; write(0,'(A)') msg___ ; endif
+       if (repa_mass.eq.1) then ; write(msg___,6720) whoami ; call plainmessage(msg___) ; endif
  6720 format(A,' INTERPOLATION WILL USE MASS-WEIGHTING')
 !
        if (orient.eq.1) then
@@ -1198,13 +1200,13 @@
         write(keyword,'(I8)') norient
         mlen=len(keyword)
         mlen=min(max(0,mlen),len(keyword));keyword(mlen+1:)='';call adjustleft(keyword,(/' ',tab/));mlen=len_trim(keyword)
-        write(msg___,6700) whoami, keyword(1:mlen) ; write(0,'(A)') msg___
+        write(msg___,6700) whoami, keyword(1:mlen) ; call plainmessage(msg___)
  6700 format(A,' STRING WILL BE ORIENTED BASED ON ',A,' ATOMS')
-        if (orient_mass.eq.1) then ; write(msg___,6710) whoami ; write(0,'(A)') msg___ ; endif
+        if (orient_mass.eq.1) then ; write(msg___,6710) whoami ; call plainmessage(msg___) ; endif
  6710 format(A,' ORIENTATION WILL USE MASS-WEIGHTING')
        endif ! orient == 1
 !ccccccccccccccccccccccccc do work cccccccccccccccccccccccccccc
-       write(msg___,6974) whoami ; write(0,'(A)') msg___
+       write(msg___,6974) whoami ; call plainmessage(msg___)
  6974 format(A,' READING COORDINATE FILES')
 ! allocate memory for ALL replicas (may not be the best solution if
 ! the structure is very large; however, with 0K string, you will want
@@ -1241,7 +1243,7 @@
 !
 ! check for undefined coordinates
       if (any(rin_all.eq.unknownf)) then
-        write(0,*) 'WARNING FROM: ',whoami,': ','WARNING: SOME INPUT COORDINATES ARE UNDEFINED AFTER READING.'
+        call warning(whoami, 'WARNING: SOME INPUT COORDINATES ARE UNDEFINED AFTER READING.', 0)
       endif
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 ! orient structures if requested
@@ -1339,7 +1341,7 @@
         endif ! interp_method
 ! check for undefined coordinates
         if (any(rout_all.eq.unknownf)) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','WARNING: SOME COORDINATES ARE UNDEFINED AFTER INTERPOLATION.'
+         call warning(whoami, 'WARNING: SOME COORDINATES ARE UNDEFINED AFTER INTERPOLATION.', 0)
         endif
 !
 !cccccccccccc write file cccccccccccccccccccccccc
@@ -1422,7 +1424,7 @@
       stat_iteration_counter=atoi(get_remove_parameter(comlyn, 'COUN', comlen), -1)
       stat_iteration_counter=max(stat_iteration_counter,0)
       if (stat_iteration_counter.gt.0) then
-       if (qprint) then ; write(msg___,639) whoami, stat_iteration_counter ; write(0,'(A)') msg___ ; endif
+       if (qprint) then ; write(msg___,639) whoami, stat_iteration_counter ; call plainmessage(msg___) ; endif
  639 format(A,' SETTING ITERATION COUNTER TO ',I7)
       endif
 !
@@ -1485,7 +1487,7 @@
       if (associated(iselct)) then ; nstat=size(iselct) ; else ; nstat=0 ; endif
 !*************************************************************************
       if (nstat.eq.0) then
-        write(0,*) 'WARNING FROM: ',whoami,': ','NO ATOMS SELECTED FOR RMSD COMPUTATION. WILL NOT COMPUTE RMSD.'
+        call warning(whoami, 'NO ATOMS SELECTED FOR RMSD COMPUTATION. WILL NOT COMPUTE RMSD.', 0)
         output_rmsd0=.false.
         output_dsdt=.false.
         output_rmsd_ave=.false.
@@ -1494,10 +1496,10 @@
        qstat_orient=(remove_tag(comlyn,'ORIE',comlen).gt.0)
        if (qstat_orient) then
         if (repa_initialized.and.norient.gt.0) then
-         if (qprint) then ; write(msg___,638) whoami ; write(0,'(A)') msg___ ; endif
+         if (qprint) then ; write(msg___,638) whoami ; call plainmessage(msg___) ; endif
  638 format(A,' RMSD CALCULATIONS WILL INCLUDE ORIENTATION.')
         else
-      write(0,*) 'WARNING FROM: ',whoami,': ','REPARAMETRIZATION DISABLED OR NO ORIENTATION ATOMS FOUND. WILL NOT ORIENT.'
+      call warning(whoami, 'REPARAMETRIZATION DISABLED OR NO ORIENTATION ATOMS FOUND. WILL NOT ORIENT.', 0)
          qstat_orient=.false.
         endif ! repa_initialized
        endif ! qstat_orient
@@ -1514,7 +1516,7 @@
 !
         rmsd0_fname=get_remove_parameter(COMLYN,'RNAM',COMLEN); rmsd0_flen=len_trim(rmsd0_fname)
         if (rmsd0_flen.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','NO RMSD FILE NAME SPECIFIED. WILL WRITE TO STDOUT.'
+         call warning(whoami, 'NO RMSD FILE NAME SPECIFIED. WILL WRITE TO STDOUT.', 0)
          rmsd0_funit=fout
         else
          if (remove_tag(comlyn,'RAPP',comlen).gt.0) then ! APPEND?
@@ -1534,7 +1536,7 @@
          else
           write(msg___,661 ) whoami
          endif
-         write(0,'(A)') msg___
+         call plainmessage(msg___)
         endif
  660 format(A,' WILL WRITE STRING RMSD TO FILE ',A)
  661 format(A,' WILL WRITE STRING RMSD TO STDOUT.')
@@ -1552,7 +1554,7 @@
 !
         dsdt_fname=get_remove_parameter(COMLYN,'DNAM',COMLEN); dsdt_flen=len_trim(dsdt_fname)
         if (dsdt_flen.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','NO DELS FILE NAME SPECIFIED. WILL WRITE TO STDOUT.'
+         call warning(whoami, 'NO DELS FILE NAME SPECIFIED. WILL WRITE TO STDOUT.', 0)
          dsdt_funit=fout
         else
          if (remove_tag(comlyn,'DAPP',comlen).gt.0) then ! APPEND?
@@ -1572,7 +1574,7 @@
          else
           write(msg___,651 ) whoami
          endif
-         write(0,'(A)') msg___
+         call plainmessage(msg___)
         endif
  650 format(A,' WILL WRITE STRING RMSD(I,I+1) TO FILE ',A)
  651 format(A,' WILL WRITE STRING RMSD(I,I+1) TO STDOUT.')
@@ -1594,7 +1596,7 @@
 !
         rmsd_ave_fname=get_remove_parameter(COMLYN,'RANM',COMLEN); rmsd_ave_flen=len_trim(rmsd_ave_fname)
         if (rmsd_ave_flen.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','NO RMSA FILE NAME SPECIFIED. WILL WRITE TO STDOUT.'
+         call warning(whoami, 'NO RMSA FILE NAME SPECIFIED. WILL WRITE TO STDOUT.', 0)
          rmsd_ave_funit=fout
         else
          if (remove_tag(comlyn,'RAAP',comlen).gt.0) then ! APPEND?
@@ -1614,7 +1616,7 @@
          else
           write(msg___,6510 ) whoami
          endif
-         write(0,'(A)') msg___
+         call plainmessage(msg___)
         endif
  6500 format(A,' WILL WRITE STRING RMSD FROM AVERAGE STRUC. TO FILE ',A)
  6510 format(A,' WILL WRITE STRING RMSD FROM AVERAGE STRUC. TO STDOUT.')
@@ -1671,7 +1673,7 @@
 !
         stat_rmsd_mass=(remove_tag(comlyn,'MASS',comlen).gt.0)
         if (stat_rmsd_mass) then
-         if (qprint) then ; write(msg___,640) whoami ; write(0,'(A)') msg___ ; endif
+         if (qprint) then ; write(msg___,640) whoami ; call plainmessage(msg___) ; endif
          do i=1,nstat
           statWeights(i)=m(iatom_s(i))*statWeights(i)
          enddo
@@ -1692,7 +1694,7 @@
         output_arclength=.true.
         s_fname=get_remove_parameter(COMLYN,'ANAM',COMLEN); s_flen=len_trim(s_fname)
         if (s_flen.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','STRING LENGTH FILE NAME NOT SPECIFIED. WILL WRITE TO STDOUT.'
+         call warning(whoami, 'STRING LENGTH FILE NAME NOT SPECIFIED. WILL WRITE TO STDOUT.', 0)
          s_funit=fout
         else
          if (remove_tag(comlyn,'AAPP',comlen).gt.0) then ! APPEND?
@@ -1712,7 +1714,7 @@
          else
           write(msg___,653) whoami
          endif
-         write(0,'(A)') msg___
+         call plainmessage(msg___)
         endif
  652 format(A,' WILL WRITE STRING LENGTH TO FILE ',A)
  653 format(A,' WILL WRITE STRING LENGTH TO STDOUT.')
@@ -1723,7 +1725,7 @@
         output_curvature=.true.
         c_fname=get_remove_parameter(COMLYN,'CVNM',COMLEN); c_flen=len_trim(c_fname)
         if (c_flen.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','CURVATURE FILE NAME NOT SPECIFIED. WILL WRITE TO STDOUT.'
+         call warning(whoami, 'CURVATURE FILE NAME NOT SPECIFIED. WILL WRITE TO STDOUT.', 0)
          c_funit=fout
         else
          if (remove_tag(comlyn,'CAPP',comlen).gt.0) then ! APPEND?
@@ -1743,7 +1745,7 @@
          else
           write(msg___,6531) whoami
          endif
-         write(0,'(A)') msg___
+         call plainmessage(msg___)
         endif
  6521 format(A,' WILL WRITE CURVATURE TO FILE ',A)
  6531 format(A,' WILL WRITE CURVATURE TO STDOUT.')
@@ -1796,7 +1798,7 @@
       if (.not.sm0k_initialized) call sm0k_init()
 !
       if (.not.stat_initialized) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','NO OUTPUT OPTIONS SELECTED. NOTHING DONE'
+       call warning(whoami, 'NO OUTPUT OPTIONS SELECTED. NOTHING DONE', 0)
        return
       endif
 !
@@ -1919,7 +1921,7 @@
 ! done
           endif ! qprint
          else ! repa_initialized
-          write(0,*) 'WARNING FROM: ',whoami,': ','NO REPARAMETRIZATION OPTIONS SELECTED. SKIPPING DSDT.'
+          call warning(whoami, 'NO REPARAMETRIZATION OPTIONS SELECTED. SKIPPING DSDT.', 0)
          endif
         endif ! qroot
 ! 6680 format('DLEN> ',I5,' ',100F11.5)
@@ -1958,7 +1960,7 @@
           call files_close(rmsd_ave_funit)
           call files_open(rmsd_ave_funit, rmsd_ave_fname, 'FORMATTED', 'APPEND')
         else ! repa_initialized
-          write(0,*) 'WARNING FROM: ',whoami,': ','NO REPARAMETRIZATION OPTIONS SELECTED. SKIPPING RMSD_AVE.'
+          call warning(whoami, 'NO REPARAMETRIZATION OPTIONS SELECTED. SKIPPING RMSD_AVE.', 0)
         endif ! repa_initialized
        endif ! qroot
 ! done
@@ -1979,7 +1981,7 @@
          call files_open(s_funit, s_fname, 'FORMATTED', 'APPEND')
 ! done
         else
-          write(0,*) 'WARNING FROM: ',whoami,': ','NO REPARAMETRIZATION OPTIONS SELECTED. SKIPPING ARCLENGTH.'
+          call warning(whoami, 'NO REPARAMETRIZATION OPTIONS SELECTED. SKIPPING ARCLENGTH.', 0)
         endif
        endif ! qprint
 ! 669 format(I5,' ',100F11.5)
@@ -2001,7 +2003,7 @@
          call files_open(c_funit, c_fname, 'FORMATTED', 'APPEND')
 ! done
         else
-          write(0,*) 'WARNING FROM: ',whoami,': ','NO REPARAMETRIZATION OPTIONS SELECTED. SKIPPING CURVATURE.'
+          call warning(whoami, 'NO REPARAMETRIZATION OPTIONS SELECTED. SKIPPING CURVATURE.', 0)
         endif
        endif ! me
 ! 6692 format(I5,' ',100F11.5)

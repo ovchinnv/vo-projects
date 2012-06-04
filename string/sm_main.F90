@@ -1,3 +1,5 @@
+/*#define __WRN(__WHO,__MSG) write(0,*) 'WARNING FROM: ',__WHO,': ',__MSG*/
+/*#define __PRINT(__MSG) write(0,'(A)') __MSG*/
 /*COORDINATES AND MASSES:*/
 /*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
 /*
@@ -58,7 +60,7 @@
         call sm_close(comlyn, comlen) ! close a file on each replica
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       else
-            write(msg___,*)'UNRECOGNIZED SUBCOMMAND: ',keyword;write(0,*) 'WARNING FROM: ',whoami,': ',msg___
+            write(msg___,*)'UNRECOGNIZED SUBCOMMAND: ',keyword;call warning(whoami, msg___, 0)
       endif
 !
       end subroutine sm_main
@@ -80,8 +82,6 @@
 !
        character(len=*) :: COMLYN
        integer :: comlen
-
-
        character(len=132) :: filex, formt, facc
        integer :: unum, flen
 
@@ -95,7 +95,7 @@
      & .or.sm0k_initialized &
      & .or.ftsm_initialized)) then
         if (ME_GLOBAL.eq.0) &
-        write(0,*) 'WARNING FROM: ',whoami,': ',' STRING METHOD NOT INITIALIZED. NOTHING DONE.'
+        call warning(whoami, ' STRING METHOD NOT INITIALIZED. NOTHING DONE.', 0)
         return
        endif
 !
@@ -103,7 +103,7 @@
 ! unum
         UNUM=atoi(get_remove_parameter(COMLYN, 'UNIT', COMLEN), -1)
         IF (UNUM.LT.0) THEN
-         write(0,*) 'WARNING FROM: ',whoami,': ',' NO UNIT NUMBER SPECIFIED'
+         call warning(whoami, ' NO UNIT NUMBER SPECIFIED', 0)
 
 
 
@@ -111,7 +111,7 @@
 ! filename
         FILEX=get_remove_parameter(COMLYN,'NAME',COMLEN); FLEN=len_trim(FILEX)
         IF (FLEN.LE.0) THEN
-         write(0,*) 'WARNING FROM: ',whoami,': ','NO FILE NAME GIVEN'
+         call warning(whoami, 'NO FILE NAME GIVEN', 0)
          return
         ENDIF
 ! format
@@ -124,7 +124,7 @@
         ELSE IF (remove_tag(COMLYN,'CARD',COMLEN).GT.0) THEN
          FORMT='FORMATTED'
         ELSE
- write(0,*) 'WARNING FROM: ',whoami,': ','NO FORMAT SPECIFIED, WILL USE "UNFORMATTED"'
+ call warning(whoami, 'NO FORMAT SPECIFIED, WILL USE "UNFORMATTED"', 0)
          FORMT='UNFORMATTED'
         ENDIF
 !
@@ -169,7 +169,7 @@
      & .or.sm0k_initialized &
      & .or.ftsm_initialized)) then
         if (ME_GLOBAL.eq.0) &
-        write(0,*) 'WARNING FROM: ',whoami,': ',' STRING METHOD NOT INITIALIZED. NOTHING DONE.'
+        call warning(whoami, ' STRING METHOD NOT INITIALIZED. NOTHING DONE.', 0)
         return
        endif
 !

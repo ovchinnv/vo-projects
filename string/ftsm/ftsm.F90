@@ -1,3 +1,5 @@
+/*#define __WRN(__WHO,__MSG) write(0,*) 'WARNING FROM: ',__WHO,': ',__MSG*/
+/*#define __PRINT(__MSG) write(0,'(A)') __MSG*/
 /*COORDINATES AND MASSES:*/
 /*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
 /*
@@ -99,7 +101,7 @@
 !
       integer :: ierror ! for 1
       integer :: natom
- integer :: isele, i__, iend; integer, pointer::iselct(:)
+ integer :: isele, i__, iend; integer, pointer::iselct(:);character(LEN=20)::word__
       real*8, pointer :: fd_error(:,:)
 !
       logical :: qroot, qslave, qprint, qcomp
@@ -117,7 +119,7 @@
 !
 ! check for smcv initialization; quit if initialized
       if (smcv_initialized) then
-       write(0,*) 'WARNING FROM: ',whoami,': ',' SMCV IS ON AND CANNOT BE USED WITH FTSM. NOTHING DONE.'
+       call warning(whoami, ' SMCV IS ON AND CANNOT BE USED WITH FTSM. NOTHING DONE.', 0)
        return
       endif
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -149,8 +151,6 @@
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       elseif (( keyword(1:4).eq.'DYNA'(1:4) )) then
 
-
-
 !ccccccccccccccc PARSE OTHER DYNAMICS OPTIONS
 ! reset internal interation counter for ftsm_master
        olditeration=0
@@ -159,7 +159,7 @@
        if (update_on) then
         update_freq=atoi(get_remove_parameter(comlyn, 'UPDF', comlen), 0)
         if (update_freq.le.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','UPDATE FREQUENCY INVALID OR UNSPECIFIED. WILL NOT UPDATE.'
+         call warning(whoami, 'UPDATE FREQUENCY INVALID OR UNSPECIFIED. WILL NOT UPDATE.', 0)
          update_on=.false.
         else
          repa_on=(remove_tag(comlyn,'REPA',comlen).gt.0)
@@ -170,7 +170,7 @@
        if (stat_on) then
         stat_freq=atoi(get_remove_parameter(comlyn, 'STAF', comlen), 0)
         if (stat_freq.le.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','STATISTICS FREQUENCY INVALID OR UNSPECIFIED.'
+         call warning(whoami, 'STATISTICS FREQUENCY INVALID OR UNSPECIFIED.', 0)
          stat_on=.false.
         endif
        endif ! stat_on
@@ -179,7 +179,7 @@
        if (evolve_ftsm_on) then
         evolve_freq=atoi(get_remove_parameter(comlyn, 'EVOF', comlen), 0)
         if (evolve_freq.le.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','EVOLUTION FREQUENCY INVALID OR UNSPECIFIED. WILL NOT EVOLVE.'
+         call warning(whoami, 'EVOLUTION FREQUENCY INVALID OR UNSPECIFIED. WILL NOT EVOLVE.', 0)
          evolve_ftsm_on=.false.
         endif
        endif ! evolve_ftsm_on
@@ -204,7 +204,7 @@
           if (num_ave_samples.gt.0) then
             num_evolve_samples=num_ave_samples
           else
-           write(0,*) 'WARNING FROM: ',whoami,': ','INVALID NUMBER OF SAMPLES SPECIFIED. WILL SET TO ZERO.'
+           call warning(whoami, 'INVALID NUMBER OF SAMPLES SPECIFIED. WILL SET TO ZERO.', 0)
           endif ! num_samples
          endif ! NAVE
 !
@@ -213,7 +213,7 @@
           if (num_ave_samples.gt.0) then
             max_evolve_samples=num_ave_samples
           else
-  write(0,*) 'WARNING FROM: ',whoami,': ','INVALID MAXIMUM NUMBER OF SAMPLES SPECIFIED. WILL SET TO ZERO.'
+  call warning(whoami, 'INVALID MAXIMUM NUMBER OF SAMPLES SPECIFIED. WILL SET TO ZERO.', 0)
           endif ! num_samples
          endif ! MAXAVE
         endif ! evolve_aver
@@ -223,20 +223,20 @@
         if (evolve_aver_on) i=i+1
 !
         if (i.gt.1) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','MORE THAN ONE EVOLUTION SCHEME REQUESTED. WILL USE EXPO.'
+         call warning(whoami, 'MORE THAN ONE EVOLUTION SCHEME REQUESTED. WILL USE EXPO.', 0)
          evolve_expo_on=.true.
          evolve_aver_on=.false.
         endif
 !
         if (i.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','EVOLUTION SCHEME UNSPECIFIED. WILL USE EXPO.'
+         call warning(whoami, 'EVOLUTION SCHEME UNSPECIFIED. WILL USE EXPO.', 0)
          evolve_expo_on=.true.
          evolve_aver_on=.false.
         endif
        endif ! evolve_ftsm_on
 !
        if (update_on.and..not.(evolve_ftsm_on.or.repa_on)) then
-        write(0,*) 'WARNING FROM: ',whoami,': ','EVOLUTION AND REPARAMETRIZATION DISABLED. UPDATE IS OFF.'
+        call warning(whoami, 'EVOLUTION AND REPARAMETRIZATION DISABLED. UPDATE IS OFF.', 0)
         update_on=.false.
        endif
 !
@@ -252,10 +252,10 @@
         repl_x_temp=atof(get_remove_parameter(comlyn, 'REXT', comlen), 0d0)
 !
         if (repl_x_freq.le.0) then
-          write(0,*) 'WARNING FROM: ',whoami,': ','MUST SPECIFY POSITIVE REXF. REPLICA EXCHANGE IS OFF.'
+          call warning(whoami, 'MUST SPECIFY POSITIVE REXF. REPLICA EXCHANGE IS OFF.', 0)
           repl_x_on=.false.
         elseif (repl_x_temp.le.0) then
-          write(0,*) 'WARNING FROM: ',whoami,': ','MUST SPECIFY POSITIVE REXT. REPLICA EXCHANGE IS OFF.'
+          call warning(whoami, 'MUST SPECIFY POSITIVE REXT. REPLICA EXCHANGE IS OFF.', 0)
           repl_x_on=.false.
         else
           call ftsm_rex_set_temp(repl_x_temp)
@@ -269,65 +269,65 @@
 ! print summary
 !cccccccccccccccccc STRING METHOD OPTIONS cccccccccccccccccccccc
        if (qprint) then
-        WRITE (msg___,'(2A)') whoami, ' STRING METHOD ENABLED.'; write(0,'(A)') msg___
+        WRITE (msg___,'(2A)') whoami, ' STRING METHOD ENABLED.'; call plainmessage(msg___)
         if (evolve_ftsm_on) then
             WRITE (msg___,'(/,2A,/,2A,I7,A)') &
      & whoami, ' STRING EVOLUTION ENABLED.', &
      & whoami, ' WILL EVOLVE AFTER EVERY ', &
-     & evolve_freq,' ITERATIONS.'; write(0,'(A)') msg___
+     & evolve_freq,' ITERATIONS.'; call plainmessage(msg___)
             WRITE (msg___,'(2A,I7,A)') &
      & whoami, ' THE FIRST', evolve_nskip, &
-     & ' ITERATIONS WILL NOT CONTRIBUTE TO AVERAGES.'; write(0,'(A)') msg___
+     & ' ITERATIONS WILL NOT CONTRIBUTE TO AVERAGES.'; call plainmessage(msg___)
             if (evolve_expo_on) then
-               write(msg___,671) whoami, whoami, evolve_expo_mem ; write(0,'(A)') msg___
+               write(msg___,671) whoami, whoami, evolve_expo_mem ; call plainmessage(msg___)
  671 format(A,' STRING EVOLUTION WILL BE OF THE FORM:',/, &
      & A,' R(N+1)=A*R(N)+(1-A)*RINST, A=',F9.5,'.')
             elseif (evolve_aver_on) then
-               write(msg___,6710) whoami, whoami, num_evolve_samples ; write(0,'(A)') msg___
+               write(msg___,6710) whoami, whoami, num_evolve_samples ; call plainmessage(msg___)
  6710 format(A,' CV EVOLUTION WILL BE OF THE FORM:',/, &
      & A,' R(N)=AVERAGE_0^{N}(RINST).  INITIAL NUMBER OF SAMPLES IS ', &
      & I5,'.')
              if (max_evolve_samples.gt.0) &
-     & write(msg___, 6711) whoami, max_evolve_samples ; write(0,'(A)') msg___
+     & write(msg___, 6711) whoami, max_evolve_samples ; call plainmessage(msg___)
  6711 format(A, ' ONLY THE MOST RECENT ', I5,' SAMPLES WILL BE USED.')
 
             endif
         endif ! evolve_ftsm_on
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
         if (update_on) then
-          WRITE (msg___,666) whoami, update_freq ; write(0,'(A)') msg___
+          WRITE (msg___,666) whoami, update_freq ; call plainmessage(msg___)
  666 format(A,' WILL UPDATE IMAGES AFTER EVERY ',I7,' ITERATIONS.')
          if (repa_on) &
-     & WRITE (msg___,667) whoami ; write(0,'(A)') msg___
+     & WRITE (msg___,667) whoami ; call plainmessage(msg___)
  667 format(A,' WILL REPARAMETRIZE STRING DURING UPDATE ')
         endif ! update_on
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
         if (restrained_on) then
             WRITE (msg___,'(2A)') &
-     & whoami, ' WILL USE RESTRAINED DYNAMICS.' ; write(0,'(A)') msg___
+     & whoami, ' WILL USE RESTRAINED DYNAMICS.' ; call plainmessage(msg___)
 !
-            write(msg___,665) whoami, restrained_eq_steps ; write(0,'(A)') msg___
+            write(msg___,665) whoami, restrained_eq_steps ; call plainmessage(msg___)
  665 format(A, ' WILL ADJUST TO NEW RESTRAINTS OVER ',I7, ' STEPS.')
         endif ! restrained
 !
 ! proj_on is necessary to compute free energies
         if (proj_on) then
             write (msg___,'(2A)') whoami, &
-     & ' WILL RESTRAIN SYSTEM TO PLANE PERPENDICULAR TO PATH.' ; write(0,'(A)') msg___
+     & ' WILL RESTRAIN SYSTEM TO PLANE PERPENDICULAR TO PATH.' ; call plainmessage(msg___)
         else
             write (msg___,'(2A)') whoami, &
      & ' WILL RESTRAIN SYSTEM TO PATH IMAGE.'//                         &
-     & ' (FE/MFPT CANNOT BE COMPUTED).' ; write(0,'(A)') msg___
+     & ' (FE/MFPT CANNOT BE COMPUTED).' ; call plainmessage(msg___)
         endif
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
         if (stat_on) then
-            write(msg___,668) whoami, stat_freq ; write(0,'(A)') msg___
+            write(msg___,668) whoami, stat_freq ; call plainmessage(msg___)
  668 format(A, ' WILL OUTPUT STRING STATISTICS AFTER EVERY ',I7, ' STEPS.')
         endif
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
         if (repl_x_on) then
             write(msg___,691) whoami, whoami, repl_x_freq, repl_x_temp
-            write(0,'(A)') msg___
+            call plainmessage(msg___)
  691 format(A, ' WILL ATTEMPT TO EXCHANGE NEIGHBORING REPLICAS ',/ &
      & A, ' ONCE IN EVERY ',I6,' ITERATIONS AT ',F11.3, ' K.')
         endif ! repl_x_on
@@ -349,11 +349,11 @@
        qcomp=(remove_tag(comlyn,'COMP',comlen).gt.0)
 !
        if (qcomp) then
-         if (qprint) write(msg___,6657) whoami ; write(0,'(A)') msg___
+         if (qprint) write(msg___,6657) whoami ; call plainmessage(msg___)
  6657 format(/A,' WILL DEFINE PATH FROM COMPARISON COORDINATES.')
          call ftsm_fill(rcomp(1,:),rcomp(2,:),rcomp(3,:))
        else ! ~qcomp -- use main coordinates
-         if (qprint) write(msg___,6660) whoami ; write(0,'(A)') msg___
+         if (qprint) write(msg___,6660) whoami ; call plainmessage(msg___)
  6660 format(/A,' WILL DEFINE PATH FROM MAIN COORDINATES.')
          call ftsm_fill(r(1,:),r(2,:),r(3,:))
        endif ! qcomp
@@ -362,43 +362,43 @@
        if (remove_tag(comlyn,'GRAD',comlen).gt.0) then ! finite-difference gradient test
 ! check fd spec
         step=atof(get_remove_parameter(comlyn, 'STEP', comlen), finite_difference_d)
-        if (qprint) write(msg___, 7001) whoami,whoami,step,whoami,whoami ;write(0,'(A)') msg___
+        if (qprint) write(msg___, 7001) whoami,whoami,step,whoami,whoami ;call plainmessage(msg___)
  7001 format(/A,' WILL TEST GRADIENTS USING FINITE DIFFERENCES', &
      & /A,' USING DX = DY = DZ = ',F15.9,'.', &
      & /A,' MAIN COORDINATE SET MUST BE DEFINED.', &
      & /A,' WILL OVERWRITE FORCE/GRAD ARRAYS')
         if (any(r(1,:).eq.unknownf)) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','MAIN X SET HAS UNDEFINED VALUES. NOTHING DONE.'
+         call warning(whoami, 'MAIN X SET HAS UNDEFINED VALUES. NOTHING DONE.', 0)
         else
          fd_error=>ftsm_test_grad_fd(r(1,:),r(2,:),r(3,:),step)
 ! write(me_global+100,*) fd_error
          if (qprint) then
           if (proj_on) then
-           write(msg___,7006) whoami, whoami, whoami, whoami ; write(0,'(A)') msg___
+           write(msg___,7006) whoami, whoami, whoami, whoami ; call plainmessage(msg___)
  7002 format(/A,' TOP:    NORMALIZED PROJECTION ONTO PATH', &
      & /A,' BOTTOM: DISTANCE PERPENDICULAR TO PATH', &
      & /A,' DGRAD_X_MAX, DGRAD_Y_MAX, DGRAD_Z_MAX', &
      & /A,' ======================================')
            do i=1,2
             write(msg___,'(A,3'//real_format//'F15.9)')                   &
-     & whoami,fd_error(i,:) ; write(0,'(A)') msg___
+     & whoami,fd_error(i,:) ; call plainmessage(msg___)
            enddo
           else ! projection off
-           write(msg___,7013) whoami, whoami, whoami ; write(0,'(A)') msg___
+           write(msg___,7013) whoami, whoami, whoami ; call plainmessage(msg___)
  7013 format(/A,' DISTANCE TO PATH POINT:', &
      & /A,' DGRAD_X_MAX, DGRAD_Y_MAX, DGRAD_Z_MAX', &
      & /A,' ======================================')
             write(msg___,'(A,3'//real_format//'F15.9)')                   &
-     & whoami,fd_error(1,:) ; write(0,'(A)') msg___
+     & whoami,fd_error(1,:) ; call plainmessage(msg___)
           endif ! projection
          endif ! qprint
 ! decide whether the test was passed
          zval=abs(maxval(fd_error))
          if (zval.lt.abs(step)*1d0) then
-          write(msg___,7003) whoami, zval, whoami ; write(0,'(A)') msg___
+          write(msg___,7003) whoami, zval, whoami ; call plainmessage(msg___)
          else
-          write(msg___,7004) whoami, zval, whoami ; write(0,'(A)') msg___
-          write(0,*) 'WARNING FROM: ',whoami,': ','FINITE DERIVATIVE TEST FAILED.'
+          write(msg___,7004) whoami, zval, whoami ; call plainmessage(msg___)
+          call warning(whoami, 'FINITE DERIVATIVE TEST FAILED.', 0)
          endif ! report test result
  7003 format(/A, ' THE MAXIMUM GRADIENT ERROR IS ',F15.9,', ', &
      & /A, ' WHICH IS SMALLER THAN STEP. TEST PASSED.')
@@ -409,41 +409,41 @@
        endif ! grad
 !
        if (remove_tag(comlyn,'PARA',comlen).gt.0) then ! parallel communication test
-        if (qprint) write(msg___, 7005) whoami,whoami,whoami ; write(0,'(A)') msg___
+        if (qprint) write(msg___, 7005) whoami,whoami,whoami ; call plainmessage(msg___)
  7005 format(/A,' WILL COMPARE PARALLEL AND SERIAL FORCE COMPUTATION', &
      & /A,' MAIN COORDINATE SET MUST BE DEFINED.', &
      & /A,' WILL OVERWRITE FORCE/GRAD ARRAYS')
         if (any(r(1,:).eq.unknownf)) then
-         write(0,*) 'WARNING FROM: ',whoami,': ',' MAIN X SET HAS UNDEFINED VALUES. NOTHING DONE.'
+         call warning(whoami, ' MAIN X SET HAS UNDEFINED VALUES. NOTHING DONE.', 0)
         else
          fd_error=>ftsm_test_parallel(r(1,:),r(2,:),r(3,:)) ! use the same array as above
          if (qprint) then
           if (proj_on) then
-           write(msg___,7006) whoami, whoami, whoami, whoami ; write(0,'(A)') msg___
+           write(msg___,7006) whoami, whoami, whoami, whoami ; call plainmessage(msg___)
  7006 format(/A,' TOP:    NORMALIZED PROJECTION ONTO PATH', &
      & /A,' BOTTOM: DISTANCE PERPENDICULAR TO PATH', &
      & /A,' DGRAD_X_MAX, DGRAD_Y_MAX, DGRAD_Z_MAX, VALUE', &
      & /A,' ============================================')
            do i=1, 2
             write(msg___,'(A,4'//real_format//'F15.9)')                   &
-     & whoami,fd_error(i,:) ; write(0,'(A)') msg___
+     & whoami,fd_error(i,:) ; call plainmessage(msg___)
            enddo
           else ! not proj_on
-           write(msg___,7010) whoami, whoami, whoami ; write(0,'(A)') msg___
+           write(msg___,7010) whoami, whoami, whoami ; call plainmessage(msg___)
  7010 format(/A,' DISTANCE TO PATH POINT:', &
      & /A,' DGRAD_X_MAX, DGRAD_Y_MAX, DGRAD_Z_MAX, VALUE', &
      & /A,' ============================================')
             write(msg___,'(A,4'//real_format//'F15.9)')                   &
-     & whoami,fd_error(1,:) ; write(0,'(A)') msg___
+     & whoami,fd_error(1,:) ; call plainmessage(msg___)
           endif ! proj_on
          endif ! qprint
 ! decide whether the test was passed
          zval=abs(maxval(fd_error))
          if (zval.lt.parallel_tolerance) then
-          write(msg___,7007) whoami, zval, whoami, parallel_tolerance ; write(0,'(A)') msg___
+          write(msg___,7007) whoami, zval, whoami, parallel_tolerance ; call plainmessage(msg___)
          else
-          write(msg___,7008) whoami, zval, whoami, parallel_tolerance ; write(0,'(A)') msg___
-          write(0,*) 'WARNING FROM: ',whoami,': ','PARALLEL COMPUTATION TEST FAILED.'
+          write(msg___,7008) whoami, zval, whoami, parallel_tolerance ; call plainmessage(msg___)
+          call warning(whoami, 'PARALLEL COMPUTATION TEST FAILED.', 0)
          endif ! report test result
  7007 format(/A, ' THE MAXIMUM ERROR IS ',E12.5,', ', &
      & /A, ' WHICH IS SMALLER THAN ',E12.5,'. TEST PASSED.')
@@ -463,15 +463,15 @@
            case('YES','ON','TRUE','T','yes','on','true','t')
             keyword='ENABLED '; calc_bestfit_grad_para=.true.
             if (qprint) then
-             write(msg___,7009) whoami, 'FORCES', keyword ; write(0,'(A)') msg___
+             write(msg___,7009) whoami, 'FORCES', keyword ; call plainmessage(msg___)
             endif
            case('NO','OFF','FALSE','F','no','off','false','f')
             keyword='DISABLED' ; calc_bestfit_grad_para=.false.
             if (qprint) then
-             write(msg___,7009) whoami, 'FORCES', keyword ; write(0,'(A)') msg___
+             write(msg___,7009) whoami, 'FORCES', keyword ; call plainmessage(msg___)
             endif
            case default
-            write(0,*) 'WARNING FROM: ',whoami,': ','UNKNOWN OPTION SPECIFIED'
+            call warning(whoami, 'UNKNOWN OPTION SPECIFIED', 0)
           end select
        enddo ! comlen
  7009 format(/A, ' PARALLEL COMPUTATION OF ',A,' ',A)
@@ -488,7 +488,7 @@
        qdcd=remove_tag(comlyn,'DCD',comlen); qdcd = min(qdcd,1)
 !
        if ((qcor+qdcd) .gt. 1) then
-        write(0,*) 'WARNING FROM: ',whoami,': ',' MORE THAN ONE OUTPUT FORMAT REQUESTED. WILL USE DCD.'
+        call warning(whoami, ' MORE THAN ONE OUTPUT FORMAT REQUESTED. WILL USE DCD.', 0)
         qcor=0; qdcd=1;
        endif
 !
@@ -520,12 +520,12 @@
 ! check for column spec
          c1=atoi(get_remove_parameter(comlyn, 'COL', comlen), -1)
          if (c1.gt.0) then
-          if (qprint) then ; write(msg___,6679) whoami, c1 ; write(0,'(A)') msg___ ; endif
+          if (qprint) then ; write(msg___,6679) whoami, c1 ; call plainmessage(msg___) ; endif
  6679 format(/A,' WRITING COORDINATES FROM COLUMN ',I3)
           if (qdcd.gt.0) then ; call ftsm_write_dcd(IFILE=ifile,COL=c1) ;
           else ; call ftsm_write_cor(ifile,c1) ; endif
          else
-          if (qprint) then ; write(msg___,6689) whoami ; write(0,'(A)') msg___ ; endif
+          if (qprint) then ; write(msg___,6689) whoami ; call plainmessage(msg___) ; endif
  6689 format(/A,' WRITING COORDINATES FROM DEFAULT COLUMN.')
           if (qdcd.gt.0) then ; call ftsm_write_dcd(IFILE=ifile) ;
           else ; call ftsm_write_cor(ifile) ; endif
@@ -546,7 +546,7 @@
        qdcd=remove_tag(comlyn,'DCD',comlen); qdcd = min(qdcd,1)
 !
        if ((qcor+qdcd) .gt. 1) then
-        write(0,*) 'WARNING FROM: ',whoami,': ','MORE THAN ONE INPUT FORMAT REQUESTED. WILL USE DCD.'
+        call warning(whoami, 'MORE THAN ONE INPUT FORMAT REQUESTED. WILL USE DCD.', 0)
         qcor=0; qdcd=1;
        endif
 !
@@ -573,12 +573,12 @@
 !cccccccccccccccccc assume file is open, read ccccccccccccccccccc
        if (ifile.ge.0) then
         if (c1.gt.0) then ! column spec
-         if (qprint) then ; write(msg___,6699) whoami, c1 ; write(0,'(A)') msg___ ; endif
+         if (qprint) then ; write(msg___,6699) whoami, c1 ; call plainmessage(msg___) ; endif
  6699 format(A,' READING COORDINATES INTO COLUMN ',I3)
          if (qdcd.gt.0) then ; if (qroot) call ftsm_read_dcd(ifile, c1);
          else; call ftsm_read_cor(ifile,c1) ; endif
        else
-         if (qprint) then ; write(msg___,6709) whoami ; write(0,'(A)') msg___ ; endif
+         if (qprint) then ; write(msg___,6709) whoami ; call plainmessage(msg___) ; endif
  6709 format(A,' READING COORDINATES INTO DEFAULT COLUMN.')
          if (qdcd.gt.0) then ; if (qroot) call ftsm_read_dcd(ifile);
          else ; call ftsm_read_cor(ifile) ; endif
@@ -614,7 +614,7 @@
 ! read column spec
         c1=atoi(pop_string(comlyn,comlen)) ; comlen=len_trim(comlyn)
         c2=atoi(pop_string(comlyn,comlen)) ; comlen=len_trim(comlyn)
-        if (qprint) then ; write(msg___,6729) whoami, c1, c2 ; write(0,'(A)') msg___ ; endif
+        if (qprint) then ; write(msg___,6729) whoami, c1, c2 ; call plainmessage(msg___) ; endif
  6729 format(/A,' WILL SWAP COLUMNS ',I3,' AND ',I3,' ')
         call ftsm_swap(c1, c2)
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -622,7 +622,7 @@
 ! read column spec
         c1=atoi(pop_string(comlyn,comlen)) ; comlen=len_trim(comlyn)
         c2=atoi(pop_string(comlyn,comlen)) ; comlen=len_trim(comlyn)
-        if (qprint) then ; write(msg___,6739) whoami, c1, c2 ; write(0,'(A)') msg___ ; endif
+        if (qprint) then ; write(msg___,6739) whoami, c1, c2 ; call plainmessage(msg___) ; endif
  6739 format(/A,' WILL COPY COLUMN ',I3,' TO ',I3,' ')
         call ftsm_copy(c1,c2)
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -637,19 +637,20 @@
          isele=find_tag(comlyn, 'SELE', comlen)
          if (isele.ge.iorie) then
 !
+          nullify(iselct)
           isele=find_tag(comlyn, 'SELE', comlen)
           msg___=comlyn(isele:comlen) ! part of string that begins with the selection
           i__=comlen-isele+1
           iend=find_tag(msg___, 'END', i__) ! location of selection termination
           iend=iend-1+isele ! index into comlyn starting from 1
           msg___=comlyn(isele:iend) ! part of string that begins with the selection and ends before ' END'
-          keyword=pop_string(msg___) ! remove first word (which we know is 'SELE*') from msg___
+          word__=pop_string(msg___) ! remove first word (which we know is 'SELE*') from msg___
 ! process selection:
           nullify(iselct)
           iselct=>system_getind(msg___)
 ! remove selection string from command line:
           msg___=comlyn(iend:comlen) ! command line starting with 'END' (see above)
-          keyword=pop_string(msg___) ! remove 'END*' e.g. 'ENDING' is ok too
+          word__=pop_string(msg___) ! remove 'END*' e.g. 'ENDING' is ok too
           comlyn(isele:isele)=' ';
           comlyn(isele+1:)=msg___ ! selection has been removed from command
           comlen=len_trim(comlyn)
@@ -658,7 +659,7 @@
 ! currently we require at least three atoms for orientation
 !
           if (norient.lt.3) then
-           write(0,*) 'WARNING FROM: ',whoami,': ',' FEWER THAN THREE ATOMS SELECTED FOR ORIENTATION. ABORT.'
+           call warning(whoami, ' FEWER THAN THREE ATOMS SELECTED FOR ORIENTATION. ABORT.', 0)
            return
           endif
 !
@@ -697,20 +698,20 @@
 !
 ! print summary
           if (qprint) then
-            write(msg___,100) whoami, norient ; write(0,'(A)') msg___
+            write(msg___,100) whoami, norient ; call plainmessage(msg___)
  100 format(A,' WILL ORIENT STRUCTURES BASED ON ',i5,' ATOMS')
-            write(msg___,101) whoami ; ; write(0,'(A)') msg___
+            write(msg___,101) whoami ; ; call plainmessage(msg___)
  101 format(A,' ORIENTATION WEIGHTS UNIFORM.')
             if (qdiffrot) then
-             write(msg___,102) whoami ; write(0,'(A)') msg___
+             write(msg___,102) whoami ; call plainmessage(msg___)
             else
-             write(msg___,103) whoami ; write(0,'(A)') msg___
+             write(msg___,103) whoami ; call plainmessage(msg___)
             endif
  102 format (A, ' ORIENTATION AND FORCING ATOMS ARE DIFFERENT')
  103 format (A, ' ORIENTATION AND FORCING ATOMS ARE IDENTICAL')
           endif ! qprint
          else
-          write(0,*) 'WARNING FROM: ',whoami,': ',' ATOM SELECTION MUST BE SPECIFIED AFTER ORIE.'
+          call warning(whoami, ' ATOM SELECTION MUST BE SPECIFIED AFTER ORIE.', 0)
           return
          endif
          call ftsm_define_rtmd_type()
@@ -721,26 +722,27 @@
          isele=find_tag(comlyn, 'SELE', comlen)
          if (isele.gt.irmsd) then
 !
+          nullify(iselct)
           isele=find_tag(comlyn, 'SELE', comlen)
           msg___=comlyn(isele:comlen) ! part of string that begins with the selection
           i__=comlen-isele+1
           iend=find_tag(msg___, 'END', i__) ! location of selection termination
           iend=iend-1+isele ! index into comlyn starting from 1
           msg___=comlyn(isele:iend) ! part of string that begins with the selection and ends before ' END'
-          keyword=pop_string(msg___) ! remove first word (which we know is 'SELE*') from msg___
+          word__=pop_string(msg___) ! remove first word (which we know is 'SELE*') from msg___
 ! process selection:
           nullify(iselct)
           iselct=>system_getind(msg___)
 ! remove selection string from command line:
           msg___=comlyn(iend:comlen) ! command line starting with 'END' (see above)
-          keyword=pop_string(msg___) ! remove 'END*' e.g. 'ENDING' is ok too
+          word__=pop_string(msg___) ! remove 'END*' e.g. 'ENDING' is ok too
           comlyn(isele:isele)=' ';
           comlyn(isele+1:)=msg___ ! selection has been removed from command
           comlen=len_trim(comlyn)
           if (associated(iselct)) then ; nforced=size(iselct) ; else ; nforced=0 ; endif
 !
           if (nforced.le.0) then
-           write(0,*) 'WARNING FROM: ',whoami,': ','NO RMSD ATOMS SELECTED. ABORT.'
+           call warning(whoami, 'NO RMSD ATOMS SELECTED. ABORT.', 0)
            return
           endif
 !
@@ -774,19 +776,19 @@
           endif
 ! print summary
           if (qprint) then
-            write(msg___,104) whoami, nforced ; write(0,'(A)') msg___
+            write(msg___,104) whoami, nforced ; call plainmessage(msg___)
  104 format(A,' WILL APPLY FORCES TO ',i5, &
      & ' ATOMS')
-            write(msg___,105) whoami ; write(0,'(A)') msg___
+            write(msg___,105) whoami ; call plainmessage(msg___)
  105 format(A,' FORCING WEIGHTS UNIFORM.')
             if (qdiffrot) then
-             write(msg___,102) whoami ; write(0,'(A)') msg___
+             write(msg___,102) whoami ; call plainmessage(msg___)
             else
-             write(msg___,103) whoami ;write(0,'(A)') msg___
+             write(msg___,103) whoami ;call plainmessage(msg___)
             endif
           endif ! qprint
          else
-          write(0,*) 'WARNING FROM: ',whoami,': ','ATOM SELECTION MUST BE SPECIFIED AFTER RMSD.'
+          call warning(whoami, 'ATOM SELECTION MUST BE SPECIFIED AFTER RMSD.', 0)
           return
          endif
 !*************************************************************
@@ -795,10 +797,10 @@
           k=atof(get_remove_parameter(comlyn, 'KPAR', comlen), -1d0)
           if (k.ge.0d0) then
            kpara=k
-           if (qprint) then ; write(msg___,6756) whoami, k ; write(0,'(A)') msg___ ; endif
+           if (qprint) then ; write(msg___,6756) whoami, k ; call plainmessage(msg___) ; endif
  6756 format(A,' SETTING PARALLEL RESTRAINT FORCE CONSTANT TO ',F11.5)
           else
-           if (qprint) then ; write(msg___,6757) whoami, k ; write(0,'(A)') msg___ ; endif
+           if (qprint) then ; write(msg___,6757) whoami, k ; call plainmessage(msg___) ; endif
  6757 format(A,' INVALID FORCE CONSTANT SPECIFIED: ',F11.5)
           endif
 !*************************************************************
@@ -807,22 +809,22 @@
           k=atof(get_remove_parameter(comlyn, 'KPRP', comlen), -1d0)
           if (k.ge.0d0) then
            kperp=k
-           if (qprint) then ; write(msg___,6746) whoami, k ; write(0,'(A)') msg___ ; endif
+           if (qprint) then ; write(msg___,6746) whoami, k ; call plainmessage(msg___) ; endif
  6746 format(A,' SETTING PERPENDICULAR RESTRAINT FORCE CONSTANT TO ' &
      & ,F11.5)
           else
-           if (qprint) then ; write(msg___,6757) whoami, k ; write(0,'(A)') msg___ ; endif
+           if (qprint) then ; write(msg___,6757) whoami, k ; call plainmessage(msg___) ; endif
           endif
 !**************************************************************
         elseif (find_tag(comlyn, 'KRMS', comlen).gt.0) then
           k=atof(get_remove_parameter(comlyn, 'KRMS', comlen), -1d0)
           if (k.ge.0d0) then
            krms=k
-           if (qprint) then ; write(msg___,6752) whoami, k ; write(0,'(A)') msg___ ; endif
+           if (qprint) then ; write(msg___,6752) whoami, k ; call plainmessage(msg___) ; endif
  6752 format(A,' SETTING RMSD RESTRAINT FORCE CONSTANT TO ' &
      & ,F11.5)
           else
-           if (qprint) then ; write(msg___,6757) whoami, k ; write(0,'(A)') msg___ ; endif
+           if (qprint) then ; write(msg___,6757) whoami, k ; call plainmessage(msg___) ; endif
           endif
 !***************************************************************
         elseif (remove_tag(comlyn,'MASS',comlen).gt.0) then ! mass-weighting
@@ -832,19 +834,19 @@
  natom=psf_natom()
           select case(keyword(1:klen))
            case('YES','ON','TRUE','T','yes','on','true','t')
-            if (qprint) then ; write(msg___,8001) whoami, 'SET FROM ATOM MASSES' ; write(0,'(A)') msg___ ; endif
+            if (qprint) then ; write(msg___,8001) whoami, 'SET FROM ATOM MASSES' ; call plainmessage(msg___) ; endif
             call ftsm_set_weights(m, natom) ! send masses
            case('NO','OFF','FALSE','F','no','off','false','f')
-            if (qprint) then ; write(msg___,8001) whoami, 'WILL BE UNIFORM' ; write(0,'(A)') msg___ ; endif
+            if (qprint) then ; write(msg___,8001) whoami, 'WILL BE UNIFORM' ; call plainmessage(msg___) ; endif
             call ftsm_set_weights( (/ (1d0, i=1,natom) /), natom) ! uniform
            case('BFACTOR', 'bfactor', 'BFACT', 'bfact')
-            if (qprint) then ; write(msg___,8001) whoami, 'SET FROM BFACTOR ARRAY' ; write(0,'(A)') msg___ ; endif
+            if (qprint) then ; write(msg___,8001) whoami, 'SET FROM BFACTOR ARRAY' ; call plainmessage(msg___) ; endif
             call ftsm_set_weights(bfactor, natom) ! send masses
            case('OCCU', 'occu','OCCUPANCY', 'occupancy')
-            if (qprint) then ; write(msg___,8001) whoami, 'SET FROM OCCUPANCY ARRAY' ; write(0,'(A)') msg___ ; endif
+            if (qprint) then ; write(msg___,8001) whoami, 'SET FROM OCCUPANCY ARRAY' ; call plainmessage(msg___) ; endif
             call ftsm_set_weights(occupancy, natom) ! send masses
            case default
-            write(0,*) 'WARNING FROM: ',whoami,': ','UNKNOWN OPTION SPECIFIED'
+            call warning(whoami, 'UNKNOWN OPTION SPECIFIED', 0)
           end select
  8001 format(A,' WEIGHTS ',A,'.')
 !*********************************************************************
@@ -856,14 +858,14 @@
            case('YES','ON','TRUE','T','yes','on','true','t')
             proj_on=.true.
             if (qprint) then ; write (msg___,'(2A)') whoami, &
-     & ' WILL RESTRAIN SYSTEM TO PLANE PERPENDICULAR TO PATH.' ; write(0,'(A)') msg___ ; endif
+     & ' WILL RESTRAIN SYSTEM TO PLANE PERPENDICULAR TO PATH.' ; call plainmessage(msg___) ; endif
            case('NO','OFF','FALSE','F','no','off','false','f')
             proj_on=.false.
             if (qprint) then ; write (msg___,'(2A)') whoami, &
      & ' WILL RESTRAIN SYSTEM TO PATH IMAGE.'//                         &
-     & ' (FE/MFPT CANNOT BE COMPUTED).' ; write(0,'(A)') msg___ ; endif
+     & ' (FE/MFPT CANNOT BE COMPUTED).' ; call plainmessage(msg___) ; endif
            case default
-            write(0,*) 'WARNING FROM: ',whoami,': ','UNKNOWN OPTION SPECIFIED'
+            call warning(whoami, 'UNKNOWN OPTION SPECIFIED', 0)
           end select
 !*********************************************************************
         elseif (find_tag(comlyn, 'DPAR', comlen).gt.0) then ! normalized distance parallel to vector between neighboring replicas at which this system is restrained
@@ -871,10 +873,10 @@
 ! check replica spec
           irep=atoi(get_remove_parameter(comlyn, 'REP', comlen), -1)
           if (irep.lt.0.or.irep.ge.nstring) then
-           if (qprint) then ; write(msg___, 6773) whoami, whoami, zval ; write(0,'(A)') msg___ ; endif
+           if (qprint) then ; write(msg___, 6773) whoami, whoami, zval ; call plainmessage(msg___) ; endif
            dpar0=zval
           else
-           if (qprint) then ; write(msg___,6774) whoami, irep, zval ; write(0,'(A)') msg___ ; endif
+           if (qprint) then ; write(msg___,6774) whoami, irep, zval ; call plainmessage(msg___) ; endif
            if (mestring.eq.irep) dpar0=zval ! note: permitting any value
           endif ! irep
  6773 format(A,' REPLICA NUMBER INVALID OR UNSPECIFIED.', &
@@ -889,10 +891,10 @@
 ! check replica spec
           irep=atoi(get_remove_parameter(comlyn, 'REP', comlen), -1)
           if (irep.lt.0.or.irep.ge.nstring) then
-           if (qprint) then ; write(msg___, 6776) whoami, whoami, zval ; write(0,'(A)') msg___ ; endif
+           if (qprint) then ; write(msg___, 6776) whoami, whoami, zval ; call plainmessage(msg___) ; endif
            dperp0=zval
           else
-           if (qprint) then ; write(msg___,6775) whoami, irep, zval ; write(0,'(A)') msg___ ; endif
+           if (qprint) then ; write(msg___,6775) whoami, irep, zval ; call plainmessage(msg___) ; endif
            if (mestring.eq.irep) dperp0=zval ! note: permitting any value
           endif ! irep
  6776 format(A,' REPLICA NUMBER INVALID OR UNSPECIFIED.', &
@@ -906,10 +908,10 @@
 ! check replica spec
           irep=atoi(get_remove_parameter(comlyn, 'REP', comlen), -1)
           if (irep.lt.0.or.irep.ge.nstring) then
-           if (qprint) then ; write(msg___, 6777) whoami, whoami, zval ; write(0,'(A)') msg___ ; endif
+           if (qprint) then ; write(msg___, 6777) whoami, whoami, zval ; call plainmessage(msg___) ; endif
            drms0=zval
           else
-           if (qprint) then ; write(msg___,6778) whoami, irep, zval ; write(0,'(A)') msg___ ; endif
+           if (qprint) then ; write(msg___,6778) whoami, irep, zval ; call plainmessage(msg___) ; endif
            if (mestring.eq.irep) drms0=zval ! note: permitting any value
           endif ! irep
  6777 format(A,' REPLICA NUMBER INVALID OR UNSPECIFIED.', &
@@ -922,12 +924,12 @@
 ! done with 'SET' parsing
 !cccccccccccccccccccccccccccccccccccc CV WEIGHTS cccccccccccccccccccccccccccccccccccc
       elseif (( keyword(1:4).eq.'LIST'(1:4) )) then ! list forcing and orientation atoms
-       if (qprint) then ; write(msg___,6762) whoami ; write(0,'(A)') msg___ ; endif
+       if (qprint) then ; write(msg___,6762) whoami ; call plainmessage(msg___) ; endif
  6762 format(/A,' WILL LIST REPLICA ATOMS.')
        call ftsm_list_atoms()
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       else
-            write(msg___,*)'UNRECOGNIZED SUBCOMMAND: ',keyword;write(0,*) 'WARNING FROM: ',whoami,': ',msg___
+            write(msg___,*)'UNRECOGNIZED SUBCOMMAND: ',keyword;call warning(whoami, msg___, 0)
       endif
 !
       end subroutine ftsm_parse
@@ -948,12 +950,12 @@
 !
 ! do a basic communicator check:
       if (ME_LOCAL.eq.0.and.ME_STRNG.eq.MPI_UNDEFINED) then
-        write(msg___, 111) whoami, ME_GLOBAL, whoami ; write(0,'(A)') msg___
+        write(msg___, 111) whoami, ME_GLOBAL, whoami ; call plainmessage(msg___)
  111 FORMAT(A, ' WORLD REPLICA ',I5, ' HAS ZERO GROUP ID', &
      & /,A,' BUT INVALID STRING ID (MAY BE OK).')
       elseif (ME_STRNG.ne.MPI_UNDEFINED.and. &
      & (ME_LOCAL.ne.0.or.MPI_COMM_LOCAL.eq.MPI_COMM_NULL)) then
-        write(msg___, 112) whoami, ME_GLOBAL, whoami ; write(0,'(A)') msg___
+        write(msg___, 112) whoami, ME_GLOBAL, whoami ; call plainmessage(msg___)
  112 FORMAT(A, ' WORLD REPLICA ',I5, ' HAS A VALID STRING ID', &
      & /,A,' BUT A NONZERO GROUP ID. ABORTING.')
        return
@@ -966,7 +968,7 @@
        if (qroot) then
         if (ME_STRNG.eq.0) then
           write(msg___,'(2A)') &
-     & whoami, ' FTSM ALREADY INITIALIZED. CALL "DONE" TO CLEAN UP.' ; write(0,'(A)') msg___;
+     & whoami, ' FTSM ALREADY INITIALIZED. CALL "DONE" TO CLEAN UP.' ; call plainmessage(msg___);
         endif ! ME_STRNG
        endif ! qroot
        return
@@ -985,7 +987,7 @@
       if (qroot) then
         if (ME_STRNG.eq.0) then
           write(msg___,'(2A,I5, A)') &
-     & whoami, ' FOUND ',nstring,' REPLICAS.' ; write(0,'(A)') msg___
+     & whoami, ' FOUND ',nstring,' REPLICAS.' ; call plainmessage(msg___)
         endif
       endif
 !
@@ -1037,7 +1039,7 @@
       data whoami /' FTSM_DONE>'/
 !
       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.ME_STRNG.eq.0) then
-       write(msg___,'(2A,I5, A)') whoami, ' CLEANING UP.' ; write(0,'(A)') msg___
+       write(msg___,'(2A,I5, A)') whoami, ' CLEANING UP.' ; call plainmessage(msg___)
       endif
 !
       nstring=-1
@@ -1106,7 +1108,7 @@
       qroot=MPI_COMM_STRNG.ne.MPI_COMM_NULL
       qprint=qroot.and.ME_STRNG.eq.0
 !
-      if (qprint) then ; write(msg___,8002) whoami ; write(0,'(A)') msg___ ; endif
+      if (qprint) then ; write(msg___,8002) whoami ; call plainmessage(msg___) ; endif
       call smcv_repa_init(comlyn, comlen)
 !
  8002 format(/A,' USING SMCV INITIALIZATION ROUTINE')
@@ -1142,10 +1144,10 @@
          write(msg___,'(A)') '\t FORCING ATOMS'
          do j=1, nforced;
           sid=atoms%segid(iatom_f(j)); rid=atoms%resid(iatom_f(j)); ren=atoms%resname(iatom_f(j)); ac=atoms%aname(iatom_f(j));
-          write(msg___,667) '\t',j, iatom_f(j), sid, rid, ren, ac ; write(0,'(A)') msg___
+          write(msg___,667) '\t',j, iatom_f(j), sid, rid, ren, ac ; call plainmessage(msg___)
          enddo
         else
-         write(msg___,'(A)') '\t FORCING AND ORIENTATION ATOMS ARE THE SAME' ; write(0,'(A)') msg___
+         write(msg___,'(A)') '\t FORCING AND ORIENTATION ATOMS ARE THE SAME' ; call plainmessage(msg___)
         endif
       endif ! ME_STRING
 !
@@ -1171,24 +1173,24 @@
       if (ME_STRNG.eq.0.and.ME_LOCAL.eq.0) then
        write(msg___,668) &
      & whoami,' A CHANGE IN THE ORIENTATION WEIGHTS REQUIRES ', &
-     & whoami,' REDEFINING IMAGES (e.g. USING FILL)' ; write(0,'(A)') msg___
+     & whoami,' REDEFINING IMAGES (e.g. USING FILL)' ; call plainmessage(msg___)
       endif
  668 format(/2A,/2A)
 !
       if (norient.eq.0.and.nforced.eq.0) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','NO STRING ATOMS FOUND. NOTHING DONE.'
+       call warning(whoami, 'NO STRING ATOMS FOUND. NOTHING DONE.', 0)
        return
       endif
 !
 ! if (norient.eq.0)
-! & write(0,*) 'WARNING FROM: ',whoami,': ','NO ORIENTATION ATOMS FOUND.'
+! & call warning(whoami, 'NO ORIENTATION ATOMS FOUND.', 0)
       if (associated(orientWeights).and.associated(iatom_o)) then
        do i=1,norient
         j=iatom_o(i)
         if (j.le.n) then
          orientWeights(i)=w(j)
         else
-         write(0,*) 'WARNING FROM: ',whoami,': ','WEIGHT ARRAY BOUNDS EXCEEDED. ABORT.'
+         call warning(whoami, 'WEIGHT ARRAY BOUNDS EXCEEDED. ABORT.', 0)
          return
         endif
        enddo
@@ -1196,21 +1198,21 @@
        a=sum(orientWeights);
        if (a.gt.errtol()) then ; orientWeights=orientWeights/a;
        else
-        write(0,*) 'WARNING FROM: ',whoami,': ','SUM OF ORIENTATION WEIGHTS IS VERY SMALL. ABORT.'
+        call warning(whoami, 'SUM OF ORIENTATION WEIGHTS IS VERY SMALL. ABORT.', 0)
         return
        endif
 !
       endif ! weights associated
 !
 ! if (nforced.eq.0)
-! & write(0,*) 'WARNING FROM: ',whoami,': ','NO FORCED ATOMS FOUND.'
+! & call warning(whoami, 'NO FORCED ATOMS FOUND.', 0)
       if (associated(forcedWeights).and.associated(iatom_f)) then
        do i=1,nforced
         j=iatom_f(i)
         if (j.le.n) then
          forcedWeights(i)=w(j)
         else
-         write(0,*) 'WARNING FROM: ',whoami,': ','WEIGHT ARRAY BOUNDS EXCEEDED. ABORT.'
+         call warning(whoami, 'WEIGHT ARRAY BOUNDS EXCEEDED. ABORT.', 0)
          return
         endif
        enddo
@@ -1218,7 +1220,7 @@
        a=sum(forcedWeights);
        if (a.gt.errtol()) then ; forcedWeights=forcedWeights/a;
        else
-        write(0,*) 'WARNING FROM: ',whoami,': ','SUM OF FORCING WEIGHTS IS VERY SMALL. ABORT.'
+        call warning(whoami, 'SUM OF FORCING WEIGHTS IS VERY SMALL. ABORT.', 0)
         return
        endif
 !
@@ -1240,7 +1242,7 @@
       if (.not.ftsm_check(qorient)) return
 !
       if (c1.gt.num_sets.or.c2.gt.num_sets) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','INVALID COLUMN SPECIFIED. ABORT.'
+       call warning(whoami, 'INVALID COLUMN SPECIFIED. ABORT.', 0)
        return
       else
        if (qdiffrot) then
@@ -1273,7 +1275,7 @@
       if (.not.ftsm_check(qorient)) return
 !
       if (c1.gt.num_sets.or.c2.gt.num_sets) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','INVALID COLUMN SPECIFIED. ABORT.'
+       call warning(whoami, 'INVALID COLUMN SPECIFIED. ABORT.', 0)
        return
       else
        if (qdiffrot) r_o(:,:,c2)=r_o(:,:,c1)
@@ -1308,7 +1310,7 @@
       if (.not.ftsm_check(qorient)) return
 !
       if (any(x.eq.unknownf).or.any(y.eq.unknownf).or.any(z.eq.unknownf)) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','COORDINATE SET HAS UNDEFINED VALUES. NOTHING DONE.'
+       call warning(whoami, 'COORDINATE SET HAS UNDEFINED VALUES. NOTHING DONE.', 0)
        return
       else ! if (qroot) then
        do i=1,nforced
@@ -1318,7 +1320,7 @@
          r_f(i,2,center)=y(j)
          r_f(i,3,center)=z(j)
         else
-         write(0,*) 'WARNING FROM: ',whoami,': ','COORDINATE ARRAY BOUNDS EXCEEDED. ABORT.'
+         call warning(whoami, 'COORDINATE ARRAY BOUNDS EXCEEDED. ABORT.', 0)
          return
         endif
        enddo
@@ -1331,7 +1333,7 @@
           r_o(i,2,center)=y(j)
           r_o(i,3,center)=z(j)
          else
-          write(0,*) 'WARNING FROM: ',whoami,': ','COORDINATE ARRAY BOUNDS EXCEEDED. ABORT.'
+          call warning(whoami, 'COORDINATE ARRAY BOUNDS EXCEEDED. ABORT.', 0)
           return
          endif
         enddo
@@ -1442,7 +1444,7 @@
       if (.not.ftsm_check(qorient)) return
 !
       if (h.eq.0d0) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','COORDINATE PERTURBATION ZERO.'
+       call warning(whoami, 'COORDINATE PERTURBATION ZERO.', 0)
        return
       endif
 !
@@ -1613,7 +1615,7 @@
       qgrp=(MPI_COMM_LOCAL.ne.MPI_COMM_NULL) &
      & .and.(SIZE_LOCAL.gt.1)
       if (.not. qgrp) then ! quit if cannot run in parallel
-       write(0,*) 'WARNING FROM: ',whoami,': ','CANNOT PERFORM TEST ON 1-PROCESSOR GROUPS'
+       call warning(whoami, 'CANNOT PERFORM TEST ON 1-PROCESSOR GROUPS', 0)
        return
       endif
 ! save values & force a serial calculation
@@ -1714,7 +1716,7 @@
       if (.not. ftsm_check(qorient)) return
       if (present(col)) then ; c=col; else; c=center; endif
       if (c.lt.1.or.c.gt.num_sets) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','INVALID COLUMN. ABORT.'
+       call warning(whoami, 'INVALID COLUMN. ABORT.', 0)
        return
       endif
 !
@@ -1722,7 +1724,7 @@
       if (present(iend)) then ; ie=iend; else; ie=nstring; endif
 !
       if (ibg.lt.1.or.ibg.gt.ie) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','INVALID FRAMES REQUESTED. ABORT.'
+       call warning(whoami, 'INVALID FRAMES REQUESTED. ABORT.', 0)
        return
       endif
 !
@@ -1827,7 +1829,7 @@
       if (.not. ftsm_check(qorient)) return
       if (present(col)) then ; c=col; else; c=center; endif
       if (c.lt.1.or.c.gt.num_sets) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','INVALID COLUMN. ABORT.'
+       call warning(whoami, 'INVALID COLUMN. ABORT.', 0)
        return
       endif
 !
@@ -1855,9 +1857,9 @@
 !
        if (size(stringatoms).eq.k) then
         if ( any(stringatoms(1:k).ne.string_inds(1:k)) ) &
-     & write(0,*) 'WARNING FROM: ',whoami,': ','INVALID STRING ATOM INDICES. BEWARE.'
+     & call warning(whoami, 'INVALID STRING ATOM INDICES. BEWARE.', 0)
        else
-        write(0,*) 'WARNING FROM: ',whoami,': ','INCORRECT NUMBER OF STRING ATOMS. BEWARE.'
+        call warning(whoami, 'INCORRECT NUMBER OF STRING ATOMS. BEWARE.', 0)
        endif
 !
 !
@@ -1956,7 +1958,7 @@
       if (.not. ftsm_check(qorient)) return
       if (present(col)) then ; c=col; else; c=center; endif
       if (c.lt.1.or.c.gt.num_sets) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','INVALID COLUMN. ABORT.'
+       call warning(whoami, 'INVALID COLUMN. ABORT.', 0)
        return
       endif
 !
@@ -2011,7 +2013,7 @@
       if (.not. ftsm_check(qorient)) return
       if (present(col)) then ; c=col; else; c=center; endif
       if (c.lt.1.or.c.gt.num_sets) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','INVALID COLUMN. ABORT.'
+       call warning(whoami, 'INVALID COLUMN. ABORT.', 0)
        return
       endif
 !
@@ -2078,7 +2080,7 @@
       stat_iteration_counter=atoi(get_remove_parameter(comlyn, 'COUN', comlen), -1)
       stat_iteration_counter=max(stat_iteration_counter,0)
       if (stat_iteration_counter.gt.0) then
-       if (qprint) then ; write(msg___,639) whoami, stat_iteration_counter ; write(0,'(A)') msg___ ; endif
+       if (qprint) then ; write(msg___,639) whoami, stat_iteration_counter ; call plainmessage(msg___) ; endif
  639 format(A,' SETTING ITERATION COUNTER TO ',I7)
       endif
 !
@@ -2111,7 +2113,7 @@
        output_rmsd0=.true.
        rmsd0_fname=get_remove_parameter(COMLYN,'RNAM',COMLEN); rmsd0_flen=len_trim(rmsd0_fname)
        if (rmsd0_flen.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','NO RMSD FILE NAME SPECIFIED. WILL WRITE TO STDOUT.'
+         call warning(whoami, 'NO RMSD FILE NAME SPECIFIED. WILL WRITE TO STDOUT.', 0)
          rmsd0_funit=fout
        else
          if (remove_tag(comlyn,'RAPP',comlen).gt.0) then ! APPEND?
@@ -2123,9 +2125,9 @@
 !cccccccccccc print summary
        if (qprint) then
          if (rmsd0_flen.gt.0) then
-          write(msg___,660 ) whoami,rmsd0_fname(1:rmsd0_flen) ; write(0,'(A)') msg___
+          write(msg___,660 ) whoami,rmsd0_fname(1:rmsd0_flen) ; call plainmessage(msg___)
          else
-          write(msg___,661 ) whoami ; write(0,'(A)') msg___
+          write(msg___,661 ) whoami ; call plainmessage(msg___)
          endif
        endif
  660 format(A,' WILL WRITE STRING RMSD TO FILE ',A)
@@ -2137,7 +2139,7 @@
         output_arclength=.true.
         s_fname=get_remove_parameter(COMLYN,'ANAM',COMLEN); s_flen=len_trim(s_fname)
         if (s_flen.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','STRING LENGTH FILE NAME NOT SPECIFIED. WILL WRITE TO STDOUT.'
+         call warning(whoami, 'STRING LENGTH FILE NAME NOT SPECIFIED. WILL WRITE TO STDOUT.', 0)
          s_funit=fout
         else
          if (remove_tag(comlyn,'AAPP',comlen).gt.0) then ! APPEND?
@@ -2149,9 +2151,9 @@
 !ccccccccccc print summary
         if (qprint) then
          if (s_flen.gt.0) then
-          write(msg___,652) whoami,s_fname(1:s_flen) ; write(0,'(A)') msg___
+          write(msg___,652) whoami,s_fname(1:s_flen) ; call plainmessage(msg___)
          else
-          write(msg___,653) whoami ; write(0,'(A)') msg___
+          write(msg___,653) whoami ; call plainmessage(msg___)
          endif
         endif
  652 format(A,' WILL WRITE STRING LENGTH TO FILE ',A)
@@ -2163,7 +2165,7 @@
         output_curvature=.true.
         c_fname=get_remove_parameter(COMLYN,'CVNM',COMLEN); c_flen=len_trim(c_fname)
         if (c_flen.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','CURVATURE FILE NAME NOT SPECIFIED. WILL WRITE TO STDOUT.'
+         call warning(whoami, 'CURVATURE FILE NAME NOT SPECIFIED. WILL WRITE TO STDOUT.', 0)
          c_funit=fout
         else
          if (remove_tag(comlyn,'CAPP',comlen).gt.0) then ! APPEND?
@@ -2175,9 +2177,9 @@
 !ccccccccccc print summary
         if (qprint) then
          if (c_flen.gt.0) then
-          write(msg___,6521) whoami,c_fname(1:c_flen) ; write(0,'(A)') msg___
+          write(msg___,6521) whoami,c_fname(1:c_flen) ; call plainmessage(msg___)
          else
-          write(msg___,6531) whoami ; write(0,'(A)') msg___
+          write(msg___,6531) whoami ; call plainmessage(msg___)
          endif
         endif
  6521 format(A,' WILL WRITE CURVATURE TO FILE ',A)
@@ -2189,7 +2191,7 @@
         output_fe=.true.
         fe_fname=get_remove_parameter(COMLYN,'FENM',COMLEN); fe_flen=len_trim(fe_fname)
         if (fe_flen.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','NO F.E. FILE NAME SPECIFIED. WILL WRITE TO STDOUT.'
+         call warning(whoami, 'NO F.E. FILE NAME SPECIFIED. WILL WRITE TO STDOUT.', 0)
          fe_funit=fout
         else
          if (remove_tag(comlyn,'FAPP',comlen).gt.0) then ! APPEND?
@@ -2201,9 +2203,9 @@
 !ccccccccccc print summary cccccccccccccccccccccccccccccccccccccc
         if (qprint) then
          if (fe_flen.gt.0) then
-          write(msg___,6520) whoami,fe_fname(1:fe_flen) ; write(0,'(A)') msg___
+          write(msg___,6520) whoami,fe_fname(1:fe_flen) ; call plainmessage(msg___)
          else
-          write(msg___,6530) whoami ; write(0,'(A)') msg___
+          write(msg___,6530) whoami ; call plainmessage(msg___)
          endif
         endif
  6520 format(A,' WILL WRITE FREE ENERGY TO FILE ',A)
@@ -2218,7 +2220,7 @@
         if (centers_flen.gt.0) then
          output_centers=.true.
          if (qprint) then
-          write(msg___,6620 ) whoami,centers_fname(1:centers_flen) ; write(0,'(A)') msg___
+          write(msg___,6620 ) whoami,centers_fname(1:centers_flen) ; call plainmessage(msg___)
          endif
          if (remove_tag(comlyn,'CEAP',comlen).gt.0) then ! APPEND?
            cenform='APPEND' ! note: if appending, should not duplicate DCD header !
@@ -2226,7 +2228,7 @@
            cenform='WRITE'
          endif
         else
-          write(0,*) 'WARNING FROM: ',whoami,': ','NO FILE NAME GIVEN. WILL NOT WRITE PATH CENTERS.'
+          call warning(whoami, 'NO FILE NAME GIVEN. WILL NOT WRITE PATH CENTERS.', 0)
         endif
  6620 format(A,' WILL WRITE PATH CENTERS TO FILE ',A,'.')
 !
@@ -2242,11 +2244,11 @@
         if (rex_flen.gt.0) then
          output_rex_map=.true.
          if (qprint) then
-          write(msg___,6721) whoami,rex_fname(1:rex_flen) ; write(0,'(A)') msg___
+          write(msg___,6721) whoami,rex_fname(1:rex_flen) ; call plainmessage(msg___)
          endif
          if (rex_flen_old.gt.0) then
           if (qprint) then
-             write(msg___,6722) whoami,rex_fname_old(1:rex_flen_old) ; write(0,'(A)') msg___
+             write(msg___,6722) whoami,rex_fname_old(1:rex_flen_old) ; call plainmessage(msg___)
              rex_funit=-1
              call files_open(rex_funit, rex_fname_old(1:rex_flen_old), 'FORMATTED', 'READ')
           endif
@@ -2257,7 +2259,7 @@
          endif
 !
         else
-          write(0,*) 'WARNING FROM: ',whoami,': ','NO FILE NAME GIVEN. WILL NOT WRITE REPLICA EXCHANGE MAP.'
+          call warning(whoami, 'NO FILE NAME GIVEN. WILL NOT WRITE REPLICA EXCHANGE MAP.', 0)
         endif
  6721 format(A,' WILL WRITE REPLICA EXCHANGE MAP TO FILE ',A,'.MAP')
  6722 format(A,' WILL RESTART FROM REPLICA EXCHANGE MAP IN FILE ',A)
@@ -2272,7 +2274,7 @@
 ! check for timestep offset
         rextime_offset=atoi(get_remove_parameter(comlyn, 'ROFF', comlen), 0);
         if (rextime_offset.gt.0) then
-         if (qprint) then ; write(msg___,6724) whoami, whoami,rextime_offset ; write(0,'(A)') msg___ ; endif
+         if (qprint) then ; write(msg___,6724) whoami, whoami,rextime_offset ; call plainmessage(msg___) ; endif
  6724 format(A,' WILL OFFSET STEP COUNTER IN REPLICA EXCHANGE LOG BY ' &
      & /,A,' ',I10)
         endif
@@ -2280,7 +2282,7 @@
         if (rex_flen.gt.0) then
          output_rex_log=.true.
          if (qprint) then
-          write(msg___,6723) whoami,whoami,rex_fname(1:rex_flen) ; write(0,'(A)') msg___
+          write(msg___,6723) whoami,whoami,rex_fname(1:rex_flen) ; call plainmessage(msg___)
          endif
          if (remove_tag(comlyn,'RXAP',comlen).gt.0) then ! APPEND?
            rxlform='APPEND'
@@ -2288,7 +2290,7 @@
            rxlform='WRITE'
          endif ! rxap
         else
-          write(0,*) 'WARNING FROM: ',whoami,': ','NO FILE NAME GIVEN. WILL NOT WRITE REPLICA EXCHANGE LOG.'
+          call warning(whoami, 'NO FILE NAME GIVEN. WILL NOT WRITE REPLICA EXCHANGE LOG.', 0)
         endif ! rex_flen.gt.0
  6723 format(A,' WILL WRITE REPLICA EXCHANGE LOG TO FILE ',/, &
      & A,' ',A,'.DAT')
@@ -2302,7 +2304,7 @@
         if (forces_flen.gt.0) then
          output_forces=.true.
          if (qprint) then
-          write(msg___,6625) whoami,forces_fname(1:forces_flen) ; write(0,'(A)') msg___
+          write(msg___,6625) whoami,forces_fname(1:forces_flen) ; call plainmessage(msg___)
          endif
          if (remove_tag(comlyn,'FCAP',comlen).gt.0) then ! APPEND?
            fform='APPEND'
@@ -2310,7 +2312,7 @@
            fform='WRITE'
          endif
         else
-         write(0,*) 'WARNING FROM: ',whoami,': ','NO FILE NAME GIVEN. WILL NOT WRITE AVERAGE FORCE.'
+         call warning(whoami, 'NO FILE NAME GIVEN. WILL NOT WRITE AVERAGE FORCE.', 0)
         endif
  6625 format(A,' WILL WRITE AVERAGE FORCE TO FILE ',A,'.')
       endif ! forces
@@ -2351,7 +2353,7 @@
 ! check if the user has made an initialization call
       if (.not.ftsm_initialized) call ftsm_init()
       if (.not.stat_initialized) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','NO OUTPUT OPTIONS SELECTED. NOTHING DONE'
+       call warning(whoami, 'NO OUTPUT OPTIONS SELECTED. NOTHING DONE', 0)
        return
       endif
 !
@@ -2416,7 +2418,7 @@
           call files_close(s_funit)
          endif
         else ! repa
-          write(0,*) 'WARNING FROM: ',whoami,': ','NO REPARAMETRIZATION OPTIONS SELECTED. SKIPPING ARCLENGTH.'
+          call warning(whoami, 'NO REPARAMETRIZATION OPTIONS SELECTED. SKIPPING ARCLENGTH.', 0)
         endif
        endif ! qprint
        sform='APPEND'
@@ -2442,7 +2444,7 @@
           call files_close(c_funit)
          endif
         else
-          write(0,*) 'WARNING FROM: ',whoami,': ','NO REPARAMETRIZATION OPTIONS SELECTED. SKIPPING CURVATURE.'
+          call warning(whoami, 'NO REPARAMETRIZATION OPTIONS SELECTED. SKIPPING CURVATURE.', 0)
         endif
        endif
        cform='APPEND'
@@ -2474,7 +2476,7 @@
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       if (output_rex_map) then ! output replica exchange map
        if (rex_flen.eq.0) then
-        write(0,*) 'WARNING FROM: ',whoami,': ','NO FILE NAME SPECIFIED. WILL NOT WRITE REPLICA EXCHANGE MAP.'
+        call warning(whoami, 'NO FILE NAME SPECIFIED. WILL NOT WRITE REPLICA EXCHANGE MAP.', 0)
        else
         if (qprint) then
          rex_funit=-1
@@ -2490,7 +2492,7 @@
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       if (output_rex_log) then
        if (rex_flen.eq.0) then
-         write(0,*) 'WARNING FROM: ',whoami,': ','NO FILE NAME SPECIFIED. WILL NOT WRITE REPLICA EXCHANGE LOG.'
+         call warning(whoami, 'NO FILE NAME SPECIFIED. WILL NOT WRITE REPLICA EXCHANGE LOG.', 0)
        else
         if (qprint) then
          rex_funit=-1
@@ -2574,17 +2576,17 @@
       error=0
 !
       if (.not.ftsm_initialized) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','FTSM NOT INITIALIZED. ABORT.'
+       call warning(whoami, 'FTSM NOT INITIALIZED. ABORT.', 0)
        error=1
 !
       elseif ( qorie.and. &
      & ( norient.eq.0 .or. .not. associated(r_o) &
      & .or. .not. associated(iatom_o))) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','NO ORIENTATION ATOMS FOUND. ABORT.'
+       call warning(whoami, 'NO ORIENTATION ATOMS FOUND. ABORT.', 0)
        error=2
       elseif (nforced.eq.0 .or. .not. associated(r_f) &
      & .or. .not. associated(iatom_f)) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','NO FORCING ATOMS FOUND. ABORT.'
+       call warning(whoami, 'NO FORCING ATOMS FOUND. ABORT.', 0)
        error=3
       endif
 !
@@ -3745,7 +3747,7 @@
 ! check if the user has made an initialization call
 !
       if (.not.repa_initialized) then
-       write(0,*) 'WARNING FROM: ',whoami,': ','NO REPARAMETRIZATION OPTIONS SELECTED. NOTHING DONE.'
+       call warning(whoami, 'NO REPARAMETRIZATION OPTIONS SELECTED. NOTHING DONE.', 0)
        return
       endif
       if (qprint) then

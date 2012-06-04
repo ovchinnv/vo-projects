@@ -25,5 +25,5 @@ charmm: $(CHARMM_SOURCES)
 #lib: force_look
 #	/bin/sh -c 'for file in "bestfit.o"; do  ln -fs `pwd`/$$file ${ROOT}/lib/$$file; done'
 
-clean: 
+clean::
 	rm -f *.mod $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(EXE) bfit.o $(ROOT)/$(NAME).stamp

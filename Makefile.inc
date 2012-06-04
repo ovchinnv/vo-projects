@@ -114,6 +114,6 @@ lib:
 libs : libraries
 libraries: $(OBJS) lib
 	for d in $(DIRS); do (cd $$d; $(MAKE) libraries); done
-.SILENT : %.stamp
+.SILENT : %.stamp clean
 clean::
-	rm -f *.mod *.h $(ROOT)/$(NAME).stamp $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(EXE)
+	rm -f *.mod $(ROOT)/$(NAME).stamp $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(EXE)

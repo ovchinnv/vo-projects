@@ -1,3 +1,5 @@
+/*#define __WRN(__WHO,__MSG) write(0,*) 'WARNING FROM: ',__WHO,': ',__MSG*/
+/*#define __PRINT(__MSG) write(0,'(A)') __MSG*/
 /*COORDINATES AND MASSES:*/
 /*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
 /*
@@ -96,7 +98,7 @@
        data whoami /' FTSM_PRINT_REX_MAP>'/
 ! begin
        if (.not.rex_initialized) then
-        write(0,*) 'WARNING FROM: ',whoami,': ','REX NOT INITIALIZED. NOTHING DONE.'
+        call warning(whoami, 'REX NOT INITIALIZED. NOTHING DONE.', 0)
         return
        endif
 !
@@ -127,7 +129,7 @@
         if (ME_STRNG.eq.0) then
          read(iunit,*) rex_map(1:nstring) ! first row contains indices 0 -- nstring-1
          read(iunit,*) rex_map(1:nstring) ! second row is what we want
-         if (any(rex_map.lt.0)) write(0,*) 'WARNING FROM: ',whoami,': ','READ NEGATIVE RANK.'
+         if (any(rex_map.lt.0)) call warning(whoami, 'READ NEGATIVE RANK.', 0)
         endif ! ME_
         if (SIZE_STRNG.gt.1) call mpi_bcast(rex_map,nstring,MPI_INTEGER,0,MPI_COMM_STRNG,ierror)
        endif ! MPI_COMM
