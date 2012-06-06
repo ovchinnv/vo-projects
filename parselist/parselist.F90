@@ -29,7 +29,7 @@
 ! locals
         integer :: i, j, k, strl, inode, jnode, kstep
         integer, parameter :: missing=-99999999
-        character(len=11) :: whoami
+        character(len=12) :: whoami
 !
         data whoami /' PARSE_LIST>'/
 !

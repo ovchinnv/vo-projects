@@ -1,0 +1,327 @@
+#!/bin/bash
+# 3D test case for chest
+# V. Ovchinnikov 2012
+# Numerical solution to the poisson equation in two dimensions (known analytical solution)
+#
+# Requires a fortran compiler
+. ./fcheck "$1" "$2" "$3" ;# execute script in the current context
+#
+# u = ( 1 - exp (-ax) ) * cos (2*pi*n*y)
+a=4; m=1; n=2;
+#
+echo
+echo " *********************************************************************************************"
+echo " (test3d-1) "
+echo " Test case for solving 3D Poisson equation using CHES" 
+echo " Laplacian U  = f"
+echo " U = ( 1 - exp (-${a} * x) ) * cos (2 * pi * ${m} * y) * sin (2 * pi * ${n} * z) ; "
+echo " Dirichlet boundary conditions assigned on the boundary"
+echo " Jacobi smoother with step (omega) = 0.93 "
+echo " *********************************************************************************************"
+#
+#
+nx=98; ny=98; nz=98;
+xstretch=1.0; x0=0; x1=1
+ystretch=1.0; y0=0; y1=2
+zstretch=1.0; z0=0; z1=1.5
+#
+#
+echo " Generating test data..."
+echo "
+  implicit none
+  float :: x1($nx), y1($ny), z1($nz)
+  float :: x2($nx), y2($ny), z2($nz)
+  float :: xbc0($ny,$nz), xbc1($ny,$nz)
+  float :: ybc0($nx,$nz), ybc1($nx,$nz)
+  float :: zbc0($nx,$ny), zbc1($nx,$ny)
+  float :: rhs($nx,$ny,$nz), u($nx,$ny,$nz)
+  float, parameter :: err = 1d-12
+  float :: a, b, l, z, pi, delta
+  float :: fx, fy, fz
+  integer :: i, j, k, n
+!
+!
+! xgrid:
+  a=${x0}d0; b=${x1}d0; z=${xstretch}d0; n=$nx-1
+  l=b-a
+  if (ABS(z-1.0d0).lt.ERR) then 
+   delta=l/(n-1) 
+  else 
+   delta=l*(1.0d0-z)/(1.0d0-(z**(n-1)))
+  endif
+!
+  x1(1)=a
+  do i=2,n+1
+   x1(i)=x1(i-1)+delta;
+   delta=delta*z;
+  enddo
+!
+  open(1,file='xg_test.dat',form='formatted', status='unknown')
+  write(1,'(F30.15)') x1 
+  close(1)
+!
+  x2(2:$nx)=0.5d0*(x1(1:$nx-1)+x1(2:$nx)); x2(1)=x1(1)-0.5d0*(x1(2)-x1(1)); 
+!
+! ygrid:
+  a=${y0}d0; b=${y1}d0; z=${ystretch}d0; n=$ny-1
+  l=b-a 
+  if (ABS(z-1.0d0).lt.ERR) then 
+   delta=l/(n-1) 
+  else 
+   delta=l*(1.0d0-z)/(1.0d0-(z**(n-1)))
+  endif
+!
+  y1(1)=a
+  do i=2,n+1
+   y1(i)=y1(i-1)+delta;
+   delta=delta*z;
+  enddo
+!
+  open(1,file='yg_test.dat',form='formatted', status='unknown')
+  write(1,'(F30.15)') y1 
+  close(1)
+!
+  y2(2:$ny)=0.5d0*(y1(1:$ny-1)+y1(2:$ny)); y2(1)=y1(1)-0.5d0*(y1(2)-y1(1)); 
+!
+! zgrid:
+  a=${z0}d0; b=${z1}d0; z=${zstretch}d0; n=$nz-1
+  l=b-a 
+  if (ABS(z-1.0d0).lt.ERR) then 
+   delta=l/(n-1) 
+  else 
+   delta=l*(1.0d0-z)/(1.0d0-(z**(n-1)))
+  endif
+!
+  z1(1)=a
+  do i=2,n+1
+   z1(i)=z1(i-1)+delta;
+   delta=delta*z;
+  enddo
+!
+  open(1,file='zg_test.dat',form='formatted', status='unknown')
+  write(1,'(F30.15)') z1 
+  close(1)
+!
+  z2(2:$nz)=0.5d0*(z1(1:$nz-1)+z1(2:$nz)); z2(1)=z1(1)-0.5d0*(z1(2)-z1(1)); 
+!
+! data arrays
+!
+ pi=atan(1d0)*4d0
+ do i=1,$nx ; do j=1, $ny; do k=1, $nz
+  fx=1d0-exp(-${a}d0*x2(i))
+  fy=cos(2d0*pi*${m}*y2(j))
+  fz=sin(2d0*pi*${n}*z2(k))
+  u(i,j,k) = fx*fy*fz
+  rhs(i,j,k) = ${a}d0**2 * (fx-1d0) * fy * fz - 4d0*pi*pi*(${m}*${m}+${n}*${n})*u(i,j,k)
+ enddo;       enddo;       enddo
+!
+! write datafiles in chest format
+!
+ open(1,file='uexact_test.dat',form='formatted', status='unknown')
+ write(1,'(3I5)') $nx,$ny,$nz
+ write(1,'(${nx}F30.15)') u 
+! write(1) $nx,$ny,$nz
+! write(1) u 
+ close(1)
+ open(1,file='rhs_test.dat',form='formatted', status='unknown')
+ write(1,'(3I5)') $nx,$ny,$nz
+ write(1,'(${nx}F30.15)') rhs 
+! write(1) $nx,$ny,$nz
+! write(1) rhs 
+ close(1)
+! bc arrays
+ a=(1d0-exp (-${a}d0*${x0}))
+ b=(1d0-exp (-${a}d0*${x1}))
+ do k=1,$nz ; fz=sin(2d0*pi*${n}*z2(k))
+  do j=1,$ny ; fy=cos(2d0*pi*${m}*y2(j))
+   xbc0(j,k) = a * fy * fz
+   xbc1(j,k) = b * fy * fz
+  enddo
+ enddo
+!
+ a=cos(2d0*pi*$m*${y0})
+ b=cos(2d0*pi*$m*${y1})
+ do k=1,$nz ; fz=sin(2d0*pi*${n}*z2(k))
+  do i=1,$nx ; fx=(1d0-exp (-${a}d0*x2(i)))
+   ybc0(i,k) = fx * a * fz
+   ybc1(i,k) = fx * b * fz
+  enddo
+ enddo
+!
+ a=sin(2d0*pi*$n*${z0})
+ b=sin(2d0*pi*$n*${z1})
+ do j=1,$ny ; fy=cos(2d0*pi*${m}*y2(j))
+  do i=1,$nx ; fx=(1d0-exp (-${a}d0*x2(i)))
+   zbc0(i,j) = fx * fy * a
+   zbc1(i,j) = fx * fy * b
+  enddo
+ enddo
+!
+ open(10,file='xbc0_test.dat',form='formatted', status='unknown')
+ open(11,file='xbc1_test.dat',form='formatted', status='unknown')
+ open(12,file='ybc0_test.dat',form='formatted', status='unknown')
+ open(13,file='ybc1_test.dat',form='formatted', status='unknown')
+ open(14,file='zbc0_test.dat',form='formatted', status='unknown')
+ open(15,file='zbc1_test.dat',form='formatted', status='unknown')
+!
+ write(10,'(F30.15)') xbc0(2:$ny-1,2:$nz-1); close(10)
+ write(11,'(F30.15)') xbc1(2:$ny-1,2:$nz-1); close(11)
+ write(12,'(F30.15)') ybc0(2:$nx-1,2:$nz-1); close(12)
+ write(13,'(F30.15)') ybc1(2:$nx-1,2:$nz-1); close(13)
+ write(14,'(F30.15)') zbc0(2:$nx-1,2:$ny-1); close(14)
+ write(15,'(F30.15)') zbc1(2:$nx-1,2:$ny-1); close(15)
+!
+end " > test.F90
+#
+$FC $FFLAGS $DEFS test.F90 -o test ; ./test; rm -f test;
+#
+# prepare input file for CHES
+#
+echo " Preparing input file..."
+echo "
+# size
+
+nx=${nx}; ny=${ny}; nz=${nz}
+
+# grid
+
+xgrid=exp; xstretch=${xstretch}; x0=${x0}; x1=${x1}
+ygrid=exp; ystretch=${ystretch}; y0=${y0}; y1=${y1}
+zgrid=exp; zstretch=${zstretch}; z0=${z0}; z1=${z1}
+
+# BC
+
+bcx0=dirichlet; bcx0file=xbc0_test.dat
+bcx1=dirichlet; bcx1file=xbc1_test.dat
+bcy0=dirichlet; bcy0file=ybc0_test.dat
+bcy1=dirichlet; bcy1file=ybc1_test.dat
+bcz0=dirichlet; bcz0file=zbc0_test.dat
+bcz1=dirichlet; bcz1file=zbc1_test.dat
+
+# initial 3D data
+
+epsinit=constant   ; epsconst=1.
+kappainit=constant ; kappaconst=0.
+chargeinit=file    ; chargefile=rhs_test.dat ;  charge_mode=text ; charge_format=chest
+phiinit=constant   ; phiconst=0. % initial solution
+# multigrid solver parameters
+
+solver=multigrid
+multigrid_maximum_cycles=25
+multigrid_smooth_iterations=2
+multigrid_maximum_levels=20
+multigrid_smoother=Jacobi
+multigrid_smoother=Jacobi-Tiled-LM
+#multigrid_compute_ini_residual=no
+#multigrid_skip_convergence_test=14
+#multigrid_smoother_unroll=-1
+multigrid_omega=0.93
+#
+
+output_format=plot3d
+output_mode=text
+gridoutput=xyz_test.xyz
+potoutput=solution.dat
+
+" > test.dat
+if !([ -L ches ]); then
+ln -s ../ches .
+fi
+echo " Running CHES..."
+#echo " ********************************************************************************************"
+./ches < test.dat #>/dev/null
+#
+# compare solutions
+#
+echo " Comparing to analytical solution..."
+#echo " ********************************************************************************************"
+#
+echo "
+ implicit none
+ float, dimension($nx,$ny,$nz)  :: uanl, uches
+ float :: grid($nx,$ny,$nz,3)
+ float :: x1($nx), x2($nx), y1($ny), y2($ny), z1($nz), z2($nz)
+ float :: griderror, error
+ integer :: where(3)
+!
+! compare grids
+!
+ open(1,file='xg_test.dat',form='formatted', status='old')
+ read(1,*) x1
+ close(1)
+ open(1,file='yg_test.dat',form='formatted', status='old')
+ read(1,*) y1
+ close(1)
+ open(1,file='zg_test.dat',form='formatted', status='old')
+ read(1,*) z1
+ close(1)
+! bring grids to center
+ x2(2:$nx)=0.5d0*(x1(1:$nx-1)+x1(2:$nx)); x2(1)=x1(1)-0.5d0*(x1(2)-x1(1)); x1=x2;
+ y2(2:$ny)=0.5d0*(y1(1:$ny-1)+y1(2:$ny)); y2(1)=y1(1)-0.5d0*(y1(2)-y1(1)); y1=y2;
+ z2(2:$nz)=0.5d0*(z1(1:$nz-1)+z1(2:$nz)); z2(1)=z1(1)-0.5d0*(z1(2)-z1(1)); z1=z2;
+!
+! grid output from CHEST is at center
+!
+ open(1,file='xyz_test.xyz',form='formatted', status='old')
+ read(1,*)
+ read(1,*) grid
+ close(1)
+!
+ x2=grid(:,1,1,1); y2=grid(1,:,1,2); z2=grid(1,1,:,3)
+ griderror=max(maxval(abs(x1-x2)), maxval(abs(y1-y2)), maxval(abs(z1-z2)))
+! write(0,*) x1-x2
+! write(0,*) y1-y2
+! write(0,*) z1-z2
+!
+! compare solutions
+!
+ open(1,file='uexact_test.dat',form='formatted', status='old')
+ read(1,*)
+ read(1,*) uanl
+ close(1)
+!
+ open(1,file='solution.dat',form='formatted', status='old')
+ read(1,*)
+ read(1,*)
+ read(1,*) uches
+ close(1)
+!
+ uches=abs(uanl-uches);
+ error=maxval(uches(2:$nx-1,2:$ny-1,2:$nz-1))
+ where=maxloc(uches(2:$nx-1,2:$ny-1,2:$nz-1))
+ write(6,'(2F25.12,3I10)') griderror, error, where
+ end " > compare.F90
+#
+$FC $FFLAGS $DEFS compare.F90 -o compare
+j=0
+for f in `./compare`; do
+ i[$j]=$f
+ j=$(($j+1))
+done
+rm -f compare;
+griderr=0.00001;
+if [ `echo "${i[0]} > $griderr" | bc` -eq 1 ]; then
+ echo " Grids do not match!";
+ echo " TEST FAILED";
+ test_passed=0
+else
+ ermax=0.01; # ad-hoc criterion
+ echo " The maximum absolute error is "${i[1]}" at grid point ["${i[2]}","${i[3]}","${i[4]}"]"
+ echo " Comparing with maximum allowed error ("$ermax")"
+ if [ `echo "${i[1]} < $ermax" | bc` -eq 1 ]; then
+  echo " TEST PASSED";
+  test_passed=1
+ else
+  echo " TEST FAILED";
+  test_passed=0
+ fi
+fi
+echo " ********************************************************************************************"
+#
+# clean up
+#
+if [ -L ches ]; then
+ rm -f ches ; 
+fi
+#
+exit $test_passed

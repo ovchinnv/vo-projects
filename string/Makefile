@@ -6,7 +6,7 @@ DEPS=multicom multidiag
 DEPS+=$(addprefix $(NAME)/,$(SUBDIRS))
 
 LOCALMACROS=-include source.defs
-LOCALDEPS=mpitype.def source.defs
+LOCALDEPS=mpitype.def source.defs dmol_select_macro.def
 
 include $(ROOT)/Makefile.inc
 

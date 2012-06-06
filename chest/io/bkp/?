@@ -1,0 +1,47 @@
+
+
+      if (l.gt.0) then
+       fid=-1
+       fmt='FORMATTED' ! should also allow binary data
+       call files_open(fid, name_=filename(1:l), form_=fmt, action_='READ')
+       if (fid.lt.0) call warning(whoami, 'Cannot open file. Abort.',-1)
+      else
+       call warning(whoami, 'File name not specified. Abort.',-1)
+      endif ! l
+     endif ! me
+     if (fatal_warning(communicator)) return
+!
+     nnx=nx-2;  nny=ny-2;  nnz=nz-2;
+     n=nnx*nny*nnz
+!
+     if (me.le.0) then
+!    this is appropriate for ASCII read
+       k=0
+       read(fid, *, IOSTAT=iostatus) value
+       do while (iostatus.eq.0)
+        k=k+1
+!    individual indices
+        kk=(k-1)/(nnx*nny)        + 2          ! slowly-varying index ; offset is 2 for inner points only
+        jj=mod((k-1),nnx*nny)/nny + 2          !
+        ii=mod((k-1),nnx)         + 2          !
+        if (k.le.n) vars(i)%v(ii,jj,kk)=value  ! make assignment if not out of bounds
+        read(fid, *, IOSTAT=iostatus) value
+       enddo
+       call files_close(fid)
+     endif ! me
+!    check that the right number of entries was read
+#if PARALLEL
+     if (ncpu.gt.1) then 
+       call MPI_BCAST(k,1,mpi_int,0,communicator,bug)
+       call MPI_BCAST(vars(i)%v,nx*ny*nz,mpi_float,0,communicator,bug)
+     endif
+#endif	 
+!
+     if (k.gt.n) then 
+      call warning(whoami, 'FILE "'//filename(1:l)//'" HAS MORE ENTRIES THAN EXPECTED.', 0)
+     elseif (k.lt.n) then 
+      call warning(whoami, 'FILE "'//filename(1:l)//'" DOES NOT CONTAIN ENOUGH ENTRIES. ABORT.', -1)
+      return
+     endif
+     var_init(i)=.true.
+!

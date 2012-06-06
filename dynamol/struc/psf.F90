@@ -548,7 +548,7 @@
        end subroutine psf_info
 !
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-       function psf_natom result(natom)
+       function psf_natom() result(natom)
        implicit none
        integer :: natom
        if (psf_initialized) then

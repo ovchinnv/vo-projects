@@ -6,13 +6,14 @@ DEPS=output parser vectors files multicom random bestfit constants
 SUBDIRS=param struc coor compute
 DEPS+=$(addprefix $(NAME)/,$(SUBDIRS))
 
-# for making a static library
+# additional objects for linking a static library
 LINKOBJS=constants.o output.o files.o parser.o multicom_aux.o            \
      ivector.o rng.o clcg.o stats.o system.o sysinfo.o sysmanip.o bestfit.o \
      ch_param.o atompar.o anglpar.o bondpar.o dihepar.o                     \
      psf.o psfatom.o tlist.o                                                \
      charmmio.o pdbio.o freeio.o                                            \
      angles.o bonds.o dihedrals.o
+
 
 LOCALMACROS=-include source.defs
 LOCALDEPS=source.defs multicom_def.src
@@ -24,9 +25,6 @@ system.o: stats.o multicom_def.src $(DIRS)
 verlet.o: system.o
 
 libraries : libdynamol.a
-libdynamol.a: $(OBJS)  force_look                      #force relinking
-	$(AR) $(AFLAGS) $@ $(OBJS) $(LOBJS)
-	/bin/sh -c 'ln -fs `pwd`/libdynamol.a ${ROOT}/lib/libdynamol.a'
+
 clean::
 	for d in $(SUBDIRS); do (cd $$d; $(MAKE) clean); done
-	rm -f *.mod *.a $(OBJS) $(SOURCES)

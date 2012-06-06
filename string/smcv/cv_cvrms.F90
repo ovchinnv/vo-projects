@@ -364,7 +364,7 @@
  character(len=80) :: msg___
 !
        integer :: i, j, jj
-       character(len=14) :: whoami
+       character(len=15) :: whoami
 !
        integer :: ncv
        integer, allocatable, dimension(:) :: ind

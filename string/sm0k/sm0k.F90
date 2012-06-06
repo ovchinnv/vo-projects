@@ -572,7 +572,7 @@
 ! print summary
 !!!!!! reparametrization summary !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
       mlen=len(methods(interp_method))
-      mlen=min(max(0,mlen),len(methods(interp_method)));methods(interp_method)(mlen+1:)='';call adjustleft(methods(interp_method),(/' ',tab/));mlen=len_trim(methods(interp_method))
+mlen=min(max(0,mlen),len(methods(interp_method)));methods(interp_method)(mlen+1:)='';call adjustleft(methods(interp_method),(/' ',tab/));mlen=len_trim(methods(interp_method))
       if (interp_method.eq.linear_exact) then
         write(msg___,666) whoami,methods(interp_method)(1:mlen)
       else
@@ -990,7 +990,7 @@
       if (qprint) then
        if (interp_method.gt.0) then
         length=len(methods(interp_method))
-        length=min(max(0,length),len(methods(interp_method)));methods(interp_method)(length+1:)='';call adjustleft(methods(interp_method),(/' ',tab/));length=len_trim(methods(interp_method))
+length=min(max(0,length),len(methods(interp_method)));methods(interp_method)(length+1:)='';call adjustleft(methods(interp_method),(/' ',tab/));length=len_trim(methods(interp_method))
         write(msg___,6770) whoami, methods(interp_method)(1:length) ; call plainmessage(msg___)
  6770 format(/A,' WILL INTERPOLATE USING ',A,' INTERPOLATION')
        else

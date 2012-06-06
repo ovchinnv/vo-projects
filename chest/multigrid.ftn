@@ -1,0 +1,1092 @@
+!DEC$ ATTRIBUTES INLINE :: residual
+!DEC$ ATTRIBUTES INLINE :: refine
+!DEC$ ATTRIBUTES INLINE :: apply_bc
+!DEC$ ATTRIBUTES INLINE :: residual2d
+!DEC$ ATTRIBUTES INLINE :: fzero
+!DEC$ ATTRIBUTES INLINE :: Jacobi
+!DEC$ ATTRIBUTES INLINE :: JacobiTiledLoMem
+!DEC$ ATTRIBUTES INLINE :: GaussSeidel
+!DEC$ ATTRIBUTES INLINE :: GaussSeidelRB
+!DEC$ ATTRIBUTES INLINE :: GaussSeidelRBTiled
+!DEC$ ATTRIBUTES INLINE :: GaussSeidelRBTiledLoMem
+!DEC$ ATTRIBUTES INLINE :: GSInner
+!DEC$ ATTRIBUTES INLINE :: GSOuter
+!DEC$ ATTRIBUTES INLINE :: GaussSeidel2d
+!DEC$ ATTRIBUTES INLINE :: copy3d
+!DEC$ ATTRIBUTES INLINE :: coarsen
+!DEC$ ATTRIBUTES INLINE :: coarsen2d
+!DEC$ ATTRIBUTES INLINE :: compute_fd_coef
+!DEC$ ATTRIBUTES INLINE :: compute_fd_coef2d
+ module multigrid
+!
+ use constants
+#ifdef __TIMER
+ use timer
+#endif
+ private
+
+ bool, public :: multigrid_initialized=.false.
+ 
+ int, parameter :: nxmin=3, nymin=3, nzmin=3 ! minimum allowed number of inner points
+ int, save :: maxlev                         ! maximum number of allowed levels (user defined)
+ int, parameter :: default_maxlev=1000
+!
+ float, pointer, save, dimension(:) :: dxall, dyall, dzall, odxall, odyall, odzall, & ! arrays that hold all metrics
+                                       allp, alleps, allkappa, allrhs,& ! arrays that hold coefficients, sources, and solution
+                                       alleast, allwest, allsouth, allnorth, allfront, allback ! arrays that store boundary conditions
+!
+ float, pointer, save, dimension(:,:) :: bc_wgt
+!
+ int, save :: dxlen, dylen, dzlen, len3D, len3Dbc, len2Dxy, len2Dxz, len2Dyz ! corresponding 1D array lengths
+ int, save :: numlev=-1 ! number of multigrid levels
+ int, pointer, save :: mcycle(:) ! this stores cycle definition (smooth, prolong, or restrict)
+ int, pointer, save :: vcycle(:) ! default vcycle
+ character*200, save :: multigrid_cycle_spec ! description of multigrid cycle
+!
+ int, parameter :: reduce=-1, prolong=-2, done=0; ! this is just notation; currently positive numbers ar assumed to be iterations
+!
+ int, parameter :: nsmoother = 8
+ character(len=24) :: smoother_names(nsmoother) = &
+&   [character(len=24):: 'JACOBI','GAUSS-SEIDEL','GAUSS-SEIDEL-RB','GAUSS-SEIDEL-UNROLL','GAUSS-SEIDEL-RB-TILED',&
+&                       'GAUSS-SEIDEL-RB-TILED-LM','GAUSS-SEIDEL-REVERSE','JACOBI-TILED-LM' ]
+ int, parameter :: Jacobi_=1, GaussSeidel_=2, GaussSeidelRB_=3, GSUnrollFromMiddle_=4, GaussSeidelRBTiled_=5,&
+&                  GaussSeidelRBTiledLoMem_=6, GaussSeidelReverse_=7, JacobiTiledLomem_=8
+ int, save :: smoother, default_smoother=GaussSeidel_
+ int, save :: smooth_iterations;
+ int, save :: smooth_tilesize;
+ int, parameter :: default_unroll_iter=2 ; ! default inner iterations for "unrolled" GS
+ int, save :: unroll_iter;                 ! inner iterations for "unrolled" GS
+ int, parameter :: default_smooth_iterations=10;
+ int, parameter :: default_smooth_tilesize=256;
+ int, save :: maxcycle ! maximum number of cycles
+ int, parameter :: default_maxcycle=1000 ! maximum number of cycles; after this is reached, issue a warning and quit
+ int, save :: convergence_skip_cycles;
+ int, parameter :: default_convergence_skip_cycles=0;
+ float, save :: max_residual ! maximum residual allowed
+ float, save :: default_max_residual ! initialized below
+ float, save :: init_residual
+ float, save :: omega ! overrelaxation parameter in GS
+ float, parameter :: default_omega=1
+ bool, save :: multigrid_loud=.true.
+ bool, save :: compute_initial_residual
+ bool, parameter :: default_compute_initial_residual=.true.
+ int, save :: i3D=1, i2D=0
+!
+#ifdef __TIMER
+ int :: mgtimer, smoothtimer
+ float :: coarsen_time=zero, refine_time=zero, smooth_time=zero, residual_time=zero, bc_time=zero
+ float :: mgtime=-1d0
+#endif
+!
+ public multigrid_init
+ public multigrid_done
+ public multigrid_solve
+! the next three routine updates coefficients (eps, kappa, and rhs) 
+ public multigrid_update_coef
+ public multigrid_update_bc
+ private parse_multigrid_cycle
+!
+ contains 
+!*******************************************************************************!
+  subroutine multigrid_init()
+  use SIZE, only: nx, ny, nz, me, communicator, q2D
+  use grid
+  use output
+  use parser
+  use constants
+  implicit none
+!
+  character*14, parameter :: whoami = 'MULTIGRID_INIT'
+  character*100 :: msg
+  character*100 :: keyword
+  int :: msglen
+  int :: nnx, nny, nnz, l, len_cycle
+  int :: dxi, dxj, dxci, dxcj, dyi, dyj, dyci, dycj, dzi, dzj, dzci, dzcj
+  float, allocatable, dimension(:) :: x0,x1,y0,y1,z0,z1,dx0,dy0,dz0 
+  float :: fac1d, fac2d, fac3d
+  int :: i, ii, j
+!  
+  if (multigrid_initialized) call multigrid_done()
+!
+  if (.not.grid_initialized) then 
+    call warning(whoami, 'Main grid not initialized. Nothing done.', 0)
+    return
+  endif
+!
+  if (q2d) then ; i3d=0 ;  call message(whoami, '2D configuration specified'); else ; i3d=1 ; endif ; i2d=1-i3d;
+!
+  default_max_residual=1.d0*ERRTOL()
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% request a few parameters from parser %%%%%%%%%%%%%%%%%%%%%%%%%%%%
+#define __DEFAULT
+#define __INT
+#define __MINUSERR
+#define __WARNIFMISSING
+!
+#define __VAR	maxlev
+#define __TAG	multigrid_maximum_levels
+#define __NAME	maximum number of grid levels
+#include "mgutil/mg_macro1.src"
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% smoother selection %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+  if (.not.existtag_nocase('MULTIGRID_SMOOTHER')) then
+   l=len_trim(smoother_names(default_smoother))
+   call warning(whoami,' Multigrid smoother unspecified. Defaulting to "'//smoother_names(default_smoother)(1:l)//'"',0)
+   smoother=default_smoother
+  else 
+   keyword=getval_nocase_upper('MULTIGRID_SMOOTHER')
+   l=len_trim(keyword)
+   smoother=-999
+   do i=1,nsmoother
+     if (keyword.eq.smoother_names(i)) then 
+      smoother=i
+      exit
+     endif
+   enddo
+   if (smoother.gt.0) then
+    call message(whoami, 'Setting multigrid smoother to "'//smoother_names(smoother)(1:l)//'"')
+   else
+    call warning(whoami, 'Unknown multigrid smoother specified. Abort.',-1)
+   endif
+  endif
+!
+  if (smoother.eq.GSUnrollFromMiddle_) then
+!
+   #define __VAR	unroll_iter
+   #define __TAG	multigrid_smoother_unroll
+   #define __NAME	maximum number of unrolled smoother loops
+   #undef __MINUSERR
+   #include "mgutil/mg_macro1.src"
+   #define __MINUSERR
+   if (unroll_iter.lt.0) &
+   & call message(whoami, 'Will perform maximal unrolling');
+!
+  elseif ( (smoother.eq.GaussSeidelRBTiled_).or.(smoother.eq.GaussSeidelRBTiledLoMem_).or.(smoother.eq.JacobiTiledLoMem_) ) then
+   #define __VAR	smooth_tilesize
+   #define __TAG	multigrid_smoother_tilesize
+   #define __NAME	smoother tile size
+   #include "mgutil/mg_macro1.src"
+  endif
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+!
+#define __VAR	smooth_iterations
+#define __TAG	multigrid_smooth_iterations
+#define __NAME	number of smoother iterations
+#include "mgutil/mg_macro1.src"
+!
+#define __VAR	maxcycle
+#define __TAG	multigrid_maximum_cycles
+#define __NAME	maximum number of cycles
+#include "mgutil/mg_macro1.src"
+!
+#undef __WARNIFMISSING
+#define __VAR	convergence_skip_cycles
+#define __TAG	multigrid_skip_convergence_test
+#define __NAME	Number of cycles before first convergence test
+#include "mgutil/mg_macro1.src"
+!
+#undef __INT
+#define __BOOL
+#undef __MINUSERR
+#define __VAR	compute_initial_residual
+#define __TAG	multigrid_compute_ini_residual
+#define __NAME	compute-initial-residual
+#include "mgutil/mg_macro1.src"
+!
+#undef __BOOL
+#define __MINUSERR
+#define __WARNIFMISSING
+#define __VAR	max_residual
+#define __TAG	multigrid_residual
+#define __NAME	maximum residual
+#include "mgutil/mg_macro1.src"
+!
+#define __VAR	omega
+#define __TAG	multigrid_omega
+#define __NAME	over-relaxation parameter
+#include "mgutil/mg_macro1.src"
+!
+!**********************************************
+! determine the maximum number of levels possible (3D/2D)
+  numlev=1;
+  nnx=nx-2; nny=ny-2; nnz=nz-2; ! inner points
+  do while ( (mod(nnx,2).eq.0).and.(mod(nny,2).eq.0).and.(mod(nnz,2)*i3d.eq.0).and. &
+&              nnx.ge.2*nxmin.and.nny.ge.2*nymin.and.nnz.ge.2*nzmin*i3d.and. &
+&              numlev.lt.maxlev )
+   numlev=numlev+1
+   nnx=nnx/2; nny=nny/2; nnz=nnz/(2-i2d);
+  enddo
+!
+  call message(whoami, 'NUMBER OF MULTIGRID LEVELS IS '//itoa(numlev))
+!
+! define default v-cycle
+!***********************************************
+  allocate(vcycle(4*(numlev-1)+1)); ! smooth & coarsen numlev-1 times; smooth; interpolate & smooth numlev-1 times
+  ii=0
+  do i=1,numlev-1
+   ii=ii+1 ; vcycle(ii)=smooth_iterations
+   ii=ii+1 ; vcycle(ii)=reduce
+  enddo
+  ii=ii+1 ; vcycle(ii)=smooth_iterations
+  do i=1,numlev-1
+   ii=ii+1 ; vcycle(ii)=prolong
+   ii=ii+1 ; vcycle(ii)=smooth_iterations
+  enddo
+!****************************************************************************
+! parse cycle definition; default will assume a vcycle with iterations specified above
+!****************************************************************************
+  nullify(mcycle)
+!
+  if (existtag_nocase('multigrid_cycle')) then 
+   multigrid_cycle_spec=getval_nocase('multigrid_cycle')
+   call toupper(multigrid_cycle_spec)
+   select case(multigrid_cycle_spec)
+    case('VCYCLE', 'V', 'V-CYCLE')
+     mcycle=>vcycle
+    case default ! process a custom cycle definition
+     call parse_multigrid_cycle(multigrid_cycle_spec, mcycle)
+     if (.not.associated(mcycle)) then
+      call warning(whoami, 'INVALID CYCLE SPECIFIED. ABORT.',-1)
+     endif
+   end select
+  else
+   mcycle=>vcycle
+  endif
+!**************************************************************************
+! check that the multigrid cycle makes sense:
+!
+  l=1; ! start at the first level
+  len_cycle=size(mcycle)
+  do i=1,len_cycle
+   j=mcycle(i)
+   if (j.eq.done) then
+! comment out the next two lines to parse until the end
+    len_cycle=i-1
+    exit
+   elseif (j.eq.reduce) then
+    l=l+1;
+    if (l.gt.numlev) then ! invalid level
+     call warning(whoami, 'INVALID CYCLE SPECIFIED. ABORT.',-1);
+     exit
+    endif
+   elseif (j.eq.prolong) then
+    l=l-1;
+    if (l.lt.1) then ! invalid level (allowed levels are [ 0 ... numlev-1 ]
+     call warning(whoami, 'INVALID CYCLE SPECIFIED. ABORT.',-1);
+     exit   
+    endif
+   elseif (j.lt.0) then ! this means an invalid entry
+    call warning(whoami, 'INVALID CYCLE SPECIFIED. ABORT.',-1);
+    exit   
+   endif ! all positive entries are valid and correspond to smoother iterations
+  enddo
+!
+  if ( (l.ne.1) .or. (len_cycle.eq.0) ) call warning(whoami, 'INVALID CYCLE SPECIFIED. ABORT.',-1);
+  if (fatal_warning(communicator)) call terminate(whoami)
+!**************************************************************************
+!
+! create metrics for all levels
+  nnx=nx-2; nny=ny-2; nnz=nz-2-i2d; ! inner points at first level; in 2D, set nnz=0 here
+!
+! allocate storage space for additional grids 
+!
+  fac1d=(1d0-0.5d0**numlev)/(1d0-0.5d0);
+!
+  dxlen=    numlev+nint(2d0*nnx*fac1d); ! two sets of metrics; (one of two metrics has an "extra" element)
+  dylen=    numlev+nint(2d0*nny*fac1d);
+  dzlen=    numlev+nint(2d0*nnz*fac1d); ! note: dzall, odzall have to have nonzero length in 2D even though they are not used
+!
+  allocate(dxall(dxlen),odxall(dxlen),dyall(dylen),odyall(dylen),dzall(dzlen),odzall(dzlen)) 
+!
+! metrics at first level
+  dxi=1; 
+  dxj=dxi+nnx;     dxci=dxj+1; dxcj=dxci+nnx-1;
+  dyi=1; 
+  dyj=dyi+nny;     dyci=dyj+1; dycj=dyci+nny-1;
+  dzi=1; 
+  dzj=dzi+nnz-i2d; dzci=dzj+1; dzcj=dzci+nnz-1;
+!
+  dxall(dxi:dxj)  = dxcen(1:nnx+1);
+  dxall(dxci:dxcj)= dxcor(2:nnx+1);
+  dyall(dyi:dyj)  = dycen(1:nny+1);
+  dyall(dyci:dycj)= dycor(2:nny+1);
+  dzall(dzi:dzj)  = dzcen(1:nnz+i3d);
+  dzall(dzci:dzcj)= dzcor(2:nnz+1);
+!
+! arrays for gridding at other levels
+!
+  allocate(x0(nnx),x1(nnx),y0(nny),y1(nny),z0(nnz),z1(nnz),dx0(nnx),dy0(nny), dz0(nnz))
+!
+  x0(1:nnx)=xcen(2:nx-1); ! take internal points only
+  y0(1:nny)=ycen(2:ny-1);
+  z0(1:nnz)=zcen(2:nz-1-i2d); ! OK in 3D/2D
+!
+  do l=2,numlev
+! create coarser grid:
+   x1(1:nnx/2)=0.5d0*(x0(1:nnx:2)+x0(2:nnx:2)); ! also contains only internal points (on a coarse grid)
+   y1(1:nny/2)=0.5d0*(y0(1:nny:2)+y0(2:nny:2));
+   z1(1:nnz/2)=0.5d0*(z0(1:nnz:2)+z0(2:nnz:2)); ! OK in 3D/2D
+! compute coarse-level metrics
+   nnx=nnx/2; nny=nny/2; nnz=nnz/2;
+!  center-to-center metrics (reuse coordinate arrays)
+   x0(2:nnx)=x1(2:nnx)-x1(1:nnx-1); x0(1)=x0(2); x0(nnx+1)=x0(nnx); ! first metric would contain 1st boundary point
+   y0(2:nny)=y1(2:nny)-y1(1:nny-1); y0(1)=y0(2); y0(nny+1)=y0(nny);
+   z0(2:nnz)=z1(2:nnz)-z1(1:nnz-1); if (.not.q2d) then ; z0(1)=z0(2); z0(nnz+1)=z0(nnz); endif;
+! corner-to-corner metrics
+   dx0(1:nnx)=0.5d0*(x0(1:nnx)+x0(2:nnx+1)); ! first metric contains 1st point (no ghost pt.)
+   dy0(1:nny)=0.5d0*(y0(1:nny)+y0(2:nny+1));
+   dz0(1:nnz)=0.5d0*(z0(1:nnz)+z0(2:nnz+1)); ! 3D/2D
+!
+   dxi=dxcj+1; dxj=dxi+nnx;     dxci=dxj+1; dxcj=dxci+nnx-1;
+   dyi=dycj+1; dyj=dyi+nny;     dyci=dyj+1; dycj=dyci+nny-1;
+   dzi=dzcj+1; dzj=dzi+nnz-i2d; dzci=dzj+1; dzcj=dzci+nnz-1;
+!
+   dxall(dxi :dxj) = x0(1:nnx+1); ! append cor metric, then cen metric to global metric array
+   dxall(dxci:dxcj)=dx0(1:nnx);
+   dyall(dyi :dyj) = y0(1:nny+1);
+   dyall(dyci:dycj)=dy0(1:nny);
+   dzall(dzi :dzj) = z0(1:nnz+i3d); ! 3D/2D
+   dzall(dzci:dzcj)=dz0(1:nnz);     ! 3D/2D
+!
+   x0(1:nnx)=x1(1:nnx);    y0(1:nny)=y1(1:nny);   z0(1:nnz)=z1(1:nnz); ! recurse : redefine x1 as the fine grid and repeat
+!
+  enddo
+!
+! aa:
+!   write(0,*) dxall-dzall
+!   write(0,*) '***********'
+!   write(0,*) dyall-dzall
+!
+  odxall=1d0/dxall; odyall=1d0/dyall; odzall=1d0/dzall;
+!
+  deallocate(x0,y0,z0,x1,y1,z1,dx0,dy0,dz0)
+!*************************************** FINISHED WITH METRICS *******************************/
+  nnx=nx-2; nny=ny-2; nnz=nz-2; ! inner points
+! allocate data arrays
+  fac2d=(1d0-0.25d0**numlev) /(1d0-0.25d0);
+  fac3d=(1d0-0.125d0**numlev)/(1d0-0.125d0);
+!
+  ! reduce dimensionality for storage in 2D
+  if (q2d) fac3d=fac2d 
+! total length for 3D storage without boundary points
+  len3D  =nint(nnx*nny*nnz*fac3d); ! 2D/3D
+! xy plane is special because in 2D we keep z-ghostpoints at all levels (even though they are not used) 
+  len2Dxy=nint(nnx*nny*fac2d);
+! for other arrays, reduce dimensionality
+  if (q2d) then ; fac2d=fac1d ; endif
+  len2Dxz=nint(nnx*nnz*fac2d); 
+  len2Dyz=nint(nny*nnz*fac2d);
+!
+! coefficeint for 3D storage with boundary points
+  len3Dbc=len3D+                        &! inner points
+& 2*(len2Dxy+len2Dxz+len2Dyz)+          &! 2D boundaries
+& 4*(nint(fac1d*(nnx+nny+i3d*nnz)))+    &! 1D corner lines (z constant)
+& (8+i2d*4)*numlev                       ! 1D corner points and 1-pt corner "lines" in z-direction
+!
+! note that the length of coefficient arrays is smaller; this is because the solution array contains boundary points, which are also stored
+! write(0,*) numlev, fac1d, fac2d, fac3d !aa
+! write(0,*) len3d, nnx*nny*nnz, len3dbc, nx*ny*nz !aa
+! 
+  allocate(allp(len3Dbc)) ! 3D solution array with boundary points
+!
+  allocate(alleps(len3D),allkappa(len3D),allrhs(len3D)) ! 3D coefficient arrays w/o boundary points
+  allocate(alleast(len2Dyz), allwest(len2Dyz), allnorth(len2Dxz), allsouth(len2Dxz), allback(len2Dxy), allfront(len2Dxy)) ! 2D bc arrays
+!
+  allocate(bc_wgt(6,numlev)) ! coefficients for applying BC
+! to populate data arrays need to call external subroutine to do a pointer cast
+  call multigrid_update_bc()
+  call multigrid_update_coef(.true., .true., .true., .true.);
+!
+  if (.not.fatal_warning(communicator)) multigrid_initialized=.true.
+!
+  end subroutine multigrid_init
+!*****************************************************************************************************
+  subroutine multigrid_done()
+  implicit none
+  if (multigrid_initialized) then 
+   if (associated(mcycle).and..not.associated(mcycle, target=vcycle)) deallocate(mcycle)
+   deallocate(allp,alleps,allkappa,allrhs,&
+&              allwest, alleast, allnorth, allsouth, allback, allfront,&
+&              dxall, odxall, dyall, odyall, dzall, odzall, vcycle)
+   multigrid_initialized=.false.
+  endif
+!  
+  end subroutine multigrid_done
+!*****************************************************************************************************
+! this routine handles both 2 and 3 dimensions; however, nz has to be equal to 3 for the 2D case to work
+  subroutine multigrid_update_coef(update_eps, update_kappa, update_rhs, update_p)
+  use SIZE, only : nx, ny, nz, q2D
+  use state
+  implicit none
+  bool :: update_eps, update_kappa, update_rhs, update_p
+  int :: l, inew, iold
+  int :: nnx, nny, nnz
+!
+  character*21, parameter :: whoami='MULTIGRID_UPDATE_COEF'
+!
+  if (.not.state_initialized) then 
+    call warning(whoami, 'State not initialized. Nothing.', 0)
+    return
+  endif
+!
+  nnx=nx-2;  nny=ny-2;   nnz=nz-2;
+! store first level 
+  if (update_eps  ) call copy3d(eps  (2:nnx+1,2:nny+1,2:nnz+1), alleps,  nnx,nny,nnz)
+  if (update_kappa) call copy3d(kappa(2:nnx+1,2:nny+1,2:nnz+1), allkappa,nnx,nny,nnz)
+  if (update_rhs  ) call copy3d(rhs  (2:nnx+1,2:nny+1,2:nnz+1), allrhs,  nnx,nny,nnz)
+  if (update_p    ) call copy3d(p,    allp,                              nx,ny,nz   )
+! coarsen to the lower levels
+!
+  iold=1 ! index at previous level
+!
+  do l=2,numlev
+   inew=iold + nnx*nny*nnz ! index at this level
+!  interpolate: 
+   if (update_eps)   call coarsen(alleps(iold),   alleps(inew),  nnx,nny,nnz, i2d) ! must have dimensions to satisfy IFORT 
+   if (update_kappa) call coarsen(allkappa(iold), allkappa(inew),nnx,nny,nnz, i2d)
+   nnx=nnx/2;  nny=nny/2;   nnz=nnz/(2-i2d);
+! no rhs update, since for coarse levels it is the residual computed after upper level iterations
+   iold=inew;
+  enddo
+! 
+  end subroutine multigrid_update_coef
+!*****************************************************************************************************
+  subroutine multigrid_update_bc()
+  use SIZE, only: nx, ny, nz
+  use bc
+  use output
+  use constants
+  implicit none
+!
+  character*19, parameter :: whoami='MULTIGRID_UPDATE_BC'
+  int :: nnx, nny, nnz
+  int :: level, i1, j1, k1, ibd
+  float :: dplus, dminus
+!
+  if (.not.bc_initialized) then 
+    call warning(whoami, 'Boundary conditions not initialized. Nothing done.', 0)
+    return
+  endif
+!
+  nnx=nx-2;  nny=ny-2;  nnz=nz-2;
+!
+  allwest=0.; alleast=0.; allsouth=0.; allnorth=0.; allfront=0.; allback=0.;
+!
+! only need to store first level -- other levels are zero; in the case of PBC, bc arrays not used at all
+  call copy3d(bcs(west)%p(2:nny+1,2:nnz+1),  allwest,  nny, nnz, 1)
+  call copy3d(bcs(east)%p(2:nny+1,2:nnz+1),  alleast,  nny, nnz, 1)
+!
+  call copy3d(bcs(south)%p(2:nnx+1,2:nnz+1),  allsouth, nnx, nnz, 1)
+  call copy3d(bcs(north)%p(2:nnx+1,2:nnz+1),  allnorth, nnx, nnz, 1)
+!
+  if (ndim.gt.2) then 
+   call copy3d(bcs(front)%p(2:nnx+1,2:nny+1),  allfront, nnx, nny, 1)
+   call copy3d(bcs(back )%p(2:nnx+1,2:nny+1),  allback,  nnx, nny, 1)
+  endif
+!
+! now need to set scaling coefficients for bc data at all levels
+  i1=nnx+2; j1=nny+2; k1=1+nnz-i2d+i3d
+  do level=1,numlev ! loop over all levels
+   do ibd=1,2*ndim  ! loop over all dimensions; note, only the z-dimension can have trivial metric arrays
+    select case(ibd)
+     case(west) ; dplus=dxall(i1);       dminus=dxall(nx)
+     case(east) ; dplus=dxall(i1+nnx-1); dminus=dxall(2*nx-3)
+     case(south); dplus=dyall(j1);       dminus=dyall(ny)
+     case(north); dplus=dyall(j1+nny-1); dminus=dyall(2*ny-3)
+     case(front); dplus=dzall(k1);       dminus=dzall(nz)
+     case(back) ; dplus=dzall(k1+nnz-1); dminus=dzall(2*nz-3)
+    end select
+!
+    select case(bc_type(ibd))
+     case(dirichlet)  ; bc_wgt(ibd,level)=two                    ! applied at boundary
+     case(dirichletg) ; bc_wgt(ibd,level)=dplus*2/(dplus+dminus) ! applied at ghost point
+     case(neumann)    ; bc_wgt(ibd,level)=dplus                  ! at boundary
+     case(neumanng)   ; bc_wgt(ibd,level)=dplus                  ! at ghost point
+    end select
+   enddo ! ibd
+!
+   nnx=nnx/2;         nny=nny/2;        nnz=nnz/(2-i2d);
+   i1=i1+3*nnx+1;     j1=j1+3*nny+1;    k1=k1+3*(nnz-i2d)+i3d;
+!
+  enddo ! level
+!
+!    write(0,*) bc_wgt(1,:) !aa
+ end subroutine multigrid_update_bc
+!*************************** HERE WE GO, KIDS *****************************************************!
+ subroutine multigrid_solve()
+!
+  use SIZE, only: nx, ny, nz, communicator, q2d
+  use output
+  use parser, only: itoa, ftoa
+  use bc ! boundary conditions
+  use state, only: p ! for copying solution to main array
+!
+  implicit none
+  character*15, parameter :: whoami = 'MULTIGRID_SOLVE'
+  character*100 :: msg
+  int :: msglen
+  int :: level, i1, j1, k1, i3, i3b, i2, j2, k2 ! indices into global arrays
+  int :: i, j, k, m, n
+  int :: nnx, nny, nnz, nall
+  int :: di, icycle
+  int :: imax, jmax, kmax
+!
+! define multigrid metric arrays: will compute metrics once at all levels in the cpu version since memory tends to be cheaper than flops
+!
+  float, dimension( len3d ) ::  alle, allw, alls, alln, allb, allf, allo
+  float :: res ( (nx-2) * (ny-2) * (nz-2) ), curr_residual, d
+  bool :: qres
+!
+!  interface
+!   subroutine apply_bc(u,g,nnx,nny,nnz,boundary,bctype)
+!   float :: u(nnx,nny,nnz), g(*)
+!   int :: nnx,nny,nnz,boundary,bctype
+!   end subroutine apply_bc
+!  end interface
+!
+!  include 'multigrid_int.h' ! disable argument checking
+!
+  if (.not.multigrid_initialized) then 
+   call warning(whoami, 'SOLVER NOT INITIALIZED. ABORT.',0)
+   return
+  endif
+!
+! allocate multigrid arrays  
+!  allocate(  allw(len3D),  alle(len3D),  alls(len3D),  alln(len3D),  allb(len3D),  allf(len3D),  allo(len3D)  )
+! populate multigrid arrays 
+! loop over all levels
+  nnx=nx-2; nny=ny-2; nnz=nz-2;
+  i1=1; j1=1; k1=1;
+  i3=1;
+!
+  do level=1,numlev
+   call compute_fd_coef  (allw(i3),alle(i3),alls(i3),alln(i3),allf(i3),allb(i3),allo(i3),&  ! multigrid coefficients
+&                          alleps(i3),allkappa(i3),                                       &  ! gridded coefficients
+&                          odxall(i1),odxall(i1+nnx+1),odyall(j1),odyall(j1+nny+1),odzall(k1),odzall(k1+nnz-i2d+i3d),&  ! grid metrics
+&                          nnx,nny,nnz,i2d)                                                      ! dimension
+! note that the metrics are normalized by o; furthermore, the rhs must be normalized by o at every coarsening/prolongation
+   i3=i3+nnx*nny*nnz;
+   i1=i1+2*nnx+1;     j1=j1+2*nny+1;    k1=k1+2*(nnz-i2d)+i3d;
+   nnx=nnx/2;         nny=nny/2;        nnz=nnz/(2-i2d);
+  enddo
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+#ifdef __INSIDESMOOTHER
+#undef __INSIDESMOOTHER
+#endif
+#ifdef __TIMER
+  mgtimer=timer_start()
+  smoothtimer=timer_start()
+#endif
+!
+! define initial indices into global arrays
+  nnx=nx-2; nny=ny-2; nnz=nz-2;
+  i1=1; j1=1; k1=1;
+  i2=1; j2=1; k2=1;
+  i3=1;  i3b=1;
+!
+! scale rhs by o metric
+  nall=nnx*nny*nnz
+  do k=i3, i3-1+nall; allrhs(k)=allrhs(k)/allo(k); enddo
+  icycle=0;
+! update bc
+  level=1
+#include "mgutil/multigrid_bc.src"
+! compute initial residual
+#define __RNORM /allo(i) //! note: this causes extra divisions in the residual calculation
+  if (compute_initial_residual) then
+#ifdef __TIMER
+ mgtime=timer_stamp(mgtimer)
+#endif
+   call residual(res, allp, allrhs, allw, alle, alls, alln, allf, allb, allo, nx, ny, nz, q2d); qres=.false.;
+#ifdef __TIMER
+ residual_time=residual_time+timer_elapsed(mgtimer)
+#endif
+! define residual normalization (could be made different for subsequent calls)
+#include "mgutil/mg_resout.src"
+  else
+   curr_residual=one
+  endif ! compute_initial_residual
+  init_residual=curr_residual
+!
+!
+! aa
+! open(666,file='resf0.dat',form='unformatted') ; write(666) res; close(666)
+! open(666,file='rhsf.dat',form='unformatted') ; write(666) allrhs(1:nall); close(666) ! note: RHS normalized by o
+! open(666,file='e.dat',form='unformatted') ; write(666) alle(1:nall); close(666) ! note: RHS normalized by o
+! open(666,file='w.dat',form='unformatted') ; write(666) allw(1:nall); close(666) ! note: RHS normalized by o
+! open(666,file='s.dat',form='unformatted') ; write(666) alls(1:nall); close(666) ! note: RHS normalized by o
+! open(666,file='n.dat',form='unformatted') ; write(666) alln(1:nall); close(666) ! note: RHS normalized by o
+! open(666,file='o.dat',form='unformatted') ; write(666) allo(1:nall); close(666) ! note: RHS normalized by o
+! open(666,file='f.dat',form='unformatted') ; write(666) allf(1:nall); close(666) ! note: RHS normalized by o
+! open(666,file='b.dat',form='unformatted') ; write(666) allb(1:nall); close(666) ! note: RHS normalized by o
+! open(666,file='rhsf.dat',form='unformatted') ; write(666) allrhs(1:nall)*allo(1:nall); close(666) ! note: RHS normalized by o
+! stop ! aa
+! begin multigrid iterations
+!
+  icycle=1;
+  do while (curr_residual.gt.max_residual)
+   if (icycle.gt.maxcycle) then
+    call warning(whoami, 'Maximum number of cycles reached.',0)
+    exit
+   endif
+!
+   do i=1,size(mcycle) 
+    j=mcycle(i)
+!
+!***********************************************************************************************
+    select case(j);
+!***********************************************************************************************
+     case(reduce); ! 1) compute residual; 2) update indices 3) interpolate residual onto a coarser grid; 4) update bc
+#ifdef __TIMER
+ mgtime=timer_stamp(mgtimer)
+#endif
+      if (qres) then
+       call residual(res,allp(i3b),allrhs(i3),allw(i3),alle(i3),alls(i3),alln(i3),allf(i3),allb(i3),allo(i3),nnx+2,nny+2,nnz+2,q2d)
+#ifdef __TIMER
+ residual_time=residual_time+timer_stamp(mgtimer) 
+#endif
+      endif ! qres
+! update indices (some of these updates are not necessary in this version of subroutine)
+      i1=i1+2*nnx+1;      j1=j1+2*nny+1;      k1=k1+2*(nnz-i2d)+i3d;
+! 2D bc offsets
+      i2=i2+nny*nnz;      j2=j2+nnz*nnx;      k2=k2+nnx*nny;
+! 3D offsets
+      i3=i3+nnx*nny*nnz;  i3b=i3b+(nnx+2)*(nny+2)*(nnz+2);
+! inerpolate
+      call coarsen(res, allrhs(i3), nnx, nny, nnz, i2d)
+! switch to coarse grid lengths
+      nnx=nnx/2; nny=nny/2; nnz=nnz/(2-i2d); ! 3D/2D
+!        write(0,*) size(allrhs), i3+(nnx)*(nny)*(nnz) - 1 ! aa
+!        write(0,*) size(allp), i3b+(nnx+2)*(nny+2)*(nnz+2) - 1 ! aa
+! scale new rhs by o metric
+      do k=i3, i3-1+nnx*nny*nnz; allrhs(k)=allrhs(k)/allo(k); enddo
+! initialize solution (to 0, are there other sensible options?)
+      call fzero(allp(i3b),nnx+2,nny+2,nnz+2)
+! update bc (note that the bc update should be unnecessary in most cases, since we begin from an initial solution of zero)
+      level=level+1
+!
+#ifdef __TIMER
+ coarsen_time=coarsen_time+timer_elapsed(mgtimer) 
+#endif
+#include "mgutil/multigrid_bc.src"
+!***********************************************************************************************
+     case(prolong); ! 1) interpolate solution onto finer mesh; 2) add to solution on the finer mesh 3) update bc
+#ifdef __TIMER
+ mgtime=timer_stamp(mgtimer)
+#endif
+!
+      nnx=2*nnx; nny=2*nny; nnz=(2-i2d)*nnz; ! switch to finer grid dimensions
+      di=(nnx+2)*(nny+2)*(nnz+2)
+      call refine(allp(i3b-di), allp(i3b), nnx, nny, nnz, i2d)
+! update offsets
+! update indices (some of these updates are not necessary in this version of subroutine)
+      i1=i1-2*nnx-1;      j1=j1-2*nny-1;      k1=k1-2*(nnz-i2d)-i3d;
+! 2D bc offsets
+      i2=i2-nny*nnz;      j2=j2-nnz*nnx;      k2=k2-nnx*nny;
+! 3D offsets
+      i3=i3-nnx*nny*nnz;  i3b=i3b-di;
+! update bc
+      level=level-1
+#ifdef __TIMER
+ refine_time=refine_time+timer_elapsed(mgtimer) 
+#endif
+#include "mgutil/multigrid_bc.src"
+!***********************************************************************************************
+     case default; ! this means a positive integer is found --> call smoother 
+#define __INSIDESMOOTHER
+#ifdef __TIMER
+ mgtime=timer_stamp(smoothtimer)
+#endif
+      select case(smoother);
+       case(Jacobi_);
+       do k=1,j
+        call Jacobi(allp(i3b),allrhs(i3),allw(i3),alle(i3),alls(i3),alln(i3),allf(i3),allb(i3),nnx+2,nny+2,nnz+2,omega,q2d)
+! update BC
+#include "mgutil/multigrid_bc.src"
+       enddo
+!***********************************************************************************************
+       case(JacobiTiledLomem_);
+       do k=1,j
+        call JacobiTiledLoMem(allp(i3b),allrhs(i3),alleps(i3),allkappa(i3),&
+&                                    odxall(i1),odxall(i1+nnx+1),odyall(j1),odyall(j1+nny+1),odzall(k1),odzall(k1+nnz-i2d+i3d),&
+&                                    nnx+2,nny+2,nnz+2,omega,smooth_tilesize,i2d)
+! update BC
+#include "mgutil/multigrid_bc.src"
+       enddo
+!***********************************************************************************************
+       case(GaussSeidel_);
+!       write(0,*) 'DBG SMOOTH:'
+       do k=1,j
+        call GaussSeidel(allp(i3b),allrhs(i3),allw(i3),alle(i3),alls(i3),alln(i3),allf(i3),allb(i3),nnx+2,nny+2,nnz+2,omega,q2d)
+! update BC
+#include "mgutil/multigrid_bc.src"
+       enddo
+!***********************************************************************************************
+       case(GaussSeidelReverse_);
+!       write(0,*) 'DBG SMOOTH:'
+       do k=1,j
+        call GaussSeidelReverse(allp(i3b),allrhs(i3),allw(i3),alle(i3),alls(i3),alln(i3),allf(i3),allb(i3),nnx+2,nny+2,nnz+2,omega&
+&       ,q2d)
+! update BC
+#include "mgutil/multigrid_bc.src"
+       enddo
+!***********************************************************************************************
+       case(GaussSeidelRB_);
+!       write(0,*) 'DBG SMOOTH:'
+       do k=1,j
+        call GaussSeidelRB(allp(i3b),allrhs(i3),allw(i3),alle(i3),alls(i3),alln(i3),allf(i3),allb(i3),nnx+2,nny+2,nnz+2,omega,q2d)
+! update BC
+#include "mgutil/multigrid_bc.src"
+       enddo
+!***********************************************************************************************
+       case(GaussSeidelRBTiled_);
+       do k=1,j
+        call GaussSeidelRBTiled(allp(i3b),allrhs(i3),allw(i3),alle(i3),alls(i3),alln(i3),allf(i3),allb(i3),nnx+2,nny+2,nnz+2,omega&
+&        ,smooth_tilesize, q2d)
+! update BC
+#include "mgutil/multigrid_bc.src"
+       enddo
+!***********************************************************************************************
+       case(GaussSeidelRBTiledLoMem_);
+       do k=1,j
+        call GaussSeidelRBTiledLoMem(allp(i3b),allrhs(i3),alleps(i3),allkappa(i3),&
+&                                    odxall(i1),odxall(i1+nnx+1),odyall(j1),odyall(j1+nny+1),odzall(k1),odzall(k1+nnz-i2d+i3d),&
+&                                    nnx+2,nny+2,nnz+2,omega,smooth_tilesize,i2d)
+#include "mgutil/multigrid_bc.src"
+       enddo
+!***********************************************************************************************
+       case(GSUnrollFromMiddle_);
+! unroll as many iterations as possible; when not possible to perform requested number of
+! unrolled iterations, decrease unrolling number; repeat steps until the requested number of smoothing 
+! iterations is performed
+       if (unroll_iter.le.-1) then ; k=j ; else ; k=unroll_iter+1 ; endif ! when unroll_iter < 0, attempt to unroll completely
+! k is the total number of iterations (unroll_iter=0 corresponds to k=1) 
+! k cannot be greater than j (in case unroll_iter was specified to be too large)
+       k=min(k,j,ishft(nnx-2,-1),ishft(nny-2,-1)); if (.not.q2d) k=min(k,ishft(nnz-2,-1))
+       do while (j.gt.0)
+!
+!         write(0,*) level, j, k!,q2d,ishft(nny-2,-1)
+        do m=1,j/k ! k=1 corresponds to no unrolling; with k=2, the number of loops should be halved
+         call GSInner(allp(i3b),allrhs(i3),allw(i3),alle(i3),alls(i3),alln(i3),allf(i3),allb(i3),nnx+2,nny+2,nnz+2,omega,q2d,k)
+         do n=k-1,1,-1; ! at each iteration, update the outermost n points; k is the total number of iterations
+! update BC
+#include "mgutil/multigrid_bc.src"
+          call GSOuter(allp(i3b),allrhs(i3),allw(i3),alle(i3),alls(i3),alln(i3),allf(i3),allb(i3),nnx+2,nny+2,nnz+2,omega,q2d,n)
+         enddo ! n
+! update BC
+#include "mgutil/multigrid_bc.src"
+        enddo ! m
+!
+        j=mod(j,k); k=j ! remaining iterations
+       enddo ! j
+!
+      end select
+#ifdef __INSIDESMOOTHER
+#undef __INSIDESMOOTHER
+#endif
+#ifdef __TIMER
+ smooth_time=smooth_time+timer_elapsed(smoothtimer) 
+#endif
+!***********************************************************************************************
+    end select
+!***********************************************************************************************
+    qres=.true. ! true means that the residual must be recomputed (b/c arrays were modified in the cycle)
+   enddo ! end of cycle
+! compute residual (update bc first)
+! NOTE: the residual calculation below is strictly for the purpose of output; 
+!       we could check less frequently and save a little time
+!***********************************************
+   if (icycle.gt.convergence_skip_cycles) then
+#ifdef __TIMER
+ mgtime=timer_stamp(mgtimer)
+#endif
+   call residual(res,allp,allrhs,allw,alle,alls,alln,allf,allb,allo,nx,ny,nz,q2d); qres=.false.; ! false means residual is already known
+#ifdef __TIMER
+ residual_time=residual_time+timer_stamp(mgtimer) 
+#endif
+#include "mgutil/mg_resout.src"
+   endif
+!***********************************************
+   icycle=icycle+1
+  enddo ! while not solved
+!
+#ifdef __TIMER
+ mgtime=timer_elapsed_total(mgtimer)
+ call message(whoami,'============= TIMING INFORMATION ==============')
+ call message(whoami,'Time within multigrid cycle (s) : '//ftoa(mgtime));
+!
+ call message(whoami,'Coarsening time (s) : '//ftoa(coarsen_time))
+ call message(whoami,'Refinement time (s) : '//ftoa(refine_time))
+ call message(whoami,'Smoothing time (s)  : '//ftoa(smooth_time))
+ call message(whoami,'Residual time (s)   : '//ftoa(residual_time))
+ call message(whoami,'BC time (s)         : '//ftoa(bc_time))
+ call message(whoami,'Other time (s)      : '//ftoa(mgtime-coarsen_time-refine_time-smooth_time-residual_time-bc_time))
+ call message(whoami,'===============================================')
+ call timer_erase(mgtimer)
+ call timer_erase(smoothtimer)
+#endif
+! copy solution to main array
+  call copy3d(allp,p,nx,ny,nz)
+! aa
+! open(666,file='resf.dat',form='unformatted') ; write(666) res; close(666)
+! open(666,file='p.dat',form='unformatted') ; write(666) p; close(666)
+! open(666,file='p.dat',form='formatted') ; write(666,*) p(:,:,2); close(666)
+!
+ end subroutine multigrid_solve
+!*****************************************************************************************!
+ subroutine parse_multigrid_cycle(str, icycle)
+  use ivector
+  use output
+  use SIZE, only: me, communicator
+  use parser, only : atoi, digits2, hyphen, space, tab
+  implicit none
+!
+  character, parameter :: csmooth(2)  = (/'S','s'/);
+  character, parameter :: cprolong(2) = (/'P','p'/);
+  character, parameter :: ccoarsen(2) = (/'C','c'/);
+! 
+  int, pointer :: icycle(:)
+!  
+  character*(21), parameter :: whoami='PARSE_MULTIGRID_CYCLE'
+  character*(*) :: str
+  character :: cmd
+  int :: ind, ind2, strlen, iter
+  int :: i
+  type (int_vector) :: cycle
+!  
+  ind=1
+  strlen=len_trim(str)
+  call int_vector_init(cycle)
+!
+  do while (ind.le.strlen)
+!
+   cmd=str(ind:ind)
+   if (any(csmooth.eq.cmd)) then 
+! look for number of iterations
+    ind2=ind+1;
+    do
+     cmd=str(ind2:ind2)
+     if (ind2.gt.strlen) exit
+     if (any(digits2.eq.cmd) .or. (ind2.eq.ind+1.and.cmd.eq.hyphen)) then 
+       ind2=ind2+1; 
+     else
+      exit
+     endif
+    enddo
+    ind2=ind2-1
+!
+    if (ind2.gt.ind) then 
+     iter=atoi(str(ind+1:ind2))
+     if (fatal_warning(communicator)) exit
+     if (iter.le.0) then 
+      call warning(whoami, 'Number of smoothing iterations must be positive. Nothing done.',-1)
+      stop
+      exit
+     endif  
+    else
+     iter=smooth_iterations
+    endif ! ind2  
+    i=int_vector_add(cycle,iter)
+    ind=ind2
+   elseif (any(cprolong.eq.cmd)) then
+    i=int_vector_add(cycle,prolong)
+   elseif (any(ccoarsen.eq.cmd)) then
+    i=int_vector_add(cycle,reduce)
+   elseif (any(space.eq.cmd)) then 
+! nothing
+   else ! invalid character
+    call warning(whoami, 'Invalid character encountered. Nothing done.',-1)
+    exit
+   endif
+   ind=ind+1
+  enddo
+!
+  if (.not.fatal_warning(communicator)) then 
+   allocate(icycle(cycle%last))
+   icycle=cycle%i(1:cycle%last)
+  endif
+!
+  call int_vector_done(cycle)
+!
+ end subroutine parse_multigrid_cycle
+! 
+ end module multigrid
+!*****************************************************************************************!
+! utility subroutines; they are useful for changing array ranks
+! there is no error checking in these routines
+!*****************************************************************************************!
+! subroutine copy2d(a,b,nx,ny)
+! implicit none
+! int :: nx, ny
+! float, dimension(nx,ny) :: a, b
+! b=a
+! end subroutine copy2d
+!*****************************************************************************************!
+ subroutine copy3d(a,b,nx,ny,nz)
+ implicit none
+ int :: nx, ny, nz
+ float, dimension(nx,ny,nz) :: a, b
+ b=a
+ end subroutine copy3d
+!*****************************************************************************************!
+ subroutine fzero(a,nx,ny,nz)
+ use constants, only : zero
+ implicit none
+ int :: nx, ny, nz
+ float, dimension(nx,ny,nz) :: a
+ a=zero
+ end subroutine fzero
+!*****************************************************************************************!
+ subroutine copy_inner3d(a,b,nx,ny,nz)
+ implicit none
+ int :: nx, ny, nz
+ float, dimension(*) :: a, b 
+! copy the inner region (i.e. excluding ghostpoints) of array a to array b
+
+ end subroutine copy_inner3d
+!*****************************************************************************************!
+! Solution prolongation
+#include "mgutil/refine.src"
+!*****************************************************************************************!
+! Residual coarsening
+#include "mgutil/coarsen.src"
+!*****************************************************************************************!
+! Residual calculation
+#include "mgutil/residual.src"
+!*****************************************************************************************!
+! Jacobi smoothers
+#include "mgutil/Jacobi.src"
+!*****************************************************************************************!
+! Gauss-Seidel smoothers
+#include "mgutil/GS.src"
+!*****************************************************************************************!
+ subroutine compute_fd_coef(w,e,s,n,f,b,o,eps,kappa,odxcen,odxcor,odycen,odycor,odzcen,odzcor,nx,ny,nz,i2d)
+ implicit none
+! nx corresponds to the number of inner points 
+ int :: nx, ny, nz
+ int :: i2d
+ float, dimension(nx,ny,nz) :: w,e,s,n,f,b,o,eps,kappa
+ float :: odxcen(nx+1), odxcor(nx)
+ float :: odycen(ny+1), odycor(ny)
+ float :: odzcen(nz+1-i2d-i2d), odzcor(nz-i2d) ! 3D/2D
+! it may be too costly to have all of the metrics in memory
+ int :: i ,j ,k
+ int :: ip, jp, kp
+ float :: epscor(nx+1,ny+1,nz+1-i2d)
+ float :: oo(nx,ny,nz)
+!
+! x-metrics:
+! compute epsilon at x cell boundary
+! note that I am effectively applying 0 neumann conditions to epsilon; it might be required in the future to customize bc (e.g. for periodicity)
+
+! aa
+! write(0,*) '*******'
+! write(0,*) eps
+! write(0,*) odxcor
+! write(0,*) odxcen
+! write(0,*) '*******'
+! write(0,*) '*******'
+! write(0,*) kappa
+! write(0,*) odycor
+! write(0,*) odycen
+! write(0,*) odzcor
+! write(0,*) odzcen
+! write(0,*) '*******'
+! 
+ epscor(2:nx,1:ny,1:nz)=0.5d0*(eps(2:nx,:,:)+eps(1:nx-1,:,:));
+ epscor(1,   1:ny,1:nz)=       eps(1,:,:);
+ epscor(nx+1,1:ny,1:nz)=       eps(nx,:,:);
+!
+ do i=1,nx
+  ip=i+1
+  w(i,:,:)=odxcor(i)*odxcen(i) *epscor(i, :ny,:nz)
+  e(i,:,:)=odxcor(i)*odxcen(ip)*epscor(ip,:ny,:nz)
+ enddo
+!
+! y-metrics:
+! compute epsilon at y cell boundary
+ epscor(1:nx,2:ny,1:nz)=0.5d0*(eps(:,2:ny,:)+eps(:,1:ny-1,:));
+ epscor(1:nx,1,   1:nz)=       eps(:,1,:);
+ epscor(1:nx,ny+1,1:nz)=       eps(:,ny,:);
+!
+ do j=1,ny
+  jp=j+1
+  s(:,j,:)=odycor(j)*odycen(j) *epscor(:nx,j, :nz)
+  n(:,j,:)=odycor(j)*odycen(jp)*epscor(:nx,jp,:nz)
+ enddo
+!
+! z-metrics:
+! compute epsilon at z cell boundary
+ epscor(1:nx,1:ny,2:nz)=0.5d0*(eps(:,:,2:nz)+eps(:,:,1:nz-1));
+ epscor(1:nx,1:ny,1)   =       eps(:,:,1);
+ do k=nz,nz-i2d
+  epscor(1:nx,1:ny,k+1)=eps(:,:,k);
+ enddo
+!
+ f=0d0; b=0d0; ! initialize in case they are never used (2D)
+!
+ do k=1,nz-i2d
+  kp=k+1
+  f(:,:,k)=odzcor(k)*odzcen(k) *epscor(:nx,:ny,k )
+  b(:,:,k)=odzcor(k)*odzcen(kp)*epscor(:nx,:ny,kp)
+ enddo
+!
+ o=-(w+e+s+n+b+f)+kappa ;
+! invert metrics
+ oo=1d0/o;
+ w=w*oo;  e=e*oo;  s=s*oo;  n=n*oo;  f=f*oo;  b=b*oo
+!
+! aa
+! write(7,*) 'xxxxxxxxxx'
+! write(7,*) w
+! write(7,*) e
+! write(7,*) s
+! write(7,*) n
+! write(7,*) f
+! write(7,*) b
+! write(7,*) 'xxxxxxxxxx'
+!
+ end subroutine compute_fd_coef
+!*****************************************************************************************!
+ subroutine compute_fd_coef2d(w,e,s,n,o,eps,kappa,odxcen,odxcor,odycen,odycor,nx,ny)
+ implicit none
+! nx corresponds to the number of inner points 
+! note: am also normalizing rhs by o here: remember to multiply when computing residual !
+ int :: nx, ny
+ float, dimension(nx,ny) :: w,e,s,n,o,eps,kappa
+ float :: odxcen(nx+1), odxcor(nx)
+ float :: odycen(ny+1), odycor(ny)
+! it may be too costly to have all of the metrics in memory
+ int :: i ,j
+ int :: ip, jp
+ float :: epscor(nx+1,ny+1)
+ float :: oo(nx,ny)
+!
+! x-metrics:
+! compute epsilon at x cell boundary
+ epscor(2:nx,1:ny)=0.5d0*(eps(2:nx,:)+eps(1:nx-1,:));
+ epscor(1,1:ny)   =       eps(1,:);
+ epscor(nx+1,1:ny)=       eps(nx,:);
+!
+ do i=1,nx
+  ip=i+1
+  w(i,:)=odxcor(i)*odxcen(i) *epscor(i, :ny)
+  e(i,:)=odxcor(i)*odxcen(ip)*epscor(ip,:ny)
+ enddo
+!
+! y-metrics:
+! compute epsilon at y cell boundary
+ epscor(1:nx,2:ny)=0.5d0*(eps(:,2:ny)+eps(:,1:ny-1));
+ epscor(1:nx,1)   =       eps(:,1);
+ epscor(1:nx,ny+1)=       eps(:,ny);
+!
+ do j=1,ny
+  jp=j+1
+  s(:,j)=odycor(j)*odycen(j) *epscor(:nx,j )
+  n(:,j)=odycor(j)*odycen(jp)*epscor(:nx,jp)
+ enddo
+!
+ o=-(w+e+s+n)+kappa ;
+!normalize metrics
+ oo=1d0/o ; 
+ w=w*oo;  e=e*oo;  s=s*oo;  n=n*oo;
+!
+ end subroutine compute_fd_coef2d

@@ -42,7 +42,6 @@ MSG=-include $(ROOT)/source.msg
 CHMSG=-include $(ROOT)/charmm.msg
 GLOBALDEPS=$(ROOT)/source.defs $(ROOT)/source.msg
 
-
 MPI_INCLUDE=-I $(MPI_HOME)/include
 MPI_LIB=-L $(MPI_HOME)/lib
 
@@ -50,6 +49,7 @@ INCLUDES+=-I $(ROOT)/include
 LIBS+=-L $(ROOT)/lib
 OBJDIR=$(ROOT)/obj
 LOBJS=$(addprefix $(OBJDIR)/,$(LINKOBJS))
+DEPS+=$(addprefix $(NAME)/,$(SUBDIRS))
 
 SOURCES=$(OBJS:%.o=%.F90)
 CHARMM_SOURCES=$(OBJS:%.o=%.src)
@@ -74,9 +74,16 @@ all : default
 %.o:%.F $(LIBDEPS)
 	$(FC) $(FFLAGS) $(DEFS) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $< -o $@
 %.a:
-	$(AR) $(AFLAGS) $@ $(OBJS)
+	$(AR) $(AFLAGS) $@ $(OBJS) $(LOBJS)
+	file=$@ ; if [ -f $$file ] ; then ln -fs `pwd`/$$file ${ROOT}/lib/$$file; 2>/dev/null; fi
+###############################################################
+# DISTRIBUTION DIRS
+DISTRIB=$(addprefix $(ROOT)/, include obj lib)
+$(DISTRIB):
+	if [ ! -d $@ ] ; then mkdir $@ ; fi
+
 ###################### STAMPS KEEP TRACK OF DEPENDENCIES ON DIRECTORIES (OR OTHER COMPOUND OBJECTS): #####
-$(ROOT)/$(NAME).stamp:: $(OBJS)
+$(ROOT)/$(NAME).stamp:: $(OBJS) $(DISTRIB)
 	for file in $(OBJS); do \
 	ln -fs `pwd`/$$file ${ROOT}/obj/$$file; \
 	file=$${file%.*}.mod ; if [ -f $$file  ] ; then ln -fs `pwd`/$$file ${ROOT}/include/$$file; fi ;\
@@ -100,7 +107,8 @@ $(OBJS):$(addsuffix .stamp, $(DEPS))
 dynamol:
 	$(MAKE) -C $(ROOT)/dynamol
 string:
-	$(MAKE) -C $(ROOT)/dynamol
+	$(MAKE) -C $(ROOT)/string
+
 
 
 force_look:
@@ -109,12 +117,11 @@ mod:
 	/bin/sh -c 'for file in `ls *.mod *.h 2>/dev/null`; do  ln -fs `pwd`/$$file ${ROOT}/include/$$file; done'
 modules: $(OBJS) mod
 	for d in $(DIRS); do (cd $$d; $(MAKE) modules); done
-lib:
-	/bin/sh -c 'for file in ${OBJS}; do  ln -fs `pwd`/$$file ${ROOT}/lib/$$file; done'
+linklibs:
 	/bin/sh -c 'for file in `ls *.a 2>/dev/null`; do  ln -fs `pwd`/$$file ${ROOT}/lib/$$file; done'
 libs : libraries
-libraries: $(OBJS) lib
+libraries: $(ROOT)/$(NAME).stamp linklibs
 	for d in $(DIRS); do (cd $$d; $(MAKE) libraries); done
-.SILENT : %.stamp clean
+.SILENT : %.stamp clean $(DISTRIB)
 clean::
 	rm -f *.mod $(ROOT)/$(NAME).stamp $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(EXE)

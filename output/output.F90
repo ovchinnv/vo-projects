@@ -134,7 +134,7 @@ module output
 !
  subroutine output_init(filename)
  character(len=*), optional :: filename
- character(len=len(filename)) :: fname
+ character(len=200) :: fname
  integer :: flen
  call output_done()
 !
