@@ -37,8 +37,8 @@ all : print $(TESTS)
 $(TESTS) : force_look
 	./$@ "$(FC)" "$(FFLAGS)" "$(DEFS)">& $@.out ; echo " $@ : " `grep " TEST " $@.out`
 
-#force_look:
-#	true
+force_look:
+	true
 
 print:
 	echo

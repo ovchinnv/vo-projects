@@ -1,12 +1,8 @@
 ROOT=..
-OBJS=erfappx.o
+OBJS=erfappx.o erfsun_2_f90.o
 NAME=erf
-
 
 include $(ROOT)/Makefile.inc
 
-$(ROOT)/$(NAME).stamp :: erfsun_2_f90.o
-erfsun_2_f90.o : erfsun_2_f90.c
-
 clean::
-	rm -f $(ROOT)/$(NAME).stamp $(SOURCES) $(OBJS) erfsun_2_f90.o
+	rm -f $(ROOT)/$(NAME).stamp $(SOURCES) $(OBJS)

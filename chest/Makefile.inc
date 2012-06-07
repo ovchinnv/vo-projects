@@ -15,6 +15,7 @@ DEFS+=-D SIZE=gridsize \
 
 LOCALMACROS+=-include $(COMMON)/source.defs
 LOCALDEPS+=$(COMMON)/source.defs
+INCLUDES+=-I $(COMMON)
 
 $(COMMON)/%.mod : $(COMMON)/%.o
 	file=$(notdir $@) ; if [ -f $$file ] ; then mv -f $$file $(COMMON)/$$file 2>/dev/null; fi

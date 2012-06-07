@@ -2,11 +2,11 @@
 !
 !    include other modules
       use state     ! main physical variables
-      use parser    ! parses input unit and stores input parameters
+      __DEP_PARSER    ! parses input unit and stores input parameters
       use SIZE      ! basic size information
       use grid      ! grid module
       use bc        ! boundary conditions
-      use output    ! runtime output
+      __DEP_OUTPUT    ! runtime output
       use object    ! objects that modify problem coefficients
 !      use plot3Dio ! output in plot3D (CFD) format; compile as a library, not as a module
       use multigrid ! multigrid solver module
@@ -24,29 +24,35 @@
 !
       contains
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-       subroutine PB_init(comm)
-       use files
-       implicit none
-!
-#ifdef PARALLEL
-       include 'mpif.h'
+       subroutine PB_init( &
+#ifdef __PARALLEL
+     &  comm )
+       __DEP_MPI
+#else
+     &)
 #endif
-       integer*4, optional :: comm
-       integer*4 :: numarg 
-       character*(80) :: filename, fname, keyword
+       use files
+       __IMPNONE
+!
+#ifdef __PARALLEL
+       int4mpi, optional :: comm
+#endif
+       int4mpi :: numarg 
+       character(len=80) :: filename, fname, keyword
        int :: flen
        int :: fid=-1 
-       logical :: qcomm
+       bool :: qcomm
        int :: bug
 !
-       character*7, parameter :: whoami='PB_INIT'
+       character(len=7), parameter :: whoami='PB_INIT'
 !
 !       if (PB_initialized) call PB_done()
 !
+#ifdef __PARALLEL
        qcomm=present(comm)
-!
-#ifdef PARALLEL
        if (qcomm) call MPI_RANK(comm, me, bug)
+#else
+       qcomm=.false.
 #endif
 ! process input file
 ! *********************************************************************************************************
@@ -73,11 +79,15 @@
 ! *
 !    1) size
        if (qcomm) then 
+#ifdef __PARALLEL
         if (existtag_nocase('NZ')) then 
          call size_initialize(atoi(getval_nocase('NX')), atoi(getval_nocase('NY')), atoi(getval_nocase('NZ')), comm)
         else ! 2D
          call size_initialize(atoi(getval_nocase('NX')), atoi(getval_nocase('NY')), 0, comm)
         endif
+#else
+/* nothing */
+#endif
        else
         if (existtag_nocase('NZ')) then 
          call size_initialize(atoi(getval_nocase('NX')), atoi(getval_nocase('NY')), atoi(getval_nocase('NZ')))
@@ -121,7 +131,16 @@
          call message(whoami, 'Computing gridded parameters.');
          call object_grid_objects( xcen, ycen, zcen, dxcor, dycor, dzcor, eps, kappa, rhs, nx, ny, nz )
         endif
-        if (fatal_warning(comm)) call terminate(whoami)
+!
+        if (qcomm) then 
+#ifdef __PARALLEL
+         if (fatal_warning(comm)) call terminate(whoami)
+#else
+/* nothing */
+#endif
+        else
+         if (fatal_warning()) call terminate(whoami)
+        endif
        endif
 !
        PB_initialized=.true.
@@ -129,18 +148,18 @@
        end subroutine PB_init
 !************************************************************************************
        subroutine PB_solve()
-       implicit none
+       __IMPNONE
 !
-       character*20 :: solver
+       character(len=20) :: solver
 !
-!    initialize multigrid solver, if requested     
+!    initialize multigrid solver, if requested
 !
-       character*8, parameter :: whoami='PB_SOLVE'
+       character(len=8), parameter :: whoami='PB_SOLVE'
 !
 !    the proper way to terminate run if error occurs on some processors (but not all)
        if (.not. PB_initialized) call warning(whoami, 'POISSON_BOLTZMANN MODULE NOT INITIALIZED.',-1)
-       if (fatal_warning(communicator)) call terminate(whoami)
-!       
+       if (fatal_warning(__COMM)) call terminate(whoami)
+!
        if     (existtag('SOLVER')) then ; solver=getval('SOLVER'); call toupper(solver);
        elseif (existtag('solver')) then ; solver=getval('solver'); call toupper(solver); 
        else ; ! no solver defined
@@ -157,7 +176,7 @@
        select case(solver)
 !*********************************************************************************!
 #define __NM MULTIGRID
-#include "PBmacro1.src"
+#include "PBmacro1.def"
 !*********************************************************************************!
        case default;
         call warning(whoami, 'Unknown solver '//solver(1:len_trim(solver))//' specified. Nothing done.',-1);
@@ -168,15 +187,15 @@
        subroutine PB_output()
        use object, only : object_surface_pointer, object_initialized
        use formats
-       implicit none
+       __IMPNONE
 !
-       character*9, parameter :: whoami='PB_OUTPUT'
+       character(len=9), parameter :: whoami='PB_OUTPUT'
        int :: ifmt=plot3d
        bool :: qbin ! whether binary output is used
        float, pointer :: surf(:,:,:)
        int :: i
 !
-       character*80 :: filename, output_format, output_mode
+       character(len=80) :: filename, output_format, output_mode
 !
        if (existtag_nocase('output_format')) then 
         output_format=getval_nocase_upper('output_format');
@@ -300,11 +319,11 @@
 !*********************************************************************************!
        subroutine PB_done()
        use files, only: files_done
-       implicit none
+       __IMPNONE
 !
-       character*7, parameter :: whoami='PB_DONE'
+       character(len=7), parameter :: whoami='PB_DONE'
 !
-       character*20 :: solver
+       character(len=20) :: solver
 !
        if (existtag('OBJECT') .or. existtag('object')) then 
         if (object_initialized) then 
@@ -331,7 +350,7 @@
        select case(solver)
 !*********************************************************************************!
 #define __NM MULTIGRID
-#include "PBmacro2.src"
+#include "PBmacro2.def"
 !*********************************************************************************!
        end select
 !

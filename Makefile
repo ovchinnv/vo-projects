@@ -1,4 +1,4 @@
-DIRS=bestfit constants dynamol erf files lu multicom multidiag output parselist parser random string timer vectors
+DIRS=bestfit constants dynamol erf files lu multicom multidiag output parselist parser random string timer vectors chest
 DISTRIB=include obj lib
 
 all : $(DISTRIB)

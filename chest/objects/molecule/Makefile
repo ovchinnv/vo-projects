@@ -1,7 +1,7 @@
 ROOT=../../..
 COMMON=../..
 OBJS=PDB.o molecule.o
-DEPS=dynamol output parser
+DEPS=dynamol output parser erf
 NAME=chest/objects/molecule
 #
 include $(ROOT)/Makefile.inc
