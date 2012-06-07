@@ -1,4 +1,4 @@
-ROOT=../
+ROOT=../..
 include $(ROOT)/Makefile.inc
 
 #FC=gfortran
@@ -37,8 +37,6 @@ all : print $(TESTS)
 $(TESTS) : force_look
 	./$@ "$(FC)" "$(FFLAGS)" "$(DEFS)">& $@.out ; echo " $@ : " `grep " TEST " $@.out`
 
-force_look:
-	true
 
 print:
 	echo
@@ -49,6 +47,5 @@ print:
 
 .SILENT : force_look print clean $(TESTS)
 
-clean:
+clean::
 	rm -f $(SCRATCH)
-

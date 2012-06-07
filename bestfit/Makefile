@@ -11,13 +11,6 @@ LINKOBJS=constants.o output.o
 
 include $(ROOT)/Makefile.inc
 
-EXE=test
-
-
-test: $(EXE)
-$(EXE): $(OBJS) bfit.o
-	$(LD) $(LDFLAGS) $(OBJS) $(LOBJS) bfit.o -o $(EXE)
-
 bfit.o    : bestfit.o
 
 charmm: $(CHARMM_SOURCES)

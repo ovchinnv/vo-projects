@@ -41,7 +41,7 @@ bc.o grid.o: gridsize.o state.o
 clean::
 	for d in $(SUBDIRS); do (cd $$d; $(MAKE) clean); done
 
-test: force_look
+test:: force_look
 	$(MAKE) -C test
 
 .SILENT : test
