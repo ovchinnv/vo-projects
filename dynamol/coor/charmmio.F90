@@ -368,7 +368,7 @@ module charmmio
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  subroutine ch_coor_write(fid, r, wgt, mask)
  use psf
- use output, only: error, message
+ use output, only: warning, message
  implicit none
  integer :: fid
  real*8 :: r(:,:)

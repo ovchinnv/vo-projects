@@ -386,6 +386,10 @@ module system
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  function system_init_mol_scalar_nocase(tag) result(s)
  use mol_formats
+ use charmmio
+ use pdbio
+ use freeio
+!
  use constants
 
 

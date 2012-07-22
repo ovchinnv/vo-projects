@@ -2,7 +2,7 @@ ROOT=../..
 OBJS=ftsm_var.o ftsm_rex.o ftsm.o
 NAME=string/ftsm
 COMMON=..
-DEPS=constants vectors
+DEPS=constants bestfit output vectors dynamol multicom parser
 INCLUDES= -I $(COMMON)
 
 LOCALMACROS=-include source.defs -include ../source.defs
@@ -14,4 +14,3 @@ include $(COMMON)/Makefile.inc
 ftsm_var.o: $(COMMON)/sm_config.mod $(COMMON)/sm_var.mod
 ftsm.o: ftsm_var.o ftsm_rex.o
 ftsm_rex.o: ftsm_var.o
-

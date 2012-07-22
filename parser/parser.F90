@@ -69,6 +69,7 @@
       public parser_done
       public list_params ! list parameters
       public adjustleft
+      public adjustleft_1, adjustleft_2
       public numword
 ! CHARMM-compatibility routines
       public pop_string
@@ -80,6 +81,10 @@
       public itoa
       public ftoa
       public ltoa
+!
+      interface adjustleft
+       module procedure adjustleft_1, adjustleft_2
+      end interface
 !
       contains
 !******************************************** implement data routines*********************
@@ -799,9 +804,9 @@
        end subroutine tolower
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 ! this subroutine uses a custom definition of white space
-       subroutine adjustleft(a, space)
+       subroutine adjustleft_1(a, space)
         character(len=*) :: a
-        character, optional :: space(:)
+        character :: space(:)
         integer :: l, i, j
         l=len(a)
         if (l.gt.0) then
@@ -822,9 +827,35 @@
           j=j+1
          enddo
         endif
-! write(0,*) 'AL***:',a
 !
-       end subroutine adjustleft
+       end subroutine adjustleft_1
+!
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+! this subroutine uses the definition of white space found in the module
+       subroutine adjustleft_2(a)
+        character(len=*) :: a
+        integer :: l, i, j
+        l=len(a)
+        if (l.gt.0) then
+         i=1
+         do while (i.le.l)
+          if (all(space.ne.a(i:i))) exit
+          i=i+1
+         enddo
+! move string left
+         j=1
+         do while (j.le.l-i+1)
+          a(j:j)=a(i+j-1:i+j-1)
+          j=j+1
+         enddo
+! pad with blanks
+         do while (j.le.l)
+          a(j:j)=' '
+          j=j+1
+         enddo
+        endif
+!
+       end subroutine adjustleft_2
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
   function numword(a) ! returns the number of blank-separated words in a string
    character(len=*) :: a
@@ -832,7 +863,7 @@
    character(len=2), parameter :: space = ' '//tab
    character, parameter :: space2(2) = (/' ',tab/)
    integer :: n, numword,i,j,l
-
+!
    l=len_trim(a);
    n=0
    if (l.eq.0.or.any(a(1:l).eq.space2)) return ! this is string comparison: any applies to space2

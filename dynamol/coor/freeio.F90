@@ -119,7 +119,7 @@
        natom=size(r,2)
 !
        if (natom.ne.atoms%last) then
-        call error(whoami, 'COORDINATE ARRAY HAS INCORRECT DIMENSIONS. ABORT.',-1)
+        call warning(whoami, 'COORDINATE ARRAY HAS INCORRECT DIMENSIONS. ABORT.',-1)
        else
         write(fid,'(A)') '* FREE FORMAT COORDINATE FILE WRITTEN BY DYNAMO PROGRAM'
         do i=1, natom
