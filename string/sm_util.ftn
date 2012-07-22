@@ -174,7 +174,7 @@ __CHARMM_ONLY##IF STRINGM
 !
 !     weight rin by wgt
       wrs=1./sum(wgt)
-      swgt=sqrt(wgt)*wrs  ! no checking for nonnegative numbers
+      swgt=sqrt(wgt*wrs)  ! no checking for nonnegative numbers
       rin_w=rin*swgt
       call mpi_alltoallv(rin_w,s_count,s_disp,mpifloat,                    &
      &                   rall,r_count,r_disp,mpifloat,                     &
@@ -212,7 +212,7 @@ __CHARMM_ONLY##IF STRINGM
        drall(i,1:nrep-1)=drall(i,1:nrep-1)/ds(1:nrep-1)
       enddo
 !     compute curvature (second derivative, actually)
-      dsn(1:nrep-2)=0.5*(ds(2:nrep-1)-ds(1:nrep-2)) ! dsc approximated at nodes, not centers
+      dsn(1:nrep-2)=0.5*(ds(2:nrep-1)+ds(1:nrep-2)) ! dsc approximated at nodes, not centers
       do i=1, nall
        dr2all(i,1:nrep-2)=(drall(i,2:nrep-1)-drall(i,1:nrep-2))         &
      &                     /dsn(1:nrep-2)
@@ -399,7 +399,7 @@ __CHARMM_ONLY##IF STRINGM
 !
 !     scale rin by wgt
       wrs=1./sum(wgt)
-      swgt=sqrt(wgt)*wrs
+      swgt=sqrt(wgt*wrs)
       rin_w=rin*swgt
 !
       call mpi_alltoallv(rin_w,s_count,s_disp,mpifloat,                    &
@@ -504,14 +504,16 @@ __CHARMM_ONLY##IF STRINGM
       def=maxval(ds)/minval(ds)
 !     compute _approximate_ curvature on the coarse grid (2nd derivative)
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-      dr2all=rall(:,2:nrep)-rall(:,1:nrep-1)
-      dr2all(:,1:nrep-2)=dr2all(:,2:nrep-1)-dr2all(:,1:nrep-2)
+      dr2all=rall(:,2:nrep)-rall(:,1:nrep-1)                    ! first difference
+      dr2all(:,1:nrep-2)=dr2all(:,2:nrep-1)-dr2all(:,1:nrep-2)  ! second difference
       curv_me=sum(dr2all**2,1)
 !     reduce from all cpus
       call mpi_allreduce(curv_me, curvature, nrep-2, mpifloat,             &
      & MPI_SUM, MPI_COMM_STRNG, ierror)
 !     take square root and divide by ds^2
       curvature=sqrt(curvature)/ds(1:nrep-2)/ds(2:nrep-1)
+!     to get the derivative with respect to a \in {0,1} parametrization, multiply by curve length
+!     (bear in mind that the norms here are smaller by sqrt(3) than atomic RMSDs)
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 !     begin convergence loop
       iteration=0
@@ -524,7 +526,7 @@ __CHARMM_ONLY##IF STRINGM
         rall(i,:)=rr
         drall(i,:)=rrtan ! this may not be accurate for linear interpolation
        enddo
-!     compute drall differently for linear interpolation
+!     compute drall differently for linear interpolation; dr is normalized at the end of routine
 !     only inner points get modified
 !     assuming that ds is uniform (which should be true at convergence)
 !     note: ds is normalized to unit length at the end
@@ -569,7 +571,7 @@ __CHARMM_ONLY##IF STRINGM
         rr=rall(i,:)                      !       make a copy
         r0=rr(1); r1=rr(nrep)
         rr=rr-(r1-r0)*tnew-r0             !       remove linear part of array
-        rh=2.0*matmul(transpose(sinvec),rr)/(nrep-1) !       forward transform
+        rh=2d0*matmul(transpose(sinvec),rr)/(nrep-1) !       forward transform
         rrfine=matmul(sinvec_fine(:,1:npass),                           &
      &    rh(1:npass)) !      inverse transform
         rrfine=rrfine+r0+(r1-r0)*tfine    !       restore linear component
@@ -756,7 +758,7 @@ __CHARMM_ONLY##IF STRINGM
 !
 !     scale rin by wgt
       wrs=1./sum(wgt)
-      swgt=sqrt(wgt)*wrs
+      swgt=sqrt(wgt*wrs)
       rin_w=rin*swgt
 !
 !     gather all data on root
@@ -1062,7 +1064,7 @@ __CHARMM_ONLY##IF STRINGM
 !
 !     scale rin by wgt
       wrs=1./sum(wgt)
-      swgt=sqrt(wgt)*wrs
+      swgt=sqrt(wgt*wrs)
       rin_w=rin*swgt
 !
 !     gather all data on root
@@ -1142,11 +1144,18 @@ __CHARMM_ONLY##IF STRINGM
          call mdiag(a,rhs,nrep-2,1)
          dalpha(2:nrep-1)=rhs-alpha(2:nrep-1)
 !
-         where (abs(dalpha).gt.0.15d0)
-          alpha = alpha + sign (0.15d0, dalpha) ;
-         elsewhere
-          alpha = alpha + dalpha
-         end where
+! limit dalpha
+         do i=2,nrep-1
+          alpha(i)=alpha(i)+sign(min(abs(dalpha(i)),0.4d0),dalpha(i))
+         enddo
+!
+!         where (abs(dalpha).gt.0.4d0)
+!          alpha = alpha + sign (0.4d0, dalpha) ;
+!         elsewhere
+!          alpha = alpha + dalpha
+!         end where
+!         dum=maxval(abs(dalpha))
+!         alpha=alpha + dalpha * min(1d0,1d0/dum)
 !
         endif
        enddo ! convergence loop
@@ -1248,7 +1257,7 @@ __CHARMM_ONLY##IF STRINGM
 !
 !     weight rin by wgt
       wrs=1./sum(wgt)
-      swgt=sqrt(wgt)*wrs
+      swgt=sqrt(wgt*wrs)
       rin_w=rin*swgt
       call mpi_alltoallv(rin_w,s_count,s_disp,mpifloat,                    &
      &                   rall,r_count,r_disp,mpifloat,                     &

@@ -1069,13 +1069,13 @@ __CHARMM_ONLY##IF STRINGM
       if (mestring.eq.0) then
        dpar0=0d0
       elseif (mestring.eq.nstring-1) then
-       dpar=1d0
+       dpar0=1d0
       else
-       dpar=0.5d0
+       dpar0=0.5d0
       endif
 !
-      dperp=0.5d0
-      drms=0d0
+      dperp0=0.5d0
+      drms0=0d0
 !
       qorient=.false.
       qdiffrot=.false.
@@ -2642,7 +2642,7 @@ __CHARMM_ONLY##IF STRINGM
      &                                 //real_format//')'
          endif
 !
-         write(s_funit, fmt) ds
+         write(s_funit, fmt) ds * sqrt(3d0) ! correction factor for consistency with atomic RMSD
 !     flush unit: close and reopen later
          if (s_funit.ne.__OSTREAM) then
           __CLOSE_FILE(s_funit, 'KEEP', error)
@@ -2668,7 +2668,7 @@ __CHARMM_ONLY##IF STRINGM
      &                                 //real_format//')'
          endif
 !
-         write(s_funit, fmt) curv
+         write(s_funit, fmt) curv / sqrt(3d0) ! correction factor for consistency with atomic RMSD
 !     flush unit: close and reopen later
          if (c_funit.ne.__OSTREAM) then
           __CLOSE_FILE(c_funit, 'KEEP', error)
@@ -3970,6 +3970,18 @@ __CHARMM_ONLY##IF STRINGM
         float, optional :: dst_cutoff
         float, optional :: dr(n) ,r_bc_0(n), r_bc_1(n)
         end subroutine interp_driver_sci
+!
+        subroutine interp_linear_exact(rin,rout,wgt,n,                  &
+     &   d_arclength, curvature,                                        &
+     &   drout,                                                         &
+     &   r_bc_0, r_bc_1)
+        int :: n
+        float :: rin(n), rout(n), wgt(n)
+        float :: d_arclength(:), curvature(:)
+        float, optional :: drout(n) ! optional computation of tangent
+        float , optional :: r_bc_0(n), r_bc_1(n)   ! optional fixed bc data
+       end subroutine interp_linear_exact
+!
       end interface
 !
       data whoami/' FTSM_REPA>'/
@@ -4048,13 +4060,18 @@ __CHARMM_ONLY##IF STRINGM
      &        MPI_COMM_STRNG, ierror)
         endif ! me
        endif ! qorient
-!cccccccccccccc now call the approproate interpolation subroutine
+!cccccccccccccc now call the appropriate interpolation subroutine
        weights(:,1)=forcedWeights
        weights(:,2)=forcedWeights
        weights(:,3)=forcedWeights
 !
-       call interp_driver_sci(rf,rf,weights,3*nforced,                  &
-     &  interp_method,def,iterations,ds,curv,dst_cutoff)
+       if (interp_method.eq.linear_exact) then
+        call interp_linear_exact(rf,rf,weights,3*nforced,ds,curv)
+       else
+        call interp_driver_sci(rf,rf,weights,3*nforced,                 &
+     &   interp_method,def,iterations,ds,curv,dst_cutoff)
+       endif
+!
        if (qorient) then
         u=transpose(u)  ! STOPPED HERE
         rf=matmul(rf, u)      ! rotate back

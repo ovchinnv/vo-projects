@@ -73,12 +73,12 @@ __CHARMM_ONLY##IF STRINGM
 !
 ! for interpolation
 !
-      character(len=20) :: methods(4), method, form
+      character(len=20) :: methods(5), method, form
       character(len=4)  :: ext
       character(len=80) :: name_cv_in, name_cv_out, name_cor_in, name_cor_out
       character(len=80) :: dummy
       character(len=80), allocatable :: fname_cor_in(:), fname_cor_out(:)
-      data methods/ 'LINEAR','CUBIC SPLINE','B-SPLINE','DST'/
+      data methods/ 'LINEAR','CUBIC SPLINE','B-SPLINE','DST','LINEAR_EXACT'/
 !
       int :: int_method, length, num_rep_in, num_rep_out,               &
      &           len_cv_in, len_cv_out, len_cor_in, len_cor_out, ofile
@@ -1725,6 +1725,8 @@ __CHARMM_ONLY##IF STRINGM
              int_method=bspline
            elseif (__STRNCMP(method,'SPLI',4)) then
              int_method=spline
+           elseif (__STRNCMP(method,'LIN2',4)) then
+             int_method=linear_exact
            endif
          endif
 !     print summary
@@ -2335,12 +2337,13 @@ __CHARMM_ONLY##IF STRINGM
       CHARACTER(LEN=*) :: COMLYN
       INTEGER :: COMLEN
 !
-      character(len=20) :: methods(4)
+      character(len=20) :: methods(5)
       character(len=16) :: whoami
       character(len=8) :: keyword
-      data methods/ 'LINEAR','CUBIC SPLINE','B-SPLINE','DST'/
+      data methods/ 'LINEAR','CUBIC SPLINE','B-SPLINE','DST',&
+     &  'LINEAR_EXACT'/
 !     selection array
-      int :: qlinear, qspline, qbspline, qdst
+      int :: qlinear, qspline, qbspline, qdst, qlinear_exact
       int :: mlen
 !
 !     declare functions here
@@ -2359,26 +2362,27 @@ __CHARMM_ONLY##IF STRINGM
       qbspline=0
       qlinear=0
       qdst=0
+      qlinear_exact=0
       dst_cutoff=0d0
       interp_method=0
       repa_initialized=.false.
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       if (__INDX_RM(comlyn,comlen,'LINE').gt.0) then
        qlinear=1
-       interp_method=1
+       interp_method=linear
       endif
       if ((__INDX_RM(comlyn,comlen,'CSPL').gt.0).or.                        &
      &    (__INDX_RM(comlyn,comlen,'SPLI').gt.0)) then
        qspline=1
-       interp_method=2
+       interp_method=spline
       endif
       if (__INDX_RM(comlyn,comlen,'BSPL').gt.0) then
        qbspline=1
-       interp_method=3
+       interp_method=bspline
       endif
       if (__INDX_RM(comlyn,comlen,'DST').gt.0) then
        qdst=1
-       interp_method=4
+       interp_method=dst
 !      did the user specify filter cutoff?
        dst_cutoff=__GET_RM_F(comlyn, comlen, 'WNCT', -1.0d0)
        if (dst_cutoff.lt.0.0d0) then
@@ -2388,35 +2392,50 @@ __CHARMM_ONLY##IF STRINGM
         dst_cutoff=0.5d0
        endif
       endif
+      if (__INDX_RM(comlyn,comlen,'LIN2').gt.0) then
+       qlinear_exact=1
+       interp_method=linear_exact
+      endif
 !ccccccc CHECK FOR MULTIPLE OPTIONS
-      if ((qspline+qlinear+qbspline+qdst) .eq. 0) then
+      if ((qspline+qlinear+qbspline+qdst+qlinear_exact) .eq. 0) then
        if (qprint) then  ; write(_MSGBUF,665) whoami, whoami ; __PRINT(_MSGBUF) ; endif
  665   FORMAT(A,' INTERPOLATION METHOD NOT SPECIFIED.',/,               &
      & A,' WILL USE LINEAR INTERPOLATION.')
        interp_method=linear
-      elseif ((qdst+qspline+qlinear+qbspline) .gt. 1) then
+      elseif ((qspline+qlinear+qbspline+qdst+qlinear_exact) .gt. 1) then
        __WRN(whoami,'TOO MANY INTERPOLATION OPTIONS.')
       endif
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 !     did the user specify a tolerance?
-      def=__GET_RM_F(comlyn, comlen, 'DEFI', 1.1d0)
-      if (def.lt.1.0d0) then
+      if (interp_method.ne.linear_exact) then ! options below are invalid for exact interpolation
+       def=__GET_RM_F(comlyn, comlen, 'DEFI', 1.1d0)
+       if (def.lt.1.0d0) then
          __WRN(whoami,'INTERPOLATION TOLERANCE MUST BE >= 1.')
 !         return
-      endif
+       endif
 !     did the user specify a maximum number of iterations?
-      iterations=__GET_RM_I(comlyn, comlen, 'ITER',10)
+       iterations=__GET_RM_I(comlyn, comlen, 'ITER',10)
+      else
+       def=0d0
+       iterations=0
+      endif
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 !     print summary
       if (qprint) then
        mlen=len(methods(interp_method))
-       write(_MSGBUF,667) whoami,methods(interp_method)(1:mlen),whoami,    &
-     & def ; __PRINT(_MSGBUF)
+       if (interp_method.eq.linear_exact) then
+        write(_MSGBUF,666) whoami,methods(interp_method)(1:mlen)
+       else
+        write(_MSGBUF,667) whoami,methods(interp_method)(1:mlen),whoami,&
+     &  def
+       endif
+       __PRINT(_MSGBUF)
+ 666  format(A,' WILL REPARAMETRIZE STRING USING ',A,' INTERPOLATION')
  667  format(A,' WILL REPARAMETRIZE STRING USING ',A,/,                 &
      &A,' INTERPOLATION TO WITHIN MAX(DS)/MIN(DS) < ',F7.3,' TOLERANCE')
-      if (iterations.gt.0) then ; write(_MSGBUF,668) whoami, iterations ; __PRINT(_MSGBUF) ; endif
+       if (iterations.gt.0) then ; write(_MSGBUF,668) whoami, iterations ; __PRINT(_MSGBUF) ; endif
  668  format(A,' WITH A MAXIMUM OF ',I5,' ITERATIONS')
-      if(interp_method.eq.dst) then ; write(_MSGBUF,6680) whoami,dst_cutoff*100.0 ; __PRINT(_MSGBUF) ; endif
+       if(interp_method.eq.dst) then ; write(_MSGBUF,6680) whoami,dst_cutoff*100.0 ; __PRINT(_MSGBUF) ; endif
  6680 format(A,' DST INTERPOLATION WILL USE THE LOWER ',F8.4,           &
      & '% OF WAVENUMBERS')
       endif
