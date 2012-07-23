@@ -11,3 +11,6 @@ $(DIRS) :: $(DISTRIB)
 	(cd $@ ; $(MAKE))
 $(DISTRIB) :
 	if [ ! -d $@ ] ; then mkdir $@ ; fi
+charmm :
+		for d in $(DIRS); do (cd $$d; $(MAKE) charmm); done
+.SILENT : charmm

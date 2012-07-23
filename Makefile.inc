@@ -144,3 +144,4 @@ clean::
 	rm -f *.mod *.a $(ROOT)/$(NAME).stamp $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(EXE) test.F90 test.dat test.out test.o 
 	if [ -f test ] ; then rm -f test ; fi
 
+charmm:
