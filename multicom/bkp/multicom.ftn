@@ -52,7 +52,6 @@ __CHARMM_ONLY##IF MULTICOM
        subroutine multicom_main(comlyn, comlen)
 !      multicom command parser
        use parselist
-       use multicom_aux
 !
        __DEP_PARSER
        __DEP_OUTPUT
@@ -228,9 +227,6 @@ __CHARMM_ONLY##IF MULTICOM
           ind = multicom_add( (/ ((j-1)*nlocal+1, j=1, nrep) /) )
           if (qens) call multicom_set('ENSBL', (/ nrep+2/) )
           if (qstr) call multicom_set('STRNG', (/ nrep+2/) )
-!    set parser communicator to WORLD by default (user can change this later)
-!    NOTE: this is already done on CHARMM's PARSTRT, but I am keeping it anyway
-          call multicom_set('PARSER',(/1/))
 !
           call multicom_parinit()
 !    warn about `unused' processors
@@ -241,58 +237,9 @@ __CHARMM_ONLY##IF MULTICOM
      &       A,' CALCULATIONS.'); 
             __PRINT(_MSGBUF)
            endif ! first_size
-!    message about parser communicator
-            write(_MSGBUF,445) whoami, whoami ; __PRINT(_MSGBUF)
- 445  FORMAT(A, ' PARSER COMMUNICATOR SET TO GLOBAL (GLOBAL ROOT BROADCAST).',/&
-     &       A, ' USE "MCOM SET PARSER < COMM_ID LIST >" TO OVERRIDE (SEE DOCUMENTATION)')
           endif ! first_me
          endif ! nrep
         endif ! nlocal
-!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       elseif __STRNCMP(keyword,'PARSE',5) then
-!ccccccc set parser communicator to a local or global
-        keyword=__NEXTA(comlyn,comlen) ! communicator name, e.g. LOCAL
-!
-        if (.not.multicom_initialized) then
-         __WRN(whoami,' COMMUNICATOR MODULE NOT INITIALIZED. NOTHING DONE.')
-        else
-!
-         keyword=adjustl(keyword); klen=len_trim(keyword)
-         if (klen.le.0) then
-          __WRN(whoami,' COMMUNICATOR NAME NOT SPECIFIED. NOTHING DONE.')
-         else
-!
-!    cycle through valid options
-!
-          klen=5
-          bug=0
-          if (keyword(1:5).eq.'WORLD') then
-!    this should not be necessary since 'GLOBAL' wraps 'WORLD'
-           MPI_COMM_PARSER=MPI_COMM_WORLD; 
-           call MPI_COMM_SIZE(MPI_COMM_PARSER, SIZE_PARSER, bug)
-           call MPI_COMM_RANK(MPI_COMM_PARSER, ME_PARSER, bug)
-#ifdef __BASIC
-          elseif (keyword(1:5).eq.'LOCAL') then
-           MPI_COMM_PARSER=MPI_COMM_LOCAL; SIZE_PARSER=SIZE_LOCAL; ME_PARSER=ME_LOCAL;
-          elseif (keyword(1:5).eq.'GROUP') then ! for backward compatibility
-           MPI_COMM_PARSER=MPI_COMM_LOCAL; SIZE_PARSER=SIZE_LOCAL; ME_PARSER=ME_LOCAL;
-           keyword='GROUP'
-          elseif (keyword(1:6).eq.'GLOBAL') then
-           MPI_COMM_PARSER=MPI_COMM_GLOBAL; SIZE_PARSER=SIZE_GLOBAL; ME_PARSER=ME_GLOBAL;
-           klen=6
-#endif
-          else
-           __WARN(whoami,keyword(1:klen),' IS NOT A VALID OPTION. NOTHING DONE.')
-           bug=1
-          endif
-         endif
-        endif
-!
-        if (first_me.eq.0.and.bug.eq.0) then
-         write(_MSGBUF, '(2A)') whoami,                                &
-     &    ' SETTING PARSER COMMUNICATOR TO "',keyword(1:klen),'".'; __PRINT(_MSGBUF)
-        endif
-!
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        else
             __WARN(whoami,' UNRECOGNIZED SUBCOMMAND: ',keyword)
@@ -341,9 +288,11 @@ __CHARMM_ONLY##IF MULTICOM
        int :: i, j
        int :: bug=0
        character(len=15) :: whoami
-       bool :: found=.false., mpiinit
+       bool :: found=.false.
 !
        data whoami /' MULTICOM_INIT>'/
+!
+       communicator=MPI_COMM_WORLD
 !
        if (multicom_initialized) then
         call multicom_cleanup()
@@ -365,10 +314,6 @@ __CHARMM_ONLY##IF MULTICOM
         call multicom_cleanup()
         return
        endif
-!
-       call mpi_initialized(mpiinit,bug)
-       if (.not.mpiinit) call mpi_init(bug)
-       communicator=MPI_COMM_WORLD
 !
        ncomm=ncomm+1
 !
@@ -580,7 +525,6 @@ __CHARMM_ONLY##IF MULTICOM
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine multicom_barrier(comm_name)
        use multicom_aux
-       __DEP_PARSER
        __DEP_OUTPUT
        __DEP_MPI
 !
@@ -589,7 +533,7 @@ __CHARMM_ONLY##IF MULTICOM
        character(len=*) :: comm_name
 !    local vars
        character(len=18) :: whoami
-       int :: c, s, m, l, ierror
+       int :: c, m, s, l, ierror
  __DECLARE_MSGBUF
 !
        data whoami /' MULTICOM_BARRIER>'/
@@ -610,7 +554,7 @@ __CHARMM_ONLY##IF MULTICOM
 !
        if (comm_name(1:5).eq.'WORLD') then
 !    this should not be necessary since 'GLOBAL' wraps 'WORLD'; primarily for debugging
-        c=MPI_COMM_WORLD; s=1; m=1;
+        c=MPI_COMM_WORLD; m=1;
 #ifdef __BASIC
        elseif (comm_name(1:5).eq.'LOCAL') then
         c=MPI_COMM_LOCAL; s=SIZE_LOCAL; m=ME_LOCAL;
@@ -641,7 +585,7 @@ __CHARMM_ONLY##IF MULTICOM
      &    ' CALLING MPI_BARRIER ON COMMUNICATOR "',comm_name(1:l),'".'; __PRINT(_MSGBUF)
        endif
 !
-       if (c.ne.MPI_COMM_NULL.and.m.ne.MPI_UNDEFINED.and.s.gt.1)        &
+       if (c.ne.MPI_COMM_NULL.and.m.ne.MPI_UNDEFINED)                   &
      & call MPI_BARRIER(c, ierror)
 !
        end subroutine multicom_barrier
