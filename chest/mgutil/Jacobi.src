@@ -6,7 +6,7 @@
  int :: nx, ny, nz
  float :: dt
  float, dimension(nx,ny,nz) :: p &
-                              ,q ! temporary array
+&                             ,q ! temporary array
  float, dimension(nx-2,ny-2,nz-2) :: rhs,w,e,s,n,f,b ! note that the metrics e--b are variable (because they include eps & kappa; oo=1/o)
  int :: nnx, nny, nnz
  int :: nxp, nyp, nzp
@@ -62,12 +62,90 @@
 !
 #ifdef __VECCOPY
 ! in my experience, the vector copy is slower
- p=q
+  p=q
 #else
-   do k=2,nzp;   do j=2,nyp;    do i=2,nxp ; p(i,j,k)=q(i,j,k) ; enddo ; enddo ; enddo
+  do k=2,nzp;   do j=2,nyp;    do i=2,nxp ; p(i,j,k)=q(i,j,k) ; enddo ; enddo ; enddo
 #endif
 !
  end subroutine Jacobi
+!**********************************************************************************************************************!
+! EXPERIMENTAL (now, very slow) ----------- !!!!!!!!!!!!!!!!!!!!
+ subroutine JacobiOnTheFly(p,rhs,eps,kappa,odxcen,odxcor,odycen,odycor,odzcen,odzcor,nx,ny,nz,dt,i2d)
+! compute metrics 'on the fly'
+ use constants, only : one
+ implicit none
+ int :: nx, ny, nz
+ int :: i2d
+ float :: dt
+ float :: odxcen(nx-1), odxcor(nx-2)
+ float :: odycen(ny-1), odycor(ny-2)
+ float :: odzcen(nz-1-i2d-i2d), odzcor(nz-2-i2d) ! 3D/2D
+ float, dimension(nx,ny,nz) :: p &
+&                             ,q ! temporary array
+ float, dimension(nx-2,ny-2,nz-2) :: rhs, eps, kappa
+ float :: w, e, s, n, f, b, o
+ float :: pw, pe, po, d
+
+ int :: nnx, nny, nnz, ntot
+ int :: nxp, nyp, nzp
+ int :: i, j, k, m, im, jm, km
+! 
+ nnx=nx-2; nny=ny-2; nnz=nz-2;
+ nxp=nnx+1; nyp=nny+1; nzp=nnz+1;
+
+! if (i2d.eq.1) then
+
+! else ! 3D
+!#ifdef __SAVEP
+! prefactor quarter instead of half if metrics are doubled (see below) 
+ d = 0.25d0 * dt / (maxval(odxcor)**2+maxval(odycor)**2+maxval(odzcor)**2)
+!write(0,*)"------------ ",d
+!##################################################################################
+  do k=2,nzp;      km=k-1;
+   do j=2,nyp;     jm=j-1;      po=p(2,j,k); pw=p(1,j,k);
+    do i=2,nxp;    im=i-1;
+     pe=p(i+1,j,k)
+! compute metrics
+     w = odxcor(im)*odxcen(im)*(eps(im,jm,km)+eps(max(im-1,1),jm,         km         )) ! beware of the 0.5 factor
+     e = odxcor(im)*odxcen(i )*(eps(im,jm,km)+eps(min(i,nnx), jm,         km         ))
+     s = odycor(jm)*odycen(jm)*(eps(im,jm,km)+eps(im,         max(jm-1,1),km         ))
+     n = odycor(jm)*odycen(j )*(eps(im,jm,km)+eps(im,         min(j,nny), km         ))
+     f = odzcor(km)*odzcen(km)*(eps(im,jm,km)+eps(im,         jm,         max(km-1,1)))
+     b = odzcor(km)*odzcen(k )*(eps(im,jm,km)+eps(im,         jm,         min(k,nnz) ))
+     o = -(w+e+s+n+f+b) + 2d0 * kappa(im,jm,km) ;! o=one/o; ! add twice kappa if missing 0.5 above
+
+!write(0,*) d*o
+!stop
+
+     q(i,j,k)=po      + d* (o*(po-rhs(im,jm,km))+&
+&                                     w*pw +         &
+&                                     e*pe +         &
+&                                     s*p(i,jm,k) +  &
+&                                     n*p(i,j+1,k) + &
+&                                     f*p(i,j,km) +  &
+&                                     b*p(i,j,k+1)   &
+&                                   )
+!     q(i,j,k)=po        - dt * (  po +               &
+!&                                 o*( w*pw +         &
+!&                                     e*pe +         &
+!&                                     s*p(i,jm,k) +  &
+!&                                     n*p(i,j+1,k) + &
+!&                                     f*p(i,j,km) +  &
+!&                                     b*p(i,j,k+1)   &
+!&                                   )                &
+!&                                    -rhs(im,jm,km)    )
+      pw=po; po=pe;
+     enddo ; enddo ; enddo ! i,j,k 
+!#else
+! endif ! i2d
+!##################################################################################
+#ifdef __VECCOPY
+  p=q
+#else
+  do k=2,nzp;   do j=2,nyp;    do i=2,nxp ; p(i,j,k)=q(i,j,k) ; enddo ; enddo ; enddo
+#endif
+!
+ end subroutine JacobiOnTheFly
 !**********************************************************************************************************************!
  subroutine JacobiTiledLoMem(p,rhs,eps,kappa,odxcen,odxcor,odycen,odycor,odzcen,odzcor,nx,ny,nz,dt,ts,i2d)
 ! conceptual GPU template 
@@ -108,6 +186,7 @@
   tilez=INT(sqrt(one*tilesize));
   offset=NOT(ISHFTC(1,-1))         ! upper bound -- largest representable int : all ones except 1st bit 
 ! vary tile sizes a little to get a better cover (heuristic)
+kj_loop:&
   do k=0,2;  km = tilez + k;          ntz = (nnz/km) + min(1,mod(nnz,km)); ! number of tiles in z-direction
    do j=0,2; jm = tilesize / km + j ; nty = (nny/jm) + min(1,mod(nny,jm)); ! number of tiles in y-direction
     remainder = ntx*nty*im*jm - ntot  ! number of elements by which the size of the cover exceeds grid size
@@ -118,10 +197,9 @@
      tx=im; ty=jm;
      offset=remainder
     endif
-    if (remainder.eq.0) goto 88888
-  enddo; enddo ! i, j
+    if (remainder.eq.0) exit kj_loop
+  enddo; enddo kj_loop
 !
-88888 continue
 ! allocate data, now that tile size is known (pad epsilon for easy corner interpolation)
   allocate(rhs1(tx,ty,1),eps1(0:tx+1,0:ty+1,1),kappa1(tx,ty,1),p1(tx+2,ty+2,1),q1(tx+2,ty+2,1))
   allocate(odxcen1(tx+1),odxcor1(tx),odycen1(ty+1),odycor1(ty))
@@ -222,6 +300,7 @@
   offset=1 ;
   offset=NOT(ISHFTC(offset,-1))      ! upper bound -- largest representable int : all ones except 1st bit 
 ! vary tile sizes a little to get a better cover (heuristic)
+ kji_loop:&
   do k=0,1;  km = tilez + k;           ntz = (nnz/km) + min(1,mod(nnz,km)); ! number of tiles in z-direction
    tiley = INT(sqrt(one*tilesize/km))
    do j=0,1; jm = tiley + j ;          nty = (nny/jm) + min(1,mod(nny,jm)); ! number of tiles in y-direction
@@ -235,10 +314,9 @@
       tx=im; ty=jm; tz=km
       offset=remainder
      endif
-     if (remainder.eq.0) goto 99999 ! break out of three nested loops since we cannot do better than zero !
-  enddo; enddo; enddo ! i, j, k
+     if (remainder.eq.0) exit kji_loop ! break out of three nested loops since we cannot do better than zero !
+  enddo; enddo; enddo kji_loop ! i, j, k
 !
-99999 continue
 ! allocate data, now that tile size is known (pad epsilon for easy corner interpolation)
   allocate(rhs1(tx,ty,tz),eps1(0:tx+1,0:ty+1,0:tz+1),kappa1(tx,ty,tz),p1(tx+2,ty+2,tz+2),q1(tx+2,ty+2,tz+2))
   allocate(odxcen1(tx+1),odxcor1(tx),odycen1(ty+1),odycor1(ty),odzcen1(tz+1),odzcor1(tz))
@@ -341,13 +419,13 @@
        do i=2,ntx+1;     im=i-1;
 #endif
 ! compute metrics
-        w = odxcor1(im)*odxcen1(im)*(eps1(im,jm,km)+eps1(im-1,jm,km)) ! 0.5 included using o normalization
+        w = odxcor1(im)*odxcen1(im)*(eps1(im,jm,km)+eps1(im-1,jm,km)) ! be aware of 0.5 factor
         e = odxcor1(im)*odxcen1(i )*(eps1(im,jm,km)+eps1(i   ,jm,km))
         s = odycor1(jm)*odycen1(jm)*(eps1(im,jm,km)+eps1(im,jm-1,km))
         n = odycor1(jm)*odycen1(j )*(eps1(im,jm,km)+eps1(im  ,j ,km))
         f = odzcor1(km)*odzcen1(km)*(eps1(im,jm,km)+eps1(im,jm,km-1))
         b = odzcor1(km)*odzcen1(k )*(eps1(im,jm,km)+eps1(im,jm,k   ))
-        o = -(w+e+s+n+f+b) + kappa(im,jm,km) ; o=one/o
+        o = -(w+e+s+n+f+b) + kappa(im,jm,km) * 2 ; o=one/o            ! add twice kappa if missing 0.5 above
 !
         q1(i,j,k)=p1(i,j,k) - dt *  (   p1(i,j,k) &
 &                               + o*( w*p1(im,j,k) + e*p1(i+1,j,k) + s*p1(i,jm,k) + n*p1(i,j+1,k) + f*p1(i,j,km) + b*p1(i,j,k+1))&
