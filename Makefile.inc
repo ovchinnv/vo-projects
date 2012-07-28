@@ -9,14 +9,14 @@ CFLAGS =-O3 -fno-math-errno -c
 #FFLAGS= -O3 -c -extend-source -fast -fno-math-errno -finline -fp-model fast=2 -xSSE3 -ipo # -no-inline-factor -no-inline-min-size #-ipo 
 #FFLAGS= -O3 -c -extend-source -fast -fno-math-errno -finline -fp-model fast=2 -xhost -no-ipo # -no-inline-factor -no-inline-min-size #-ipo 
 #MPI_HOME=/usr/local/mpich2-intel
-#FC=gfortran
+FC=gfortran
 #FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fbounds-check -frange-check #-fopenmp 
-#FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno #-fbounds-check -frange-check 
-#MPI_HOME=/usr/local/mpich2-gnu
-FC=pathf95
-FFLAGS=-Ofast -fno-math-errno -extend-source -ffortran-bounds-check -OPT:Olimit=8753 -INLINE -ipa -c
+FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno #-fbounds-check -frange-check 
+MPI_HOME=/usr/local/mpich2-gnu
+#FC=pathf95
+#FFLAGS=-Ofast -fno-math-errno -extend-source -ffortran-bounds-check -OPT:Olimit=8753 -INLINE -ipa -c
 #FFLAGS=-extend-source -OPT:Olimit=8753 -INLINE -c
-MPI_HOME=/usr/local/mpich2-path64
+#MPI_HOME=/usr/local/mpich2-path64
 #
 DEFS=-D int=integer -D float=real*8 -D bool=logical -D int4mpi=integer*4 -D mpiint=MPI_INTEGER -D mpifloat=MPI_REAL -D mpichar=MPI_CHARACTER -D mpiint4=MPI_INTEGER4\
      -D mpibool=MPI_LOGICAL -D __DMOL -D __RCOMP
