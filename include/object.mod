@@ -1,1 +1,0 @@
-/home/surgeon/projects/chest/objects/object.mod

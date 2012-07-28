@@ -1,1 +1,0 @@
-/home/surgeon/projects/multidiag/multidiag.mod
