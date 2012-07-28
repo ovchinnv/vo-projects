@@ -1,6 +1,7 @@
 ROOT=..
 OBJS=parselist.o
 NAME=parselist
+DEPS=parser
 
 INCLUDES=-I $(ROOT)/modules
 

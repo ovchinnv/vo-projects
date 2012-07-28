@@ -8,11 +8,15 @@ CFLAGS =-O3 -fno-math-errno -c
 #FFLAGS= -O3 -c -check-all -extend-source -fast -fno-math-errno -finline -fp-model fast=2 -xhost -ipo  #-ipo 
 #FFLAGS= -O3 -c -extend-source -fast -fno-math-errno -finline -fp-model fast=2 -xSSE3 -ipo # -no-inline-factor -no-inline-min-size #-ipo 
 #FFLAGS= -O3 -c -extend-source -fast -fno-math-errno -finline -fp-model fast=2 -xhost -no-ipo # -no-inline-factor -no-inline-min-size #-ipo 
-MPI_HOME=/usr/local/mpich2-intel
-FC=gfortran
-FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fbounds-check -frange-check #-fopenmp 
+#MPI_HOME=/usr/local/mpich2-intel
+#FC=gfortran
+#FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fbounds-check -frange-check #-fopenmp 
 #FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno #-fbounds-check -frange-check 
-MPI_HOME=/usr/local/mpich2-gnu
+#MPI_HOME=/usr/local/mpich2-gnu
+FC=pathf95
+FFLAGS=-Ofast -fno-math-errno -extend-source -ffortran-bounds-check -OPT:Olimit=8753 -INLINE -ipa -c
+#FFLAGS=-extend-source -OPT:Olimit=8753 -INLINE -c
+MPI_HOME=/usr/local/mpich2-path64
 #
 DEFS=-D int=integer -D float=real*8 -D bool=logical -D int4mpi=integer*4 -D mpiint=MPI_INTEGER -D mpifloat=MPI_REAL -D mpichar=MPI_CHARACTER -D mpiint4=MPI_INTEGER4\
      -D mpibool=MPI_LOGICAL -D __DMOL -D __RCOMP
@@ -26,12 +30,13 @@ DEFS=-D int=integer -D float=real*8 -D bool=logical -D int4mpi=integer*4 -D mpii
 # preprocess with C++ style preprocessor
 # -C flag preserves comments
 
-AR=xiar
-#AR=ar
+#AR=xiar
+AR=ar
 AFLAGS=rv
 
 LD=$(FC)
-LDFLAGS=-static -Bstatic
+#LDFLAGS=-static -Bstatic
+LDFLAGS=-static
 
 DYNAMOL=objects/molecule/dynamol
 # root must be defined elswhere
@@ -84,11 +89,14 @@ $(DISTRIB):
 	if [ ! -d $@ ] ; then mkdir $@ ; fi
 
 ###################### STAMPS KEEP TRACK OF DEPENDENCIES ON DIRECTORIES (OR OTHER COMPOUND OBJECTS): #####
+# try searching for module file in uppercase for pathscale
 $(ROOT)/$(NAME).stamp:: $(OBJS) $(DISTRIB)
 	for file in $(OBJS); do \
 	ln -fs `pwd`/$$file ${ROOT}/obj/$$file; \
 	file=$${file%.*}.mod ; if [ -f $$file  ] ; then ln -fs `pwd`/$$file ${ROOT}/include/$$file; fi ;\
-	done
+	file=`echo $${file%.*} | tr '[:lower:]' '[:upper:]'`.mod ;\
+	if [ -f $$file  ] ; then ln -fs `pwd`/$$file ${ROOT}/include/$$file; fi ;\
+	done; 
 	echo -n > $@
 ####################### GENERIC STAMP RESULTS IN DIFFERENT BEHAVIOR : ####################################
 %.stamp:
