@@ -1,0 +1,148 @@
+GFORTRAN module version '6' created from state.F90 on Wed Aug  8 20:57:00 2012
+MD5:aee95932bf993f5e81344959256be9bc -- If you edit this, you'll get what you deserve.
+
+(() () () () () () () () () () () () () () () () () () () () () () ()
+() () () ())
+
+()
+
+()
+
+()
+
+()
+
+()
+
+(2 'eps' 'state' 'eps' 1 ((VARIABLE UNKNOWN-INTENT UNKNOWN-PROC UNKNOWN
+EXPLICIT-SAVE 0 0 DIMENSION POINTER) (REAL 8 0 0 REAL ()) 0 0 () (3 0
+DEFERRED () () () () () ()) 0 () () () 0 0)
+3 'error' 'output' 'error' 1 ((PROCEDURE UNKNOWN-INTENT MODULE-PROC DECL
+UNKNOWN 0 0 SUBROUTINE) (UNKNOWN 0 0 0 UNKNOWN ()) 4 0 (5 6 7) () 0 () ()
+() 0 0)
+8 'fatal_warning' 'output' 'fatal_warning' 1 ((PROCEDURE UNKNOWN-INTENT
+MODULE-PROC DECL UNKNOWN 0 0 FUNCTION IMPLICIT_PURE) (LOGICAL 4 0 0
+LOGICAL ()) 0 0 () () 8 () () () 0 0)
+9 'fout' 'output' 'fout' 1 ((VARIABLE UNKNOWN-INTENT UNKNOWN-PROC
+UNKNOWN EXPLICIT-SAVE 0 0) (INTEGER 4 0 0 INTEGER ()) 0 0 () () 0 () ()
+() 0 0)
+10 'kappa' 'state' 'kappa' 1 ((VARIABLE UNKNOWN-INTENT UNKNOWN-PROC
+UNKNOWN EXPLICIT-SAVE 0 0 DIMENSION POINTER) (REAL 8 0 0 REAL ()) 0 0 ()
+(3 0 DEFERRED () () () () () ()) 0 () () () 0 0)
+11 'message' 'output' 'message' 1 ((PROCEDURE UNKNOWN-INTENT MODULE-PROC
+DECL UNKNOWN 0 0 SUBROUTINE ALWAYS_EXPLICIT) (UNKNOWN 0 0 0 UNKNOWN ())
+12 0 (13 14 15) () 0 () () () 0 0)
+16 'msg__' 'output' 'msg__' 1 ((VARIABLE UNKNOWN-INTENT UNKNOWN-PROC
+UNKNOWN IMPLICIT-SAVE 0 0) (CHARACTER 1 0 0 CHARACTER ((CONSTANT (
+INTEGER 4 0 0 INTEGER ()) 0 '80'))) 0 0 () () 0 () () () 0 0)
+17 'nvar' 'state' 'nvar' 1 ((PARAMETER UNKNOWN-INTENT UNKNOWN-PROC
+UNKNOWN IMPLICIT-SAVE 0 0) (INTEGER 4 0 0 INTEGER ()) 0 0 () (CONSTANT (
+INTEGER 4 0 0 INTEGER ()) 0 '4') () 0 () () () 0 0)
+18 'output' 'output' 'output' 1 ((MODULE UNKNOWN-INTENT UNKNOWN-PROC
+UNKNOWN UNKNOWN 0 0) (UNKNOWN 0 0 0 UNKNOWN ()) 0 0 () () 0 () () () 0 0)
+19 'output_done' 'output' 'output_done' 1 ((PROCEDURE UNKNOWN-INTENT
+MODULE-PROC DECL UNKNOWN 0 0 SUBROUTINE) (UNKNOWN 0 0 0 UNKNOWN ()) 0 0
+() () 0 () () () 0 0)
+20 'output_init' 'output' 'output_init' 1 ((PROCEDURE UNKNOWN-INTENT
+MODULE-PROC DECL UNKNOWN 0 0 SUBROUTINE ALWAYS_EXPLICIT) (UNKNOWN 0 0 0
+UNKNOWN ()) 21 0 (22) () 0 () () () 0 0)
+23 'output_initialized' 'output' 'output_initialized' 1 ((VARIABLE
+UNKNOWN-INTENT UNKNOWN-PROC UNKNOWN EXPLICIT-SAVE 0 0) (LOGICAL 4 0 0
+LOGICAL ()) 0 0 () () 0 () () () 0 0)
+24 'p' 'state' 'p' 1 ((VARIABLE UNKNOWN-INTENT UNKNOWN-PROC UNKNOWN
+EXPLICIT-SAVE 0 0 DIMENSION POINTER) (REAL 8 0 0 REAL ()) 0 0 () (3 0
+DEFERRED () () () () () ()) 0 () () () 0 0)
+25 'plainmessage' 'output' 'plainmessage' 1 ((PROCEDURE UNKNOWN-INTENT
+MODULE-PROC DECL UNKNOWN 0 0 SUBROUTINE ALWAYS_EXPLICIT) (UNKNOWN 0 0 0
+UNKNOWN ()) 26 0 (27 28) () 0 () () () 0 0)
+29 'qprint' 'output' 'qprint' 1 ((VARIABLE UNKNOWN-INTENT UNKNOWN-PROC
+UNKNOWN EXPLICIT-SAVE 0 0) (LOGICAL 4 0 0 LOGICAL ()) 0 0 () () 0 () ()
+() 0 0)
+30 'realfmt' 'output' 'realfmt' 1 ((PARAMETER UNKNOWN-INTENT
+UNKNOWN-PROC UNKNOWN IMPLICIT-SAVE 0 0) (CHARACTER 1 0 0 CHARACTER ((
+CONSTANT (INTEGER 4 0 0 INTEGER ()) 0 '10'))) 0 0 () (CONSTANT (
+CHARACTER 1 0 0 CHARACTER (())) 0 10 'ES20.7E3  ') () 0 () () () 0 0)
+31 'rhs' 'state' 'rhs' 1 ((VARIABLE UNKNOWN-INTENT UNKNOWN-PROC UNKNOWN
+EXPLICIT-SAVE 0 0 DIMENSION POINTER) (REAL 8 0 0 REAL ()) 0 0 () (3 0
+DEFERRED () () () () () ()) 0 () () () 0 0)
+32 'state' 'state' 'state' 1 ((MODULE UNKNOWN-INTENT UNKNOWN-PROC
+UNKNOWN UNKNOWN 0 0) (UNKNOWN 0 0 0 UNKNOWN ()) 0 0 () () 0 () () () 0 0)
+33 'state_done' 'state' 'state_done' 1 ((PROCEDURE UNKNOWN-INTENT
+MODULE-PROC DECL UNKNOWN 0 0 SUBROUTINE) (UNKNOWN 0 0 0 UNKNOWN ()) 0 0
+() () 0 () () () 0 0)
+34 'state_initialize' 'state' 'state_initialize' 1 ((PROCEDURE
+UNKNOWN-INTENT MODULE-PROC DECL UNKNOWN 0 0 SUBROUTINE) (UNKNOWN 0 0 0
+UNKNOWN ()) 0 0 () () 0 () () () 0 0)
+35 'state_initialized' 'state' 'state_initialized' 1 ((VARIABLE
+UNKNOWN-INTENT UNKNOWN-PROC UNKNOWN EXPLICIT-SAVE 0 0) (LOGICAL 4 0 0
+LOGICAL ()) 0 0 () () 0 () () () 0 0)
+36 'terminate' 'output' 'terminate' 1 ((PROCEDURE UNKNOWN-INTENT
+MODULE-PROC DECL UNKNOWN 0 0 SUBROUTINE) (UNKNOWN 0 0 0 UNKNOWN ()) 37 0
+(38) () 0 () () () 0 0)
+39 'var_init' 'state' 'var_init' 1 ((VARIABLE UNKNOWN-INTENT
+UNKNOWN-PROC UNKNOWN IMPLICIT-SAVE 0 0 DIMENSION) (LOGICAL 4 0 0 LOGICAL
+()) 0 0 () (1 0 EXPLICIT (CONSTANT (INTEGER 4 0 0 INTEGER ()) 0 '1') (
+CONSTANT (INTEGER 4 0 0 INTEGER ()) 0 '4')) 0 () () () 0 0)
+40 'var_names' 'state' 'var_names' 1 ((PARAMETER UNKNOWN-INTENT
+UNKNOWN-PROC UNKNOWN IMPLICIT-SAVE 0 0 DIMENSION) (CHARACTER 1 0 0
+CHARACTER ((CONSTANT (INTEGER 4 0 0 INTEGER ()) 0 '6'))) 0 0 () (ARRAY (
+CHARACTER 1 0 0 CHARACTER ((CONSTANT (INTEGER 4 0 0 INTEGER ()) 0 '6')))
+1 (((CONSTANT (CHARACTER 1 0 0 CHARACTER ((CONSTANT (INTEGER 4 0 0
+INTEGER ()) 0 '6'))) 0 6 'EPS   ') ()) ((CONSTANT (CHARACTER 1 0 0
+CHARACTER (())) 0 6 'KAPPA ') ()) ((CONSTANT (CHARACTER 1 0 0 CHARACTER
+(())) 0 6 'CHARGE') ()) ((CONSTANT (CHARACTER 1 0 0 CHARACTER (())) 0 6
+'PHI   ') ())) ('4')) (1 0 EXPLICIT (CONSTANT (INTEGER 4 0 0 INTEGER ())
+0 '1') (CONSTANT (INTEGER 4 0 0 INTEGER ()) 0 '4')) 0 () () () 0 0)
+41 'varray' 'state' 'varray' 1 ((DERIVED UNKNOWN-INTENT UNKNOWN-PROC
+UNKNOWN UNKNOWN 0 0 POINTER_COMP) (UNKNOWN 0 0 0 UNKNOWN ()) 0 0 () () 0
+((42 'v' (REAL 8 0 0 REAL ()) (3 0 DEFERRED () () () () () ()) (
+UNKNOWN-FL UNKNOWN-INTENT UNKNOWN-PROC UNKNOWN UNKNOWN 0 0 DIMENSION
+POINTER) UNKNOWN-ACCESS ())) PUBLIC (() () () ()) () 0 0 6281009)
+43 'warning' 'output' 'warning' 1 ((PROCEDURE UNKNOWN-INTENT MODULE-PROC
+DECL UNKNOWN 0 0 SUBROUTINE) (UNKNOWN 0 0 0 UNKNOWN ()) 44 0 (45 46 47)
+() 0 () () () 0 0)
+38 'whoami' '' 'whoami' 37 ((VARIABLE UNKNOWN-INTENT UNKNOWN-PROC
+UNKNOWN UNKNOWN 0 0 DUMMY) (CHARACTER 1 0 0 CHARACTER (())) 0 0 () () 0
+() () () 0 0)
+47 'level' '' 'level' 44 ((VARIABLE UNKNOWN-INTENT UNKNOWN-PROC UNKNOWN
+UNKNOWN 0 0 DUMMY) (INTEGER 4 0 0 INTEGER ()) 0 0 () () 0 () () () 0 0)
+46 'msg' '' 'msg' 44 ((VARIABLE UNKNOWN-INTENT UNKNOWN-PROC UNKNOWN
+UNKNOWN 0 0 DUMMY) (CHARACTER 1 0 0 CHARACTER (())) 0 0 () () 0 () () ()
+0 0)
+5 'whoami' '' 'whoami' 4 ((VARIABLE UNKNOWN-INTENT UNKNOWN-PROC UNKNOWN
+UNKNOWN 0 0 DUMMY) (CHARACTER 1 0 0 CHARACTER (())) 0 0 () () 0 () () ()
+0 0)
+7 'level' '' 'level' 4 ((VARIABLE UNKNOWN-INTENT UNKNOWN-PROC UNKNOWN
+UNKNOWN 0 0 DUMMY) (INTEGER 4 0 0 INTEGER ()) 0 0 () () 0 () () () 0 0)
+6 'msg' '' 'msg' 4 ((VARIABLE UNKNOWN-INTENT UNKNOWN-PROC UNKNOWN
+UNKNOWN 0 0 DUMMY) (CHARACTER 1 0 0 CHARACTER (())) 0 0 () () 0 () () ()
+0 0)
+13 'whoami' '' 'whoami' 12 ((VARIABLE UNKNOWN-INTENT UNKNOWN-PROC
+UNKNOWN UNKNOWN 0 0 DUMMY) (CHARACTER 1 0 0 CHARACTER (())) 0 0 () () 0
+() () () 0 0)
+15 'level' '' 'level' 12 ((VARIABLE UNKNOWN-INTENT UNKNOWN-PROC UNKNOWN
+UNKNOWN 0 0 OPTIONAL DUMMY) (INTEGER 4 0 0 INTEGER ()) 0 0 () () 0 () ()
+() 0 0)
+14 'msg' '' 'msg' 12 ((VARIABLE UNKNOWN-INTENT UNKNOWN-PROC UNKNOWN
+UNKNOWN 0 0 DUMMY) (CHARACTER 1 0 0 CHARACTER (())) 0 0 () () 0 () () ()
+0 0)
+22 'filename' '' 'filename' 21 ((VARIABLE UNKNOWN-INTENT UNKNOWN-PROC
+UNKNOWN UNKNOWN 0 0 OPTIONAL DUMMY) (CHARACTER 1 0 0 CHARACTER (())) 0 0
+() () 0 () () () 0 0)
+28 'level' '' 'level' 26 ((VARIABLE UNKNOWN-INTENT UNKNOWN-PROC UNKNOWN
+UNKNOWN 0 0 OPTIONAL DUMMY) (INTEGER 4 0 0 INTEGER ()) 0 0 () () 0 () ()
+() 0 0)
+27 'msg' '' 'msg' 26 ((VARIABLE UNKNOWN-INTENT UNKNOWN-PROC UNKNOWN
+UNKNOWN 0 0 DUMMY) (CHARACTER 1 0 0 CHARACTER (())) 0 0 () () 0 () () ()
+0 0)
+45 'whoami' '' 'whoami' 44 ((VARIABLE UNKNOWN-INTENT UNKNOWN-PROC
+UNKNOWN UNKNOWN 0 0 DUMMY) (CHARACTER 1 0 0 CHARACTER (())) 0 0 () () 0
+() () () 0 0)
+)
+
+('eps' 0 2 'error' 0 3 'fatal_warning' 0 8 'fout' 0 9 'kappa' 0 10
+'message' 0 11 'msg__' 0 16 'nvar' 0 17 'output' 0 18 'output_done' 0 19
+'output_init' 0 20 'output_initialized' 0 23 'p' 0 24 'plainmessage' 0
+25 'qprint' 0 29 'realfmt' 0 30 'rhs' 0 31 'state' 0 32 'state_done' 0
+33 'state_initialize' 0 34 'state_initialized' 0 35 'terminate' 0 36
+'var_init' 0 39 'var_names' 0 40 'varray' 0 41 'warning' 0 43)

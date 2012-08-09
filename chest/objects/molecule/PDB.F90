@@ -1,0 +1,743 @@
+/*#define __WRN(__WHO,__MSG) write(0,*) 'WARNING FROM: ',__WHO,': ',__MSG*/
+/*#define __PRINT(__MSG) write(0,'(A)') __MSG*/
+/*#define __PRINT(__MSG) call plainmessage(__MSG)*/
+/*#define __PRINTL(__MSG,__LEVEL) call plainmessage(__MSG,__LEVEL)*/
+/*COORDINATES AND MASSES:*/
+/*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
+! **********************************************************************!
+! This source file was was generated automatically from a master source !
+! code tree, which may not be distributed with this code if the !
+! distributor has a proprietary compilation procedure (e.g. CHARMM) !
+! If you edit this file (rather than the master source file) !
+! your changes will be lost if another pull from the master tree occurs.!
+! In case you are wondering why, this approach makes it possible for !
+! me to have the same master source code interfaced with different !
+! applications (some of which are written in a way that is quite far !
+! from being object-oriented) at the source level. !
+! **********************************************************************!
+module pdb
+! this module `hacks' the system module to provide a reduced structure, i.e. without psf or parameters; much in the spirit of a PDB file
+ use system, only: r, q, m, radius, bfactor, occupancy, natom, ndim, &
+& system_structure_initialized, system_coordinates_initialized
+ use parser
+ use output
+ use psf
+!
+ public PDB_init ! read a PDB file
+ public PDB_read_charges
+ public PDB_read_radii
+ public PDB_done
+!
+ logical, save :: PDB_initialized=.false.
+!
+ contains
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+  subroutine PDB_init(filename, paramtype)
+  use psfatom
+!
+  implicit none
+!
+  character, parameter :: charmmcomment(1)=(/'*'/)
+  character, parameter :: freecomment(4) = (/'*', '#', '%', '!'/)
+  character :: comment(4)
+  character(len=8), parameter :: whoami = 'PDB_init'
+  character(len=200) :: cmdline
+  character(len=8) :: keyword
+!
+! character(len=100, parameter :: pdbfmt='(A6,I5,1X,A4,1X,A3,2X,I4,4X,3F8.3,2F6.2,1X,3X,2X,A4)'
+  character(len=100), parameter :: pdbfmt='(A6,I5,1X,A4,1X,A3,2X,A4,4X,3F8.3,2F6.2,1X,3X,2X,A4)' ! resid is a string
+  character(len=100), parameter :: pqrfmt='*'
+  character(len=100), parameter :: freefmt='*'
+  character(len=100), parameter :: charmmextfmt='(I10,10X,2(2X,A8),3F20.10,2X,A8,2X,A8,F20.10)'
+  character(len=100), parameter :: charmmfmt='(I5,5X,2(1X,A4),3F10.5,1X,A4,1X,A4,F10.5)'
+  character(len=100) :: fmt
+!
+  integer :: atomid, i, ioerr, j, n=-1
+  real*8 :: x,y,z,occ,bf,d
+  character(len=8) :: aname='UNKNOWN', resname='UNKNOWN', segid='UNKNOWN', resid='UNKNOWN'
+!
+  character(len=*) :: filename
+  character(len=len(filename)) :: fname
+  character(len=*) :: paramtype
+  integer :: flen
+  integer :: fid=100
+  integer :: pass
+  logical :: fext=.false.
+  logical :: found=.false.
+  integer, parameter :: unkn=-9999999
+!
+  fname=filename
+  call adjustleft(fname)
+  flen=len_trim(fname)
+  if (flen.gt.0) then
+   open(fid, file=fname(1:flen), status='OLD', form='FORMATTED')
+  else
+   call error(whoami, 'STRUCTURE FILE NAME NOT SPECIFIED. ABORT.',-1)
+   return
+  endif
+!
+! initialize atom list member in psf
+  call atomlist_init(atoms)
+!
+  select case(paramtype)
+   case('ATOMID'); comment=freecomment
+   case default; comment=charmmcomment(1)
+  end select
+!
+! read the file in two passes; during the first pass, add atoms to a torn-down PSF;
+! in the second pass, populate what data exists in the file
+!
+  do pass=1,2
+!
+! remove comments at the beginning, if any
+!
+  do while (.true.)
+   read(fid,'(A)',IOSTAT=ioerr) cmdline
+   if (ioerr.eq.0) then
+    if (any(comment.eq.cmdline(1:1))) cycle ! note: this will not get rid of 'REMARK' fields in PDBs
+    exit
+   else
+    call warning(whoami, 'Unexpected end of file.',-1)
+    return
+   endif
+  enddo
+!
+  if (paramtype.eq.'CHARMM') then
+   if (ioerr.eq.0) then
+! guess whether the number of atoms is present
+    if ((numword(cmdline)).eq.1) then
+     read(cmdline,*) n
+     if (n.gt.100000) fext=.true.
+    elseif ((numword(cmdline)).eq.2) then
+     read(cmdline,*) n, keyword
+     call adjustleft(keyword)
+     if (keyword.eq.'EXT') then
+      fext=.true.
+     else
+      call warning(whoami, 'Unrecognized string in coordinate file.',0)
+      call warning(whoami, cmdline,-1)
+      return
+     endif
+    endif
+!
+    if (fext) then ; fmt=charmmextfmt ; else ; fmt=charmmfmt ; endif
+!
+   else ! eof
+    call warning(whoami, 'Unexpected end of file.',-1)
+    return
+   endif ! ioerr
+!
+   if (n.gt.-1) then ! number of atoms not specified in file
+    read(fid,'(A)',IOSTAT=ioerr) cmdline
+    if (ioerr.ne.0) then
+     call warning(whoami, 'Unexpected end of file.',-1)
+     return
+    endif
+   endif
+!
+  elseif (paramtype.eq.'PDB') then
+   fmt=pdbfmt
+  elseif (paramtype.eq.'PQR') then
+   fmt=pqrfmt
+  elseif (paramtype.eq.'ATOMID') then
+   fmt=freefmt
+  else
+   call warning(whoami, 'Unknown file type "'//paramtype//'". Abort.',-1)
+   return
+  endif ! paramtype CHARMM
+!
+  i=1
+  do while (ioerr.eq.0)
+! process command line
+! only lines that begin with 'ATOM'/'HETATM' are processed; 'TER ' or 'END ' indicates end of read
+   keyword(1:6)=cmdline(1:6);
+   call toupper(keyword)
+!***********************************************************************************************
+   if (paramtype.eq.'PDB'.or.paramtype.eq.'PQR') then
+!
+    select case(keyword(1:6))
+     case('ATOM  ', 'HETATM');
+      if (paramtype.eq.'PDB') read(cmdline,fmt) keyword, atomid, aname, resname, resid, x, y, z, occ, bf, segid
+      if (paramtype.eq.'PQR') read(cmdline,fmt) keyword, atomid, aname, resname, resid, x, y, z, occ, bf
+     case('TER   ','END   ');
+      exit ! loop over lines
+     case default ! keyword not recognized; assume that we can continue (we are not enforcing the PDB standard)
+! try to read next line
+      read(fid,'(A)',IOSTAT=ioerr) cmdline
+      cycle
+    end select
+!
+   elseif (paramtype.eq.'CHARMM') then
+    read(cmdline,fmt) atomid, resname, aname, x, y, z, segid, resid, bf ! ignoring residue number; weight => B-factor
+   elseif (paramtype.eq.'ATOMID') then
+    read(cmdline,fmt) atomid, x, y, z
+   endif
+   call adjustleft(cmdline)
+   call adjustleft(segid)
+   call adjustleft(resid)
+   call adjustleft(resname)
+   call adjustleft(aname)
+! match atom coordinate entry with structure
+   if (atomid.lt.1) then
+    call warning(whoami, cmdline(1:len_trim(cmdline)),0)
+    call warning(whoami, 'Nonpositive atom ID read. Skipping entry. Some coordinates may be undefined',0)
+! try to read next line
+    read(fid,'(A)',IOSTAT=ioerr) cmdline
+    cycle
+   endif
+! find index of the atom in structure
+   found=.false.
+   do j=atomid, atoms%last ! first, a forward search, assuming ordering; usually atomids will be [1..natom]
+    if (atoms%atomid(j).eq.atomid) then
+     found=.true.
+     exit
+    endif
+   enddo
+   if (.not.found) then ! try a reverse search, in case the file is disordered
+    do j=min(atomid-1,atoms%last), 1, -1 ! make sure indices stay within bounds
+     if (atoms%atomid(j).eq.atomid) then
+      found=.true.
+      exit
+     endif
+    enddo
+   endif
+!
+    if (.not.found) then
+! add this atom
+     d=-1d0
+     j=atomlist_uadd_ch(atoms, atomid, segid, resid, resname, aname, -1, d, d) ! uknown parameters are -1
+!
+    else ! atom already present -- warn and overwrite
+     if (pass.eq.1) then
+      call warning(whoami, cmdline(1:len_trim(cmdline)),0)
+      call warning(whoami, 'DUPLICATE ATOM ID IN COORDINATE FILE. WILL OVERWRITE ENTRY.',0)
+     endif
+    endif
+!
+    if (pass.eq.2) then ! when pass=1, the data structures are not allocated
+     r(:,j)=(/x,y,z/);
+!
+     if (paramtype.eq.'PDB') then
+      occupancy(j)=occ; ! occupancy
+      bfactor(j)=bf; ! b-factor
+     elseif (paramtype.eq.'PQR') then
+      q(j)=occ
+      radius(j)=bf
+     elseif (paramtype.eq.'CHARMM') then
+      bfactor(j)=bf
+     endif
+    endif ! pass
+!
+    i=i+1 ! increment atom count
+! try to read next line
+    read(fid,'(A)',IOSTAT=ioerr) cmdline
+!**********************************************************************************
+!
+  enddo ! while
+!
+! the number of lines processed is i; were all of them valid atom entries?
+  if (pass.eq.1) then
+   natom=atoms%last
+   if (n.eq.-1) n=i-1
+   if (n.ne.atoms%last) call warning(whoami, 'INCORRECT NUMBER OF ATOMS SPECIFIED IN COORDINATE FILE.',0)
+!
+   allocate(r(ndim,natom), q(natom), radius(natom), m(natom), bfactor(natom), occupancy(natom))
+   q=atoms%charge(1:natom)
+   m=1 ! default "mass"
+! initialize coordinates
+   r=unkn; occupancy=unkn; bfactor=unkn;
+   rewind(fid)
+  endif ! pass
+!
+  enddo ! pass
+!
+  call message(whoami, 'Coordinate file read.')
+!
+  system_structure_initialized=.true. ! hack to make select system routines work without PSF
+  system_coordinates_initialized=.true.
+  PDB_initialized=.true.
+!
+  end subroutine PDB_init
+!
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+! the next two routines have duplicated code from PDB_init
+!
+  subroutine PDB_read_charges(filename, paramtype, column)
+!
+  implicit none
+!
+  character, parameter :: charmmcomment(1)=(/'*'/)
+  character, parameter :: freecomment(4) = (/'*', '#', '%', '!'/)
+  character :: comment(4)
+  character(len=16), parameter :: whoami = 'PDB_read_charges'
+  character(len=200) :: cmdline
+  character(len=8) :: keyword
+!
+  character(len=100), parameter :: pdbfmt='A6,I5,1X,A4,1X,A3,2X,A4,4X,3F8.3,2F6.2,1X,3X,2X,A4'
+  character(len=100), parameter :: pqrfmt='*'
+  character(len=100), parameter :: freefmt='*'
+  character(len=100), parameter :: charmmextfmt='(I10,10X,2(2X,A8),3F20.10,2X,A8,2X,A8,F20.10)'
+  character(len=100), parameter :: charmmfmt='(I5,5X,2(1X,A4),3F10.5,1X,A4,1X,A4,F10.5)'
+  character(len=100) :: fmt
+!
+  integer :: atomid, i, ioerr, j, n=-1
+  character(len=10), optional :: column
+  logical :: qo, qb ! whether the column is occupancy or Bfactor (PDB/PQR only)
+  real*8 :: x,y,z,occ,bf
+  character(len=8) :: aname='UNKNOWN', resname='UNKNOWN', segid='UNKNOWN', resid='UNKNOWN'
+!
+  character(len=*) :: filename
+  character(len=len(filename)) :: fname
+  character(len=*) :: paramtype
+  integer :: flen
+  integer :: fid=100
+  logical :: fext=.false.
+  logical :: found=.false.
+  logical :: flags(atoms%last)
+!
+  flags=.false.
+!
+  if (.not.system_structure_initialized) then
+   call error(whoami, 'STRUCTURE NOT INITIALIZED. NOTHING DONE.', -1);
+   return
+  endif
+!
+  if (present(column)) then
+   select case(column)
+    case('BETA','beta','BFACTOR','bfactor','b','B');
+     qb=.true. ; qo=.false.
+    case('OCCU','occu','OCCUPANCY','occupancy','o','O')
+     qb=.false. ; qo=.true.
+    case default
+     if (paramtype.eq.'PDB'.or.paramtype.eq.'PQR') then
+      call error(whoami, 'INVALID COLUMN "'//column//'" SPECIFIED. ABORT.',-1)
+      return
+     endif
+   end select
+  else
+   if (paramtype.eq.'PDB') then ; qb=.true. ; qo=.false.;
+   elseif (paramtype.eq.'PQR') then ; qb=.false.; qo=.true. ; endif ! in a PQR file, the charge is in the occupancy colulmn by default
+  endif ! column ; it makes no difference what column is for non-PDB formats
+!
+  fname=filename
+  call adjustleft(fname)
+  flen=len_trim(fname)
+  if (flen.gt.0) then
+   open(fid, file=fname(1:flen), status='OLD', form='FORMATTED')
+  else
+   call error(whoami, 'STRUCTURE FILE NAME NOT SPECIFIED. ABORT.',-1)
+   return
+  endif
+!
+  select case(paramtype)
+   case('ATOMID'); comment=freecomment
+   case default; comment=charmmcomment(1)
+  end select
+!
+! remove comments at the beginning, if any
+!
+  do while (.true.)
+   read(fid,'(A)',IOSTAT=ioerr) cmdline
+   if (ioerr.eq.0) then
+    if (any(comment.eq.cmdline(1:1))) cycle
+    exit
+   else
+    call error(whoami, 'UNEXPECTED END OF FILE.',-1)
+    return
+   endif
+  enddo
+!
+  if (paramtype.eq.'CHARMM') then
+   if (ioerr.eq.0) then
+! guess whether the number of atoms is present
+    if ((numword(cmdline)).eq.1) then
+     read(cmdline,*) n
+     if (n.gt.100000) fext=.true.
+    elseif ((numword(cmdline)).eq.2) then
+     read(cmdline,*) n, keyword
+     call adjustleft(keyword)
+     if (keyword.eq.'EXT') then
+      fext=.true.
+     else
+      call error(whoami, 'UNRECOGNIZED STRING IN COORDINATE FILE.',0)
+      call error(whoami, cmdline,-1)
+      return
+     endif
+    endif
+!
+    if (fext) then ; fmt=charmmextfmt ; else ; fmt=charmmfmt ; endif
+!
+   else ! eof
+    call error(whoami, 'UNEXPECTED END OF FILE. ABORT.',0)
+    return
+   endif ! ioerr
+!
+   if (n.gt.-1) then ! number of atoms not specified in file
+    read(fid,'(A)',IOSTAT=ioerr) cmdline
+    if (ioerr.ne.0) then
+     call error(whoami, 'UNEXPECTED END OF FILE. ABORT.',0)
+     return
+    endif
+   endif
+!
+  elseif (paramtype.eq.'PDB') then
+   fmt=pdbfmt
+  elseif (paramtype.eq.'PQR') then
+   fmt=pqrfmt
+  elseif (paramtype.eq.'ATOMID') then
+   fmt=freefmt
+  else
+   call error(whoami, 'UNKNOWN FILE TYPE "'//paramtype//'". ABORT.',-1)
+   return
+  endif ! paramtype CHARMM
+!
+  i=1
+  do while (.true.)
+! process command line
+! only lines that begin with 'ATOM'/'HETATM' are processed; 'TER ' or 'END ' indicates end of read
+   keyword(1:6)=cmdline(1:6);
+   call toupper(keyword)
+!***********************************************************************************************
+   if (paramtype.eq.'PDB'.or.paramtype.eq.'PQR') then
+!
+    select case(keyword(1:6))
+     case('ATOM  ', 'HETATM');
+      if (paramtype.eq.'PDB') read(cmdline,fmt) keyword, atomid, aname, resname, resid, x, y, z, occ, bf, segid
+      if (paramtype.eq.'PQR') read(cmdline,fmt) keyword, atomid, aname, resname, resid, x, y, z, occ, bf
+     case('TER   ','END   ');
+     exit ! loop over lines
+    end select
+!
+   elseif (paramtype.eq.'CHARMM') then
+    read(cmdline,fmt) atomid, resname, aname, x, y, z, segid, resid, bf ! ignoring residue number; weight => B-factor
+   elseif (paramtype.eq.'ATOMID') then
+    read(cmdline,fmt) atomid, bf
+   endif
+!
+   call adjustleft(cmdline)
+   call adjustleft(segid)
+   call adjustleft(resid)
+   call adjustleft(resname)
+   call adjustleft(aname)
+! match atom coordinate entry with structure
+   if (atomid.lt.1) then
+    call warning(whoami, cmdline(1:len_trim(cmdline)),0)
+    call warning(whoami, 'NEGATIVE ATOM ID READ.',0)
+   endif
+! find index of the atom in structure
+   found=.false.
+   do j=atomid, atoms%last ! first, a forward search, assuming ordering
+    if (atoms%atomid(j).eq.atomid) then
+     found=.true.
+     exit
+    endif
+   enddo
+   if (.not.found) then ! try a reverse search, in case the file is disordered
+    do j=atomid-1, 1
+     if (atoms%atomid(j).eq.atomid) then
+      found=.true.
+      exit
+     endif
+    enddo
+   endif
+!
+   if (paramtype.eq.'PDB') then
+    if (.not.found.or.((atoms%segid(j).ne.segid).or.(atoms%resid(j).ne.resid).or.&
+& (atoms%resname(j).ne.resname).or.(atoms%aname(j).ne.aname))) then
+      call warning(whoami, cmdline(1:len_trim(cmdline)),0)
+      call warning(whoami, 'CANNOT FIND CORRESPONDING ENTRY IN STRUCTURE FILE. SKIPPING LINE.',0)
+    else
+      if (qb) q(j)=bf; ! b-factor
+      if (qo) q(j)=occ; ! occupancy
+      flags(atomid)=.true.
+    endif
+   elseif (paramtype.eq.'PQR') then
+    if (.not.found.or.((atoms%resid(j).ne.resid).or.&
+& (atoms%resname(j).ne.resname).or.(atoms%aname(j).ne.aname))) then
+      call warning(whoami, cmdline(1:len_trim(cmdline)),0)
+      call warning(whoami, 'CANNOT FIND CORRESPONDING ENTRY IN STRUCTURE FILE. SKIPPING LINE.',0)
+    else
+      if (qb) q(j)=bf; ! b-factor
+      if (qo) q(j)=occ; ! occupancy
+      flags(atomid)=.true.
+    endif
+   elseif (paramtype.eq.'CHARMM') then
+    if (.not.found.or.((atoms%segid(j).ne.segid).or.(atoms%resid(j).ne.resid).or.&
+& (atoms%resname(j).ne.resname).or.(atoms%aname(j).ne.aname))) then
+      call warning(whoami, cmdline(1:len_trim(cmdline)),0)
+      call warning(whoami, 'CANNOT FIND CORRESPONDING ENTRY IN STRUCTURE FILE. SKIPPING LINE.',0)
+    else
+      q(j)=bf; ! main weight array
+      flags(atomid)=.true.
+    endif
+   elseif (paramtype.eq.'ATOMID') then
+    if (.not.found) then
+      call warning(whoami, cmdline(1:len_trim(cmdline)),0)
+      call warning(whoami, 'CANNOT FIND ATOMID IN STRUCTURE FILE. SKIPPING LINE.',0)
+    else
+      q(j)=bf;
+      flags(atomid)=.true.
+    endif
+   endif ! paramtype
+!
+   i=i+1 ! increment atom count
+! try to read next line
+   read(fid,'(A)',IOSTAT=ioerr) cmdline
+   if (ioerr.ne.0) exit
+!**********************************************************************************
+!
+  enddo ! while(.true.)
+!
+ if (n.eq.-1) n=i-1
+ if (n.ne.atoms%last) call warning(whoami, 'NUMBER OF ATOMS IN COORDINATE FILE INCONSISTENT WITH STRUCTURE.',0)
+ if (.not.all(flags)) call warning(whoami, 'SOME CHARGES WERE MISSING.',0)
+!
+ call message(whoami, 'File read.')
+!
+ end subroutine PDB_read_charges
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+  subroutine PDB_read_radii(filename, paramtype, column)
+!
+  implicit none
+!
+  character, parameter :: charmmcomment(1)=(/'*'/)
+  character, parameter :: freecomment(4) = (/'*', '#', '%', '!'/)
+  character :: comment(4)
+  character(len=14), parameter :: whoami = 'PDB_read_radii'
+  character(len=200) :: cmdline
+  character(len=8) :: keyword
+!
+  character(len=100), parameter :: pdbfmt='A6,I5,1X,A4,1X,A3,2X,I4,4X,3F8.3,2F6.2,1X,3X,2X,A4'
+  character(len=100), parameter :: pqrfmt='*'
+  character(len=100), parameter :: freefmt='*'
+  character(len=100), parameter :: charmmextfmt='(I10,10X,2(2X,A8),3F20.10,2X,A8,2X,A8,F20.10)'
+  character(len=100), parameter :: charmmfmt='(I5,5X,2(1X,A4),3F10.5,1X,A4,1X,A4,F10.5)'
+  character(len=100) :: fmt
+!
+  integer :: atomid, i, ioerr, j, n=-1
+  character(len=10), optional :: column
+  logical :: qo, qb ! whether the column is occupancy or Bfactor (PDB/PQR only)
+  real*8 :: x,y,z,occ,bf
+  character(len=8) :: aname='UNKNOWN', resname='UNKNOWN', segid='UNKNOWN', resid='UNKNOWN'
+!
+  character(len=*) :: filename
+  character(len=len(filename)) :: fname
+  character(len=*) :: paramtype
+  integer :: flen
+  integer :: fid=100
+  logical :: fext=.false.
+  logical :: found=.false.
+  logical :: flags(atoms%last)
+!
+  flags=.false.
+!
+  if (.not.system_structure_initialized) then
+   call error(whoami, 'STRUCTURE NOT INITIALIZED. NOTHING DONE.', -1);
+   return
+  endif
+!
+  if (present(column)) then
+   select case(column)
+    case('BETA','beta','BFACTOR','bfactor','b','B');
+     qb=.true. ; qo=.false.
+    case('OCCU','occu','OCCUPANCY','occupancy','o','O')
+     qb=.false. ; qo=.true.
+    case default
+     if (paramtype.eq.'PDB'.or.paramtype.eq.'PQR') then
+      call error(whoami, 'INVALID COLUMN "'//column//'" SPECIFIED. ABORT.',-1)
+      return
+     endif
+   end select
+  else
+   if (paramtype.eq.'PDB') then ; qb=.true. ; qo=.false.;
+   elseif (paramtype.eq.'PQR') then ; qb=.false.; qo=.true. ; endif ! in a PQR file, the charge is in the occupancy colulmn by default
+  endif ! column ; it makes no difference what column is for non-PDB formats
+!
+  fname=filename
+  call adjustleft(fname)
+  flen=len_trim(fname)
+  if (flen.gt.0) then
+   open(fid, file=fname(1:flen), status='OLD', form='FORMATTED')
+  else
+   call error(whoami, 'STRUCTURE FILE NAME NOT SPECIFIED. ABORT.',-1)
+   return
+  endif
+!
+  select case(paramtype)
+   case('ATOMID'); comment=freecomment
+   case default; comment=charmmcomment(1)
+  end select
+!
+! remove comments at the beginning, if any
+!
+  do while (.true.)
+   read(fid,'(A)',IOSTAT=ioerr) cmdline
+   if (ioerr.eq.0) then
+    if (any(comment.eq.cmdline(1:1))) cycle
+    exit
+   else
+    call error(whoami, 'UNEXPECTED END OF FILE.',-1)
+    return
+   endif
+  enddo
+!
+  if (paramtype.eq.'CHARMM') then
+   if (ioerr.eq.0) then
+! guess whether the number of atoms is present
+    if ((numword(cmdline)).eq.1) then
+     read(cmdline,*) n
+     if (n.gt.100000) fext=.true.
+    elseif ((numword(cmdline)).eq.2) then
+     read(cmdline,*) n, keyword
+     call adjustleft(keyword)
+     if (keyword.eq.'EXT') then
+      fext=.true.
+     else
+      call error(whoami, 'UNRECOGNIZED STRING IN COORDINATE FILE.',0)
+      call error(whoami, cmdline,-1)
+      return
+     endif
+    endif
+!
+    if (fext) then ; fmt=charmmextfmt ; else ; fmt=charmmfmt ; endif
+!
+   else ! eof
+    call error(whoami, 'UNEXPECTED END OF FILE. ABORT.',0)
+    return
+   endif ! ioerr
+!
+   if (n.gt.-1) then ! number of atoms not specified in file
+    read(fid,'(A)',IOSTAT=ioerr) cmdline
+    if (ioerr.ne.0) then
+     call error(whoami, 'UNEXPECTED END OF FILE. ABORT.',0)
+     return
+    endif
+   endif
+!
+  elseif (paramtype.eq.'PDB') then
+   fmt=pdbfmt
+  elseif (paramtype.eq.'PQR') then
+   fmt=pqrfmt
+  elseif (paramtype.eq.'ATOMID') then
+   fmt=freefmt
+  else
+   call error(whoami, 'UNKNOWN FILE TYPE "'//paramtype//'". ABORT.',-1)
+   return
+  endif ! paramtype CHARMM
+!
+  i=1
+  do while (.true.)
+! process command line
+! only lines that begin with 'ATOM'/'HETATM' are processed; 'TER ' or 'END ' indicates end of read
+   keyword(1:6)=cmdline(1:6);
+   call toupper(keyword)
+!***********************************************************************************************
+   if (paramtype.eq.'PDB'.or.paramtype.eq.'PQR') then
+!
+    select case(keyword(1:6))
+     case('ATOM  ', 'HETATM');
+      if (paramtype.eq.'PDB') read(cmdline,fmt) keyword, atomid, aname, resname, resid, x, y, z, occ, bf, segid
+      if (paramtype.eq.'PQR') read(cmdline,fmt) keyword, atomid, aname, resname, resid, x, y, z, occ, bf
+     case('TER   ','END   ');
+     exit ! loop over lines
+    end select
+!
+   elseif (paramtype.eq.'CHARMM') then
+    read(cmdline,fmt) atomid, resname, aname, x, y, z, segid, resid, bf ! ignoring residue number; weight => B-factor
+   elseif (paramtype.eq.'ATOMID') then
+    read(cmdline,fmt) atomid, bf
+   endif
+!
+   call adjustleft(cmdline)
+   call adjustleft(segid)
+   call adjustleft(resid)
+   call adjustleft(resname)
+   call adjustleft(aname)
+! match atom coordinate entry with structure
+   if (atomid.lt.1) then
+    call warning(whoami, cmdline(1:len_trim(cmdline)),0)
+    call warning(whoami, 'NEGATIVE ATOM ID READ.',0)
+   endif
+! find index of the atom in structure
+   found=.false.
+   do j=atomid, atoms%last ! first, a forward search, assuming ordering
+    if (atoms%atomid(j).eq.atomid) then
+     found=.true.
+     exit
+    endif
+   enddo
+   if (.not.found) then ! try a reverse search, in case the file is disordered
+    do j=atomid-1, 1
+     if (atoms%atomid(j).eq.atomid) then
+      found=.true.
+      exit
+     endif
+    enddo
+   endif
+!
+   if (paramtype.eq.'PDB') then
+    if (.not.found.or.((atoms%segid(j).ne.segid).or.(atoms%resid(j).ne.resid).or.&
+& (atoms%resname(j).ne.resname).or.(atoms%aname(j).ne.aname))) then
+      call warning(whoami, cmdline(1:len_trim(cmdline)),0)
+      call warning(whoami, 'CANNOT FIND CORRESPONDING ENTRY IN STRUCTURE FILE. SKIPPING LINE.',0)
+    else
+      if (qb) radius(j)=bf; ! b-factor
+      if (qo) radius(j)=occ; ! occupancy
+      flags(atomid)=.true.
+    endif
+   elseif (paramtype.eq.'PQR') then
+    if (.not.found.or.((atoms%resid(j).ne.resid).or.&
+& (atoms%resname(j).ne.resname).or.(atoms%aname(j).ne.aname))) then
+      call warning(whoami, cmdline(1:len_trim(cmdline)),0)
+      call warning(whoami, 'CANNOT FIND CORRESPONDING ENTRY IN STRUCTURE FILE. SKIPPING LINE.',0)
+    else
+      if (qb) radius(j)=bf; ! b-factor
+      if (qo) radius(j)=occ; ! occupancy
+      flags(atomid)=.true.
+    endif
+   elseif (paramtype.eq.'CHARMM') then
+    if (.not.found.or.((atoms%segid(j).ne.segid).or.(atoms%resid(j).ne.resid).or.&
+& (atoms%resname(j).ne.resname).or.(atoms%aname(j).ne.aname))) then
+      call warning(whoami, cmdline(1:len_trim(cmdline)),0)
+      call warning(whoami, 'CANNOT FIND CORRESPONDING ENTRY IN STRUCTURE FILE. SKIPPING LINE.',0)
+    else
+      radius(j)=bf; ! main weight array
+      flags(atomid)=.true.
+    endif
+   elseif (paramtype.eq.'ATOMID') then
+    if (.not.found) then
+      call warning(whoami, cmdline(1:len_trim(cmdline)),0)
+      call warning(whoami, 'CANNOT FIND ATOMID IN STRUCTURE FILE. SKIPPING LINE.',0)
+    else
+      radius(j)=bf;
+      flags(atomid)=.true.
+    endif
+   endif ! paramtype
+!
+   i=i+1 ! increment atom count
+! try to read next line
+   read(fid,'(A)',IOSTAT=ioerr) cmdline
+   if (ioerr.ne.0) exit
+!**********************************************************************************
+!
+  enddo ! while(.true.)
+!
+  if (n.eq.-1) n=i-1
+  if (n.ne.atoms%last) call warning(whoami, 'NUMBER OF ATOMS IN COORDINATE FILE INCONSISTENT WITH STRUCTURE.',0)
+  if (.not.all(flags)) call warning(whoami, 'SOME RADII WERE MISSING.',0)
+!
+  call message(whoami, 'File read.')
+!
+  end subroutine PDB_read_radii
+!**********************************************************************************
+  subroutine PDB_done()
+  use psfatom
+  implicit none
+  deallocate(r,q,radius,bfactor,occupancy)
+  call atomlist_done(atoms)
+  system_structure_initialized=.false.
+  system_coordinates_initialized=.false.
+  PDB_initialized=.false.
+  end subroutine PDB_done
+!**********************************************************************************
+end module pdb

@@ -3,26 +3,30 @@ SHELL=/bin/sh
 CC=gcc
 CFLAGS =-O3 -fno-math-errno -c
 #---INTEL
-FC=ifort
-FFLAGS=-O3 -fast -finline -fp-model fast=2 -xhost -ipo -fno-math-errno -no-inline-factor -no-inline-min-size -c
+#FC=ifort
+#FFLAGS=-O3 -fast -finline -fp-model fast=2 -xhost -ipo -fno-math-errno -no-inline-factor -no-inline-min-size -c
 #FFLAGS= -O3 -c -check-all -extend-source -fast -fno-math-errno -finline -fp-model fast=2 -xhost -ipo  #-ipo 
 #FFLAGS= -O3 -c -extend-source -fast -fno-math-errno -finline -fp-model fast=2 -xSSE3 -ipo # -no-inline-factor -no-inline-min-size #-ipo 
 #FFLAGS= -O3 -c -extend-source -fast -fno-math-errno -finline -fp-model fast=2 -xhost -no-ipo # -no-inline-factor -no-inline-min-size #-ipo 
 MPI_HOME=/usr/local/mpich2-intel
 #---GNU
-#FC=gfortran
-#FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fbounds-check -frange-check #-fopenmp 
+FC=gfortran
+FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fbounds-check -frange-check #-fopenmp 
 #FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno #-fbounds-check -frange-check 
-#MPI_HOME=/usr/local/mpich2-gnu
+MPI_HOME=/usr/local/mpich2-gnu
 #---PATHSCALE
 #FC=pathf95
 #FFLAGS=-Ofast -fno-math-errno -extend-source -OPT:Olimit=8753 -INLINE -ipa -c
 #FFLAGS=-Ofast -fno-math-errno -extend-source -ffortran-bounds-check -OPT:Olimit=8753 -INLINE -ipa -c
 #FFLAGS=-extend-source -OPT:Olimit=8753 -INLINE -c
 #MPI_HOME=/usr/local/mpich2-path64
+#FC=g95
+#FFLAGS=-O3 -c -ffree-line-length-huge -ffixed-line-length-132 -cpp
+#MPI_HOME=/usr/local/mpich2-g95
 #
-DEFS=-D int=integer -D float=real*8 -D bool=logical -D int4mpi=integer*4 -D mpiint=MPI_INTEGER -D mpifloat=MPI_REAL -D mpichar=MPI_CHARACTER -D mpiint4=MPI_INTEGER4\
-     -D mpibool=MPI_LOGICAL -D __DMOL -D __RCOMP
+# G95 reguires no space between "-D" and the name
+DEFS=-Dint=integer -Dfloat=real*8 -Dbool=logical -Dint4mpi=integer*4 -Dmpiint=MPI_INTEGER -Dmpifloat=MPI_REAL -Dmpichar=MPI_CHARACTER -Dmpiint4=MPI_INTEGER4\
+     -Dmpibool=MPI_LOGICAL -Dint1="integer(kind=KIND('a'))" -D__DMOL -D__RCOMP
 
 # ! note: the VEC routines are probably slower
 
@@ -38,7 +42,7 @@ AR=xiar
 AFLAGS=rv
 
 LD=$(FC)
-LDFLAGS=-static -Bstatic -ipo
+LDFLAGS=#-static -Bstatic -ipo
 #LDFLAGS=-static -ipa
 
 DYNAMOL=objects/molecule/dynamol

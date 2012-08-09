@@ -75,7 +75,7 @@
  use constants, only : one
  implicit none
  int :: nx, ny, nz
- int :: i2d
+ int1 :: i2d
  float :: dt
  float :: odxcen(nx-1), odxcor(nx-2)
  float :: odycen(ny-1), odycor(ny-2)
@@ -153,13 +153,13 @@
  use constants, only : one, third
  implicit none
  int :: nx, ny, nz
- int :: i2d
+ int1 :: i2d
  float :: dt
  float :: odxcen(nx-1), odxcor(nx-2)
  float :: odycen(ny-1), odycor(ny-2)
  float :: odzcen(nz-1-i2d-i2d), odzcor(nz-2-i2d) ! 3D/2D
- float, dimension(nx,ny,nz) :: p 
- float, dimension(nx-2,ny-2,nz-2) :: rhs, eps, kappa
+ float, dimension(nx,ny,nz) :: p, eps
+ float, dimension(nx-2,ny-2,nz-2) :: rhs, kappa
  float :: w, e, s, n, f, b, o
 ! float :: d1, d2, d3 ! dummies
 
@@ -186,9 +186,9 @@
   tilez=INT(sqrt(one*tilesize));
   offset=NOT(ISHFTC(1,-1))         ! upper bound -- largest representable int : all ones except 1st bit 
 ! vary tile sizes a little to get a better cover (heuristic)
-kj_loop:&
-  do k=0,2;  km = tilez + k;          ntz = (nnz/km) + min(1,mod(nnz,km)); ! number of tiles in z-direction
-   do j=0,2; jm = tilesize / km + j ; nty = (nny/jm) + min(1,mod(nny,jm)); ! number of tiles in y-direction
+ji_loop:&
+  do j=0,1;  jm = tilez + j;          nty = (nny/jm) + min(1,mod(nny,jm)); ! number of tiles in y-direction
+   do i=0,2; im = tilesize / jm + i ; ntx = (nnx/im) + min(1,mod(nnx,im)); ! number of tiles in x-direction
     remainder = ntx*nty*im*jm - ntot  ! number of elements by which the size of the cover exceeds grid size
 !aa
 ! write(0,*) im, jm, ntx, nty, remainder, ntot
@@ -197,16 +197,17 @@ kj_loop:&
      tx=im; ty=jm;
      offset=remainder
     endif
-    if (remainder.eq.0) exit kj_loop
-  enddo; enddo kj_loop
+    if (remainder.eq.0) exit ji_loop
+  enddo; enddo ji_loop
 !
 ! allocate data, now that tile size is known (pad epsilon for easy corner interpolation)
-  allocate(rhs1(tx,ty,1),eps1(0:tx+1,0:ty+1,1),kappa1(tx,ty,1),p1(tx+2,ty+2,1),q1(tx+2,ty+2,1))
+  allocate(rhs1(tx,ty,1),eps1(tx+2,ty+2,1),kappa1(tx,ty,1),p1(tx+2,ty+2,1),q1(tx+2,ty+2,1))
   allocate(odxcen1(tx+1),odxcor1(tx),odycen1(ty+1),odycor1(ty))
 ! slide tile over all points and perform RB relaxation within each tile
   k=2 ! 2D
   km=k-1
   jj=1;
+write(0,*) "TILES:",tx, ty ! aa
   do while (jj.le.nny)  ; nty=min(ty,nny-jj+1); ii=1
 ! local y-metrics
    odycen1(1:nty+1)=odycen(jj:jj+nty);   odycor1(1:nty)=odycor(jj:jj+nty-1); ! center-to-center metric has extra element
@@ -216,42 +217,29 @@ kj_loop:&
 !
 ! populate tile
 !
-! epsilon: top ghost row (j=0)
-    jm=jj-1; jeps=max(jm,1)
-    j=0; im=ii;
-    do i=1,ntx+1; eps1(i,j,1)=eps(min(im,nnx),jeps,km); im=im+1;  enddo ; ! ignore left corner ghost cell
-    jm=jm+1;
-! inner point j-loop
-    do j=1,nty; im=ii-1;
-! epsilon: left ghost point
-     eps1(0,j,1)=eps(max(1,im),jm,km); im=im+1;
-! inner point i-loop
+    jm=jj
+    do j=1,nty; im=ii;
      do i=1,ntx
       rhs1(i,j,1)=rhs(im,jm,km);   eps1(i,j,1)=eps(im,jm,km);   kappa1(i,j,1)=kappa(im,jm,km);   p1(i,j,1)=p(im,jm,k)
       im=im+1;
      enddo ; ! i
-! epsilon: right ghost point
-     eps1(ntx+1,j,1)=eps(min(im,nnx),jm,km) !
-! p: last inner point and right ghost point
-     p1(ntx+1,j,1)=p(im,jm,k); im=im+1      ! remaining boundary points
-     p1(ntx+2,j,1)=p(im,jm,k)               !
+! : last inner point and ghost point
+     do i=ntx+1, ntx+2; 
+      p1(i,j,1)=p(im,jm,k); eps1(i,j,1)=eps(im,jm,k);       ! remaining boundary points 
+      im=im+1
+     enddo ; ! i
      jm=jm+1;
     enddo ! j
-! p: bottom inner points
+! : bottom inner points
 ! epsilon: bottom ghost points
-    j=nty+1; im=ii;
-    jeps=min(jm,nny);
-    do i=1,ntx+1
-     eps1(i,j,1)=eps(min(im,nnx),jeps,km); ! epsilon : neumann BC
-     p1(i,j,1)=p(im,jm,k); im=im+1;
-    enddo ;
-    p1(ntx+2,j,1)=p(im,jm,k);
-    jm=jm+1;
+    do j=nty+1, nty+2 ; im=ii;
+     do i=1,ntx+2
+      p1(i,j,1)=p(im,jm,k); eps1(i,j,1)=eps(im,jm,k);
+      im=im+1;
+     enddo ;
+     jm=jm+1;
 ! p: bottom ghost points
-    j=nty+2; im=ii;
-    do i=1,ntx+1                                   ! ignore corner ghost point
-     p1(i,j,1)=p(im,jm,k); im=im+1;
-    enddo ;
+    enddo ! j
 !************************************************************************************************
 ! smooth within tile (iteration involves local data only)
 !************************************************************************************************
@@ -261,15 +249,15 @@ kj_loop:&
 !      d1=eps1(im,jm,1)
 !      d2=odxcor1(im)
 !      d3=odycor1(jm)
-      w = odxcor1(im)*odxcen1(im)*(eps1(im,jm,1)+eps1(im-1,jm,1)) ! 0.5 included using o normalization
-      e = odxcor1(im)*odxcen1(i )*(eps1(im,jm,1)+eps1(i   ,jm,1))
-      s = odycor1(jm)*odycen1(jm)*(eps1(im,jm,1)+eps1(im,jm-1,1))
-      n = odycor1(jm)*odycen1(j )*(eps1(im,jm,1)+eps1(im  ,j ,1))
+      w = odxcor1(im)*odxcen1(im)*(eps1(i,j,1)+eps1(im, j,  1)) ! beware of 0.5 (included using o normalization)
+      e = odxcor1(im)*odxcen1(i )*(eps1(i,j,1)+eps1(i+1,j,  1))
+      s = odycor1(jm)*odycen1(jm)*(eps1(i,j,1)+eps1(i,  jm, 1))
+      n = odycor1(jm)*odycen1(j )*(eps1(i,j,1)+eps1(i,  j+1,1))
 !      w = d2*odxcen1(im)*(d1+eps1(im-1,jm,1)) ! 0.5 included using o normalization
 !      e = d2*odxcen1(i )*(d1+eps1(i   ,jm,1))
 !      s = d3*odycen1(jm)*(d1+eps1(im,jm-1,1))
 !      n = d3*odycen1(j )*(d1+eps1(im  ,j ,1))
-      o = -(w+e+s+n) + kappa(im,jm,1) ; o=one/o 
+      o = -(w+e+s+n) + kappa(im,jm,1) * 2 ; o=one/o ;             ! add twice kappa if missing 0.5 above
 !
       q1(i,j,1)=p1(i,j,1) - dt * ( p1(i,j,1) &
 &                                  + o*( w*p1(im,j,1) + e*p1(i+1,j,1) + s*p1(i,jm,1) + n*p1(i,j+1,1) ) &
@@ -318,7 +306,7 @@ kj_loop:&
   enddo; enddo; enddo kji_loop ! i, j, k
 !
 ! allocate data, now that tile size is known (pad epsilon for easy corner interpolation)
-  allocate(rhs1(tx,ty,tz),eps1(0:tx+1,0:ty+1,0:tz+1),kappa1(tx,ty,tz),p1(tx+2,ty+2,tz+2),q1(tx+2,ty+2,tz+2))
+  allocate(rhs1(tx,ty,tz),eps1(tx+2,ty+2,tz+2),kappa1(tx,ty,tz),p1(tx+2,ty+2,tz+2),q1(tx+2,ty+2,tz+2))
   allocate(odxcen1(tx+1),odxcor1(tx),odycen1(ty+1),odycor1(ty),odzcen1(tz+1),odzcor1(tz))
 ! slide tile over all points and perform RB relaxation within each tile
 ! NOTE: REUSING NTX, NTY, NYZ: they now correspond to the number of points within tile
@@ -341,71 +329,32 @@ kj_loop:&
         rhs1(i,j,k)=rhs(im,jm,km);  eps1(i,j,k)=eps(im,jm,km);  kappa1(i,j,k)=kappa(im,jm,km);  p1(i,j,k)=p(im,jm,km)
         im=im+1;
        enddo ; ! i
-! the remaining p-points are ghost points
-! p: last inner point and right ghost point
-       p1(ntx+1,j,k)=p(im,jm,km); im=im+1      ! remaining boundary points
-       p1(ntx+2,j,k)=p(im,jm,km)               !
+! the remaining eps- and p-points are ghost points
+! : last inner point and right ghost point
+       do i=ntx+1,ntx+2 ; eps1(i,j,k)=eps(im,jm,km) ; p1(i,j,k)=p(im,jm,km) ; im=im+1; enddo ; ! remaining inner and boundary points
        jm=jm+1;
       enddo ! j
 !
       do j=nty+1, nty+2; im=ii; 
-       do i=1,ntx ; p1(i,j,k)=p(im,jm,km) ; im=im+1; enddo ; ! remaining inner and  boundary points
-       p1(ntx+1,j,k)=p(im,jm,km); im=im+1      ! remaining boundary points
-       p1(ntx+2,j,k)=p(im,jm,km)               !
+       do i=1,ntx+2 ; eps1(i,j,k)=eps(im,jm,km) ; p1(i,j,k)=p(im,jm,km) ; im=im+1; enddo ; ! remaining inner and boundary points
        jm=jm+1 
       enddo ! j
       km=km+1
      enddo ! k
 !
      do k=ntz+1, ntz+2; jm=jj;
-      do j=1,nty; im=ii;
-       do i=1,ntx
-        p1(i,j,k)=p(im,jm,km) ; im=im+1;
-       enddo ; ! i
-       p1(ntx+1,j,k)=p(im,jm,km); im=im+1      ! remaining boundary points
-       p1(ntx+2,j,k)=p(im,jm,km)               !
+      do j=1,nty+2; im=ii;
+       do i=1,ntx+2 ; eps1(i,j,k)=eps(im,jm,km) ; p1  (i,j,k)=p(im,jm,km) ; im=im+1; enddo ;
        jm=jm+1;
-      enddo ! j
-!
-      do j=nty+1, nty+2; im=ii; 
-       do i=1,ntx ; p1(i,j,k)=p(im,jm,km) ; im=im+1; enddo ; ! remaining inner and  boundary points
-       p1(ntx+1,j,k)=p(im,jm,km); im=im+1                    ! remaining boundary points
-       p1(ntx+2,j,k)=p(im,jm,km)                             !
-       jm=jm+1 
       enddo ! j
       km=km+1
      enddo ! k
-! the last remaining issue are boundary conditions on epsilon for interpolation below
-! in the 2D case this was done within the loops, which will become too complicated in the 3D case,
-! so here, an explicit approach is taken
-     km=max(1,kk-1)
-     k=min(kk+ntz,nnz)
-     jm=jj
-     do j=1,nty ; 
-      im=ii ; do i=1,ntx ; eps1(i,j,0)=eps(im,jm,km); eps1(i,j,ntz+1)=eps(im,jm,k); im=im+1; enddo
-      jm=jm+1
-     enddo
-!
-     jm=max(1,jj-1)
-     j=min(jj+nty,nny)
-     km=kk
-     do k=1,ntz ; 
-      im=ii ; do i=1,ntx ; eps1(i,0,k)=eps(im,jm,km); eps1(i,nty+1,k)=eps(im,j,km); im=im+1; enddo
-      km=km+1
-     enddo
-!
-     im=max(1,ii-1)
-     i=min(ii+ntx,nnx)
-     km=kk
-     do k=1,ntz ; 
-      jm=jj ; do j=1,nty ; eps1(0,j,k)=eps(im,jm,km); eps1(ntx+1,j,k)=eps(i,jm,km); jm=jm+1; enddo
-      km=km+1
-     enddo
 !
 !****************************************************************************************************************
 ! smooth within tile (iteration involves local data only)
 !****************************************************************************************************************
 #undef __INNER
+!#define __INNER
 #ifdef __INNER
      iter=min(ntz/2, nty/2, ntx/2)
      do m=0,iter-1
@@ -419,12 +368,12 @@ kj_loop:&
        do i=2,ntx+1;     im=i-1;
 #endif
 ! compute metrics
-        w = odxcor1(im)*odxcen1(im)*(eps1(im,jm,km)+eps1(im-1,jm,km)) ! be aware of 0.5 factor
-        e = odxcor1(im)*odxcen1(i )*(eps1(im,jm,km)+eps1(i   ,jm,km))
-        s = odycor1(jm)*odycen1(jm)*(eps1(im,jm,km)+eps1(im,jm-1,km))
-        n = odycor1(jm)*odycen1(j )*(eps1(im,jm,km)+eps1(im  ,j ,km))
-        f = odzcor1(km)*odzcen1(km)*(eps1(im,jm,km)+eps1(im,jm,km-1))
-        b = odzcor1(km)*odzcen1(k )*(eps1(im,jm,km)+eps1(im,jm,k   ))
+        w = odxcor1(im)*odxcen1(im)*(eps1(i,j,k)+eps1(im, j,  k)) ! be aware of 0.5 factor
+        e = odxcor1(im)*odxcen1(i )*(eps1(i,j,k)+eps1(i+1,j,  k))
+        s = odycor1(jm)*odycen1(jm)*(eps1(i,j,k)+eps1(i,  jm, k))
+        n = odycor1(jm)*odycen1(j )*(eps1(i,j,k)+eps1(i,  j+1,k))
+        f = odzcor1(km)*odzcen1(km)*(eps1(i,j,k)+eps1(i,  j,  km))
+        b = odzcor1(km)*odzcen1(k )*(eps1(i,j,k)+eps1(i,  j,  k+1))
         o = -(w+e+s+n+f+b) + kappa(im,jm,km) * 2 ; o=one/o            ! add twice kappa if missing 0.5 above
 !
         q1(i,j,k)=p1(i,j,k) - dt *  (   p1(i,j,k) &
@@ -432,7 +381,7 @@ kj_loop:&
 &                                    - rhs1(im,jm,km) )
      enddo ; enddo ; enddo ! i,j,k 
 #ifdef __INNER
-     p1=q1 ! aa
+     p1=q1
      enddo ! m
 #endif
 !************************************************************************************************

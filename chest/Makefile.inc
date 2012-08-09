@@ -1,15 +1,15 @@
 
-DEFS+=-D SIZE=gridsize \
-      -D __TRUNCATESUMS  \
-      -D __erf=erfo7 \
-      -D __TIMER
-#      -D __VECCOPY
-#      -D __PVEC \
-#      -D __erf=erfsun \
-#      -D __CVEC \
-#      -D __RVEC \
-#      -D __erf=erfo5\
-#      -D __OPENMP
+DEFS+=-DSIZE=gridsize \
+      -D__TRUNCATESUMS  \
+      -D__erf=erfo7 \
+      -D__TIMER
+#      -D__VECCOPY
+#      -D__PVEC \
+#      -D__erf=erfsun \
+#      -D__CVEC \
+#      -D__RVEC \
+#      -D__erf=erfo5\
+#      -D__OPENMP
 # ! note: the VEC routines are probably slower
 #     -D'__erf(__A)=erfsun(DBLE(__A))' # definition of Sun error function for single precision compilation
 

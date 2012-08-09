@@ -14,7 +14,7 @@
 !DEC$ ATTRIBUTES INLINE :: GaussSeidel2d
 !DEC$ ATTRIBUTES INLINE :: copy3d
 !DEC$ ATTRIBUTES INLINE :: coarsen
-!DEC$ ATTRIBUTES INLINE :: coarsen2d
+!DEC$ ATTRIBUTES INLINE :: coarsen2d_vec
 !DEC$ ATTRIBUTES INLINE :: compute_fd_coef
 !DEC$ ATTRIBUTES INLINE :: compute_fd_coef2d
  module multigrid
@@ -77,7 +77,7 @@
  bool, save :: multigrid_loud=.true.
  bool, save :: compute_initial_residual
  bool, parameter :: default_compute_initial_residual=.true.
- int, save :: i3D=1, i2D=0
+ int1, save :: i3D=1, i2D=0
 !
 #ifdef __TIMER
  int :: mgtimer, smoothtimer
@@ -382,7 +382,7 @@
   len2Dxz=nint(nnx*nnz*fac2d); 
   len2Dyz=nint(nny*nnz*fac2d);
 !
-! coefficeint for 3D storage with boundary points
+! coefficient for 3D storage with boundary points
   len3Dbc=len3D+                        &! inner points
 & 2*(len2Dxy+len2Dxz+len2Dyz)+          &! 2D boundaries
 & 4*(nint(fac1d*(nnx+nny+i3d*nnz)))+    &! 1D corner lines (z constant)
@@ -392,14 +392,15 @@
 ! write(0,*) numlev, fac1d, fac2d, fac3d !aa
 ! write(0,*) len3d, nnx*nny*nnz, len3dbc, nx*ny*nz !aa
 ! 
-  allocate(allp(len3Dbc)) ! 3D solution array with boundary points
+  allocate(allp(len3Dbc),alleps(len3Dbc)) ! 3D solution array and epsilon array (with boundary points)
 !
-  allocate(alleps(len3D),allkappa(len3D),allrhs(len3D)) ! 3D coefficient arrays w/o boundary points
+  allocate(allkappa(len3D),allrhs(len3D)) ! 3D coefficient arrays w/o boundary points
   allocate(alleast(len2Dyz), allwest(len2Dyz), allnorth(len2Dxz), allsouth(len2Dxz), allback(len2Dxy), allfront(len2Dxy)) ! 2D bc arrays
 !
   allocate(bc_wgt(6,numlev)) ! coefficients for applying BC
 ! to populate data arrays need to call external subroutine to do a pointer cast
   call multigrid_update_bc()
+!
   call multigrid_update_coef(.true., .true., .true., .true.);
 !
   if (.not.fatal_warning(__COMM)) multigrid_initialized=.true.
@@ -422,37 +423,87 @@
   subroutine multigrid_update_coef(update_eps, update_kappa, update_rhs, update_p)
   use SIZE, only : nx, ny, nz, q2D
   use state
+  use bc
   __IMPNONE
   bool :: update_eps, update_kappa, update_rhs, update_p
-  int :: l, inew, iold
-  int :: nnx, nny, nnz
+  int :: l, inew, iold, inewb, ioldb
+  int :: nnx, nny, nnz, ibc
+  float, pointer :: z(:)
 !
   character(len=21), parameter :: whoami='MULTIGRID_UPDATE_COEF'
+! BC MACRO:
+#define __EPS_BC(__BD)  if (bc_type(__BD).eq.periodic)then;ibc=periodic;else;ibc=neumann;endif;call apply_bc(alleps(inewb),z,nnx,nny,nnz,__BD,ibc,bc_wgt(__BD,l))
+! (note that if the bc is zero neumann, the value of bc_wgt does not matter)
 !
   if (.not.state_initialized) then 
     call warning(whoami, 'State not initialized. Nothing.', 0)
     return
   endif
 !
-  nnx=nx-2;  nny=ny-2;   nnz=nz-2;
+  nnx=nx;  nny=ny;   nnz=nz;
 ! store first level 
-  if (update_eps  ) call copy3d(eps  (2:nnx+1,2:nny+1,2:nnz+1), alleps,  nnx,nny,nnz)
+  nullify(z)
+  if (update_eps  ) then
+   call copy3d(eps, alleps, nnx,nny,nnz   )
+! compute boundary points for epsilon using apply_bc via _EPS_BC MACRO:
+  l=1;  inewb=1;
+  allocate(z(max(nnx-2,nny-2,nnz-2)**2)); z=0d0 ; ! overdimensioned array for applying BC to epsilon at all levels
+   __EPS_BC(west)
+   __EPS_BC(east)
+   __EPS_BC(south)
+   __EPS_BC(north)
+   if (.not.q2d) then 
+     __EPS_BC(front)
+     __EPS_BC(back)
+   endif
+!write(0,*) 'eps updated at l',l
+  endif
+!
+  nnx=nnx-2;  nny=nny-2;  nnz=nnz-2;
+! 
   if (update_kappa) call copy3d(kappa(2:nnx+1,2:nny+1,2:nnz+1), allkappa,nnx,nny,nnz)
   if (update_rhs  ) call copy3d(rhs  (2:nnx+1,2:nny+1,2:nnz+1), allrhs,  nnx,nny,nnz)
   if (update_p    ) call copy3d(p,    allp,                              nx,ny,nz   )
 ! coarsen to the lower levels
 !
-  iold=1 ! index at previous level
+  iold=1   ! index at previous level
+  ioldb=1  ! index at previous level (arrays with boundaries)
 !
   do l=2,numlev
-   inew=iold + nnx*nny*nnz ! index at this level
+   inew=iold  + nnx   * nny   * nnz    !     index at this level
+   inewb=ioldb+(nnx+2)*(nny+2)*(nnz+2) !     index at this level (for arrays with boundary points)
 !  interpolate: 
-   if (update_eps)   call coarsen(alleps(iold),   alleps(inew),  nnx,nny,nnz, i2d) ! must have dimensions to satisfy IFORT 
-   if (update_kappa) call coarsen(allkappa(iold), allkappa(inew),nnx,nny,nnz, i2d)
-   nnx=nnx/2;  nny=nny/2;   nnz=nnz/(2-i2d);
+   if (update_kappa) call coarsen(allkappa(iold), allkappa(inew),nnx,nny,nnz, i2d, 0)
+!
+   if (update_eps) then 
+!write(0,*) 'attemp to coarsen eps at l',l, ioldb, inewb
+    call coarsen(alleps(ioldb),  alleps(inewb), nnx,nny,nnz, i2d, 1) ! boundary offset
+!write(0,*) 'eps coarsened at l',l
+! compute boundary points for epsilon using apply_bc:
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    nnx=nnx/2+2;  nny=nny/2+2;  nnz=nnz/(2-i2d)+2;
+    __EPS_BC(west)
+    __EPS_BC(east)
+    __EPS_BC(south)
+    __EPS_BC(north)
+    if (.not.q2d) then 
+     __EPS_BC(front)
+     __EPS_BC(back)
+    endif
+!write(100+l,'(16G20.10)') alleps(1:nnx*nny*nnz)
+!write(100+l,'(A)') 'xxxx'
+!
+    nnx=nnx-2;  nny=nny-2;  nnz=nnz-2;
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!write(0,*) 'eps bc updated at l',l
+   else  ! update_eps
+    nnx=nnx/2;  nny=nny/2;  nnz=nnz/(2-i2d);
+   endif ! update_eps
 ! no rhs update, since for coarse levels it is the residual computed after upper level iterations
    iold=inew;
+   ioldb=inewb;
   enddo
+  if (associated(z)) deallocate(z)
 ! 
   end subroutine multigrid_update_coef
 !*****************************************************************************************************
@@ -562,15 +613,16 @@
 ! loop over all levels
   nnx=nx-2; nny=ny-2; nnz=nz-2;
   i1=1; j1=1; k1=1;
-  i3=1;
+  i3=1; i3b=1
 !
   do level=1,numlev
    call compute_fd_coef  (allw(i3),alle(i3),alls(i3),alln(i3),allf(i3),allb(i3),allo(i3),&  ! multigrid coefficients
-&                          alleps(i3),allkappa(i3),                                       &  ! gridded coefficients
+&                          alleps(i3b),allkappa(i3),                                     &  ! gridded coefficients
 &                          odxall(i1),odxall(i1+nnx+1),odyall(j1),odyall(j1+nny+1),odzall(k1),odzall(k1+nnz-i2d+i3d),&  ! grid metrics
 &                          nnx,nny,nnz,i2d)                                                      ! dimension
 ! note that the metrics are normalized by o; furthermore, the rhs must be normalized by o at every coarsening/prolongation
    i3=i3+nnx*nny*nnz;
+   i3b=i3b+(nnx+2)*(nny+2)*(nnz+2);
    i1=i1+2*nnx+1;     j1=j1+2*nny+1;    k1=k1+2*(nnz-i2d)+i3d;
    nnx=nnx/2;         nny=nny/2;        nnz=nnz/(2-i2d);
   enddo
@@ -658,7 +710,7 @@
 ! 3D offsets
       i3=i3+nnx*nny*nnz;  i3b=i3b+(nnx+2)*(nny+2)*(nnz+2);
 ! inerpolate
-      call coarsen(res, allrhs(i3), nnx, nny, nnz, i2d)
+      call coarsen(res, allrhs(i3), nnx, nny, nnz, i2d, 0)
 ! switch to coarse grid lengths
       nnx=nnx/2; nny=nny/2; nnz=nnz/(2-i2d); ! 3D/2D
 !        write(0,*) size(allrhs), i3+(nnx)*(nny)*(nnz) - 1 ! aa
@@ -712,7 +764,7 @@
 !***********************************************************************************************
        case(JacobiTiledLomem_);
        do k=1,j
-        call JacobiTiledLoMem(allp(i3b),allrhs(i3),alleps(i3),allkappa(i3),&
+        call JacobiTiledLoMem(allp(i3b),allrhs(i3),alleps(i3b),allkappa(i3),&
 &                                    odxall(i1),odxall(i1+nnx+1),odyall(j1),odyall(j1+nny+1),odzall(k1),odzall(k1+nnz-i2d+i3d),&
 &                                    nnx+2,nny+2,nnz+2,omega,smooth_tilesize,i2d)
 ! update BC
@@ -721,7 +773,7 @@
 !***********************************************************************************************
        case(JacobiOnTheFly_);
        do k=1,j
-        call JacobiOnTheFly(allp(i3b),allrhs(i3),alleps(i3),allkappa(i3),&
+        call JacobiOnTheFly(allp(i3b),allrhs(i3),alleps(i3b),allkappa(i3),&
 &                                    odxall(i1),odxall(i1+nnx+1),odyall(j1),odyall(j1+nny+1),odzall(k1),odzall(k1+nnz-i2d+i3d),&
 &                                    nnx+2,nny+2,nnz+2,omega,i2d)
 ! update BC
@@ -763,7 +815,7 @@
 !***********************************************************************************************
        case(GaussSeidelRBTiledLoMem_);
        do k=1,j
-        call GaussSeidelRBTiledLoMem(allp(i3b),allrhs(i3),alleps(i3),allkappa(i3),&
+        call GaussSeidelRBTiledLoMem(allp(i3b),allrhs(i3),alleps(i3b),allkappa(i3),&
 &                                    odxall(i1),odxall(i1+nnx+1),odyall(j1),odyall(j1+nny+1),odzall(k1),odzall(k1+nnz-i2d+i3d),&
 &                                    nnx+2,nny+2,nnz+2,omega,smooth_tilesize,i2d)
 #include "mgutil/multigrid_bc.src"
@@ -978,8 +1030,9 @@
  __IMPNONE
 ! nx corresponds to the number of inner points 
  int :: nx, ny, nz
- int :: i2d
- float, dimension(nx,ny,nz) :: w,e,s,n,f,b,o,eps,kappa
+ int1 :: i2d
+ float, dimension(nx,ny,nz) :: w,e,s,n,f,b,o,kappa
+ float :: eps(nx+2, ny+2, nz+2)
  float :: odxcen(nx+1), odxcor(nx)
  float :: odycen(ny+1), odycor(ny)
  float :: odzcen(nz+1-i2d-i2d), odzcor(nz-i2d) ! 3D/2D
@@ -1007,9 +1060,7 @@
 ! write(0,*) odzcen
 ! write(0,*) '*******'
 ! 
- epscor(2:nx,1:ny,1:nz)=0.5d0*(eps(2:nx,:,:)+eps(1:nx-1,:,:));
- epscor(1,   1:ny,1:nz)=       eps(1,:,:);
- epscor(nx+1,1:ny,1:nz)=       eps(nx,:,:);
+ epscor(:,:ny,:nz)=0.5d0*(eps(2:,2:ny+1,2:nz+1)+eps(:nx+1,2:ny+1,2:nz+1));
 !
  do i=1,nx
   ip=i+1
@@ -1019,9 +1070,7 @@
 !
 ! y-metrics:
 ! compute epsilon at y cell boundary
- epscor(1:nx,2:ny,1:nz)=0.5d0*(eps(:,2:ny,:)+eps(:,1:ny-1,:));
- epscor(1:nx,1,   1:nz)=       eps(:,1,:);
- epscor(1:nx,ny+1,1:nz)=       eps(:,ny,:);
+ epscor(:nx,:,:nz)=0.5d0*(eps(2:nx+1,2:,2:nz+1)+eps(2:nx+1,:ny+1,2:nz+1));
 !
  do j=1,ny
   jp=j+1
@@ -1031,15 +1080,17 @@
 !
 ! z-metrics:
 ! compute epsilon at z cell boundary
- epscor(1:nx,1:ny,2:nz)=0.5d0*(eps(:,:,2:nz)+eps(:,:,1:nz-1));
- epscor(1:nx,1:ny,1)   =       eps(:,:,1);
- do k=nz,nz-i2d
-  epscor(1:nx,1:ny,k+1)=eps(:,:,k);
- enddo
+ if (i2d.eq.0) then
+  epscor(:nx,:ny,:)=0.5d0*(eps(2:nx+1,2:ny+1,2:)+eps(2:nx+1,2:ny+1,:nz+1));
+ else
+! nothing to do for 2D
+ endif
+! a single statement:
+! epscor(:nx,:ny,:)=0.5d0*(eps(2:nx+1,2:ny+1,2:nz+2-i2d)+eps(2:nx+1,2:ny+1,1+i2d:nz+1));
 !
  f=0d0; b=0d0; ! initialize in case they are never used (2D)
 !
- do k=1,nz-i2d
+ do k=1,nz-i2d ! will not be executed in 2D
   kp=k+1
   f(:,:,k)=odzcor(k)*odzcen(k) *epscor(:nx,:ny,k )
   b(:,:,k)=odzcor(k)*odzcen(kp)*epscor(:nx,:ny,kp)
@@ -1059,9 +1110,12 @@
 ! write(7,*) f
 ! write(7,*) b
 ! write(7,*) 'xxxxxxxxxx'
+! close(7)
 !
  end subroutine compute_fd_coef
 !*****************************************************************************************!
+#ifdef __OBSOLETE
+!
  subroutine compute_fd_coef2d(w,e,s,n,o,eps,kappa,odxcen,odxcor,odycen,odycor,nx,ny)
  __IMPNONE
 ! nx corresponds to the number of inner points 
@@ -1106,3 +1160,5 @@
  w=w*oo;  e=e*oo;  s=s*oo;  n=n*oo;
 !
  end subroutine compute_fd_coef2d
+!
+#endif
