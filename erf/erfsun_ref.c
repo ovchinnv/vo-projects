@@ -104,8 +104,9 @@
 * erfc/erf(NaN) is NaN
 */
 
+
 #include <math.h>
-double erfsun_(double *xptr)
+double erfsun_r_(double *xptr)
 {
 const double tiny = 1e-300,
 half= 5.00000000000000000000e-01, /* 0x3FE00000, 0x00000000 */
@@ -180,6 +181,7 @@ sb4 = 3.19985821950859553908e+03, /* 0x40A8FFB7, 0x688C246A */
 sb5 = 2.55305040643316442583e+03, /* 0x40A3F219, 0xCEDF3BE6 */
 sb6 = 4.74528541206955367215e+02, /* 0x407DA874, 0xE79FE763 */
 sb7 = -2.24409524465858183362e+01; /* 0xC03670E2, 0x42712D62 */
+
 
 int n0,hx,ix,i;
 double R,S,P,Q,s,y,z,r;

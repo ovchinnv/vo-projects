@@ -10,8 +10,8 @@ CFLAGS =-O3 -fno-math-errno -c
 #FFLAGS= -O3 -c -extend-source -fast -fno-math-errno -finline -fp-model fast=2 -xhost -no-ipo # -no-inline-factor -no-inline-min-size #-ipo 
 MPI_HOME=/usr/local/mpich2-intel
 #---GNU
-FC=gfortran
-FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fbounds-check -frange-check #-fopenmp 
+#FC=gfortran
+#FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fbounds-check -frange-check #-fopenmp 
 #FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno #-fbounds-check -frange-check 
 MPI_HOME=/usr/local/mpich2-gnu
 #---PATHSCALE
@@ -20,8 +20,8 @@ MPI_HOME=/usr/local/mpich2-gnu
 #FFLAGS=-Ofast -fno-math-errno -extend-source -ffortran-bounds-check -OPT:Olimit=8753 -INLINE -ipa -c
 #FFLAGS=-extend-source -OPT:Olimit=8753 -INLINE -c
 #MPI_HOME=/usr/local/mpich2-path64
-#FC=g95
-#FFLAGS=-O3 -c -ffree-line-length-huge -ffixed-line-length-132 -cpp
+FC=g95
+FFLAGS=-O3 -c -ffree-line-length-huge -ffixed-line-length-132 -fno-second-underscore -cpp
 #MPI_HOME=/usr/local/mpich2-g95
 #
 # G95 reguires no space between "-D" and the name
