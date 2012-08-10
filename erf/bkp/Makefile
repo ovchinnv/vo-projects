@@ -3,8 +3,11 @@ DEFS=-D int=integer -D float=real*8 -D bool=logical
 FC=ifort
 FFLAGS= -O3 -fast -c $(DEFS)
 
-#FC=gfortran
-#FFLAGS=-O3 -c # -fbounds-check -frecord-marker=4 -D int=integer -D float=real*8 -D bool=logical $(DEFS)
+FC=gfortran
+FFLAGS=-O3 -c # -fbounds-check -frecord-marker=4 -D int=integer -D float=real*8 -D bool=logical $(DEFS)
+
+#FC=g95
+#FFLAGS=-O3 -c -fno-second-underscore # -fbounds-check -frecord-marker=4 -D int=integer -D float=real*8 -D bool=logical $(DEFS)
 
 
 CC=gcc

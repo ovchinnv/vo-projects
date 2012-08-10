@@ -9,5 +9,5 @@ include $(ROOT)/Makefile.inc
 clean::
 	rm -f $(ROOT)/$(NAME).stamp $(SOURCES) $(OBJS)
 
-test.o: erfsun_2_f90.o test.F90
+test.o: erfsun_value.o test.F90
 	$(FC) $(FFLAGS) test.F90
