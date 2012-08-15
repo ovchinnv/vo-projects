@@ -7,6 +7,10 @@
 ! Targeted Molecular Dynamics Simulations of Biomolecules
 ! Basic algorithms: Best-fit alignment : W. Kabsch '78; diagonalization: Cramer's rule
 !
+! cannot inline module procedures
+!!DEC$ ATTRIBUTES FORCEINLINE :: norm3
+!!DEC$ ATTRIBUTES FORCEINLINE :: veccross3
+!!DEC$ ATTRIBUTES FORCEINLINE :: unit3
 !
 __CHARMM_ONLY##IF NEWBESTFIT
 !
@@ -24,6 +28,7 @@ __CHARMM_ONLY##IF NEWBESTFIT
        float, parameter :: zero=0d0
        float, parameter :: one=1d0
        float, parameter :: two=2d0
+       float, parameter :: three=3d0
        float, parameter :: half=0.5d0
        float, parameter :: oo3=0.3333333333333333d0
        float, parameter :: oo6=0.1666666666666666d0
@@ -32,6 +37,10 @@ __CHARMM_ONLY##IF NEWBESTFIT
        float, parameter :: pi=3.141592653589793d0
        float, parameter :: twopi=6.283185307179586232d0
        float, parameter :: fourpi=12.566370614359172464d0
+       float, parameter :: cos_2pi_o3=-half
+       float, parameter :: sin_2pi_o3= 0.866025403784439d0
+       float, parameter :: cos_4pi_o3=-half
+       float, parameter :: sin_4pi_o3=-0.866025403784439d0
        float, parameter :: Kd(3,3)=                                         &
      & RESHAPE( (/one,zero,zero,zero,one,zero,zero,zero,one/), (/3,3/) ) ! Kronecker delta
       !
@@ -147,16 +156,16 @@ __CHARMM_ONLY##IF NEWBESTFIT
       !
        Qq=oo3*a1 - oo9*a2*a2
        Rr=oo6*a2*a1 - half*a0 - oo27*a2**3
-      ! Dd=Qq**3+Rr*Rr ! Discriminant: D == 0 implies theta=1 below
+      __DBGCOMM Dd=Qq**3+Rr*Rr ! Discriminant: D == 0 implies theta=1 below
       !
        rootQ=sqrt(-Qq)
        rootQ3=rootQ**3
       !
-      ! write(0,*) 'errtol:',errtol_
-      ! write(0,*) 'D:', Dd
-      ! write(0,*) 'Q:', Qq
-      ! write(0,*) 'R:', Rr
-      ! write(0,*) 'rootQ:', rootQ
+      __DBGCOMM write(0,*) 'errtol:',errtol_
+      __DBGCOMM  write(0,*) 'D:', Dd
+      __DBGCOMM  write(0,*) 'Q:', Qq
+      __DBGCOMM  write(0,*) 'R:', Rr
+      __DBGCOMM  write(0,*) 'rootQ:', rootQ
       !
        if (rootQ.lt.errtol_) then ! for the indentity matrix
         eval(1)=-a2*oo3
@@ -165,19 +174,41 @@ __CHARMM_ONLY##IF NEWBESTFIT
        else
         Dd=Rr/rootQ3
         ! denormalize to 1 if very close; acos very sensitive to roundoff error
-        if (abs(abs(Dd)-one).lt.errtol_) then
-         theta=zero
-        else
-         theta=acos( max(-one, min(Rr/rootQ3,one)) ) ! protect from out-of-range arguments
-        endif
+!        if (abs(abs(Dd)-one).lt.errtol_) then
+!         theta=zero
+!        else
+         theta=acos( max(-one, min(Dd,one)) ) ! protect from out-of-range arguments
+!        endif
       !
-        eval(1)=two*rootQ*cos( theta*oo3)        -a2*oo3
-        eval(2)=two*rootQ*cos((theta+twopi) *oo3)-a2*oo3
-        eval(3)=two*rootQ*cos((theta+fourpi)*oo3)-a2*oo3
+!        eval(1)=two*rootQ*cos( theta*oo3)        -a2*oo3
+!        eval(2)=two*rootQ*cos((theta+twopi) *oo3)-a2*oo3
+!        eval(3)=two*rootQ*cos((theta+fourpi)*oo3)-a2*oo3
+!
+! try to speed things up: (15sec w/ intel) ; appears to make no difference
+        a = cos( theta*oo3 ); b=sqrt(one-a*a)*sin_2pi_o3 ; ! use cosine sum
+        eval(1)=two*rootQ*(a             )-a2*oo3
+        eval(2)=two*rootQ*(a*cos_2pi_o3-b)-a2*oo3
+        eval(3)=two*rootQ*(a*cos_2pi_o3+b)-a2*oo3
+!        eval(3)=two*rootQ*(a*cos_4pi_o3-b*sin_4pi_o3)-a2*oo3
        endif
-      ! write(0,*) 'EVAL:', eval
-      ! Dd=Rr/rootQ3
-      ! write(0,'(A,5E30.20)') 'test:', theta, rootQ3, Dd, acos(Dd), acos(1d0)
+! ad hoc : try to refine eigenvalues using Newton-Raphson
+! turns out that the correction is already machine precision, so no improvement is possible
+!      __DBGCOMM write(0,*) 'EVAL:', eval
+!       do j=2,2
+!        do k=1,5
+!        d=eval(j)
+!        a=(d**3+a2*d**2+a1*d+a0)/(three*d**2+two*a2*d+a1)
+!        if (abs(a).lt.errtol_) a=0.5*sign(errtol_,a) ! make sure we take a finite step
+!        __DBGCOMM write(0,*) 'CHARACTERISTIC DETERMINANT:',d,a
+!        d=d-a
+!        eval(j)=d
+!        enddo
+!        stop
+!       enddo
+!
+      __DBGCOMM write(0,*) 'EVAL:', eval
+      __DBGCOMM Dd=Rr/rootQ3
+      __DBGCOMM write(0,'(A,5E30.20)') 'test:', theta, rootQ3, Dd, acos(Dd), acos(1d0)
       !############# truncate if within errtol of 0 ###################
        if (abs(eval(1)) .lt. errtol_) eval(1)=zero
        if (abs(eval(2)) .lt. errtol_) eval(2)=zero
@@ -201,30 +232,34 @@ __CHARMM_ONLY##IF NEWBESTFIT
         q=(/b, e, h/) ; qn=norm3(q)
         r=(/c, f, i/) ; 
       !
-        if     (pn      .lt.errtol_) then; v=(/one , zero, zero/)          ! ;write(0,*) 198, p
-        elseif (qn      .lt.errtol_) then; v=(/zero, one,  zero/)          ! ;write(0,*) 199, q
-        elseif (norm3(r).lt.errtol_) then; v=(/zero, zero, one /)          ! ;write(0,*) 200, r
+        if     (pn      .lt.errtol_) then; v=(/one , zero, zero/)          __DBGCOMM ;write(0,*) 198, p
+        elseif (qn      .lt.errtol_) then; v=(/zero, one,  zero/)          __DBGCOMM ;write(0,*) 199, q
+        elseif (norm3(r).lt.errtol_) then; v=(/zero, zero, one /)          __DBGCOMM ;write(0,*) 200, r
         elseif (abs(abs(dot_product(p,q)) - pn*qn) .gt. errtol_) then ! P || Q
       ! set z=1
       ! use Cramer's rule
          det12=a*e-b*d
          det13=a*h-b*g
       !
-         if (abs(det12) .gt. errtol_) then
-          det12=one/det12;
-          v=unit3((/(b*f-c*e)*det12, (d*c-a*f)*det12, one/))  ! ;write(0,*) 209, det12, &
-                                                              ! unit3( (/  (b*f-c*e)*det12, (d*c-a*f)*det12, one /) )
+         if (abs(det12).gt.abs(det13) .and. abs(det12).gt.errtol_) then
+!          det12=one/det12;
+!          v=unit3((/(b*f-c*e)*det12, (d*c-a*f)*det12, one/))   __DBGCOMM;write(0,*) 209, det12, errtol_,&
+!                                                               __DBGCOMM unit3( (/  (b*f-c*e)*det12, (d*c-a*f)*det12, one /) )
+! more stable & faster (?):
+          v=unit3((/(b*f-c*e), (d*c-a*f), det12/))             __DBGCOMM;write(0,*) 209, det12, det13, &
+                                                               __DBGCOMM ( (/  (b*f-c*e), (d*c-a*f), det12 /) )
          elseif (abs(det13) .gt. errtol_) then
-          det13=one/det13;
-          v=unit3((/(b*i-c*h)*det13, (g*c-a*i)*det13, one/))           !  ;write(0,*) 212, det13
+!          det13=one/det13;
+!          v=unit3((/(b*i-c*h)*det13, (g*c-a*i)*det13, one/))             __DBGCOMM;write(0,*) 212, det13
+          v=unit3((/(b*i-c*h), (g*c-a*i), det13/))             __DBGCOMM;write(0,*) 212, det13
          endif
         else
          ! otherwise there is a vector with z = 0 try setting x=1
-         if     (abs(b) .gt. errtol_) then; v=unit3((/one, -a/b, zero/)) !;write(0,*) 216, b
-         elseif (abs(e) .gt. errtol_) then; v=unit3((/one, -d/e, zero/)) !;write(0,*) 217, e
-         elseif (abs(h) .gt. errtol_) then; v=unit3((/one, -g/h, zero/)) !;write(0,*) 218, h
+         if     (abs(b) .gt. errtol_) then; v=unit3((/one, -a/b, zero/)) __DBGCOMM;write(0,*) 216, b
+         elseif (abs(e) .gt. errtol_) then; v=unit3((/one, -d/e, zero/)) __DBGCOMM;write(0,*) 217, e
+         elseif (abs(h) .gt. errtol_) then; v=unit3((/one, -g/h, zero/)) __DBGCOMM;write(0,*) 218, h
          else ! Q=0 this should not be possible because P Q R are checked above !
-           v=(/zero, one, zero/)                                         !;write(0,*) 220
+           v=(/zero, one, zero/)                                         __DBGCOMM;write(0,*) 220
          endif
         endif
         evec(:,j)=v
@@ -237,6 +272,11 @@ __CHARMM_ONLY##IF NEWBESTFIT
 !        note: for a symmetric matrix, different evectors are orthogonal, so use less strict criterion below
          if (abs(dot_product(evec(:,1),evec(:,2))).lt.half) then 
           evec(:,3)=veccross3(evec(:,1),evec(:,2))
+! obtain orthogonality to higher precision (?) :
+!          v=veccross3(evec(:,2),evec(:,3))
+!          evec(:,2)=veccross3(evec(:,3),evec(:,1))
+!          evec(:,1)=v;
+!
           if (qdebug)  __DEBUG_OUT(*, " *EIG: ", evec(:,3))
 !          return
           exit ! quit do loop to skip j=3 iteration, but do not return (multiple returns unfriendly to inlining)

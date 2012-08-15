@@ -11,12 +11,10 @@ LINKOBJS=constants.o output.o
 
 include $(ROOT)/Makefile.inc
 
-bfit.o    : bestfit.o
-
 charmm: $(CHARMM_SOURCES)
 
 #lib: force_look
 #	/bin/sh -c 'for file in "bestfit.o"; do  ln -fs `pwd`/$$file ${ROOT}/lib/$$file; done'
 
 clean::
-	rm -f *.mod $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(EXE) bfit.o $(ROOT)/$(NAME).stamp
+	rm -f *.mod $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(ROOT)/$(NAME).stamp fort.666
