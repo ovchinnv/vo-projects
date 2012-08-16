@@ -125,7 +125,7 @@ test :: $(OBJS) test.o force_look
 	echo "==================================================="
 	echo "Running test :"
 	echo "==================================================="
-	time ./test 2>&1 > test.out ; cat test.out
+	time ./test > test.out 2>&1 ; cat test.out
 	echo "==================================================="
 	echo
 ######################### OTHER RULES ########################
