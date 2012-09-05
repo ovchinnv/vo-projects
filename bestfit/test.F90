@@ -1,34 +1,44 @@
+/*#define __WRN(__WHO,__MSG) write(0,*) 'WARNING FROM: ',__WHO,': ',__MSG*/
+/*#define __PRINT(__MSG) write(0,'(A)') __MSG*/
+/*#define __PRINT(__MSG) call plainmessage(__MSG)*/
+/*#define __PRINTL(__MSG,__LEVEL) call plainmessage(__MSG,__LEVEL)*/
+/*COORDINATES AND MASSES:*/
+/*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
+!#define __DBGCOMM
+!********************************************************!
+! the purpose of this file is to provide a rigorous test !
+! of the source code in this directory. Please take this !
+! task seriously, and design the test(s) accordingly, as !
+! it _will_ affect the overall debugging time of more !
+! complex compound codes. !
+!********************************************************!
  program test
-
  use bestfit
  use constants
-
  implicit none
-
- float :: M(3,3)
- float :: maxerr, err, TOL
+ real*8 :: M(3,3)
+ real*8 :: maxerr, err, TOL
  real*8 :: ERRTOL_
  real*4 :: ERRTOL4
- int :: numtest
+ integer :: numtest
 !######################## for best-fit tests
- float, allocatable :: r(:,:,:), r_rot(:,:,:), rave(:,:), rave_new(:,:)
+ real*8, allocatable :: r(:,:,:), r_rot(:,:,:), rave(:,:), rave_new(:,:)
  character(len=100) :: line
- float, allocatable :: u(:,:,:)
- float :: Kd(3,3) = RESHAPE( (/one,zero,zero,zero,one,zero,zero,zero,one/), (/3,3/) ) ! Kronecker delta
- float, allocatable :: w(:)
- float :: eigval(3)
- int :: i,j,n,l,nrep,natom
+ real*8, allocatable :: u(:,:,:)
+ real*8 :: Kd(3,3) = RESHAPE( (/one,zero,zero,zero,one,zero,zero,zero,one/), (/3,3/) ) ! Kronecker delta
+ real*8, allocatable :: w(:)
+ real*8 :: eigval(3)
+ integer :: i,j,n,l,nrep,natom
 !
- float :: rmsd_charmm(31) = &
+ real*8 :: rmsd_charmm(31) = &
 & (/0.161762d0, 0.316171d0, 0.462415d0, 0.606288d0, 0.753354d0, 0.887121d0, 0.977275d0, 1.028353d0, 1.058443d0, 1.080392d0, 1.099811d0, 1.118947d0, 1.138144d0, 1.158221d0, 1.179165d0, 1.200457d0, &
-&   1.222006d0, 1.243396d0, 1.264580d0, 1.284780d0, 1.305111d0, 1.324648d0, 1.343786d0, 1.362091d0, 1.379977d0, 1.396627d0, 1.412621d0, 1.428078d0, 1.445545d0, 1.468143d0, 1.493650d0 /)
- float :: rmsd_(32)
- float :: rmsd_vmd(31) = &
-& (/ 0.16176186501979828d0, 0.3161707818508148d0, 0.4624148905277252d0, 0.6062883138656616d0, & 
+& 1.222006d0, 1.243396d0, 1.264580d0, 1.284780d0, 1.305111d0, 1.324648d0, 1.343786d0, 1.362091d0, 1.379977d0, 1.396627d0, 1.412621d0, 1.428078d0, 1.445545d0, 1.468143d0, 1.493650d0 /)
+ real*8 :: rmsd_(32)
+ real*8 :: rmsd_vmd(31) = &
+& (/ 0.16176186501979828d0, 0.3161707818508148d0, 0.4624148905277252d0, 0.6062883138656616d0, &
 & 0.7533543109893799d0, 0.8871204853057861d0, 0.9772745370864868d0, 1.0283526182174683d0, 1.0584430694580078d0, 1.0803922414779663d0, 1.0998106002807617d0, 1.1189470291137695d0, 1.1381436586380005d0,&
 & 1.158220648765564d0, 1.179165005683899d0, 1.2004566192626953d0, 1.2220057249069214d0, 1.2433956861495972d0, 1.2645800113677979d0, 1.2847803831100464d0, 1.3051105737686157d0, 1.3246477842330933d0,&
 & 1.3437864780426025d0, 1.362090826034546d0, 1.379976749420166d0, 1.396626591682434d0, 1.4126205444335938d0, 1.428078055381775d0, 1.445544719696045d0, 1.4681434631347656d0, 1.4936503171920776d0/)
-
 !
  maxerr=0d0
  numtest=0
@@ -51,16 +61,16 @@
  M=reshape ( (/ 4.1d0, ERRTOL_, ERRTOL_, 0d0, ERRTOL_, ERRTOL_, ERRTOL_, 0d0, ERRTOL_/),(/3,3/) )
  err=check_diag(M) ; if (err.ge.0) numtest=numtest+1 ; maxerr=max(maxerr,err)
 ! ok
- M=reshape ( (/  ERRTOL_, 1d0, 0d0, & 
-                 1d0,      0d0, 3d0, & 
-                 0d0,      3d0, ERRTOL_*1000/),(/3,3/) )
+ M=reshape ( (/ ERRTOL_, 1d0, 0d0, &
+                 1d0, 0d0, 3d0, &
+                 0d0, 3d0, ERRTOL_*1000/),(/3,3/) )
  err=check_diag(M) ; if (err.ge.0) numtest=numtest+1 ; maxerr=max(maxerr,err)
- 666  continue
- M=reshape ( (/  ERRTOL4, 1., 0., &
+ 666 continue
+ M=reshape ( (/ ERRTOL4, 1., 0., &
                       1., 0., 3., &
                       0., 3., ERRTOL4*1000/),(/3,3/) )
  err=check_diag(M) ; if (err.ge.0) numtest=numtest+1 ; maxerr=max(maxerr,err)
- M=reshape ( (/  ERRTOL_, 1d0, 1d0, 1d0, 1d0, 1d0, 1d0, 1d0, ERRTOL_*1000/),(/3,3/) )
+ M=reshape ( (/ ERRTOL_, 1d0, 1d0, 1d0, 1d0, 1d0, 1d0, 1d0, ERRTOL_*1000/),(/3,3/) )
  err=check_diag(M) ; if (err.ge.0) numtest=numtest+1 ; maxerr=max(maxerr,err)
 ! goto 777
 ! this failed:
@@ -72,7 +82,6 @@
  err=check_diag(M) ; if (err.ge.0) numtest=numtest+1 ; maxerr=max(maxerr,err)
 !
 ! this also failed:
-
  M=reshape( (/ &
  0.27427009764448101458711d+00, 0.10798602617951455484580d+00,-0.16209868811080687251457d-06,&
  0.10798602617951455484580d+00, 0.42516417029020051043808d-01,-0.63821733861371916309836d-07,&
@@ -94,8 +103,6 @@
 -0.896424102783203E+01,-0.241539478302002E+02, 0.861421356201172E+02 /), (/3,3/))
  err=check_diag(M) ; if (err.ge.0) numtest=numtest+1 ; maxerr=max(maxerr,err)
 ! goto 777
-
-
 !*******random matrix tests*******
 ! these are an approximation to what actually goes on in a code
 !
@@ -107,15 +114,15 @@
   err=check_diag(M) ; if (err.ge.0) numtest=numtest+1 ; maxerr=max(maxerr,err)
  enddo
 !
- 777  continue
+ 777 continue
  write(0,*) ' MAXIMUM DIAGONALIZATION ERROR: ',maxerr
  write(0,*) ' NUMBER OF TESTS: ',numtest
 !####################################################################################################
 !####################################################################################################
 ! TEST BEST FIT ALIGNMENT
 !
- write(0,*) ' ---------------------------------------' 
- write(0,*) ' Reading structures for best-fit test...' 
+ write(0,*) ' ---------------------------------------'
+ write(0,*) ' Reading structures for best-fit test...'
  nrep=32
  do n=1,nrep
   write(line,'(I5)') n-1
@@ -145,33 +152,32 @@
 !
  enddo ! nrep
 ! superpose all structures onto a single one
- write(0,*) ' Superposing all structures onto first structure using RMSBestFit ...' 
+ write(0,*) ' Superposing all structures onto first structure using RMSBestFit ...'
 !
  do n=2,nrep
   call RMSBestFit(r(:,:,n),r(:,:,1),w,u(:,:,n),EIGVAL=eigval)
   rmsd_(n-1)=rmsd(r(:,:,1),matmul(r(:,:,n),transpose(u(:,:,n))),w)
-!  write(0,'(I5,A20)') n, ' Rotation matrix : ' 
-!  write(0,'(3G20.9)') u(:,:,n)
+! write(0,'(I5,A20)') n, ' Rotation matrix : '
+! write(0,'(3G20.9)') u(:,:,n)
 ! test orthogonality
-!  write(0,*)  ' -------------------------------------------------------------------- ' 
-!  write(0,'(A,I5,3G25.15)') ' Orthogonality error: ',n,rmsd(matmul(u(:,:,n),transpose(u(:,:,n))),Kd,(/one,one,one/))/nine
-!  write(0, '(A,10G25.15)')   ' RMSD from eigenvalues  : ',sqrt(rmsd(r(:,:,n),rave,w)**2+rmsd(r(:,:,1),rave,w)**2-two*sum(eigval)) ! , eigval ! , maxval(abs(rave))
-!  write(0, '(A,3G25.15)')   ' RMSD from coordinates  : ',rmsd_(n-1)
-!   write(0, *) rmsd_(n-1), rmsd_charmm(n-1), rmsd_vmd(n-1)
-  
+! write(0,*) ' -------------------------------------------------------------------- '
+! write(0,'(A,I5,3G25.15)') ' Orthogonality error: ',n,rmsd(matmul(u(:,:,n),transpose(u(:,:,n))),Kd,(/one,one,one/))/nine
+! write(0, '(A,10G25.15)') ' RMSD from eigenvalues  : ',sqrt(rmsd(r(:,:,n),rave,w)**2+rmsd(r(:,:,1),rave,w)**2-two*sum(eigval)) ! , eigval ! , maxval(abs(rave))
+! write(0, '(A,3G25.15)') ' RMSD from coordinates  : ',rmsd_(n-1)
+! write(0, *) rmsd_(n-1), rmsd_charmm(n-1), rmsd_vmd(n-1)
  enddo
 !
 ! compute difference from charmm and VMD:
  write(0,*) ' -------------------------------------------------------'
  write(0,*) ' Maximum RMS differences between different calculations:'
  write(0,*) ' Present vs. CHARMM: ', maxval(abs(rmsd_(1:31) - rmsd_charmm))
- write(0,*) ' Present vs. VMD   : ',maxval(abs(rmsd_(1:31) - rmsd_vmd))  
- write(0,*) ' CHARMM  vs. VMD   : ',maxval(abs(rmsd_charmm - rmsd_vmd))  
+ write(0,*) ' Present vs. VMD   : ',maxval(abs(rmsd_(1:31) - rmsd_vmd))
+ write(0,*) ' CHARMM  vs. VMD   : ',maxval(abs(rmsd_charmm - rmsd_vmd))
 !
 ! performance test (about 0.18 ms / calculation with AD)
  n=0
  write(0,*) ' Calculating best fit ', 10*n,' times...'
- do j=1,n 
+ do j=1,n
   do i=2,11
    call RMSBestFit(r(:,:,i),r(:,:,i-1),w,u(:,:,i),EIGVAL=eigval)
   enddo
@@ -181,7 +187,7 @@
 ! now, let's try to find the common structure
  rave=r(:,:,1)
  rave_new=zero
-! 
+!
  i=77 ! maximum number of iterations
  do j=1,i
   do n=1,nrep
@@ -192,7 +198,7 @@
   rave_new=sum(r_rot,3)/nrep
   err=rmsd(rave_new,rave,w)
   write(0,*) err, sum(rmsd_**2)
-!  if (err.lt.errtol_) exit
+! if (err.lt.errtol_) exit
   if (err.lt.errtol_) exit
   rave=rave_new
  enddo
@@ -202,11 +208,11 @@
  contains
   function check_diag(B)
   implicit none
-  float, intent(in) :: B(3,3)
-  float :: maxerr, A(3,3)
-  float :: eval(3), evec(3,3)
+  real*8, intent(in) :: B(3,3)
+  real*8 :: maxerr, A(3,3)
+  real*8 :: eval(3), evec(3,3)
   real*8 :: b0(3,3) ! this is a check -- do in double prec
-  float :: check_diag, norm
+  real*8 :: check_diag, norm
   character(len=10) :: whoami='CHECK_DIAG'
 !
 ! First, make sure that the matrix is symmetric
@@ -223,21 +229,20 @@
   endif
 ! Second, scale the matrix
 ! I find that this does not make a significant difference
-!  norm=third*abs(B(1,1)+B(2,2)+B(3,3))**third ; ! use trace for normalization 
-!  norm=abs(B(1,1)+B(2,2)+B(3,3))**third ; ! use trace for normalization 
-!  norm=abs(B(1,1)+B(2,2)+B(3,3))**half ; ! use trace for normalization 
-!  norm=abs(B(1,1)+B(2,2)+B(3,3))/27 ; ! use trace for normalization 
-!  norm=third*abs(B(1,1)+B(2,2)+B(3,3)) ; ! use trace for normalization 
-!  norm=abs(sum(B))/9
+! norm=third*abs(B(1,1)+B(2,2)+B(3,3))**third ; ! use trace for normalization
+! norm=abs(B(1,1)+B(2,2)+B(3,3))**third ; ! use trace for normalization
+! norm=abs(B(1,1)+B(2,2)+B(3,3))**half ; ! use trace for normalization
+! norm=abs(B(1,1)+B(2,2)+B(3,3))/27 ; ! use trace for normalization
+! norm=third*abs(B(1,1)+B(2,2)+B(3,3)) ; ! use trace for normalization
+! norm=abs(sum(B))/9
   norm=1;
   A=B/norm
-! 
+!
   call eig3s(A, eval, evec)
 ! check diagonalization directly
 ! rescale the eigenvalues back
   eval=eval*norm
   b0(:,1)=eval(1)*evec(:,1);b0(:,2)=eval(2)*evec(:,2);b0(:,3)=eval(3)*evec(:,3)! aa
-
   maxerr=(maxval(abs(matmul(b0,transpose(evec))-B)))
   if (maxerr.ge.TOL) then
    write(666,*) whoami,': Test failed, maximum error:',maxerr,TOL
@@ -267,5 +272,4 @@
   endif
 !
   end function check_diag
- end 
- 
+ end

@@ -4,6 +4,7 @@
 /*#define __PRINTL(__MSG,__LEVEL) call plainmessage(__MSG,__LEVEL)*/
 /*COORDINATES AND MASSES:*/
 /*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
+!#define __DBGCOMM
 ! **********************************************************************!
 ! This source file was was generated automatically from a master source !
 ! code tree, which may not be distributed with this code if the !
@@ -24,16 +25,20 @@
 ! Targeted Molecular Dynamics Simulations of Biomolecules
 ! Basic algorithms: Best-fit alignment : W. Kabsch '78; diagonalization: Cramer's rule
 !
+! cannot inline module procedures
+!!DEC$ ATTRIBUTES FORCEINLINE :: norm3
+!!DEC$ ATTRIBUTES FORCEINLINE :: veccross3
+!!DEC$ ATTRIBUTES FORCEINLINE :: unit3
 !
 !**CHARMM_ONLY**!##IF NEWBESTFIT
 !
   module bestfit
       !
-      use constants, only: errtol; use output
+      use constants, only : errtol; use output
       !
       private
       !
-       logical, private :: qdebug=.false.
+       logical, private :: qdebug=.true.
        logical, private :: qcheckdet=.true.
        logical, private :: qdetfailtrace=.true.
       !
@@ -41,6 +46,7 @@
        real*8, parameter :: zero=0d0
        real*8, parameter :: one=1d0
        real*8, parameter :: two=2d0
+       real*8, parameter :: three=3d0
        real*8, parameter :: half=0.5d0
        real*8, parameter :: oo3=0.3333333333333333d0
        real*8, parameter :: oo6=0.1666666666666666d0
@@ -49,6 +55,10 @@
        real*8, parameter :: pi=3.141592653589793d0
        real*8, parameter :: twopi=6.283185307179586232d0
        real*8, parameter :: fourpi=12.566370614359172464d0
+       real*8, parameter :: cos_2pi_o3=-half
+       real*8, parameter :: sin_2pi_o3= 0.866025403784439d0
+       real*8, parameter :: cos_4pi_o3=-half
+       real*8, parameter :: sin_4pi_o3=-0.866025403784439d0
        real*8, parameter :: Kd(3,3)= &
      & RESHAPE( (/one,zero,zero,zero,one,zero,zero,zero,one/), (/3,3/) ) ! Kronecker delta
       !
@@ -60,7 +70,7 @@
        public norm3
        private unit3
        public veccross3
-       private com
+       public com
        public setdebug
       !
        contains
@@ -142,14 +152,12 @@
        errtol_=ERRTOL()*50
       !
       !
-       if (qdebug) then
       ! determinant of M
-        dummy= &
-     & M(1,1)*(M(2,2)*M(3,3)-M(2,3)*M(3,2))+ &
-     & M(1,2)*(M(2,3)*M(3,1)-M(2,1)*M(3,3))+ &
-     & M(1,3)*(M(2,1)*M(3,2)-M(2,2)*M(3,1))
-        write(666,*) ' Det(M) [must be >=0] : ', dummy
-       endif
+! dummy= &
+! & M(1,1)*(M(2,2)*M(3,3)-M(2,3)*M(3,2))+ &
+! & M(1,2)*(M(2,3)*M(3,1)-M(2,1)*M(3,3))+ &
+! & M(1,3)*(M(2,1)*M(3,2)-M(2,2)*M(3,1))
+! write(666,*) ' Det(M) [must be >=0] : ', dummy
       !
       !
        a11=M(1,1); a12=M(1,2); a13=M(1,3)
@@ -182,23 +190,45 @@
        else
         Dd=Rr/rootQ3
         ! denormalize to 1 if very close; acos very sensitive to roundoff error
-        if (abs(abs(Dd)-one).lt.errtol_) then
-         theta=zero
-        else
-         theta=acos( max(-one, min(Rr/rootQ3,one)) ) ! protect from out-of-range arguments
-        endif
+! if (abs(abs(Dd)-one).lt.errtol_) then
+! theta=zero
+! else
+         theta=acos( max(-one, min(Dd,one)) ) ! protect from out-of-range arguments
+! endif
       !
-        eval(1)=two*rootQ*cos( theta*oo3) -a2*oo3
-        eval(2)=two*rootQ*cos((theta+twopi) *oo3)-a2*oo3
-        eval(3)=two*rootQ*cos((theta+fourpi)*oo3)-a2*oo3
+! eval(1)=two*rootQ*cos( theta*oo3) -a2*oo3
+! eval(2)=two*rootQ*cos((theta+twopi) *oo3)-a2*oo3
+! eval(3)=two*rootQ*cos((theta+fourpi)*oo3)-a2*oo3
+!
+! try to speed things up: (15sec w/ intel) ; appears to make no difference
+        a = cos( theta*oo3 ); b=sqrt(one-a*a)*sin_2pi_o3 ; ! use cosine sum
+        eval(1)=two*rootQ*(a )-a2*oo3
+        eval(2)=two*rootQ*(a*cos_2pi_o3-b)-a2*oo3
+        eval(3)=two*rootQ*(a*cos_2pi_o3+b)-a2*oo3
+! eval(3)=two*rootQ*(a*cos_4pi_o3-b*sin_4pi_o3)-a2*oo3
        endif
+! ad hoc : try to refine eigenvalues using Newton-Raphson
+! turns out that the correction is already machine precision, so no improvement is possible
+! ! write(0,*) 'EVAL:', eval
+! do j=2,2
+! do k=1,5
+! d=eval(j)
+! a=(d**3+a2*d**2+a1*d+a0)/(three*d**2+two*a2*d+a1)
+! if (abs(a).lt.errtol_) a=0.5*sign(errtol_,a) ! make sure we take a finite step
+! ! write(0,*) 'CHARACTERISTIC DETERMINANT:',d,a
+! d=d-a
+! eval(j)=d
+! enddo
+! stop
+! enddo
+!
       ! write(0,*) 'EVAL:', eval
       ! Dd=Rr/rootQ3
       ! write(0,'(A,5E30.20)') 'test:', theta, rootQ3, Dd, acos(Dd), acos(1d0)
       !############# truncate if within errtol of 0 ###################
        if (abs(eval(1)) .lt. errtol_) eval(1)=zero
        if (abs(eval(2)) .lt. errtol_) eval(2)=zero
-        if (abs(eval(3)) .lt. errtol_) eval(3)=zero
+       if (abs(eval(3)) .lt. errtol_) eval(3)=zero
       ! sort eigen-values in DECREASING order
        if (eval(1).lt.eval(2)) then;
         dummy=eval(1); eval(1)=eval(2); eval(2)=dummy; endif
@@ -227,13 +257,17 @@
          det12=a*e-b*d
          det13=a*h-b*g
       !
-         if (abs(det12) .gt. errtol_) then
-          det12=one/det12;
-          v=unit3((/(b*f-c*e)*det12, (d*c-a*f)*det12, one/)) ! ;write(0,*) 209, det12, &
-                                                              ! unit3( (/ (b*f-c*e)*det12, (d*c-a*f)*det12, one /) )
+         if (abs(det12).gt.abs(det13) .and. abs(det12).gt.errtol_) then
+! det12=one/det12;
+! v=unit3((/(b*f-c*e)*det12, (d*c-a*f)*det12, one/)) !;write(0,*) 209, det12, errtol_,&
+! ! unit3( (/ (b*f-c*e)*det12, (d*c-a*f)*det12, one /) )
+! more stable & faster (?):
+          v=unit3((/(b*f-c*e), (d*c-a*f), det12/)) !;write(0,*) 209, det12, det13, &
+                                                               ! ( (/ (b*f-c*e), (d*c-a*f), det12 /) )
          elseif (abs(det13) .gt. errtol_) then
-          det13=one/det13;
-          v=unit3((/(b*i-c*h)*det13, (g*c-a*i)*det13, one/)) ! ;write(0,*) 212, det13
+! det13=one/det13;
+! v=unit3((/(b*i-c*h)*det13, (g*c-a*i)*det13, one/)) !;write(0,*) 212, det13
+          v=unit3((/(b*i-c*h), (g*c-a*i), det13/)) !;write(0,*) 212, det13
          endif
         else
          ! otherwise there is a vector with z = 0 try setting x=1
@@ -246,15 +280,20 @@
         endif
         evec(:,j)=v
 ! if the first two evectors are perpendicular, obtain the third by taking a cross product; then bail
-      if (qdebug) write(666,*) " *EIG: ", evec(:,j)
+! if (qdebug) write(666,*) " *EIG: ", evec(:,j)
 !
         if (j.eq.2) then
-         if (qdebug) write(666,*) " < ev1|ev2 > / errtol : ", dot_product(evec(:,1),evec(:,2)), errtol_
+! if (qdebug) write(666,*) " < ev1|ev2 > / errtol : ", dot_product(evec(:,1),evec(:,2)), errtol_
 ! if (abs(dot_product(evec(:,1),evec(:,2))).lt.errtol_) then
 ! note: for a symmetric matrix, different evectors are orthogonal, so use less strict criterion below
          if (abs(dot_product(evec(:,1),evec(:,2))).lt.half) then
           evec(:,3)=veccross3(evec(:,1),evec(:,2))
-          if (qdebug) write(666,*) " *EIG: ", evec(:,3)
+! obtain orthogonality to higher precision (?) :
+! v=veccross3(evec(:,2),evec(:,3))
+! evec(:,2)=veccross3(evec(:,3),evec(:,1))
+! evec(:,1)=v;
+!
+! write(666,*) " *EIG: ", evec(:,3)
 ! return
           exit ! quit do loop to skip j=3 iteration, but do not return (multiple returns unfriendly to inlining)
          endif
@@ -448,6 +487,9 @@
            b0(:,1)=mu(1)*a(:,1);b0(:,2)=mu(2)*a(:,2);b0(:,3)=mu(3)*a(:,3)! aa
            write(666,*) whoami, '> RR - U x M x U^T (should be 0):'
            write(666,'(3E22.15)') matmul(b0,transpose(a))-rr ! aa
+! verify directly that teh ROTATION matrix is orthonormal:
+           write(666,*) whoami, '> A x A^T (should be I):'
+           write(666,'(3E22.15)') matmul(u,transpose(u)) ! aa
            if (qgrad) then ; gradu(:,:,:,ibeg:iend)=zero ; qgrad=.false.; endif ! skip derivatives
          endif !qdetfailtrace
          write(msg___,*)'(" ROTATION MATRIX (U) NOT UNITARY (DET[U]=",G20.13,")")',detr;call warning(whoami, msg___(1), 0)
