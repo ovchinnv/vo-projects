@@ -628,6 +628,7 @@
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        function atoiv(a,n)
        use output, only: warning
+       use constants, only: unknowni
        character(len=*) :: a
        character(len=200), allocatable :: b(:)
        character(len=5), parameter :: whoami = 'ATOIV'
@@ -642,7 +643,7 @@
         call warning(whoami,' Vector dimension mismatch',-1)
        endif
        i=min(i,n)
-       atoiv=0
+       atoiv=unknowni
        allocate(b(i))
        read(a,*) b
        do j=1,i
@@ -714,6 +715,7 @@
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        function atofv(a,n)
        use output, only: warning
+       use constants, only: unknownf
        character(len=*) :: a
        character(len=200), allocatable :: b(:)
        character(len=5), parameter :: whoami = 'ATOFV'
@@ -728,7 +730,7 @@
         call warning(whoami,' Vector dimension mismatch',-1)
        endif
        i=min(i,n)
-       atofv=0
+       atofv=unknownf
        allocate(b(i))
        read(a,*) b
        do j=1,i

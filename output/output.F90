@@ -25,10 +25,11 @@ module output
  character(len=10), public, parameter :: realfmt = 'ES20.7E3'
 !
  integer, parameter, private :: reserved_streams(3)=(/0, 5, 6/)
- integer, private, parameter :: minerrorlev=0, minwarnlev=0, minmessagelev=0
+ integer, private :: minerrorlev=0, minwarnlev=0, minmessagelev=0
  integer, private :: l
  integer, private, save :: warnlev, errorlev ! last warning/error levels
  character(len=9), private :: stat
+!
  contains
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  subroutine error(whoami,msg,level)
@@ -95,7 +96,7 @@ module output
  level=warnlev ! current value of the error level
 !
 !
- fatal_warning=(level.lt.minerrorlev)
+ fatal_warning=(level.lt.minwarnlev)
 !
  end function fatal_warning
 !
@@ -149,6 +150,8 @@ module output
   fout=6
  endif
 !
+ minerrorlev=0; minwarnlev=0; minmessagelev=0
+!
  output_initialized=.true.
  end subroutine output_init
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -160,5 +163,13 @@ module output
   fout=-1
  endif
  end subroutine output_done
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+ subroutine set_minwarnlev(level) ; integer :: level ; minwarnlev=level ; end subroutine set_minwarnlev
+ subroutine set_minerrorlev(level) ; integer :: level ; minerrorlev=level ; end subroutine set_minerrorlev
+ subroutine set_minmessagelev(level) ; integer :: level ; minmessagelev=level ; end subroutine set_minmessagelev
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+ function get_minwarnlev() result(level); integer :: level ; level=minwarnlev ; end function get_minwarnlev
+ function get_minerrorlev() result(level); integer :: level ; level=minerrorlev ; end function get_minerrorlev
+ function get_minmessagelev() result(level); integer :: level ; level=minmessagelev ; end function get_minmessagelev
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 end module output

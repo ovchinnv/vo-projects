@@ -1,7 +1,7 @@
 ROOT=..
 OBJS=parser.o
 NAME=parser
-DEPS=output
+DEPS=output constants
 
 INCLUDES=-I $(ROOT)/modules
 
