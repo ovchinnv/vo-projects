@@ -70,7 +70,7 @@
        public norm3
        private unit3
        public veccross3
-       public com
+! public com
        public setdebug
       !
        contains
@@ -194,6 +194,8 @@
 ! theta=zero
 ! else
          theta=acos( max(-one, min(Dd,one)) ) ! protect from out-of-range arguments
+! note: acos wil give a result that is between 0 and pi
+! the sine of the result is therefore always positive (see b= below)
 ! endif
       !
 ! eval(1)=two*rootQ*cos( theta*oo3) -a2*oo3
@@ -201,7 +203,8 @@
 ! eval(3)=two*rootQ*cos((theta+fourpi)*oo3)-a2*oo3
 !
 ! try to speed things up: (15sec w/ intel) ; appears to make no difference
-        a = cos( theta*oo3 ); b=sqrt(one-a*a)*sin_2pi_o3 ; ! use cosine sum
+! a = cos( theta*oo3 ); b=sqrt(one-a*a)*sin_2pi_o3 ; ! use cosine sum
+        a = cos( theta*oo3 ); b=sin( theta*oo3 ) *sin_2pi_o3 ; ! use cosine sum
         eval(1)=two*rootQ*(a )-a2*oo3
         eval(2)=two*rootQ*(a*cos_2pi_o3-b)-a2*oo3
         eval(3)=two*rootQ*(a*cos_2pi_o3+b)-a2*oo3
@@ -492,7 +495,7 @@
            write(666,'(3E22.15)') matmul(u,transpose(u)) ! aa
            if (qgrad) then ; gradu(:,:,:,ibeg:iend)=zero ; qgrad=.false.; endif ! skip derivatives
          endif !qdetfailtrace
-         write(msg___,*)'(" ROTATION MATRIX (U) NOT UNITARY (DET[U]=",G20.13,")")',detr;call warning(whoami, msg___(1), 0)
+         write(msg___,*)'ROTATION MATRIX (U) NOT UNITARY. DET[U]=',detr,'.';call warning(whoami, msg___(1), 0)
 !
         endif ! detr/=1
        endif ! qcheckdet

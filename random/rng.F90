@@ -18,14 +18,15 @@
 module rng
  implicit none
  logical :: random_initialized=.false.
+ integer :: s(4)=(/1,2,3,4/)
  contains
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  subroutine random_init(seeds)
  use parser
  use output
 !
+ character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
  integer, optional :: seeds(4)
- integer :: s(4)
  if (random_initialized) return
 !
  if (present(seeds)) then ; s=seeds ;
@@ -33,11 +34,13 @@ module rng
 !
   if (existtag_nocase('random_seeds')) then ;
    s=atofv(getval_nocase('random_seeds'),4);
+  else
+   write(msg___,*)'SEEDS NOT SPECIFIED, USING [',s,']';call warning('RANDOM_INIT', msg___(1), 0)
   endif
  endif ! seeds
 !
  if (.not.fatal_warning()) then
-  call clcginit(seeds)
+  call clcginit(s)
   random_initialized=.true.
  else
   random_initialized=.false.
@@ -49,19 +52,21 @@ module rng
  use parser
  use output
 !
- integer, optional :: seeds
- integer :: s(4)
+ character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ integer, optional :: seeds(4)
 !
  if (present(seeds)) then ; s=seeds ;
  else
 !
   if (existtag_nocase('random_seeds')) then ;
    s=atofv(getval_nocase('random_seeds'),4);
+  else
+   write(msg___,*)'SEEDS NOT SPECIFIED, USING [',s,']';call warning('RANDOM_INIT', msg___(1), 0)
   endif
  endif ! seeds
 !
  if (.not.fatal_warning()) then
-  call clcginit(seeds)
+  call clcginit(s)
   random_initialized=.true.
  endif
 !

@@ -164,12 +164,12 @@ module output
  endif
  end subroutine output_done
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
- subroutine set_minwarnlev(level) ; integer :: level ; minwarnlev=level ; end subroutine set_minwarnlev
- subroutine set_minerrorlev(level) ; integer :: level ; minerrorlev=level ; end subroutine set_minerrorlev
+ subroutine set_minwarnlev(level) ; integer :: level ; minwarnlev=level ; warnlev =max(warnlev,minwarnlev); end subroutine set_minwarnlev
+ subroutine set_minerrorlev(level) ; integer :: level ; minerrorlev=level ; errorlev=max(errorlev,minerrorlev); end subroutine set_minerrorlev
  subroutine set_minmessagelev(level) ; integer :: level ; minmessagelev=level ; end subroutine set_minmessagelev
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
- function get_minwarnlev() result(level); integer :: level ; level=minwarnlev ; end function get_minwarnlev
- function get_minerrorlev() result(level); integer :: level ; level=minerrorlev ; end function get_minerrorlev
+ function get_minwarnlev() result(level); integer :: level ; level=minwarnlev; end function get_minwarnlev
+ function get_minerrorlev() result(level); integer :: level ; level=minerrorlev; end function get_minerrorlev
  function get_minmessagelev() result(level); integer :: level ; level=minmessagelev ; end function get_minmessagelev
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 end module output
