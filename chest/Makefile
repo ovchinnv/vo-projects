@@ -14,7 +14,7 @@ LINKOBJS=output.o files.o parser.o constants.o timer.o\
      plot3Dio.o chest.o util.o formats.o\
      object.o \
      molecule.o PDB.o\
-     erfsun_2_f90.o erfappx.o\
+     erf_ext.o erfappx.o erfsun_value.o erfsun_ref.o\
      ivector_list.o \
      ivector.o rng.o clcg.o \
      stats.o system.o sysinfo.o sysmanip.o bestfit.o   \
