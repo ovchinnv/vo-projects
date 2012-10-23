@@ -521,7 +521,7 @@ __CHARMM_ONLY##ENDIF
       backlist=0  ! setting this to zero is the simplest way to provide correct default behavior (see below)
 #endif
 !
-      i=__INDX_RM(comlyn,comlen,'ORIE') ! find the position of `intc'
+      i=__INDX_RM(comlyn,comlen,'ORIE')
       if (i.gt.0) then ! only if the ORIE directive exists
 !      selection text taken from corman.src
        orient=1
@@ -534,7 +534,7 @@ __CHARMM_ONLY##ENDIF
 #ifdef __CHARMM
        IMODE=0
 !
-       CALL SELRPN(COMLYN,COMLEN,iselct,NATOM,1,IMODE,                   &
+       CALL SELRPN(COMLYN,COMLEN,iselct,NATOM,1,IMODE,                  &
      &      .FALSE.,1,' ',0,RESID,RES,IBASE,SEGID,NICTOT,NSEG,          &
      &      .TRUE.,X,Y,Z,.TRUE.,1,WMAIN)
        IF(IMODE.NE.0) THEN
@@ -542,7 +542,7 @@ __CHARMM_ONLY##ENDIF
         RETURN
        ENDIF
 #elif defined(__DMOL)
-#include "../dmol_select_macro.def"
+#include "../../dmol_select_macro.def"
 #endif
       endif ! orie specified
 !
@@ -551,7 +551,7 @@ __CHARMM_ONLY##ENDIF
       j=1
       do while (j.gt.0)
        mlen=comlen
-       j=__INDX_RM(comlyn,comlen,'MASS') ! s
+       j=__INDX_RM(comlyn,comlen,'MASS')
        if ( (orient.eq.1).and.(j.ge.i) ) then
         orient_mass=1
        else if (j.gt.0) then
@@ -562,7 +562,7 @@ __CHARMM_ONLY##ENDIF
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 !     check which atoms will be moved by reparametrization (default: all atoms)
 !     process selection
-      i=__INDX_RM(comlyn,comlen,'MOVE') !
+      i=__INDX_RM(comlyn,comlen,'MOVE')
       if (i.gt.0) then ! only if the MOVE directive exists
        j=__INDX(comlyn, comlen, 'SELE', 4)
        if (j.gt.0.and.j.lt.i) then ! sele occurs before orie
@@ -572,7 +572,7 @@ __CHARMM_ONLY##ENDIF
 !
 #ifdef __CHARMM
        IMODE=0
-       CALL SELRPN(COMLYN,COMLEN,jselct,NATOM,1,IMODE,                   &
+       CALL SELRPN(COMLYN,COMLEN,jselct,NATOM,1,IMODE,                  &
      &      .FALSE.,1,' ',0,RESID,RES,IBASE,SEGID,NICTOT,NSEG,          &
      &      .TRUE.,X,Y,Z,.TRUE.,1,WMAIN)
        IF(IMODE.NE.0) THEN
@@ -585,7 +585,7 @@ __CHARMM_ONLY##ENDIF
 !
 #elif defined(__DMOL)
        kselct=>iselct ; nullify(iselct)
-#include "../dmol_select_macro.def"
+#include "../../dmol_select_macro.def"
        jselct=>iselct
        iselct=>kselct
       else
@@ -629,8 +629,7 @@ __CHARMM_ONLY##ENDIF
 ! check that the number of fixed atoms hasn't changed since initialization; if it has, warn and quit
       ifixed=>sm0k_fixed_atoms()
 !     the problem is that ifort sometimes crashes when arrays of unequal length are compared
-      qfree=size(ifixed).eq.nfix_bckl
-      if (qfree) qfree=all(ifixed.eq.iatom_f)
+      qfree=size(ifixed).eq.nfix_bckl ; if (qfree) qfree=all(ifixed.eq.iatom_f)
 !
       if (.not.qfree) then
        __WRN(whoami,'FIXED ATOM ARRAY CHANGED AFTER LAST STRING COMMAND.')
@@ -825,7 +824,7 @@ __TRIMA(methods(interp_method),mlen)
 !
       __IMPNONE
 !ccccccccccccccccccccccccccccccccccccccc
-      int :: n                  ! NOTE: arrays as optional arguments are quite a dangerous feature of F90
+      int :: n                  ! NOTE: arrays as optional arguments can be a dangerous feature of F90
       float, optional :: var(*) ! ideally, n should give the dimension of n, but we live in an imperfect world
 !
 #include "../mpitype.def"
@@ -1162,6 +1161,7 @@ __TRIMA(methods(interp_method),mlen)
       float, pointer :: orient_weights(:), weight(:)
       int :: ierror
       float :: u(3,3) ! rotation matrix
+      float :: r_com(3)=(/0d0, 0d0, 0d0/)
 !
 !
       interface ! to linear interpolation routine
@@ -1329,7 +1329,7 @@ __TRIMA(methods(interp_method),length)
        allocate(fname_cor_in(num_rep_in))
 !
        do j=1, num_rep_in
-        read(ifile,*) fname_cor_in(j)
+        read(ifile,'(A80)') fname_cor_in(j)
        enddo
        __CLOSE_FILE(ifile,'KEEP',ierror)
 !
@@ -1386,7 +1386,7 @@ __TRIMA(methods(interp_method),length)
        norient=count(iselct.gt.0) 
 !
 #elif defined(__DMOL)
-#include "../dmol_select_macro.def"
+#include "../../dmol_select_macro.def"
        if (associated(iselct)) then ; norient=size(iselct) ; else ; norient=0 ; endif 
 #endif
 !
@@ -1439,6 +1439,13 @@ __TRIMA(methods(interp_method),length)
          deallocate(iselct)
         endif
 #endif
+!    nomalize weights
+        dum=sum(orient_weights)
+        if (abs(dum).gt.__ERRTOL) then
+         dum=one/dum
+         orient_weights=dum*orient_weights
+        endif
+!
 !    print a summary
         write(keyword,'(I8)') norient
         mlen=len(keyword)
@@ -1506,11 +1513,26 @@ __TRIMA(methods(interp_method),length)
 !
       if (qprint) then
         if (orient.eq.1) then
+!
+!       translate first set to centroid
+!
+        j=1
+        r_com=matmul(orient_weights, rin_all(:,:,j))
+        rin_all(:,1,j)=rin_all(:,1,j)-r_com(1)
+        rin_all(:,2,j)=rin_all(:,2,j)-r_com(2)
+        rin_all(:,3,j)=rin_all(:,3,j)-r_com(3)
+!
 !   set up pairs
 !         pairs = RESHAPE( (/ (i, i=1,natom),                            &
 !     &   (i, i=1,natom) /), (/ 2,natom /), order=(/ 2,1 /) )
 !       orient x based on the previous replica
          do j=2,num_rep_in
+!         translate next set to centroid
+          r_com=matmul(orient_weights, rin_all(:,:,j))
+          rin_all(:,1,j)=rin_all(:,1,j)-r_com(1)
+          rin_all(:,2,j)=rin_all(:,2,j)-r_com(2)
+          rin_all(:,3,j)=rin_all(:,3,j)-r_com(3)
+!
           call RMSBestFit(rin_all(:,:,j-1), rin_all(:,:,j), orient_weights, u) ! superpose r_(j-i) onto r_j
           rin_all(:,:,j)=matmul(rin_all(:,:,j),u) ! apply transpose (=inverse) of u to r_j
 ! old CHARMM routine:
@@ -1529,6 +1551,12 @@ __TRIMA(methods(interp_method),length)
          weight=__MASS(1:natom)
         else
          weight=1d0
+        endif
+!    nomalize weights
+        dum=sum(weight)
+        if (abs(dum).gt.__ERRTOL) then
+         dum=one/dum
+         weight=dum*weight
         endif
 !
 !     do the actual interpolation --  simple, not self-consistent
@@ -1784,8 +1812,10 @@ __CHARMM_ONLY##ENDIF
          i=0
          do while (.not.found.and.i.lt.lenenp)
           i=i+1
-          if ( (keyword(1:klen).EQ.ceprop(i)) ) then
-           found=.true.
+! 10/21/2012 : allow extra characters in keyword for backward compatibility (e.g. ANGLes -- the last two ignored)
+          j=max(1,min(klen,len_trim(ceprop(i)))) ! empty strings give a false 'found'
+          if ( (keyword(1:j).EQ.ceprop(i)(1:j)) ) then
+           found=.true. ; klen=j ; exit
           endif
          enddo
 !
@@ -1794,15 +1824,17 @@ __CHARMM_ONLY##ENDIF
           i=0
           do while (.not.found.and.i.lt.lenent)
            i=i+1
-           if ( (keyword(1:klen).EQ.ceterm(i)) ) then
-            found=.true.
+! 10/21/2012 : allow extra characters in keyword for backward compatibility (e.g. ANGLes -- the last two ignored)
+           j=max(1,min(klen,len_trim(ceterm(i))))
+           if ( (keyword(1:j).EQ.ceterm(i)(1:j)) ) then
+            found=.true. ; klen=j ; exit
            endif
           enddo
           i=-i ! this is a 'trick' to keep distinguish between indices into eprop and eterm
          endif
 !
          if (.not.found) then ! if still not found, warn
-           __WARN(whoami,'ENERGY VALUE ',KEYWORD(1:KLEN),' NOT FOUND')
+           __WARN(whoami,'ENERGY VALUE ',KEYWORD(1:klen),' NOT FOUND')
          else
           num_energy_terms=num_energy_terms+1
           if (num_energy_terms.gt.enmax) then
@@ -1864,7 +1896,7 @@ __CHARMM_ONLY##ENDIF
       nstat=count( iselct(1:natom).gt.0 )
 !
 #elif defined (__DMOL)
-#include "../dmol_select_macro.def"
+#include "../../dmol_select_macro.def"
       else
        iselct=>__GET_IND_FROM_SELECTION('ALL') ! select all atoms by default
       endif
@@ -1931,10 +1963,10 @@ __CHARMM_ONLY##ENDIF
        if (__INDX_RM(comlyn,comlen,'DELS').gt.0) then
         output_dsdt=.true.
 !
-        if (.not.allocated(rold_s))     allocate(rold_s(nstat,3)) ! for storing "old" coords
+        if (.not.allocated(rold_s)) then ; allocate(rold_s(nstat,3)) ; rold_s=zero ; endif          ! for storing "old" coords
         if (.not.allocated(rcurrent_s)) allocate(rcurrent_s(nstat,3))
         if (qstat_orient) then
-         if (.not.allocated(rold_o))    allocate(rold_o(norient,3))
+         if (.not.allocated(rold_o)) then ; allocate(rold_o(norient,3)) ; rold_o=zero ; endif
         endif
 !
         __GET_RM_A(COMLYN,COMLEN,'DNAM',4,dsdt_fname,80,dsdt_flen)
@@ -1971,12 +2003,12 @@ __CHARMM_ONLY##ENDIF
 !
         if (.not.allocated(rave_s)) allocate(rave_s(nstat,3)) ! for storing average coords
         if (.not.allocated(rold_s)) allocate(rold_s(nstat,3)) ! for storing "old" coords
-        rave_s=0d0
+        rave_s=zero
         if (.not.allocated(rcurrent_s)) allocate(rcurrent_s(nstat,3))
         if (qstat_orient) then
          if (.not.allocated(rold_o))    allocate(rold_o(norient,3))
          if (.not.allocated(rave_o))    allocate(rave_o(norient,3))
-         rave_o=0d0
+         rave_o=zero
         endif
 !
         __GET_RM_A(COMLYN,COMLEN,'RANM',4,rmsd_ave_fname,80,rmsd_ave_flen)
@@ -2498,10 +2530,10 @@ __CHARMM_ONLY##ENDIF
         if (repa_initialized) then ! proceed only if arclength defined
          if (c_funit.eq.__OSTREAM) then
       write(c_funit,'("CURV> ",I5," ",'//fmt(1:fmt_len)//'F11.5)')      &
-     & stat_iteration_counter, (curv(i),i=1,SIZE_STRNG-1)
+     & stat_iteration_counter, (curv(i),i=1,SIZE_STRNG-2)
          else
           write(c_funit,'(I5," ",'//fmt(1:fmt_len)//'F11.5)')           &
-     &          stat_iteration_counter, (curv(i),i=1,SIZE_STRNG-1)
+     &          stat_iteration_counter, (curv(i),i=1,SIZE_STRNG-2)
          endif
 !     flush unit: close and reopen
          __CLOSE_FILE(c_funit, 'KEEP', ierror)

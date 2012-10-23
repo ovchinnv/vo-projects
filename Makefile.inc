@@ -46,10 +46,6 @@ LD=$(FC)
 LDFLAGS=#-static -Bstatic -ipo
 #LDFLAGS=-static -ipa
 
-DYNAMOL=objects/molecule/dynamol
-# root must be defined elswhere
-DYNA=$(ROOT)/$(DYNAMOL)
-
 GLOBALMACROS=-include $(ROOT)/source.defs 
 MSG=-include $(ROOT)/source.msg
 CHMSG=-include $(ROOT)/charmm.msg
@@ -159,5 +155,4 @@ libraries: $(ROOT)/$(NAME).stamp linklibs
 clean::
 	rm -f *.mod *.a $(ROOT)/$(NAME).stamp $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(EXE) test.F90 test.dat test.out test.o 
 	if [ -f test ] ; then rm -f test ; fi
-
 charmm:

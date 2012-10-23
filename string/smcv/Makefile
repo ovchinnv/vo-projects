@@ -6,8 +6,8 @@ DEPS=output vectors bestfit constants multicom random lu multidiag parser dynamo
 
 COMMON=..
 
-LOCALMACROS=-include source.defs -include ../source.defs
-LOCALDEPS=source.defs ../source.defs
+LOCALMACROS=-include source.defs -include ../source.defs -include $(ROOT)/dmol.defs
+LOCALDEPS=source.defs ../source.defs $(ROOT)/dmol.defs
 
 include $(ROOT)/Makefile.inc
 include $(COMMON)/Makefile.inc
