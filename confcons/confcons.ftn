@@ -185,7 +185,7 @@ __CHARMM_ONLY  public ifindc
  bool :: qread
 !
  character(len=21), parameter :: whoami=' CONFCONS_READ_RULES>'
- int, parameter :: maxrulelength=200
+ int, parameter :: maxrulelength=150
  character(len=maxrulelength) :: line, line_bkp
  int :: ioerr, i, j, k, l, m, n, ii, l_bkp
 !
@@ -265,15 +265,15 @@ __CHARMM_ONLY  public ifindc
       if (r .eq. confcons_rules(j)) then
 !      if (any(r .eq. confcons_rules(1:num_rules))) then
        write(_MSGBUF,'(A)') 'IGNORING DUPLICATE OR CONFLICTING RULE: '//line_bkp(1:l_bkp)
-       __WARN( whoami, _MSGBUF)
+       __WRN( whoami, _MSGBUF(1))
        num_rules=num_rules-1
        exit
       endif
      enddo
     else 
-     __WARN( whoami,'DETECTED ERRORS IN RULES FILE.')
+     __WRN( whoami,'DETECTED ERRORS IN RULES FILE.')
      write(_MSGBUF, '(A)') 'SKIPPING LINE:'//line_bkp(1:l_bkp)
-     __WARN( whoami, _MSGBUF)
+     __WRN( whoami, _MSGBUF(1))
      continue
     endif  ! read error
    else ! end of file error
@@ -332,7 +332,7 @@ __CHARMM_ONLY  public ifindc
     if (r .eq. confcons_rules(j)) then
 !     if (any(r .eq. confcons_rules(1:num_rules))) then
      write(_MSGBUF, '(A)') 'IGNORING DUPLICATE OR CONFLICTING RULE: '//confcons_rules_data(ii)
-     __WARN( whoami, _MSGBUF)
+     __WRN( whoami, _MSGBUF(1))
      n=n-1
      exit
     endif
@@ -373,6 +373,14 @@ subroutine confcons_main(comlyn,comlen,islct)
  l=comlen
  999  continue
  if (l.le.1 .or. __INDX_RM(comlyn, comlen, 'HELP').gt.0) then
+  if &
+#ifdef __CHARMM
+&    (iolev.gt.0)&                     !##.not.MULTICOM
+&    (ME_LOCAL.eq.0)&                  !##MULTICOM
+#else
+&    (ME_LOCAL.eq.0)&
+#endif
+&                   then
   write(_MSGBUF,'(2A)') whoami, ' CONFORMATION CONSISTENCY CHECKER ( VO / KARPLUS GROUP / HARVARD U. 2008-12 )',&
   & whoami, ' ____________________________________________________________________________________',&
   & whoami, ' DESCRIPTION: FIND AND ELIMINATE APPARENT INCONSISTENCY IN THE LABELING OF',&
@@ -382,7 +390,7 @@ subroutine confcons_main(comlyn,comlen,islct)
   & whoami, '   INIT  - initialize/reinitialize',&
   & whoami, '   FINA  - deallocate all arrays',&
   & whoami, '   CHECK - check structure',&
-  & whoami, '   FIX   - check structure and attempt to fix errors',&
+  & whoami, '   FIX   - attempt to correct errors during checking',&
   & whoami, '   NOFX  - do not attempt to correct errors',&
   & whoami, '   NOPR  - disable output',&
   & whoami, '   PRIN  - enable output',&
@@ -394,6 +402,7 @@ subroutine confcons_main(comlyn,comlen,islct)
   & whoami, ' ATOM SELECTION IS OPTIONAL (ALL ATOMS WILL BE SELECTED BY DEFAULT)',&
   & whoami, ' ____________________________________________________________________________________'
   __PRINT(_MSGBUF)
+  endif
   return
  endif
 !
@@ -437,7 +446,7 @@ subroutine confcons_main(comlyn,comlen,islct)
    ifile=istrm
    call confcons_read_rules(ifile)
 #else
-   __WARN(whoami, ' RULES UNIT NUMBER NOT SPECIFIED. WILL NOT READ.')
+   __WRN(whoami, ' RULES UNIT NUMBER NOT SPECIFIED. WILL NOT READ.')
 #endif
   else
    call confcons_read_rules(ifile)
@@ -445,6 +454,16 @@ subroutine confcons_main(comlyn,comlen,islct)
  endif ! read
 !
  if (__INDX_RM(comlyn,comlen,'RULE').gt.0) then
+
+  if &
+#ifdef __CHARMM
+&    (iolev.gt.0)&                     !##.not.MULTICOM
+&    (ME_LOCAL.eq.0)&                  !##MULTICOM
+#else
+&    (ME_LOCAL.eq.0)&
+#endif
+&                   then
+
   write(_MSGBUF,'(2A)') whoami, ' __________________________________________________________________________'
   __PRINT(_MSGBUF)
   write(_MSGBUF,'(2A)') whoami, ' THE FOLLOWING RULES ARE CURRENTLY DEFINED:'
@@ -485,13 +504,13 @@ subroutine confcons_main(comlyn,comlen,islct)
   enddo
   write(_MSGBUF,'(2A)') whoami, ' __________________________________________________________________________'
   __PRINT(_MSGBUF)
- endif ! debug
+  endif ! me==0
+ endif ! RULES
 !
  if (__INDX_RM(comlyn,comlen,'NOFX').gt.0) then
   qfix=.false.
  elseif (__INDX_RM(comlyn,comlen,'FIX').gt.0) then ! whether to move atoms to fix the inconsistency
   qfix=.true.
-  qcheck=.true.
  endif
 !
  if ((__INDX_RM(comlyn,comlen,'CHCK').gt.0) .or. &
@@ -509,7 +528,7 @@ subroutine confcons_main(comlyn,comlen,islct)
 !
 end subroutine confcons_main
 !============================================
-function confcons_check(islct) result(errnum)
+function confcons_check(islct, r__, rref__) result(errnum)
  __DEP_PARSER
  __DEP_OUTPUT
  __DEP_MULTICOM
@@ -530,6 +549,8 @@ function confcons_check(islct) result(errnum)
   __DEP_BESTFIT
 !
  int :: islct(:)
+ float, optional :: r__(:,:), rref__(:,:) ! perform checking using optional coordinate arrays
+ float, pointer, dimension(:,:) :: r_, rref_
 !
  type(confcons_rule), pointer :: rr
  int :: i, j, k, l, m, errnum, ires, iseg
@@ -542,11 +563,26 @@ function confcons_check(islct) result(errnum)
  float :: msd0, msd1, msd2
  bool :: flagged
  character(len=16), parameter :: whoami=' CONFCONS_CHECK>'
-#ifdef __DMOL
  int :: ierror
+#ifdef __DMOL
+ int :: natom
 #endif
 !
+#include "../mpitype.def"
+!
  __DECLARE_MSGBUF
+!
+ if (present(r__)) then
+   allocate(r_(size(r__,1),size(r__,2))); r_=r__
+ else
+   allocate(r_(size(__X),3))    ; r_(:,1)=__X ; r_(:,2)=__Y ; r_(:,3)=__Z 
+ endif
+!
+ if (present(rref__)) then
+   allocate(rref_(size(rref__,1),size(rref__,2))); rref_=rref__
+ else
+   allocate(rref_(size(__X),3)) ; rref_(:,1)=__XCOMP ; rref_(:,2)=__YCOMP ; rref_(:,3)=__ZCOMP
+ endif
 !
 #ifdef __CHARMM
 ##IF MULTICOM
@@ -594,7 +630,7 @@ function confcons_check(islct) result(errnum)
 ! test atoms
       if (ind(i).le.0) then
         write(_MSGBUF, '(A)') 'SKIPPING RULE '//itoa(j)//': ATOM NOT FOUND IN RESIDUE.'
-        __WARN(whoami, __MSGBUF)
+        __WRN(whoami, _MSGBUF(1))
         deallocate(ind, r1, r2, ow) ; cycle rules
       endif
 !
@@ -605,7 +641,7 @@ function confcons_check(islct) result(errnum)
 !
       if (ind(i).le.0) then
         write(_MSGBUF, '(A)') 'SKIPPING RULE '//itoa(j)//': ATOM NOT FOUND IN RESIDUE.'
-        __WARN(whoami, __MSGBUF)
+        __WRN(whoami, _MSGBUF(1))
         deallocate(ind, r1, r2, ow) ; cycle rules
       endif
 !
@@ -618,7 +654,7 @@ function confcons_check(islct) result(errnum)
 !
        if (ind(i).le.0) then
         write(_MSGBUF, '(A)') 'SKIPPING RULE '//itoa(j)//': ATOM NOT FOUND IN RESIDUE.' 
-        __WARN(whoami, __MSGBUF)
+        __WRN(whoami, _MSGBUF(1))
         deallocate(ind, r1, r2, ow) ; cycle rules
        endif
 !
@@ -633,7 +669,7 @@ function confcons_check(islct) result(errnum)
 !
        if (ind(i).le.0) then
         write(_MSGBUF,'(A)') 'SKIPPING RULE '//itoa(j)//': ATOM NOT FOUND IN RESIDUE.'
-        __WARN(whoami, __MSGBUF)
+        __WRN(whoami, _MSGBUF(1))
         deallocate(ind, r1, r2, ow) ; cycle rules
        endif
 !
@@ -649,8 +685,8 @@ function confcons_check(islct) result(errnum)
 ! load test/orientation coordinates
      r1=0d0; r2=0d0;
      do i=itest+1,iother_permute
-      r1(i,1)=x(ind(i));    r1(i,2)=y(ind(i));    r1(i,3)=z(ind(i))
-      r2(i,1)=xcomp(ind(i));r2(i,2)=ycomp(ind(i));r2(i,3)=zcomp(ind(i))
+      r1(i,:)=r_(ind(i),:) 
+      r2(i,:)=rref_(ind(i),:)
      enddo
 !      check for undefined coords
      if ( any ( (r1.eq.anum) .or. (r2.eq.anum) ) ) then 
@@ -747,11 +783,11 @@ __CHARMM_ONLY##ENDIF
 !    copy to temp. array
        do m=0, npermute-1 ! over atoms within groups (counter not used)
         i0=i+m ; i1=i+mod( m + ipermute, npermute )
-        r1(i0,1)=x(ind(i1)); r1(i0,2)=y(ind(i1)); r1(i0,3)=z(ind(i1))
+        r1(i0,:)=r_(ind(i1),:)
        enddo ! atoms within group
 !    copy temp to coordinate array
        do i0=i, i+npermute-1
-        x(ind(i0))=r1(i0,1); y(ind(i0))=r1(i0,2); z(ind(i0))=r1(i0,3);
+        r_(ind(i0),:)=r1(i0,:)
        enddo ! atoms within group
 ! move on to the next group
        i=i+npermute
@@ -765,11 +801,11 @@ __CHARMM_ONLY##ENDIF
 !    copy to temp. array
        do m=0, npermute-1 ! over atoms within groups (counter not used)
         i0=i+m ; i1=i+mod( m + ipermute, npermute )
-        r1(i0,1)=x(ind(i1)); r1(i0,2)=y(ind(i1)); r1(i0,3)=z(ind(i1))
+        r1(i0,:)=r_(ind(i1),:)
        enddo ! atoms within group
 !    copy temp to coordinate array
        do i0=i, i+npermute-1
-        x(ind(i0))=r1(i0,1); y(ind(i0))=r1(i0,2); z(ind(i0))=r1(i0,3);
+        r_(ind(i0),:)=r1(i0,:)
        enddo ! atoms within group
 ! move on to the next group
        i=i+npermute
@@ -814,15 +850,23 @@ __CHARMM_ONLY##ENDIF
 !============== BROADCAST TO OTHER NODES ====
 ##IF PARALLEL MULTICOM
  endif ! mynod == 0
-! now broadcast to the other nodes
- __BROADCAST_LOCAL_8B(X,natom)
- __BROADCAST_LOCAL_8B(Y,natom)
- __BROADCAST_LOCAL_8B(Z,natom)
+ __BROADCAST_LOCAL(r_, 3*natom, mpifloat)
 ##ENDIF 
 #elif (defined __DMOL)
 ! other code to be written
- __BROADCAST_LOCAL(r, __NATOM, mpifloat)
+#ifdef __PARALLEL
+ endif
+ natom=__NATOM
+ __BROADCAST_LOCAL(r_, 3*natom, mpifloat)
 #endif
+#endif
+
+! populate main coordinates, if needed
+ if (present(r__)) then 
+  r__=r_
+ else
+  __X=r_(:,1) ; __Y=r_(:,2) ; __Z=r_(:,3) 
+ endif
 !
 ! set error count
  __CHARMM_ONLY  call setmsi('CONFERR',errnum)
@@ -851,6 +895,9 @@ __CHARMM_ONLY##ENDIF
    endif
   endif
  endif
+!
+ if (associated(r_)) deallocate(r_)
+ if (associated(rref_)) deallocate(rref_)
 !
 end function confcons_check
 !

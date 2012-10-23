@@ -1,7 +1,7 @@
 ROOT=..
 DYNA=$(ROOT)/dynamol
 OBJS=chirality.o confcons.o
-NAME=coonfcons
+NAME=confcons
 DEPS=constants output multicom parser dynamol
 
 LOCALMACROS=-include source.defs -include $(ROOT)/dmol.defs

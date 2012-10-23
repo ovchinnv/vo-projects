@@ -131,9 +131,15 @@ __CHARMM_ONLY##IF STRINGM
         call sm0k_init()
       endif
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+! interpolate path
       if (__STRNCMP(keyword,'INTE',4)) then
         call sm0k_interpolate(comlyn, comlen)
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+! conformational consistency
+      elseif (__STRNCMP(keyword,'CONF',4)) then
+        call sm0k_confcons()
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+! reparametrization setup/invocation
       elseif (__STRNCMP(keyword,'REPA',4)) then
        if (comlen.gt.0) then ! this is an initialization call!
         call sm0k_repa_init(comlyn, comlen)
@@ -141,6 +147,7 @@ __CHARMM_ONLY##IF STRINGM
         call sm0k_repa(0)! repa routine will reparametrize main coords
        endif
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+! statistics setup/invocation
       elseif (__STRNCMP(keyword,'STAT',4)) then
        if (comlen.gt.0) then ! this is an initialization call!
         call sm0k_stat_init(comlyn, comlen)
@@ -227,7 +234,7 @@ __CHARMM_ONLY##IF STRINGM
 !
       __IMPNONE
  __DECLARE_MSGBUF
-#include "../mpitype.def"
+#include "../../mpitype.def"
 !
       bool :: qroot, qslave
       int :: ierror
@@ -827,7 +834,7 @@ __TRIMA(methods(interp_method),mlen)
       int :: n                  ! NOTE: arrays as optional arguments can be a dangerous feature of F90
       float, optional :: var(*) ! ideally, n should give the dimension of n, but we live in an imperfect world
 !
-#include "../mpitype.def"
+#include "../../mpitype.def"
 !
       int :: stat(MPI_STATUS_SIZE)
       int :: ierror
@@ -1095,6 +1102,85 @@ __TRIMA(methods(interp_method),mlen)
 !
       end subroutine sm0k_repa
 !
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      subroutine sm0k_confcons()
+!
+      __DEP_MPI
+      __DEP_OUTPUT
+      __DEP_MULTICOM
+      __DEP_COORDINATES
+      __DEP_PSF
+!
+      use confcons, only : confcons_check
+!
+      __IMPNONE
+!
+      float, pointer :: rref_(:,:)
+!
+      bool :: qroot, qslave, qprint
+      int :: ierror, errnum, errors(SIZE_STRNG), i
+      character(len=15) :: whoami
+!
+#include "../../mpitype.def"
+!
+      int :: stat(MPI_STATUS_SIZE)
+!
+#ifdef __DMOL
+      int :: natom
+#endif
+!
+      __DECLARE_MSGBUF
+!
+      data whoami /' SM0K_CONFCONS>'/
+!
+      if (.not.sm0k_initialized) call sm0k_init()
+!
+      qroot =MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.SIZE_STRNG.gt.1
+      qslave=MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.SIZE_LOCAL.gt.1
+      qprint=MPI_COMM_STRNG.ne.MPI_COMM_NULL
+      qprint=qprint.and.(ME_STRNG.eq.0)
+!
+#ifdef __DMOL
+      natom=__NATOM
+#endif
+!
+      allocate(rref_(natom,3))
+!
+      if (mestring.gt.0) then
+!      receive reference structure
+       if (qroot) call mpi_recv(rref_,3*natom,mpifloat,mestring-1,1,MPI_COMM_STRNG,stat,ierror)
+! call confcons -- all processors enter
+       errnum=confcons_check( islct=(/( 1 , i=1,natom)/), rref__=rref_ ) ! select all atoms by default
+      endif ! mestring>0
+!
+      if (mestring.lt.nstring-1) then
+       if (qroot) then
+         rref_(:,1)=__XX(1:natom) ; rref_(:,2)=__YY(1:natom) ; rref_(:,3)=__ZZ(1:natom)
+!      send reference structure
+         call mpi_send(rref_,3*natom,mpifloat,mestring+1,1,MPI_COMM_STRNG, ierror)
+       endif ! qroot
+      endif ! mestring
+!
+!    collect number of error into array
+!
+      if (qroot) call mpi_gather(errnum,1,mpiint,errors,1,mpiint,0,MPI_COMM_STRNG,ierror)
+! print errors summary
+      if (qprint) then 
+       write(_MSGBUF,'(2A)') whoami, '___________________________________________________________',&
+&       whoami, ' REPLICA, NUMBER OF INCONSISTENCIES',&
+&       whoami, '___________________________________________________________'
+       __PRINTL(_MSGBUF,3)
+       do i=2, SIZE_STRNG
+        write(_MSGBUF,'(A,I5,", ",I5)'), whoami, i, errors(i)
+       __PRINTL(_MSGBUF,3)
+       enddo
+       write(_MSGBUF,'(2A)') whoami, '___________________________________________________________'
+       __PRINT(_MSGBUF)
+      endif
+!
+      if (associated(rref_)) deallocate(rref_)
+!
+      end subroutine sm0k_confcons
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine sm0k_interpolate(comlyn, comlen)
 !     given a collection of n string replicas, interpolate onto a finer/coarser path
@@ -2221,7 +2307,7 @@ __CHARMM_ONLY##ENDIF
       __DEP_MPI
 !
       __IMPNONE
-#include "../mpitype.def"
+#include "../../mpitype.def"
 !
       int :: n
       float, optional :: var(*)
