@@ -45,10 +45,10 @@
        function cv_drmsd_add(ind_o,ind_f,r_o,r_f,r1_o,r1_f, &
      & ow,fw,k,gamma,weight,qprojection) ! note: i is the atom index in the PSF
        use cv_types, only: proj, drmsd
-       use bestfit ! for computing one over rmsd between two target structures
+       use bestfit, only : eig3s, RMSBestFit, rmsd, norm3, veccross3 ! for computing one over rmsd between two target structures
        use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
        implicit none
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
        real*8 :: k, gamma, weight
        integer, pointer :: ind_o(:), ind_f(:)
        real*8, pointer :: r_o(:,:), r_f(:,:), r1_o(:,:), r1_f(:,:), &
@@ -226,7 +226,7 @@
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_drmsd_calc(i,x,y,z,mass,fx,fy,fz, &
      & calctheta,deriv,addforce,fext)
-       use bestfit
+       use bestfit, only : eig3s, RMSBestFit, rmsd, norm3, veccross3
        use constants
        implicit none
 !
@@ -543,7 +543,7 @@
        use psf, only : atoms
 !
        implicit none
-       character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+       character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
        integer :: i, j, type, ii, jj, iatom
        character(len=8) :: sid, rid, ren, ac

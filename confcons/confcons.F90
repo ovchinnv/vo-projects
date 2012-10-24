@@ -208,7 +208,7 @@ module confcons
  logical :: qread
 !
  character(len=21), parameter :: whoami=' CONFCONS_READ_RULES>'
- integer, parameter :: maxrulelength=200
+ integer, parameter :: maxrulelength=150
  character(len=maxrulelength) :: line, line_bkp
  integer :: ioerr, i, j, k, l, m, n, ii, l_bkp
 !
@@ -288,15 +288,15 @@ module confcons
       if (r .eq. confcons_rules(j)) then
 ! if (any(r .eq. confcons_rules(1:num_rules))) then
        write(msg___,'(A)') 'IGNORING DUPLICATE OR CONFLICTING RULE: '//line_bkp(1:l_bkp)
-       write(msg___,*)msg___;call warning(whoami, msg___(1), 0)
+       call warning(whoami, msg___(1), 0)
        num_rules=num_rules-1
        exit
       endif
      enddo
     else
-     write(msg___,*)'DETECTED ERRORS IN RULES FILE.';call warning(whoami, msg___(1), 0)
+     call warning(whoami, 'DETECTED ERRORS IN RULES FILE.', 0)
      write(msg___, '(A)') 'SKIPPING LINE:'//line_bkp(1:l_bkp)
-     write(msg___,*)msg___;call warning(whoami, msg___(1), 0)
+     call warning(whoami, msg___(1), 0)
      continue
     endif ! read error
    else ! end of file error
@@ -355,7 +355,7 @@ module confcons
     if (r .eq. confcons_rules(j)) then
 ! if (any(r .eq. confcons_rules(1:num_rules))) then
      write(msg___, '(A)') 'IGNORING DUPLICATE OR CONFLICTING RULE: '//confcons_rules_data(ii)
-     write(msg___,*)msg___;call warning(whoami, msg___(1), 0)
+     call warning(whoami, msg___(1), 0)
      n=n-1
      exit
     endif
@@ -396,6 +396,9 @@ subroutine confcons_main(comlyn,comlen,islct)
  l=comlen
  999 continue
  if (l.le.1 .or. remove_tag(comlyn,'HELP',comlen).gt.0) then
+  if &
+& (ME_LOCAL.eq.0)&
+& then
   write(msg___,'(2A)') whoami, ' CONFORMATION CONSISTENCY CHECKER ( VO / KARPLUS GROUP / HARVARD U. 2008-12 )',&
   & whoami, ' ____________________________________________________________________________________',&
   & whoami, ' DESCRIPTION: FIND AND ELIMINATE APPARENT INCONSISTENCY IN THE LABELING OF',&
@@ -405,7 +408,7 @@ subroutine confcons_main(comlyn,comlen,islct)
   & whoami, '   INIT  - initialize/reinitialize',&
   & whoami, '   FINA  - deallocate all arrays',&
   & whoami, '   CHECK - check structure',&
-  & whoami, '   FIX   - check structure and attempt to fix errors',&
+  & whoami, '   FIX   - attempt to correct errors during checking',&
   & whoami, '   NOFX  - do not attempt to correct errors',&
   & whoami, '   NOPR  - disable output',&
   & whoami, '   PRIN  - enable output',&
@@ -417,6 +420,7 @@ subroutine confcons_main(comlyn,comlen,islct)
   & whoami, ' ATOM SELECTION IS OPTIONAL (ALL ATOMS WILL BE SELECTED BY DEFAULT)',&
   & whoami, ' ____________________________________________________________________________________'
   do i_=1,size(msg___);if(msg___(i_)=='')exit;call plainmessage(msg___(i_));enddo;msg___=''
+  endif
   return
  endif
 !
@@ -444,13 +448,22 @@ subroutine confcons_main(comlyn,comlen,islct)
   if (remove_tag(comlyn,'ADD',comlen).le.0) num_rules=0 ! overwrite rules
   ifile=atoi(get_remove_parameter(comlyn, 'UNIT', comlen), -1)
   if (ifile .eq. -1) then
-   write(msg___,*)' RULES UNIT NUMBER NOT SPECIFIED. WILL NOT READ.';call warning(whoami, msg___(1), 0)
+   call warning(whoami, ' RULES UNIT NUMBER NOT SPECIFIED. WILL NOT READ.', 0)
   else
    call confcons_read_rules(ifile)
   endif
  endif ! read
 !
  if (remove_tag(comlyn,'RULE',comlen).gt.0) then
+  if &
+
+
+
+
+& (ME_LOCAL.eq.0)&
+
+& then
+
   write(msg___,'(2A)') whoami, ' __________________________________________________________________________'
   do i_=1,size(msg___);if(msg___(i_)=='')exit;call plainmessage(msg___(i_));enddo;msg___=''
   write(msg___,'(2A)') whoami, ' THE FOLLOWING RULES ARE CURRENTLY DEFINED:'
@@ -491,13 +504,13 @@ subroutine confcons_main(comlyn,comlen,islct)
   enddo
   write(msg___,'(2A)') whoami, ' __________________________________________________________________________'
   do i_=1,size(msg___);if(msg___(i_)=='')exit;call plainmessage(msg___(i_));enddo;msg___=''
- endif ! debug
+  endif ! me==0
+ endif ! RULES
 !
  if (remove_tag(comlyn,'NOFX',comlen).gt.0) then
   qfix=.false.
  elseif (remove_tag(comlyn,'FIX',comlen).gt.0) then ! whether to move atoms to fix the inconsistency
   qfix=.true.
-  qcheck=.true.
  endif
 !
  if ((remove_tag(comlyn,'CHCK',comlen).gt.0) .or. &
@@ -515,11 +528,15 @@ subroutine confcons_main(comlyn,comlen,islct)
 !
 end subroutine confcons_main
 !============================================
-function confcons_check(islct) result(errnum)
+function confcons_check(islct_, r__, rref__) result(errnum)
  use parser
  use output
  use multicom_aux
+
+
+
  use system, only : r, rcomp
+
  use psf
  use constants
 !
@@ -527,9 +544,14 @@ function confcons_check(islct) result(errnum)
 
 
 
+
+
   use bestfit, only : eig3s, RMSBestFit, rmsd, norm3, veccross3
 !
- integer :: islct(:)
+ integer, optional, intent(in) :: islct_(:)
+ integer, pointer :: islct(:)
+ real*8, optional :: r__(:,:), rref__(:,:) ! perform checking using optional coordinate arrays
+ real*8, pointer, dimension(:,:) :: r_, rref_
 !
  type(confcons_rule), pointer :: rr
  integer :: i, j, k, l, m, errnum, ires, iseg
@@ -542,27 +564,56 @@ function confcons_check(islct) result(errnum)
  real*8 :: msd0, msd1, msd2
  logical :: flagged
  character(len=16), parameter :: whoami=' CONFCONS_CHECK>'
-
  integer :: ierror
+
+ integer :: natom
+
+!
 
 !
  character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
+!
+ if (present(islct_)) then
+  allocate(islct(size(islct_))); islct=islct_
+ else
+  allocate(islct(natom)) ; islct=1
+ endif
+!
+ if (present(r__)) then
+   allocate(r_(size(r__,1),size(r__,2))); r_=r__
+ else
+   allocate(r_(size(r(1,:)),3)) ; r_(:,1)=r(1,:) ; r_(:,2)=r(2,:) ; r_(:,3)=r(3,:)
+ endif
+!
+ if (present(rref__)) then
+   allocate(rref_(size(rref__,1),size(rref__,2))); rref_=rref__
+ else
+   allocate(rref_(size(r(1,:)),3)) ; rref_(:,1)=rcomp(1,:) ; rref_(:,2)=rcomp(2,:) ; rref_(:,3)=rcomp(3,:)
+ endif
 !
 !
  errnum=0 ! number of errors
 !
 ! other code to be written
- call mpi_bcast(r,psf_natom(),MPI_REAL,0,MPI_COMM_LOCAL,ierror)
+! populate main coordinates, if needed
+ if (present(r__)) then
+  r__=r_
+ else
+  r(1,:)=r_(:,1) ; r(2,:)=r_(:,2) ; r(3,:)=r_(:,3)
+ endif
 !
 ! set error count
  !**CHARMM_ONLY**! call setmsi('CONFERR',errnum)
 !
-!
 ! print summary
 !
  if (qprint) then
-  write(msg___,'(9A)') whoami,' ________________________________________________________________________________'
-  do i_=1,size(msg___);if(msg___(i_)=='')exit;call plainmessage(msg___(i_));enddo;msg___=''
+!
+  if (errnum.gt.0) then
+   write(msg___,'(2A)') whoami,' ________________________________________________________________________________'
+   do i_=1,size(msg___);if(msg___(i_)=='')exit;call plainmessage(msg___(i_));enddo;msg___=''
+  endif
+!
   if (qfix) then
    if (errnum.eq.1) then
     write(msg___,'(A,I5,A)') whoami, errnum, ' INCONSISTENCY WAS FOUND AND CORRECTED.'
@@ -582,8 +633,11 @@ function confcons_check(islct) result(errnum)
   endif
  endif
 !
-end function confcons_check
+ if (associated(r_)) deallocate(r_)
+ if (associated(rref_)) deallocate(rref_)
+ if (associated(islct)) deallocate(islct)
 !
+end function confcons_check
 !
 !
 end module confcons

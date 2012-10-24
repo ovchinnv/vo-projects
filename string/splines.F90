@@ -878,7 +878,7 @@ call warning('LINEAR_INTERP', 'SOURCE ARRAY LENGTH IS ZERO. WILL RETURN ZEROS.',
 ! uses the linear interpolation subroutine
       !**CHARMM_ONLY**! __DEP_KINDS
       implicit none
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
       integer :: delta
       real*8 :: t(:), x(:)
 ! locals

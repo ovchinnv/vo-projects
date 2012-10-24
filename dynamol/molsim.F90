@@ -222,7 +222,7 @@ endif
  character(len=6) :: action
 !
  character(len=16), parameter :: whoami='MOLSIM_INTEGRATE'
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
  integer*4 :: me
  me=0
 !

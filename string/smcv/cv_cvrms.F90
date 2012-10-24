@@ -363,7 +363,7 @@
        use multicom_aux
        use mpi
        implicit none
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
        integer :: i, j, jj
        character(len=15) :: whoami

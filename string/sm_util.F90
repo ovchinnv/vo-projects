@@ -353,7 +353,7 @@
       real*8 :: def, dum
       real*8, parameter :: pi=3.14159265358979323846
       real*8 :: r0, r1, wrs
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
       character(len=19) :: whoami
       data whoami /' INTERP_DRIVER_SCI>'/
 !
@@ -716,7 +716,7 @@
       real*8 :: def, dum
       real*8, parameter :: pi=3.14159265358979323846
       real*8 :: r0, r1, wrs
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
       character(len=24) :: whoami
       data whoami /' INTERP_DRIVER_SCI_ROOT>'/
 !
@@ -1175,12 +1175,11 @@
 !
        d_arclength=sqrt(ds2_new)
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       drall_new(:,1:nrep-2)=drall_new(:,2:nrep-1)-drall_new(:,1:nrep-2)
-       curvature=sqrt(sum(drall_new**2,1))/ &
+       drall(:,1:nrep-2)=drall_new(:,2:nrep-1)-drall_new(:,1:nrep-2)
+       curvature=sqrt(sum(drall(:,1:nrep-2)**2,1))/ &
      & (d_arclength(1:nrep-2)*d_arclength(2:nrep-1))
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       endif ! qroot
-!
 !ccccc now scatter new coordinates into rout
       call mpi_scatter(rall(1,fbc0+1), n, MPI_REAL, rout, n ,MPI_REAL, &
      & 0, MPI_COMM_STRNG, ierror)
@@ -1246,6 +1245,7 @@
       nensem=SIZE_STRNG
       nrep=nensem+fbc0+fbc1
 ! allocate work arrays, now that we know nrep
+
       allocate(ds(nrep-1), dsn(nrep-1), ds2me(nrep), ds2all(nrep-1), &
      & s(nrep),curv_me(nrep-2))
 !
@@ -1375,7 +1375,7 @@
        integer :: stat(MPI_STATUS_SIZE)
        integer :: error
 !
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
        data whoami /' FRAMES_ALIGN_STRING>'/
 ! do work
@@ -1731,7 +1731,7 @@
        real*8 :: A1(3,3), A2(3,3), A3(3,3), A4(3,3)
        integer :: where1, where2, where3, where4, me
        integer :: i, ibeg, iend
-character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
        data whoami /' FRAME_ALIGN_VORO>'/
 ! do work
 !

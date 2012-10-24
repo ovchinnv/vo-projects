@@ -205,7 +205,7 @@
        integer :: i, j, ii, jj, iatom
        character(len=8) :: sid, rid, ren, ac
        character(len=13) :: whoami
-character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
        integer :: ncom1
        integer, allocatable, dimension(:) :: ind1
@@ -244,7 +244,7 @@ character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine frames_calc(i,x,y,z,mass,deriv)
        use sm_var, only: mestring
-       use bestfit
+       use bestfit, only : eig3s, RMSBestFit, rmsd, norm3, veccross3
        use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
        implicit none
 !
@@ -811,7 +811,7 @@ character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i
 !
        subroutine frames_calc_align_comp(i,x,y,z, &
      & xcomp,ycomp,zcomp,mass,d)
-       use bestfit
+       use bestfit, only : eig3s, RMSBestFit, rmsd, norm3, veccross3
        use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
        implicit none
 ! vars

@@ -175,6 +175,9 @@ module chirality
  l=comlen
  999 continue
  if (l.le.1 .or. remove_tag(comlyn,'HELP',comlen).gt.0) then
+  if &
+& (ME_LOCAL.eq.0)&
+& then
   write(msg___,'(2A)') whoami, ' CHIRALITY CHECKER ( VO / KARPLUS GROUP / HARVARD U. 2012 )'&
 & ,whoami, ' _______________________________________________________________________________'&
 & ,whoami, ' DESCRIPTION: FIND AND CORRECT CHIRALITY ERRORS ACCORDING'&
@@ -184,7 +187,7 @@ module chirality
 & ,whoami, '   INIT  - initialize/reinitialize'&
 & ,whoami, '   FINA  - deallocate all arrays'&
 & ,whoami, '   CHECK - check structure'&
-& ,whoami, '   FIX   - check structure and attempt to fix errors'&
+& ,whoami, '   FIX   - attempt to correct errors during checking'&
 & ,whoami, '   NOFX  - do not attempt to correct errors'&
 & ,whoami, '   NOPR  - disable output'&
 & ,whoami, '   PRIN  - enable output'&
@@ -196,6 +199,7 @@ module chirality
 & ,whoami, ' ATOM SELECTION IS OPTIONAL (ALL ATOMS WILL BE SELECTED BY DEFAULT)'&
 & ,whoami, ' _______________________________________________________________________________'
   do i_=1,size(msg___);if(msg___(i_)=='')exit;call plainmessage(msg___(i_));enddo;msg___=''
+  endif ! me==0
   return
  endif
 !
@@ -224,13 +228,23 @@ module chirality
   if (remove_tag(comlyn,'ADD',comlen).le.0) num_rules=0 ! overwrite rules
   ifile=atoi(get_remove_parameter(comlyn, 'UNIT', comlen), -1)
   if (ifile .eq. -1) then
-   write(msg___,*)' RULES UNIT NUMBER NOT SPECIFIED. WILL NOT READ.';call warning(whoami, msg___(1), 0)
+   call warning(whoami, ' RULES UNIT NUMBER NOT SPECIFIED. WILL NOT READ.', 0)
   else
    call chirality_read_rules(ifile)
   endif
  endif ! read
 !
  if (remove_tag(comlyn,'RULE',comlen).gt.0) then
+!
+  if &
+
+
+
+
+& (ME_LOCAL.eq.0)&
+
+& then
+!
   write(msg___,'(2A)') whoami, ' __________________________________________________________________________';
   do i_=1,size(msg___);if(msg___(i_)=='')exit;call plainmessage(msg___(i_));enddo;msg___=''
   write(msg___,'(2A)') whoami, ' THE FOLLOWING RULES ARE CURRENTLY DEFINED:';
@@ -244,13 +258,13 @@ module chirality
   enddo
   write(msg___,'(2A)') whoami, ' __________________________________________________________________________';
   do i_=1,size(msg___);if(msg___(i_)=='')exit;call plainmessage(msg___(i_));enddo;msg___=''
- endif ! debug
+  endif ! me==0
+ endif ! RULES
 !
  if (remove_tag(comlyn,'NOFX',comlen).gt.0) then
   qflip=.false.
  elseif (remove_tag(comlyn,'FIX',comlen).gt.0) then ! whether to flip the atom specified in the rule to change chirality
   qflip=.true.
-  qcheck=.true.
  endif
 !
  if ((remove_tag(comlyn,'CHCK',comlen).gt.0) .or. &
@@ -290,7 +304,9 @@ module chirality
  subroutine chirality_read_rules(ifile)
  use parser
  use output
+
  character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
+
  integer, optional :: ifile
  logical :: qread
 !
@@ -336,15 +352,15 @@ module chirality
       if (r .eq. dihedral_rules(j)) then
 ! if (any(r .eq. dihedral_rules(1:num_rules))) then
        write(msg___,'(A)') 'IGNORING DUPLICATE OR CONFLICTING RULE: '//line(1:l); 
-       write(msg___,*)msg___;call warning(whoami, msg___(1), 0)
+       call warning(whoami, msg___(1), 0)
        num_rules=num_rules-1
        exit
       endif
      enddo
     else
-     write(msg___,*)'DETECTED ERRORS IN RULES FILE.';call warning(whoami, msg___(1), 0)
+     call warning(whoami, 'DETECTED ERRORS IN RULES FILE.', 0)
      write(msg___, '(A)') 'SKIPPING LINE:'//line(1:l); 
-     write(msg___,*)msg___;call warning(whoami, msg___(1), 0)
+     call warning(whoami, msg___(1), 0)
      continue
     endif ! read error
    else ! end of file error
@@ -380,8 +396,8 @@ module chirality
 ! therefore we should chek for duplicated here also
    do k=1,j-1
     if (r .eq. dihedral_rules(k)) then
-       write(msg___,'(A)') 'IGNORING DUPLICATE OR CONFLICTING RULE: '//line(1:l); 
-       write(msg___,*)msg___;call warning(whoami, msg___(1), 0)
+       write(msg___,'(A)') 'IGNORING DUPLICATE OR CONFLICTING RULE: '//dihedral_rules_data(i)
+       call warning(whoami, msg___(1), 0)
      j=j-1
      exit
     endif
@@ -392,27 +408,50 @@ module chirality
  endif
 end subroutine chirality_read_rules
 !============================================
- function chirality_check(islct) result(errnum)
+ function chirality_check(islct_, r__) result(errnum)
  use parser
  use output
  use system, only : r, rcomp, m, bfactor, occupancy
  use psf
  use constants, only : pi
  use multicom_aux !**CHARMM_ONLY**! !##MULTICOM
- integer :: ierror
+
+
 
 !
  character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
- integer :: islct(:)
+ integer, optional, intent(in) :: islct_(:)
+ integer, pointer :: islct(:)
+ real*8, optional :: r__(:,:)
+ real*8, pointer :: r_(:,:)
 !
  character, parameter :: op(-1:1) = (/'>',' ','<'/) ! trick to write the correct inequality
  type(dihedral_rule), pointer :: rr
  integer :: i,j,ind(6), errnum, ires, iseg
  real*8 :: phi, d
  logical :: flagged
+ integer :: ierror
+!
+
+ integer :: natom
+
+!
+
 !
  character(len=17), parameter :: whoami=' CHIRALITY_CHECK>'
+!
+ if (present(islct_)) then
+  allocate(islct(size(islct_))); islct=islct_
+ else
+  allocate(islct(natom)) ; islct=1
+ endif
+!
+ if (present(r__)) then
+   allocate(r_(size(r__,1),size(r__,2))); r_=r__
+ else
+   allocate(r_(size(r(1,:)),3)) ; r_(:,1)=r(1,:) ; r_(:,2)=r(2,:) ; r_(:,3)=r(3,:)
+ endif
 !
 !
 !
@@ -421,7 +460,12 @@ end subroutine chirality_read_rules
 ! charmm-specific code
 !
 ! other code to be written
- call mpi_bcast(rr,psf_natom(),MPI_REAL,0,MPI_COMM_LOCAL,ierror)
+! populate main coordinates, if needed
+ if (present(r__)) then
+  r__=r_
+ else
+  r(1,:)=r_(:,1) ; r(2,:)=r_(:,2) ; r(3,:)=r_(:,3)
+ endif
 !
 ! set error count
  !**CHARMM_ONLY**! call setmsi('CHIERR',errnum)
@@ -438,6 +482,9 @@ end subroutine chirality_read_rules
   endif
   do i_=1,size(msg___);if(msg___(i_)=='')exit;call plainmessage(msg___(i_));enddo;msg___=''
  endif
+!
+ if (associated(r_)) deallocate(r_)
+ if (associated(islct)) deallocate(islct)
 !
 end function chirality_check
 !============================================================================

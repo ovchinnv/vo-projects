@@ -43,7 +43,7 @@
        function cv_qcomp_add(type,fr1,fr2,k,gamma,weight) ! note: i is the atom index in the PSF
        use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
        implicit none
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
        integer :: type, fr1, fr2
        real*8 :: k, gamma, weight
 ! locals
@@ -249,7 +249,7 @@
        use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
        use mpi
        implicit none
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
        integer :: i
        character(len=15) :: whoami

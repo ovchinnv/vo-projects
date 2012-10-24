@@ -97,6 +97,8 @@
       public sm0k_main
       public sm0k_repa
       public sm0k_stat
+      public sm0k_confcons
+      public sm0k_chirality
 !
       contains
 !
@@ -104,7 +106,9 @@
 !----------------------------------------------------------------------
 ! command parser for the 0K string
 !----------------------------------------------------------------------
-      use sm_config, only : stat_on, stat_freq, repa_on, repa_freq ! for communication with MINI
+      use sm_config, only : stat_on, stat_freq, repa_on, repa_freq, &
+& confcons_on, confcons_freq, chirality_on, chirality_freq, &
+& string_noprint
 !
       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
       use psf
@@ -120,7 +124,7 @@
       character(len=8) :: keyword
       character(len=11) :: whoami
 !
-  character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+  character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
 ! declare functions here
 !
@@ -138,9 +142,19 @@
         call sm0k_init()
       endif
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+! interpolate path
       if (( keyword(1:4).eq.'INTE'(1:4) )) then
         call sm0k_interpolate(comlyn, comlen)
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+! conformational consistency
+      elseif (( keyword(1:4).eq.'CONF'(1:4) )) then
+        call sm0k_confcons()
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+! chirality
+      elseif (( keyword(1:4).eq.'CHIR'(1:4) )) then
+        call sm0k_chirality()
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+! reparametrization setup/invocation
       elseif (( keyword(1:4).eq.'REPA'(1:4) )) then
        if (comlen.gt.0) then ! this is an initialization call!
         call sm0k_repa_init(comlyn, comlen)
@@ -148,6 +162,7 @@
         call sm0k_repa(0)! repa routine will reparametrize main coords
        endif
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+! statistics setup/invocation
       elseif (( keyword(1:4).eq.'STAT'(1:4) )) then
        if (comlen.gt.0) then ! this is an initialization call!
         call sm0k_stat_init(comlyn, comlen)
@@ -169,6 +184,7 @@
 
 
 
+
 !cccccccccccccccccc reparametrization option cccccccccccccccccccccc
        repa_freq=atoi(get_remove_parameter(comlyn, 'REPF', comlen), -1)
        if (repa_freq.le.0) then
@@ -184,8 +200,38 @@
      & whoami,' WILL REPARAMETRIZE AFTER EVERY ', &
      & repa_freq,' MINIMIZATION ITERATIONS' ; do i_=1,size(msg___);if(msg___(i_)=='')exit;call plainmessage(msg___(i_),3);enddo;msg___=''
        endif ! repa_freq
+!cccccccccccccccc conformational consistency options ccccccccccccccc
+       confcons_freq=atoi(get_remove_parameter(comlyn, 'CONFF', comlen), -1)
+       if (confcons_freq.le.0) then
+        confcons_on=.false.
+        WRITE (msg___,'(2A)') &
+     & whoami,' CONF/CONS FREQUENCY ZERO OR UNSPECIFIED.', &
+     & whoami,' CONF/CONS CHECKING WILL NOT BE DONE.';
+             do i_=1,size(msg___);if(msg___(i_)=='')exit;call plainmessage(msg___(i_),3);enddo;msg___=''
+       else
+        confcons_on=.true.
+        write(msg___,'(/,2A,I7,A/)') &
+     & whoami,' WILL CHECK PATH FOR CONF/CONS AFTER EVERY ', &
+     & confcons_freq,' MINIMIZATION ITERATIONS'
+        do i_=1,size(msg___);if(msg___(i_)=='')exit;call plainmessage(msg___(i_),3);enddo;msg___=''
+       endif ! confcons_freq
+!cccccccccccccccc chirality optionsccccccccccccccc ccccccccccccccc
+       chirality_freq=atoi(get_remove_parameter(comlyn, 'CHIRF', comlen), -1)
+       if (chirality_freq.le.0) then
+        chirality_on=.false.
+        WRITE (msg___,'(2A)') &
+     & whoami,' CHIRALITY FREQUENCY ZERO OR UNSPECIFIED.', &
+     & whoami,' CHIRALITY CHECKING WILL NOT BE DONE.';
+             do i_=1,size(msg___);if(msg___(i_)=='')exit;call plainmessage(msg___(i_),3);enddo;msg___=''
+       else
+        chirality_on=.true.
+        write(msg___,'(/,2A,I7,A/)') &
+     & whoami,' WILL CHECK PATH FOR CHIRALITY ERRORS AFTER EVERY ', &
+     & chirality_freq,' MINIMIZATION ITERATIONS'
+        do i_=1,size(msg___);if(msg___(i_)=='')exit;call plainmessage(msg___(i_),3);enddo;msg___=''
+       endif ! chirality_freq
 !cccccccccccccccccc statistics output option cccccccccccccccccccccc
-       if (repa_on) then ! boolly, it makes sense to output string statistics only when reparametrization is enabled
+       if (repa_on) then ! it makes sense to output string statistics only when reparametrization is enabled
 ! if you want to follow the unparametrized dynamics, just set maxiter to 0 in the repa setup call
         stat_freq=atoi(get_remove_parameter(comlyn, 'STAF', comlen), -1)
         if (stat_freq.le.0) then
@@ -206,12 +252,10 @@
      & whoami,' (DISABLED). STATISTICS WILL NOT BE OUTPUT.' ; do i_=1,size(msg___);if(msg___(i_)=='')exit;call plainmessage(msg___(i_),3);enddo;msg___=''
         stat_on=.false.
        endif
+!
+       string_noprint=(remove_tag(comlyn,'NOPR',comlen).gt.0)
+!
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-
-
-
-
-
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       else
             write(msg___,*)'UNRECOGNIZED SUBCOMMAND: ',keyword;call warning(whoami, msg___(1), 0)
@@ -226,8 +270,7 @@
       use mpi
 !
       implicit none
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
-
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
       logical :: qroot, qslave
       integer :: ierror
@@ -290,7 +333,7 @@
       use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
       use mpi
       implicit none
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
       character(len=11) :: whoami
 !
@@ -320,7 +363,7 @@
       use system, only : system_getind
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       implicit none
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
       CHARACTER(LEN=*) :: COMLYN
       INTEGER :: COMLEN
@@ -437,7 +480,7 @@
 ! process selection
 !
 !
-      i=remove_tag(comlyn,'ORIE',comlen) ! find the position of `intc'
+      i=remove_tag(comlyn,'ORIE',comlen)
       if (i.gt.0) then ! only if the ORIE directive exists
 ! selection text taken from corman.src
        orient=1
@@ -471,7 +514,7 @@
       j=1
       do while (j.gt.0)
        mlen=comlen
-       j=remove_tag(comlyn,'MASS',comlen) ! s
+       j=remove_tag(comlyn,'MASS',comlen)
        if ( (orient.eq.1).and.(j.ge.i) ) then
         orient_mass=1
        else if (j.gt.0) then
@@ -482,7 +525,7 @@
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 ! check which atoms will be moved by reparametrization (default: all atoms)
 ! process selection
-      i=remove_tag(comlyn,'MOVE',comlen) !
+      i=remove_tag(comlyn,'MOVE',comlen)
       if (i.gt.0) then ! only if the MOVE directive exists
        j=find_tag(comlyn, 'SELE', comlen)
        if (j.gt.0.and.j.lt.i) then ! sele occurs before orie
@@ -650,7 +693,7 @@ mlen=min(max(0,mlen),len(methods(interp_method)));methods(interp_method)(mlen+1:
 ! on Cartesian coordinates
 ! note: var is assumed to contain coordinates of free atoms (CHARMM SD minimizer convention) in [x1,y1,z1,x2,y2,z2...] triplet format
 !
-      use bestfit
+      use bestfit, only : eig3s, RMSBestFit, rmsd, norm3, veccross3
       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
       use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
       use constants
@@ -661,7 +704,7 @@ mlen=min(max(0,mlen),len(methods(interp_method)));methods(interp_method)(mlen+1:
 !
       implicit none
 !ccccccccccccccccccccccccccccccccccccccc
-      integer :: n ! NOTE: arrays as optional arguments are quite a dangerous feature of F90
+      integer :: n ! NOTE: arrays as optional arguments can be a dangerous feature of F90
       real*8, optional :: var(*) ! ideally, n should give the dimension of n, but we live in an imperfect world
 !
 !
@@ -924,10 +967,216 @@ mlen=min(max(0,mlen),len(methods(interp_method)));methods(interp_method)(mlen+1:
       end subroutine sm0k_repa
 !
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      subroutine sm0k_confcons(from_sd_,var) ! optionally, accepts variables directly from sd minimizer; no fixed atom support yet
+!
+      use mpi
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
+      use multicom_aux
+      use system, only : r, rcomp, m, bfactor, occupancy
+      use psf
+!
+      use confcons, only : confcons_check
+      use sm_config, only : string_noprint
+!
+      implicit none
+!
+      logical, optional :: from_sd_
+      logical :: from_sd
+      real*8, optional, intent(inout) :: var(*)
+!
+      real*8, pointer :: rref_(:,:), r_(:,:)
+!
+      logical :: qroot, qprint
+      integer :: ierror, errnum, errors(SIZE_STRNG), i, j
+      character(len=15) :: whoami
+!
+!
+      integer :: stat(MPI_STATUS_SIZE)
+!
+      integer :: natom
+!
+      character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
+!
+      data whoami /' SM0K_CONFCONS>'/
+!
+      if (.not.sm0k_initialized) call sm0k_init()
+!
+      qroot =MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.SIZE_STRNG.gt.1
+      qprint=MPI_COMM_STRNG.ne.MPI_COMM_NULL
+      qprint=qprint.and.(ME_STRNG.eq.0)
+!
+      natom=psf_natom()
+!
+      if (present(from_sd_)) then ; from_sd=from_sd_ ; else ; from_sd=.false. ; endif
+      if (from_sd) then
+       if (present(var)) then
+        allocate(r_(natom,3))
+        j=1
+        do i=1,natom
+         r_(i,1)=var(j);j=j+1
+         r_(i,2)=var(j);j=j+1
+         r_(i,3)=var(j);j=j+1
+        enddo
+       else
+       call warning(whoami, ' NO S/D COORDINATES FOUND. ABORT.', 0)
+       return
+       endif
+      endif ! from_sd
+!
+      allocate(rref_(natom,3))
+!
+      if (mestring.gt.0) then
+! receive reference structure
+       if (qroot) call mpi_recv(rref_,3*natom,MPI_REAL,mestring-1,1,MPI_COMM_STRNG,stat,ierror)
+! call confcons -- all processors enter
+       if (from_sd) then
+        errnum=confcons_check( r__=r_, rref__=rref_ )
+       else
+        errnum=confcons_check( rref__=rref_ )
+       endif
+      endif ! mestring>0
+!
+      if (mestring.lt.nstring-1) then
+       if (qroot) then
+        if (from_sd) then
+         rref_=r_
+        else
+         rref_(:,1)=r(1,1:natom) ; rref_(:,2)=r(2,1:natom) ; rref_(:,3)=r(3,1:natom)
+        endif
+! send reference structure
+         call mpi_send(rref_,3*natom,MPI_REAL,mestring+1,1,MPI_COMM_STRNG, ierror)
+       endif ! qroot
+      endif ! mestring
+!
+! collect number of errors into array
+!
+      if (qroot) call mpi_gather(errnum,1,MPI_INTEGER,errors,1,MPI_INTEGER,0,MPI_COMM_STRNG,ierror)
+! print errors summary
+      if (qprint.and..not.string_noprint) then
+       write(msg___,'(2A)') whoami, '___________________________________________________________',&
+& whoami, ' REPLICA, NUMBER OF INCONSISTENCIES',&
+& whoami, '___________________________________________________________'
+       do i_=1,size(msg___);if(msg___(i_)=='')exit;call plainmessage(msg___(i_),3);enddo;msg___=''
+       do i=2, SIZE_STRNG
+        write(msg___,'(A,I5,", ",I5)'), whoami, i, errors(i)
+       do i_=1,size(msg___);if(msg___(i_)=='')exit;call plainmessage(msg___(i_),3);enddo;msg___=''
+       enddo
+       write(msg___,'(2A)') whoami, '___________________________________________________________'
+       do i_=1,size(msg___);if(msg___(i_)=='')exit;call plainmessage(msg___(i_));enddo;msg___=''
+      endif
+!
+      if (from_sd) then
+       j=1
+       do i=1,natom
+        var(j)=r_(i,1);j=j+1
+        var(j)=r_(i,2);j=j+1
+        var(j)=r_(i,3);j=j+1
+       enddo
+      endif
+!
+      if (associated(rref_)) deallocate(rref_)
+      if (associated(r_)) deallocate(r_)
+!
+      end subroutine sm0k_confcons
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      subroutine sm0k_chirality(from_sd_,var) ! optionally, accepts variables directly from sd minimizer; no fixed atom support yet
+! this is a plain wrapper around the chirality checker routine
+!
+      use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
+      use mpi
+      use multicom_aux
+      use system, only : r, rcomp, m, bfactor, occupancy
+      use psf
+!
+      use chirality, only : chirality_check
+      use sm_config, only : string_noprint
+!
+      implicit none
+!
+      logical, optional :: from_sd_
+      logical :: from_sd
+      real*8, optional, intent(inout) :: var(*)
+!
+      real*8, pointer :: r_(:,:)
+!
+      logical :: qroot, qprint
+      integer :: ierror, errnum, errors(SIZE_STRNG), i, j
+      character(len=16) :: whoami
+!
+!
+      integer :: stat(MPI_STATUS_SIZE)
+!
+      integer :: natom
+!
+      character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
+!
+      data whoami /' SM0K_CHIRALITY>'/
+!
+      if (.not.sm0k_initialized) call sm0k_init()
+!
+      qroot =MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.SIZE_STRNG.gt.1
+      qprint=MPI_COMM_STRNG.ne.MPI_COMM_NULL
+      qprint=qprint.and.(ME_STRNG.eq.0)
+!
+      natom=psf_natom()
+!
+      if (present(from_sd_)) then ; from_sd=from_sd_ ; else ; from_sd=.false. ; endif
+      if (from_sd) then
+       if (present(var)) then
+        allocate(r_(natom,3))
+        j=1
+        do i=1,natom
+         r_(i,1)=var(j);j=j+1
+         r_(i,2)=var(j);j=j+1
+         r_(i,3)=var(j);j=j+1
+        enddo
+        errnum=chirality_check( r__=r_ )
+       else
+       call warning(whoami, ' NO S/D COORDINATES FOUND. ABORT.', 0)
+       return
+       endif
+      else
+        errnum=chirality_check()
+      endif ! from_sd
+!
+       if (from_sd) then
+       else
+       endif
+!
+! collect number of errors into array
+!
+      if (qroot) call mpi_gather(errnum,1,MPI_INTEGER,errors,1,MPI_INTEGER,0,MPI_COMM_STRNG,ierror)
+! print errors summary
+      if (qprint.and..not.string_noprint) then
+       write(msg___,'(2A)') whoami, '___________________________________________________________',&
+& whoami, ' REPLICA, NUMBER OF ERRORS',&
+& whoami, '___________________________________________________________'
+       do i_=1,size(msg___);if(msg___(i_)=='')exit;call plainmessage(msg___(i_),3);enddo;msg___=''
+       do i=2, SIZE_STRNG
+        write(msg___,'(A,I5,", ",I5)'), whoami, i, errors(i)
+       do i_=1,size(msg___);if(msg___(i_)=='')exit;call plainmessage(msg___(i_),3);enddo;msg___=''
+       enddo
+       write(msg___,'(2A)') whoami, '___________________________________________________________'
+       do i_=1,size(msg___);if(msg___(i_)=='')exit;call plainmessage(msg___(i_));enddo;msg___=''
+      endif
+!
+      if (from_sd) then
+       j=1
+       do i=1,natom
+        var(j)=r_(i,1);j=j+1
+        var(j)=r_(i,2);j=j+1
+        var(j)=r_(i,3);j=j+1
+       enddo
+      endif
+!
+      if (associated(r_)) deallocate(r_)
+!
+      end subroutine sm0k_chirality
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine sm0k_interpolate(comlyn, comlen)
 ! given a collection of n string replicas, interpolate onto a finer/coarser path
 !
-      use bestfit
+      use bestfit, only : eig3s, RMSBestFit, rmsd, norm3, veccross3
 !
       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
       use mpi
@@ -943,7 +1192,7 @@ mlen=min(max(0,mlen),len(methods(interp_method)));methods(interp_method)(mlen+1:
       use charmmio; use pdbio; use mol_formats
 !
       implicit none
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
       CHARACTER(LEN=*) :: COMLYN
       INTEGER :: COMLEN
@@ -972,6 +1221,7 @@ mlen=min(max(0,mlen),len(methods(interp_method)));methods(interp_method)(mlen+1:
       real*8, pointer :: orient_weights(:), weight(:)
       integer :: ierror
       real*8 :: u(3,3) ! rotation matrix
+      real*8 :: r_com(3)=(/0d0, 0d0, 0d0/)
 !
 !
       interface ! to linear interpolation routine
@@ -1113,7 +1363,7 @@ length=min(max(0,length),len(methods(interp_method)));methods(interp_method)(len
        allocate(fname_cor_in(num_rep_in))
 !
        do j=1, num_rep_in
-        read(ifile,*) fname_cor_in(j)
+        read(ifile,'(A80)') fname_cor_in(j)
        enddo
        call files_close(ifile)
 !
@@ -1219,6 +1469,13 @@ length=min(max(0,length),len(methods(interp_method)));methods(interp_method)(len
          orient_weights(iselct) = orient_mass * m(iselct) + (1d0-orient_mass)
          deallocate(iselct)
         endif
+! nomalize weights
+        dum=sum(orient_weights)
+        if (abs(dum).gt.errtol()) then
+         dum=one/dum
+         orient_weights=dum*orient_weights
+        endif
+!
 ! print a summary
         write(keyword,'(I8)') norient
         mlen=len(keyword)
@@ -1273,11 +1530,26 @@ length=min(max(0,length),len(methods(interp_method)));methods(interp_method)(len
 !
       if (qprint) then
         if (orient.eq.1) then
+!
+! translate first set to centroid
+!
+        j=1
+        r_com=matmul(orient_weights, rin_all(:,:,j))
+        rin_all(:,1,j)=rin_all(:,1,j)-r_com(1)
+        rin_all(:,2,j)=rin_all(:,2,j)-r_com(2)
+        rin_all(:,3,j)=rin_all(:,3,j)-r_com(3)
+!
 ! set up pairs
 ! pairs = RESHAPE( (/ (i, i=1,natom), &
 ! & (i, i=1,natom) /), (/ 2,natom /), order=(/ 2,1 /) )
 ! orient x based on the previous replica
          do j=2,num_rep_in
+! translate next set to centroid
+          r_com=matmul(orient_weights, rin_all(:,:,j))
+          rin_all(:,1,j)=rin_all(:,1,j)-r_com(1)
+          rin_all(:,2,j)=rin_all(:,2,j)-r_com(2)
+          rin_all(:,3,j)=rin_all(:,3,j)-r_com(3)
+!
           call RMSBestFit(rin_all(:,:,j-1), rin_all(:,:,j), orient_weights, u) ! superpose r_(j-i) onto r_j
           rin_all(:,:,j)=matmul(rin_all(:,:,j),u) ! apply transpose (=inverse) of u to r_j
 ! old CHARMM routine:
@@ -1296,6 +1568,12 @@ length=min(max(0,length),len(methods(interp_method)));methods(interp_method)(len
          weight=m(1:natom)
         else
          weight=1d0
+        endif
+! nomalize weights
+        dum=sum(weight)
+        if (abs(dum).gt.errtol()) then
+         dum=one/dum
+         weight=dum*weight
         endif
 !
 ! do the actual interpolation -- simple, not self-consistent
@@ -1413,7 +1691,7 @@ length=min(max(0,length),len(methods(interp_method)));methods(interp_method)(len
       use mpi !!**CHARMM_ONLY**!##MPI
 !ccccccccccccccccccccccccccccccccccccccccccccccccc
       implicit none
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
       CHARACTER(len=*) :: COMLYN
       INTEGER :: COMLEN
@@ -1569,10 +1847,10 @@ length=min(max(0,length),len(methods(interp_method)));methods(interp_method)(len
        if (remove_tag(comlyn,'DELS',comlen).gt.0) then
         output_dsdt=.true.
 !
-        if (.not.allocated(rold_s)) allocate(rold_s(nstat,3)) ! for storing "old" coords
+        if (.not.allocated(rold_s)) then ; allocate(rold_s(nstat,3)) ; rold_s=zero ; endif ! for storing "old" coords
         if (.not.allocated(rcurrent_s)) allocate(rcurrent_s(nstat,3))
         if (qstat_orient) then
-         if (.not.allocated(rold_o)) allocate(rold_o(norient,3))
+         if (.not.allocated(rold_o)) then ; allocate(rold_o(norient,3)) ; rold_o=zero ; endif
         endif
 !
         dsdt_fname=get_remove_parameter(COMLYN,'DNAM',COMLEN); dsdt_flen=len_trim(dsdt_fname)
@@ -1609,12 +1887,12 @@ length=min(max(0,length),len(methods(interp_method)));methods(interp_method)(len
 !
         if (.not.allocated(rave_s)) allocate(rave_s(nstat,3)) ! for storing average coords
         if (.not.allocated(rold_s)) allocate(rold_s(nstat,3)) ! for storing "old" coords
-        rave_s=0d0
+        rave_s=zero
         if (.not.allocated(rcurrent_s)) allocate(rcurrent_s(nstat,3))
         if (qstat_orient) then
          if (.not.allocated(rold_o)) allocate(rold_o(norient,3))
          if (.not.allocated(rave_o)) allocate(rave_o(norient,3))
-         rave_o=0d0
+         rave_o=zero
         endif
 !
         rmsd_ave_fname=get_remove_parameter(COMLYN,'RANM',COMLEN); rmsd_ave_flen=len_trim(rmsd_ave_fname)
@@ -1780,7 +2058,7 @@ length=min(max(0,length),len(methods(interp_method)));methods(interp_method)(len
       end subroutine sm0k_stat_init
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine sm0k_stat(n,var)
-      use bestfit
+      use bestfit, only : eig3s, RMSBestFit, rmsd, norm3, veccross3
       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
       use psf
       use parser
@@ -2016,10 +2294,10 @@ length=min(max(0,length),len(methods(interp_method)));methods(interp_method)(len
         if (repa_initialized) then ! proceed only if arclength defined
          if (c_funit.eq.fout) then
       write(c_funit,'("CURV> ",I5," ",'//fmt(1:fmt_len)//'F11.5)')      &
-     & stat_iteration_counter, (curv(i),i=1,SIZE_STRNG-1)
+     & stat_iteration_counter, (curv(i),i=1,SIZE_STRNG-2)
          else
           write(c_funit,'(I5," ",'//fmt(1:fmt_len)//'F11.5)')           &
-     & stat_iteration_counter, (curv(i),i=1,SIZE_STRNG-1)
+     & stat_iteration_counter, (curv(i),i=1,SIZE_STRNG-2)
          endif
 ! flush unit: close and reopen
          call files_close(c_funit)

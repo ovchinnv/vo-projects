@@ -43,7 +43,7 @@
        function cv_posi_com_add(type,atom_list,k,gamma,weight,frame)
        use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
        implicit none
-       character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+       character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
        real*8 :: k, gamma, weight
        integer, optional :: frame ! reference frame
@@ -375,7 +375,7 @@ write(msg___,*)' POSITION_COM_',pos,' CV ALREADY PRESENT. NOTHING DONE.';call wa
 !
        implicit none
 !
-       character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+       character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
        integer :: i, j, type, ii, jj, iatom
        character(len=8) :: sid, rid, ren, ac
        character(len=18) :: whoami

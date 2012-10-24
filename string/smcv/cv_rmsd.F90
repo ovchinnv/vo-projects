@@ -181,7 +181,7 @@
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_rmsd_calc(i,x,y,z,mass,fx,fy,fz, &
      & calctheta,deriv,addforce,fext)
-       use bestfit
+       use bestfit, only : eig3s, RMSBestFit, rmsd, norm3, veccross3
        use constants
        implicit none
 !
@@ -441,7 +441,7 @@
        use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
        implicit none
 !
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
        integer :: i, j, type, ii, jj, iatom
        character(len=8) :: sid, rid, ren, ac

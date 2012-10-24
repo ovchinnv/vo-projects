@@ -19,13 +19,14 @@ module rng
  implicit none
  logical :: random_initialized=.false.
  integer :: s(4)=(/1,2,3,4/)
+ private s
  contains
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  subroutine random_init(seeds)
  use parser
  use output
 !
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
  integer, optional :: seeds(4)
  if (random_initialized) return
 !
@@ -52,7 +53,7 @@ module rng
  use parser
  use output
 !
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
  integer, optional :: seeds(4)
 !
  if (present(seeds)) then ; s=seeds ;

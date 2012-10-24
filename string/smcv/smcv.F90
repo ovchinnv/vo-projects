@@ -105,7 +105,7 @@
 !
       integer(kind=MPI_ADDRESS_KIND) :: lb, extent
 !
-      character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+      character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
 !
 ! interface to frames_align_string routine (needed since routine is not in a module and I use optional args
@@ -1949,7 +1949,7 @@
 !
       implicit none
 !
-   character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+   character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
 !
       integer :: ierror
@@ -2119,7 +2119,7 @@
 !
       implicit none
 !
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
       character(len=11) :: whoami
       integer :: ierror
@@ -2196,7 +2196,7 @@
 !
       logical :: qroot, qprint
 !
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
       data whoami /' SMCV_REPA_INIT>'/
 !
@@ -2327,7 +2327,7 @@
       data whoami/' SMCV_STAT_INIT>'/
 !
       logical :: qroot, qprint
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       qroot=MPI_COMM_STRNG.ne.MPI_COMM_NULL
       qprint=qroot.and.ME_STRNG.eq.0
@@ -3189,7 +3189,7 @@
       use mpi
 !
       implicit none
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 ! local variables
       character(len=11) :: whoami
       logical :: qprint

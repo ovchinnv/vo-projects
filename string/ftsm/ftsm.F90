@@ -31,7 +31,7 @@
       module ftsm ! finite-temperature string method
       !**CHARMM_ONLY**! __DEP_KINDS
       use ftsm_var
-      use bestfit ! , only : RMSBestFit, rmsd
+      use bestfit, only : eig3s, RMSBestFit, rmsd, norm3, veccross3 ! , only : RMSBestFit, rmsd
 !
       private
 !
@@ -109,7 +109,7 @@
 !
       logical :: qroot, qslave, qprint, qcomp
 !
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
 !
       data whoami /' FTSM>'/
@@ -938,11 +938,11 @@
       subroutine ftsm_init()
       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
       use parser
-      use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
+      use multicom_aux !**CHARMM_ONLY**! !##MULTICOM
       use mpi
 !
       implicit none
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
       integer :: ierror
       logical :: qroot, qslave
       character(len=11) :: whoami
@@ -1031,10 +1031,10 @@
 !
       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
       use parser
-      use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
+      use multicom_aux !**CHARMM_ONLY**! !##MULTICOM
       use mpi
 !
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
       character(len=11) :: whoami
 !
@@ -1095,11 +1095,11 @@
 !
       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
       use parser
-      use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
+      use multicom_aux !**CHARMM_ONLY**! !##MULTICOM
       use mpi
       implicit none
 !
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
       CHARACTER(LEN=*) :: COMLYN
       INTEGER :: COMLEN
@@ -1121,12 +1121,12 @@
       subroutine ftsm_list_atoms()
       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
       use parser
-      use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
+      use multicom_aux !**CHARMM_ONLY**! !##MULTICOM
       use mpi
       use psf, only : atoms
 !
       implicit none
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
       integer :: j
       character(len=8) :: sid, rid, ren, ac
@@ -1163,14 +1163,14 @@
       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
       use constants
       use parser
-      use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
+      use multicom_aux !**CHARMM_ONLY**! !##MULTICOM
 !
       implicit none
       real*8 :: w(n), a
       character(len=18) :: whoami
       integer :: i, j, n
 !
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
       data whoami /' FTSM_SET_WEIGHTS>'/
 !
@@ -1292,7 +1292,7 @@
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine ftsm_fill(x,y,z)
       use constants
-      use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
+      use multicom_aux !**CHARMM_ONLY**! !##MULTICOM
       use mpi
 !
       implicit none
@@ -1693,7 +1693,7 @@
 !
       use psf
       use system, only : r, rcomp, m, bfactor, occupancy
-      use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
+      use multicom_aux !**CHARMM_ONLY**! !##MULTICOM
       use parser
       use charmmio; use pdbio; use mol_formats
       use mpi
@@ -1812,7 +1812,7 @@
       subroutine ftsm_read_dcd(ifile, col)
       use psf
       use system, only : r, rcomp, m, bfactor, occupancy
-      use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
+      use multicom_aux !**CHARMM_ONLY**! !##MULTICOM
       use parser
       use mpi
       use charmmio; use pdbio; use mol_formats
@@ -2057,12 +2057,12 @@
       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
       use psf
       use parser
-      use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
+      use multicom_aux !**CHARMM_ONLY**! !##MULTICOM
       use mpi
 !cccccccccccccccccccccccccccccccccccccccccccccccccc
       implicit none
 !
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
       CHARACTER(LEN=*) :: COMLYN
       INTEGER :: COMLEN
@@ -2330,7 +2330,7 @@
       subroutine ftsm_stat()
       use ftsm_rex, only: ftsm_rex_print_map, ftsm_rex_print_log
       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
-      use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
+      use multicom_aux !**CHARMM_ONLY**! !##MULTICOM
       use parser
       use mpi
 !
@@ -2573,7 +2573,7 @@
       integer :: error
       logical :: ok, qorie
 !
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
       data whoami /' FTSM_CHECK>'/
 !
@@ -2600,13 +2600,13 @@
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine ftsm_main(x,y,z,fx,fy,fz,iteration)
       use parser
-      use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
+      use multicom_aux !**CHARMM_ONLY**! !##MULTICOM
       use mpi
       use output,only:message,warning,plainmessage,output_init,output_done,fatal_warning,fout
 !
       implicit none
 !
-      character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+      character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
       real*8 :: x(:), y(:), z(:), &
      & fx(:), fy(:), fz(:)
@@ -2736,7 +2736,7 @@
       subroutine ftsm_calc(x,y,z,deriv,t)
 !
       use constants
-      use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
+      use multicom_aux !**CHARMM_ONLY**! !##MULTICOM
       use mpi
 !
       implicit none
@@ -3724,7 +3724,7 @@
       integer*4 :: stat(MPI_STATUS_SIZE)
       integer :: i, ierror
 !
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
       interface
         subroutine interp_driver_sci(rin,rout,wgt,n, &

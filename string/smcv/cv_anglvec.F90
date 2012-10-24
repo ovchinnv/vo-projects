@@ -626,7 +626,7 @@
        use psf, only : atoms
        implicit none
 !
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
        integer :: i
        character(len=19) :: whoami

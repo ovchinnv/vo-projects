@@ -61,7 +61,7 @@ module sysmanip
   end subroutine sysmanip_translate
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
   subroutine sysmanip_align_pc(qmass,ialign,imove)! align the principal components of the molecule with the Cartesian vectors
-  use bestfit
+  use bestfit, only : eig3s, RMSBestFit, rmsd, norm3, veccross3
   use constants
   use parser, only: ftoa, itoa
   implicit none

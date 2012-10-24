@@ -39,7 +39,7 @@
 !
       character(len=8) :: keyword
       character(len=9) :: whoami
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
       data whoami /' SM_MAIN>'/
 !

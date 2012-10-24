@@ -1529,7 +1529,7 @@
        use mpi
 !
       implicit none
-      character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+      character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
 !
        integer :: iunit
@@ -1652,7 +1652,7 @@
 !
        implicit none
 !
-character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
 !
        integer :: iunit
@@ -2226,7 +2226,7 @@ write(msg___,*)'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.';c
        integer :: iunit, ierr
        character(len=*), optional :: fmt
 ! local
-!#include "../mpitype.def"
+!#include "../../mpitype.def"
 !
        integer :: i
        character(len=80) :: frm

@@ -39,7 +39,7 @@
       use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
       implicit none
 !
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
       character(len=*) :: COMLYN
       integer :: COMLEN
@@ -125,7 +125,7 @@
       use system, only : system_getind
 !
       implicit none
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
       character(len=*) comlyn
       integer :: comlen
@@ -245,7 +245,7 @@
       character(len=8) :: cv_name
 !
  integer :: isele, i__, iend; integer, pointer::iselct(:);character(LEN=20)::word__
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
       integer :: i, j, atom_group, nslct
       logical :: ok
@@ -336,7 +336,7 @@
       use system, only : system_getind
       implicit none
 !
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
       character(len=*) :: comlyn
       integer :: comlen
@@ -450,7 +450,7 @@
       character(len=19) :: whoami
       character(len=8) :: cv_name
 !
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 
 
 
@@ -561,7 +561,7 @@
       character(len=8) :: cv_name
       character(len=8) :: key
 !
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
 
 
@@ -698,7 +698,7 @@
       use system, only : system_getind
 !
       implicit none
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
       character(len=*) :: comlyn
       integer :: comlen
@@ -774,7 +774,7 @@
       use system, only : system_getind
       implicit none
 !
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
       character(len=*) :: comlyn
       integer :: comlen
@@ -849,7 +849,7 @@
       use multicom_aux !!**CHARMM_ONLY**!##MULTICOM
       use mpi
       implicit none
-      character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+      character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
       character(len=*) :: comlyn
       integer :: comlen
@@ -930,7 +930,7 @@
 !
  integer :: isele, i__, iend; integer, pointer::iselct(:);character(LEN=20)::word__
  integer, pointer :: jselct(:), kselct(:)
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
       integer :: i, j, n
       real*8 :: a, b

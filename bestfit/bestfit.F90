@@ -4,6 +4,7 @@
 /*#define __PRINTL(__MSG,__LEVEL) call plainmessage(__MSG,__LEVEL)*/
 /*COORDINATES AND MASSES:*/
 /*#define __INDX(__STR, __STRLEN, __TEST, __TESTLEN)  index(__STR(1:min(__STRLEN,len(__STR))),__TEST(1:min(__TESTLEN,len(__TEST))))*/
+!#define .true. .false.
 !#define __DBGCOMM
 ! **********************************************************************!
 ! This source file was was generated automatically from a master source !
@@ -41,6 +42,7 @@
        logical, private :: qdebug=.true.
        logical, private :: qcheckdet=.true.
        logical, private :: qdetfailtrace=.true.
+       logical, private :: qpower=.true. ! power iterations in eigensolver
       !
       !parameters
        real*8, parameter :: zero=0d0
@@ -70,7 +72,7 @@
        public norm3
        private unit3
        public veccross3
-! public com
+       public com
        public setdebug
       !
        contains
@@ -211,19 +213,19 @@
 ! eval(3)=two*rootQ*(a*cos_4pi_o3-b*sin_4pi_o3)-a2*oo3
        endif
 ! ad hoc : try to refine eigenvalues using Newton-Raphson
-! turns out that the correction is already machine precision, so no improvement is possible
+! for most cases, turns out that the correction is already machine precision, so no improvement is possible
 ! ! write(0,*) 'EVAL:', eval
-! do j=2,2
-! do k=1,5
-! d=eval(j)
-! a=(d**3+a2*d**2+a1*d+a0)/(three*d**2+two*a2*d+a1)
-! if (abs(a).lt.errtol_) a=0.5*sign(errtol_,a) ! make sure we take a finite step
-! ! write(0,*) 'CHARACTERISTIC DETERMINANT:',d,a
-! d=d-a
-! eval(j)=d
-! enddo
+       do j=1,3
+        d=eval(j)
+        do k=1,2
+         a=(d**3+a2*d**2+a1*d+a0)/(three*d**2+two*a2*d+a1) ! * half ! slow down deliberately
+! if (abs(a).lt.errtol_) a=0.9*sign(errtol_,a) ! make sure we take a finite step
+      ! write(0,*) 'CHARACTERISTIC DETERMINANT:',d,a
+         d=d-a
+        enddo
+        eval(j)=d
 ! stop
-! enddo
+       enddo
 !
       ! write(0,*) 'EVAL:', eval
       ! Dd=Rr/rootQ3
@@ -232,12 +234,12 @@
        if (abs(eval(1)) .lt. errtol_) eval(1)=zero
        if (abs(eval(2)) .lt. errtol_) eval(2)=zero
        if (abs(eval(3)) .lt. errtol_) eval(3)=zero
-      ! sort eigen-values in DECREASING order
-       if (eval(1).lt.eval(2)) then;
+      ! sort eigen-values in the order of DECREASING MAGNITUDE
+       if (abs(eval(1)).lt.abs(eval(2))) then;
         dummy=eval(1); eval(1)=eval(2); eval(2)=dummy; endif
-       if (eval(1).lt.eval(3)) then;
+       if (abs(eval(1)).lt.abs(eval(3))) then;
         dummy=eval(1); eval(1)=eval(3); eval(3)=dummy; endif
-       if (eval(2).lt.eval(3)) then;
+       if (abs(eval(2)).lt.abs(eval(3))) then;
         dummy=eval(2); eval(2)=eval(3); eval(3)=dummy; endif
       !######################### now compute eigenvectors ############
       !
@@ -317,6 +319,33 @@
          evec(:,1)=veccross3(evec(:,2),evec(:,3))
         endif
        endif
+!
+! optional power iterations to improve pesky eigenvectors
+       if (qpower) then
+! first eigenvalue/vector pair
+        if (abs(eval(1)).gt.errtol_) then
+         a=evec(1,1); b=evec(2,1); c=evec(3,1)
+         dummy=one/eval(1)
+         do j=1,2
+          d = a11*a + a12*b + a13*c; e = a21*a + a22*b + a23*c; f = a31*a + a32*b + a33*c; a=d*dummy ; b=e*dummy ; c=f*dummy
+         enddo
+         v=unit3((/a,b,c/)) ; evec(:,1)=v ;
+! second eigenvalue/vector pair
+         if (abs(eval(2)).gt.errtol_) then
+          a=evec(1,1); b=evec(2,1); c=evec(3,1)
+          d=evec(1,2); e=evec(2,2); f=evec(3,2)
+          theta=one/eval(2)
+          do j=1,3
+           dummy=a*d+b*e+c*f;
+           d=d-dummy*a ; e=e-dummy*b ; f=f-dummy*c
+           g = a11*d + a12*e + a13*f; h = a21*d + a22*e + a23*f; i = a31*d + a32*e + a33*f; d=g*theta ; e=h*theta ; f=i*theta
+          enddo ; r=unit3((/d,e,f/)) ; evec(:,2)=r ;
+         endif
+! obtain third vector using a cross product
+         evec(:,3)=veccross3(evec(:,1),evec(:,2))
+        endif
+       endif ! qpower
+!
       !
        end subroutine eig3s
       !#########################################################
@@ -352,7 +381,7 @@
      & rmu(3), roomu(2)
        integer :: i, j, k, l, n
        character(len=10) :: whoami='RMSBestFit'
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 ! for derivatives:
        logical :: qgrad
        real*8 :: invA(3,3),detA,e,v(3),c(3),dvdrr(3,3,3,3),dmudrr(3,3,3)

@@ -21,23 +21,27 @@
 !DEC$ ATTRIBUTES FORCEINLINE :: erfo7
 !DEC$ ATTRIBUTES FORCEINLINE :: erfo5
 ! approximations from Abramowits & Stegun (also see Wiki)
-function erfo7(x)
-!implicit none
+function erfo7(y)
+implicit none
 real*8, parameter :: a1=0.0705230784d0,a2=0.0422820123d0,a3=0.0092705272d0,a4=0.0001520143d0,a5=0.0002765672d0,a6=0.0000430638d0,&
-& one=1d0
-real*8 :: erfo7, x, x2, x3
+& one=1d0, zero=0d0
+real*8 :: erfo7, y, x, x2, x3
+integer :: isgn
+isgn=sign(one,y); x=isgn*y;
 x2=x*x; x3=x2*x
 erfo7 = one + a1 * x + a2 * x2 + a3 * x3 + a4 * x2 * x2 + a5 * x2 * x3 + a6 * x3 * x3;
+erfo7=one/erfo7
 erfo7=erfo7*erfo7; erfo7=erfo7*erfo7; erfo7=erfo7*erfo7; erfo7=erfo7*erfo7; ! 16th power
-!erfo7=((((erfo7**2)**2)**2)**2)
-erfo7=one-one/erfo7
+erfo7=(one-erfo7)*isgn
 end function erfo7
 !
-function erfo5(x)
-!implicit none
-real*8, parameter :: p=0.47047d0, a1=0.3480242d0, a2=-0.0958798d0, a3=0.7478556d0, one=1d0
-real*8 :: erfo5, x, t, t2
+function erfo5(y)
+implicit none
+real*8, parameter :: p=0.47047d0, a1=0.3480242d0, a2=-0.0958798d0, a3=0.7478556d0, one=1d0, zero=0d0
+real*8 :: erfo5, y, x, t, t2
+integer :: isgn
+isgn=sign(one,y); x=isgn*y;
 t=one/(one+p*x); t2=t*t
-erfo5 = one - (a1*t + a2*t2 + a3*t*t2)*exp(-x*x)
+erfo5 = (one - (a1*t + a2*t2 + a3*t*t2)*exp(-x*x))*isgn
 end function erfo5
 !

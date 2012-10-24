@@ -879,7 +879,7 @@ module system
 
 
  implicit none
- character(len=200) :: msg___(10)=(/'','','','','','','','','',''/); integer :: i_
+ character(len=200) :: msg___(20)=(/'','','','','','','','','','','','','','','','','','','',''/); integer :: i_
 !
  character(len=13) , parameter :: whoami='SYSTEM_PRINTE'
 !
