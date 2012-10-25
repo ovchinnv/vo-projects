@@ -1,1 +1,0 @@
-/home/surgeon/projects/dynamol/param/anglpar.mod

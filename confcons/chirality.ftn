@@ -65,8 +65,9 @@ module chirality
 & 'VAL N C CB HA 0. -1 HA CA'&
 &]
 !
-  character(len=80), target :: pseudo_dihedral_rules_charmm22(42)=& ! these rules enforce pseudo-chirality, which concerns equivalent atoms
+  character(len=80), target :: pseudo_dihedral_rules_charmm22(43)=& ! these rules enforce pseudo-chirality, which concerns equivalent atoms
 &  [character(len=80) ::     &
+& 'ANY CA HT3 HT2 HT1 0. 2 HT1 HT2',& ! for N-terminal residues except PROP
 & 'ALA CA HB3 HB2 HB1 0. 2 HB1 HB2',& ! proton ordering within methyl groups
 & 'ASN CA CG HB2 HB1 0. 2 HB1 HB2',&
 & 'ASP CA CG HB2 HB1 0. 2 HB1 HB2',&
@@ -111,6 +112,11 @@ module chirality
 & 'VAL CB HG23 HG22 HG21 0. 2 HG21 HG22'&
 &]
 !
+  character(len=80), target :: pseudo_dihedral_rules_charmm22_prop(1)=& ! for the proline patch
+&  [character(len=80) ::     &
+& 'PRO CA CD HN2 HN1 0. 2 HN1 HN2'&
+&]
+!
   bool, parameter :: qdebug=.false.
 
 ! subroutines listing
@@ -129,7 +135,7 @@ module chirality
  function compare_rules(r1,r2)
  type(dihedral_rule), intent(in) :: r1, r2
  bool :: compare_rules
- compare_rules=r1%resname.eq.r2%resname.and.all(r1%aname(1:4).eq.r2%aname(1:4)) ! stop here VO .and.abs(r1%threshold-r2%threshold).lt.1d-6.and.r1%sgn.eq.r2%sgn
+ compare_rules=(r1%resname.eq.r2%resname).and.all(r1%aname(1:4).eq.r2%aname(1:4)) ! stop here VO .and.abs(r1%threshold-r2%threshold).lt.1d-6.and.r1%sgn.eq.r2%sgn
  end function compare_rules
 !============================================
  subroutine chirality_main(comlyn,comlen,islct)
@@ -146,9 +152,11 @@ module chirality
  type(dihedral_rule), pointer :: r
  int :: errnum, ifile
  bool :: qcheck
+ bool :: qadd ! whether to overwite rules upon reading, or to add rules
  character(len=16), parameter :: whoami=' CHIRALITY_MAIN>'
 !
  qcheck=.false. ! whether to run checker
+ qadd=.false.
 !
  l=comlen
  999  continue
@@ -177,6 +185,7 @@ module chirality
 &  ,whoami, '   HELP  - print this screen'&
 &  ,whoami, '   RULE  - print rules that are currently defined'&
 &  ,whoami, '   PSEU  - also check for pseudo-chirality errors (i.e. atom ordering)'&
+&  ,whoami, '   PROP  - also check for pseudo-chirality in the Proline patch (c22)'&
 &  ,whoami, '   READ <UNIT> <ADD> - read rules from unit (or from input stream if unit is omitted)'&
 &  ,whoami, '    "ADD" will append rules to the existing rules'&
 &  ,whoami, ' ATOM SELECTION IS OPTIONAL (ALL ATOMS WILL BE SELECTED BY DEFAULT)'&
@@ -215,8 +224,18 @@ module chirality
 !
  if (__INDX_RM(comlyn,comlen,'PSEU').gt.0) then
   dihedral_rules_data=>pseudo_dihedral_rules_charmm22
-  if (__INDX_RM(comlyn, comlen, 'ADD').le.0) num_rules=0 ! overwrite rules
+  qadd=__INDX_RM(comlyn, comlen, 'ADD').gt.0
+  if (.not.qadd) num_rules=0 ! overwrite rules
   call chirality_read_rules()
+  qadd=.true. ! so that additional adds on the same line add to the rule set
+ endif
+!
+ if (__INDX_RM(comlyn,comlen,'PROP').gt.0) then
+  dihedral_rules_data=>pseudo_dihedral_rules_charmm22_prop
+  if (.not.qadd) qadd=__INDX_RM(comlyn, comlen, 'ADD').gt.0
+  if (.not.qadd) num_rules=0 ! overwrite rules
+  call chirality_read_rules()
+  qadd=.true. ! so that additional adds on the same line add to the rule set
  endif
 !
  if (__INDX_RM(comlyn,comlen,'READ').gt.0) then
@@ -482,14 +501,18 @@ end subroutine chirality_read_rules
 !   loop over all rules
  rules : do j=1,num_rules
      rr=>dihedral_rules(j)
-     if (res(ires)(1:len_trim(res(ires))).eq.rr%resname(1:len_trim(rr%resname))) then
+     if ( res(ires)(1:len_trim(res(ires))).eq.rr%resname(1:len_trim(rr%resname)) .or. & 
+&         rr%resname(1:3).eq.'ANY') &
+&                                       then
 ! find atom indices corresponding to the rule
 ! use an aux. routine from confcons
       do i=1,6
        ind(i)=ifindc(rr%aname(i),atype,ibase(ires)+1,ibase(ires+1))
        if (ind(i).le.0) then
-        write(_MSGBUF,'(A)') 'SKIPPING RULE '//itoa(j)//': ATOM NOT FOUND IN RESIDUE.'
-        __WRN( whoami, _MSGBUF(1))
+        if (rr%resname(1:3).ne.'ANY') then ! silent skip on 'ANY' mismatch
+          write(_MSGBUF,'(A)') 'SKIPPING RULE '//itoa(j)//': ATOM NOT FOUND IN RESIDUE.'
+          __WRN( whoami, _MSGBUF(1))
+        endif ! rule mismatch 
         cycle rules
        endif
       enddo
