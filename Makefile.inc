@@ -4,6 +4,7 @@ CC=gcc
 CFLAGS =-O3 -fno-math-errno -c
 #---INTEL
 FC=ifort
+#FFLAGS=-O2 -c
 FFLAGS=-O3 -fast -finline -fp-model fast=2 -xhost -ipo -fno-math-errno -no-inline-factor -no-inline-min-size -c
 #FFLAGS=-O3 -fast -finline -fp-model precise -xhost -ipo -fno-math-errno -no-inline-factor -no-inline-min-size -c
 #FFLAGS= -O3 -check-all -extend-source -fast -fno-math-errno -finline -fp-model fast=2 -xhost -ipo  #-ipo 
