@@ -540,10 +540,10 @@ __CHARMM_ONLY##IF STRINGM
          if (qdcd.eq.0.or.qprint) then
           if (flen.gt.0) __CLOSE_FILE(ifile,'KEEP',error)
          endif
-#ifdef __CHARMM
-         iolev=oldiol
-#endif
         endif ! ifile
+#ifdef __CHARMM
+        iolev=oldiol
+#endif
        endif ! qroot
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       elseif (__STRNCMP(keyword,'READ',4)) then
@@ -1873,7 +1873,7 @@ __CHARMM_ONLY##IF STRINGM
      &  string_inds, k, ibg, ibg, 3*k, 0d0, 1, ie, title,ntitle,ifile,  &
      &  .false., .false., stringatoms(1:20), .false., r3(:,1))       ! whew...
 #elif defined(__DMOL)
-       call dcd_write_frame(ifile,r3,.true.,FREEATOMS=string_inds(1:k))
+       call dcd_write_frame(ifile,r3,(ibg.eq.1),FREEATOMS=string_inds(1:k))
 #endif
 !from dynio.src
 !      SUBROUTINE WRITCV(X,Y,Z,
@@ -2001,10 +2001,12 @@ __CHARMM_ONLY##IF STRINGM
        istats=1
        qcg=.false.
        qdim4=.false.
-       begin_=1
+       begin_=0 ! note begin <=0 forces a strange "reset" with begin=istep (which is zero below); this is to support trajectories
+                ! made with VMD
        skip_=1
        stop_=nstring
        ntitle=0
+       istep=0
 !
        call readcv(r3(:,1), r3(:,2), r3(:,3),                              &
      &  trash8, qcg,                                                    & !__CHARMM_ONLY##CHEQ
@@ -2083,7 +2085,7 @@ __CHARMM_ONLY##IF STRINGM
      &   istep, istats, ndof, delta, begin_, stop_, skip_,              &
      &   nsavv_, 'CORD', 'CORD', title, ntitle, qdim4, trash8, .false.)
 #elif defined (__DMOL)
-        call dcd_read_frame(ifile, r3, .true., FREEATOMS=stringatoms)
+        call dcd_read_frame(ifile, r3, .false., FREEATOMS=stringatoms)
 #endif
 !
         call MPI_SEND(r3,3*natom,rtype,i-1,i-1,                          &
@@ -2465,7 +2467,7 @@ __CHARMM_ONLY##IF STRINGM
         if (centers_flen.gt.0) then
          output_centers=.true.
          if (qprint) then
-          write(_MSGBUF,6620 ) whoami,centers_fname(1:centers_flen) ; __PRINT(_MSGBUF)
+          write(_MSGBUF,6620 ) whoami,centers_fname(1:centers_flen) ;__PRINT(_MSGBUF)
          endif
          if (__INDX_RM(comlyn,comlen,'CEAP').gt.0) then ! APPEND?
            cenform='APPEND' ! note: if appending, should not duplicate DCD header !
@@ -2579,7 +2581,7 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_MPI 
 !
       __IMPNONE
-      int :: i, k, fmt_len
+      int :: i, fmt_len
 !
 #ifdef __CHARMM
       int :: oldiol
@@ -2771,11 +2773,16 @@ __CHARMM_ONLY##IF STRINGM
         endif
 !    write current centers as a trajectory frame (adopted from write_dcd)
 !--------------------------------------------------------------------
+! header will be written only if IBEG=1, so be careful, or will have a corrupt file
+! however, if header missing, can cat file to another trajectory file w header (e.g. "cat path1.dcd path2.dcd > path1-2.dcd" )
+! VO 10.2012 : "cheat" by looking at whether the append option is set
+        if (cenform.eq.'APPEND') then ; i=(stat_iteration_counter-1) * nstring + 1 ; else ; i=1 ; endif
         call ftsm_write_dcd(IFILE=centers_funit,                        &
-     &       IBEG=(stat_iteration_counter-1) * nstring + 1,             & ! header will be written only if IBEG=1, so be careful, or will have a corrupt file
-!     &       IEND=2**31-1) ! largest 4-byte int     ! however, if header missing, can cat file to another trajectory file w header
+     &       IBEG=i,                                                    &
+!     &       IBEG=(stat_iteration_counter-1) * nstring + 1,             &
+!     &       IEND=2**31-1) ! largest 4-byte int     
      &       IEND= -1 + 2**30 + 2**30)
-!    NOTE: should write the correct number of records to header at the end
+!    NOTE: should write the correct number of records to header at the end of calculation
 !--------------------------------------------------------------------
 !    flush unit:
         if (qprint) __CLOSE_FILE(centers_funit, 'KEEP', error)
