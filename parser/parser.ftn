@@ -20,6 +20,7 @@
        type (params), pointer :: context_params(:)
        int :: length=0
        int :: last=0
+       int :: current=0
       end type contexts
 !
        character(len=26), parameter  :: lower='abcdefghijklmnopqrstuvwxyz'
@@ -96,7 +97,8 @@
        allocate(context%context_name(context_incr))
        context%length=context_incr
        context%last=1
-       context%context_name(1)='main'
+       context%current=1
+       context%context_name(1)='MAIN'
 !    initialize main context
        parameters=>context%context_params(1)
        call params_init(parameters)
@@ -150,12 +152,17 @@
        copyname=cname; call toupper(copyname)
        call adjustleft(copyname)
        if (.not.parser_initialized) call parser_init() 
-       do j=1,context%last
-        if (context%context_name(j).eq.copyname) then
-!       found element
-         parser_find_context=j
-        endif
-       enddo
+!    check current context for a match
+       if (context%context_name(context%current).eq.copyname) then
+        parser_find_context=context%current
+       else
+        do j=1,context%last
+         if (context%context_name(j).eq.copyname) then
+!    found element
+          parser_find_context=j
+         endif
+        enddo
+       endif
 !
        end function parser_find_context
 !********************************************************************************************
@@ -175,6 +182,8 @@
         context%last=j
         parser_context=j
        endif
+!
+       context%current=parser_context
 !
        end function parser_context
 !********************************************************************************************
@@ -730,13 +739,16 @@
 !
        end subroutine parse_file
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-       subroutine list_params( &
+       subroutine list_params(ctx &
 #ifdef __PARALLEL
-       & me
+       & , me
 #endif
        & )
 ! 
        use output
+!
+       character(len=*), intent(in), optional :: ctx ; int :: ictx
+!
        character(len=11), parameter :: whoami = 'LIST_PARAMS'
        int :: i
 #ifdef __PARALLEL
@@ -745,15 +757,17 @@
 !
        if (.not.parser_initialized) call parser_init()
 !
+       ictx=1 ; if (present(ctx)) ictx=max(1,parser_find_context(ctx)) ; parameters=>context%context_params(ictx)
+!
 #ifdef __PARALLEL
        if (me.le.0) then
 #endif
-        call message(whoami,'THE FOLLOWING PARAMETERS ARE DEFINED')
-        call message(whoami,'====================================')
+        call message(whoami,'THE FOLLOWING PARAMETERS ARE DEFINED IN CONTEXT "'//context%context_name(ictx)(1:len_trim(context%context_name(ictx)))//'":')
+        call message(whoami,'========================================================')
         do i=1,parameters%last
          call message(whoami,tab//parameters%tag(i)(1:parameters%tlen(i))//' = "'//parameters%val(i)(1:parameters%vlen(i))//'"')
         enddo
-        call message(whoami,'====================================')
+        call message(whoami,'========================================================')
 #ifdef __PRALLEL
        endif
 #endif
