@@ -1,0 +1,309 @@
+module enm
+
+ __DEP_OUTPUT
+ __DEP_CONST
+ use lu
+
+ implicit none
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+ contains
+
+ subroutine stiffness_from_fluctuations(Corr,wgt,Temp,bonds,stiff,niter)
+
+#ifdef __PARALLEL
+ __DEP_MPI
+ __DEP_MULTICOM
+
+ int :: communicator, mpierr
+#endif
+! for parallelization
+ int :: ncpu, me ! these have trivial default values for serial runs
+ int, allocatable :: nbonds_local(:), bond_offsets(:)
+ int :: ibond, jbond
+! 
+ __DECLARE_MSGBUF
+
+ float, intent(in) :: Corr(:,:), Temp ! correlation matrix, temperature
+ float, intent(in) :: wgt(:) ! weights that are used to compute the COM, which is assumed to remain stationary
+ int, intent(in) :: bonds(:,:)
+ float, intent(inout) :: stiff(:) ! corresponds to the bonds list
+ int, intent(inout) :: niter
+!
+ float ::  dstiff(size(stiff)), w(size(wgt))
+ 
+ int :: natom, ndof, nbonds, iter
+ int :: i, j, ii, jj, kk
+ 
+ float :: normC, error, alpha
+ float, allocatable :: P(:,:), Pt(:,:) ! projection operator and transpose
+ float, allocatable :: K(:,:) ! stiffness matrix
+ float, allocatable :: Ki(:,:) ! stiffness matrix pseudo-inverse
+ float, allocatable :: K1(:,:,:) ! stiffness matrix derivative
+ float, allocatable :: Kp(:,:), Kpi(:,:) ! reduced stiffness matrix and inverse
+ float, allocatable :: Kp1(:,:,:), Kpi1(:,:,:), Kpj1(:,:,:) ! reduced stiffness matrix derivative and derivative of inverse
+ float, allocatable :: diff(:,:) ! difference matrix
+ float, allocatable :: L(:,:), M(:,:), M1(:,:), N(:,:), N1(:,:), Q(:,:), R(:,:) ! miscellaneous scratch matrices
+ 
+ float, allocatable :: error1(:) ! error derivative
+ float, allocatable :: H1(:,:), H2(:,:), H(:,:)
+ 
+ int, allocatable :: luperm(:)
+ 
+ character(len=27) :: whoami='stiffness_from_fluctuations';
+ 
+ natom=size(Corr,1) ;
+ nbonds=(size(bonds,1)) ;
+ ndof=natom-1 
+!
+! projection
+! allocate(P(ndof,natom), Pt(natom,ndof)) ; P=zero 
+ do i=1,ndof ; ! P(i,i)=one; 
+  w(i)=wgt(i)/wgt(natom) ; ! P(i,natom)=-w(i);
+ enddo ; ! Pt=transpose(P);
+! stiffness mat 
+ allocate(K(natom, natom), Ki(natom, natom), K1(natom, natom, nbonds)); K=zero; K1=zero
+ allocate(diff(natom, natom))
+ allocate(Kp(ndof,ndof), Kp1(ndof, ndof, nbonds));
+ allocate(Kpi(ndof,ndof), Kpi1(ndof, ndof, nbonds), Kpj1(natom, natom, nbonds));
+
+ allocate(H1(nbonds,nbonds),H2(nbonds,nbonds),H(nbonds,nbonds),error1(nbonds))
+ allocate(L(ndof,ndof),M(ndof,ndof),M1(natom,natom),N(ndof,ndof),N1(natom,natom),Q(ndof,ndof),R(natom,natom) )
+
+ allocate(luperm(nbonds));
+
+#ifdef __PARALLEL
+! MULTICOM is assumed to be present and initialized
+ communicator=MPI_COMM_LOCAL
+ me=ME_LOCAL
+ ncpu=SIZE_LOCAL
+#else
+ me=0
+ ncpu=1
+#endif
+! compute index limits for parallelization
+! ============================================
+ allocate(nbonds_local(ncpu), bond_offsets(ncpu))
+ nbonds_local=nbonds/ncpu ; do i=1,mod(nbonds,ncpu) ; nbonds_local(i)=nbonds_local(i)+1 ; enddo
+! convert bond numbers into offsets
+ bond_offsets(1)=0
+ do i=2,ncpu ; bond_offsets(i) = bond_offsets(i-1) + nbonds_local(i-1) ; enddo
+ ibond=bond_offsets(me+1)+1; jbond=ibond - 1 + nbonds_local(me+1)
+! write(0,*) me, ibond, jbond
+! write(0,*) bond_offsets
+! ============================================
+ do i=ibond,jbond
+! do i=1,nbonds ! aa
+  ii=bonds(i,1) ; jj=bonds(i,2)
+! derivative of the stiffness matrix
+  K1(ii,ii,i)= one; K1(jj,jj,i)= one;
+  K1(ii,jj,i)=-one; K1(jj,ii,i)=-one;
+! derivative of reduced stiffness matrix
+!  Kp1(:,:,i) = matmul(matmul(P, K1(:,:,i)),  Pt) ;
+  call PMPt(K1(:,:,i),Kp1(:,:,i),w,natom)
+
+!  write(0,*)   sum( Kp1(:,:,i)-Kpi1(:,:,i) ) ! test to make sure they are the same
+
+!  write(0,*) 'Making derivative matrix (bond counter) :',i
+ enddo 
+! =========== all-gather
+#ifdef __PARALLEL
+ if (ncpu.gt.1) then
+!  call mpi_allgatherv(MPI_IN_PLACE,0,MPI_DATATYPE_NULL,K1,nbonds_local*natom*natom,bond_offsets*natom*natom,mpifloat,communicator,mpierr)
+  call mpi_allgatherv(MPI_IN_PLACE,0,MPI_DATATYPE_NULL,Kp1,nbonds_local*ndof*ndof,bond_offsets*ndof*ndof,mpifloat,communicator,mpierr)
+! below is the way to do this without in place (note that I am using Kpi1)
+!  call mpi_allgatherv(Kp1(:,:,ibond),nbonds_local(me+1)*ndof*ndof,mpifloat,Kpi1,nbonds_local*ndof*ndof,bond_offsets*ndof*ndof,mpifloat,communicator,mpierr)
+ endif
+#endif
+!
+! ==========
+!
+! normalization constants
+ normC = one/norm2(Corr,Corr,natom) ;
+! 
+ alpha = kboltzmann*Temp*three
+!
+! N/R iterations
+!
+ do iter=1, niter
+!
+! compute stiffness matrix **********************
+ do i=1,nbonds
+  ii=bonds(i,1) ; jj=bonds(i,2)
+  K(ii,jj) = -stiff(i)
+  K(jj,ii) = -stiff(i)
+ enddo 
+ do i=1,natom ;  K(i,i)=zero ; K(i,i)=-sum(K(i,:)); enddo
+! reduced stiffness matrix
+ call PMPt(K,Kp,w,natom)
+!************************************************
+! stiffness inverse
+ call inv_lu(Kp, Kpi, ndof, i)
+! full fluctuation matrix
+! Ki = matmul(matmul(Pt , Kpi), P)
+ call PtMP(Kpi,Ki,w,natom)
+
+! write(0,*) maxval(Ki-K), Ki(natom,natom),K(natom,natom) ! test : not exact but close (machine prec)
+! write(666,'(202G30.20)') Kpi ; close(666)
+! stop
+
+! difference matrix
+ diff = (Corr - alpha * Ki);
+ error=normC * norm2(diff,diff,natom)
+
+! first loop: derivatives of the reduced stiffness matrix inverse
+ do i=ibond,jbond
+  __PMSG('linear pass (bond index): ',i,'/',jbond)
+  L = Kp1(:,:,i);
+  M =  - matmul ( Kpi  , matmul( L , Kpi) )
+!  M1 = matmul(Pt , matmul(M , P ) )
+  call PtMP(M,M1,w,natom)
+!
+  Kpi1(:,:,i)=M ;
+  Kpj1(:,:,i)=M1;
+! also: derivative of error w.r.t. bond constants
+  error1(i) = normC * norm2(diff,M1,natom)
+ enddo
+!
+#ifdef __PARALLEL
+ if (ncpu.gt.1) then
+  call mpi_allgatherv(MPI_IN_PLACE,0,MPI_DATATYPE_NULL,Kpj1,nbonds_local*natom*natom,bond_offsets*natom*natom,mpifloat,communicator,mpierr)
+  call mpi_allgatherv(MPI_IN_PLACE,0,MPI_DATATYPE_NULL,Kpi1,nbonds_local*ndof*ndof,bond_offsets*ndof*ndof,mpifloat,communicator,mpierr)
+  call mpi_allgatherv(MPI_IN_PLACE,0,MPI_DATATYPE_NULL,error1,nbonds_local,bond_offsets,mpifloat,communicator,mpierr)
+ endif
+#endif
+!write(0,*) error1
+!stop
+!
+! compute the derivative matrices (basically, Hessians of the error)
+! this can be very slow (quadratic complexity) -- parallelized
+
+ do i=ibond,jbond
+  __PMSG('quadratic pass (bond index): ',i,'/',jbond)
+  L = Kp1(:,:,i)
+  M = Kpi1(:,:,i)
+  M1= Kpj1(:,:,i)
+
+  do j=1,nbonds ! over all bonds :  this is inefficient because the matrix H is symmetric, but easy to parallelize
+   N1=Kpj1(:,:,j);
+   H1(j,i)=norm2(M1,N1,natom);
+!   H1(i,j)=H1(j,i);
+!
+   Q=Kp1(:,:,j);
+   N=Kpi1(:,:,j);  
+!   R = - matmul (Pt, matmul( matmul(matmul(M,Q) + matmul(N,L),   Kpi), P))
+   Q=matmul(M,Q)
+   Q=Q+matmul(N,L)
+   Q=matmul(Q,Kpi)
+   call PtMP(Q,R,w,natom)
+   R=-R
+
+   H2(j,i)=norm2(diff,R,natom);
+!   H2(i,j)=H2(j,i); 
+
+  enddo ! j-loop (fast-varying)
+ 
+!  H1(i,i) = norm2(M1,M1,natom);
+!  H2(i,i) = -two * sum ( diff * ( matmul(Pt, matmul(matmul(matmul(M,L), Kpi), P))));
+!  Q=matmul(M,L) 
+!  Q=matmul(Q,Kpi)
+!  call PtMP(Q,R,w,natom)
+!  H2(i,j)=-two*norm2(diff,R,natom);
+!
+ enddo ! i-loop (slow-varying)
+
+ H = normC * ( -alpha * H1 + H2 ) ! this is the derivative of the objective function w.r.t dof (fc. constants)
+!
+#ifdef __PARALLEL
+ if (ncpu.gt.1) then
+  call mpi_allgatherv(MPI_IN_PLACE,0,MPI_DATATYPE_NULL,H,nbonds_local*nbonds,bond_offsets*nbonds,mpifloat,communicator,mpierr)
+ endif
+#endif
+!
+! H = half * (H + transpose(H)) ! symmetrize in case of roundoff
+!
+! solve : dstiff=H\err1; 
+ call LUDCMP(H, nbonds, luperm, i, j)
+ dstiff=error1
+ call LUBKSB(H, nbonds, luperm, dstiff)
+ stiff = stiff - dstiff
+!
+ __PMSG('iteration/MSD error: ',iter,error)
+!
+! write(0,*) stiff
+! write(0,*) K
+ 
+ enddo ! N-R iterations
+
+
+! deallocate(P,Pt)
+ deallocate(K,Ki,K1,Kp,Kpi,Kpi1,Kpj1,Kp1,diff)
+ deallocate(L, M, M1, N1, R, Q, H1, H2, H)
+ deallocate(luperm, error1)
+ deallocate(nbonds_local,bond_offsets)
+!
+ end subroutine stiffness_from_fluctuations
+!**********************************************
+ subroutine PMPt(A,B,w,n)
+! perform matrix multiplication "B = P * A * P^T"
+! A has size (n, n) ; B has size (n-1, n-1)
+ float, intent(in) :: A(n,n), w(n)
+ float, intent(out) :: B(n-1,n-1)
+ float :: last, C(n,n)
+ int :: n,i,j
+ C=A
+! loop over all matrix and correct coefficients
+ last=C(n,n)
+!
+ do j=1,n-1
+  do i=1,n-1 
+   C(i,j) = C(i,j) - w(j) * C(i,n) - w(i) * ( C(n,j) - w(j)*last )
+  enddo
+ enddo
+!
+ B=C(1:n-1,1:n-1)
+!
+ end subroutine PMPt
+!**********************************************
+ subroutine PtMP(B,A,w,n)
+! perform matrix multiplication "A = Pt * B * P^T"
+! A has size (n, n) ; B has size (n-1, n-1)
+ float, intent(out) :: A(n,n)
+ float, intent(in) :: B(n-1,n-1), w(n)
+ float :: sumc, sumr, sumrc, C(n,n), wn(n), wsum
+ int :: n,i,j
+!
+ C(1:n-1,1:n-1)=B
+!use nromalized weights
+ wsum=sum(w(1:n-1))
+ wn=w/wsum;
+!
+  sumrc=zero
+  do i=1,n-1 
+   sumc=zero
+   sumr=zero
+   do j=1,n-1
+    sumc=sumc  +  wn(j) *C(i,j)
+    sumr=sumr  +  wn(j) *C(j,i)
+   enddo
+   sumrc=sumrc + wn(i) * sumc
+!
+   C(i,n) = -sumc*wsum
+   C(n,i) = -sumr*wsum
+  enddo
+  C(n,n)=sumrc*wsum*wsum
+!
+  A=C
+!
+ end subroutine PtMP
+!
+ function norm2(A,B,n)
+ float :: A(n,n), B(n,n), norm2
+ int :: n,i,j
+ norm2=zero
+ do i=1,n ; do j=1,n ; norm2=norm2+A(i,j)*B(i,j) ; enddo; enddo
+ end function norm2
+
+!
+end module enm
+

@@ -1,0 +1,135 @@
+program fit
+! read a matrix of fluctuations and compute optimal force constants using least squares with Newton-Raphson
+
+ use enm
+ use files
+ use output
+ use constants
+
+ implicit none
+
+!
+ int :: flen, numarg, fid, ioerr, i, niter
+ character(len=80) :: fname, filename, fmt
+
+ int :: natom
+ int :: nbond
+ 
+ float, allocatable :: Corr(:,:)
+ int, allocatable :: bonds(:,:)
+
+ float, allocatable :: stiff(:), wgt(:)
+ float :: Temp
+
+ __DECLARE_MSGBUF
+ numarg=command_argument_count() ! number of arguments
+! ************** read correlation matrix
+ if (numarg.ge.1) then
+  call getarg(1, filename)
+  fname=filename
+  flen=len_trim(fname)
+  fid=100
+  open(fid, file=fname(1:flen), status='OLD', form='FORMATTED')
+ else
+  fid=5 ! if file name missing, read from standard input
+ endif
+!
+ natom=0
+ do 
+  read(fid,*,IOSTAT=ioerr)
+!  write(message_(1),*) alpha, ioerr
+  if (ioerr.eq.-1.or.ioerr.eq.-2) then ! EOF
+   exit
+  elseif (ioerr.ne.0) then
+   write(_MSGBUF,*) 'ERROR IN FILE: ',fname(1:flen) ; __PRINT(_MSGBUF)
+   stop
+  else
+   natom=natom+1
+  endif
+ enddo
+!
+ write(_MSGBUF,*) 'READING ',natom,' LINES FROM FILE ',fname(1:flen) ; __PRINT(_MSGBUF)
+ rewind(fid)
+! 
+ allocate(Corr(natom, natom)) ! correlation matrix
+
+ do i=1,natom ;   read(fid,*) Corr(:,i) ; enddo
+!**************************************************
+ write(0,*) 'Correlation matrix:'
+ write(0,*) '==================================================='
+ write(fmt,*) natom
+! do i=1,natom ;   write(0,'('//fmt//'G25.15)') Corr(:,i) ; enddo
+ write(0,*) '==================================================='
+
+!************** BOND LIST ************************************
+ if (numarg.ge.2) then
+  call getarg(2, filename)
+  fname=filename
+  flen=len_trim(fname)
+  fid=100
+  open(fid, file=fname(1:flen), status='OLD', form='FORMATTED')
+ else
+  fid=5 ! if file name missing, read from standard input
+ endif
+!
+ nbond=0
+ do 
+  read(fid,*,IOSTAT=ioerr)
+!  write(message_(1),*) alpha, ioerr
+  if (ioerr.eq.-1.or.ioerr.eq.-2) then ! EOF
+   exit
+  elseif (ioerr.ne.0) then
+   write(_MSGBUF,*) 'ERROR IN FILE: ',fname(1:flen) ; __PRINT(_MSGBUF)
+   stop
+  else
+   nbond=nbond+1
+  endif
+ enddo
+!
+ write(_MSGBUF,*) 'READING ',nbond,' LINES FROM FILE ',fname(1:flen) ; __PRINT(_MSGBUF)
+ rewind(fid)
+! 
+ allocate(bonds(nbond,2)) ! bonds
+
+ do i=1,nbond ;   read(fid,*) bonds(i,:) ; enddo
+!**************************************************
+ write(0,*) 'BONDS:'
+ write(0,*) '==================================================='
+ write(fmt,*) natom
+! do i=1,nbond ;   write(0,'(2I5)') bonds(i,:) ; enddo
+ write(0,*) '==================================================='
+!**************************************************
+! number of iterations
+ if (numarg.ge.3) then
+  call getarg(3, filename)
+  read(filename,*) niter
+ else
+  niter=10
+ endif
+
+!**************************************************
+ write(0,*) 'Fitting bond coefficients using N/R least squares:'
+ write(0,*) '==================================================='
+! fit coefficients
+ allocate(stiff(nbond)); stiff=one/10d0;
+ allocate(wgt(natom)); wgt=one;
+! call stiffness_from_fluctuations(Corr, wgt, one/kboltzmann/three, bonds, stiff, niter) ! for test case
+ Temp=300d0;
+ call stiffness_from_fluctuations(Corr, wgt, Temp, bonds, stiff, niter)
+!
+ write(0,*) 'Computed the following bond coefficicents'
+ write(0,*) '==================================================='
+ do i=1,nbond ;   write(0,'(2I5,G25.15)') bonds(i,:), stiff(i) ; enddo
+ write(0,*) '==================================================='
+
+ open(fid, file='stiff.dat', status='UNKNOWN', form='FORMATTED')
+ do i=1,nbond ;   write(fid,'(2I5,G25.15)') bonds(i,:), stiff(i) ; enddo
+
+ close(fid)
+
+ deallocate(stiff,wgt,Corr,bonds)
+
+end
+
+
+
