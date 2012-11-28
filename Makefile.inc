@@ -4,17 +4,18 @@ CC=gcc
 CFLAGS =-O3 -fno-math-errno -c
 #---INTEL
 FC=ifort
-FFLAGS=-O3 -fast -finline -fp-model fast=2 -xhost -ipo -fno-math-errno -no-inline-factor -no-inline-min-size -c
-#FFLAGS=-O3 -fast -finline -fp-model precise -xhost -ipo -fno-math-errno -no-inline-factor -no-inline-min-size -c
+#FFLAGS=-O1 -c
+#FFLAGS=-O3 -fast -finline -fp-model fast=2 -xhost -ipo -fno-math-errno -no-inline-factor -no-inline-min-size -c
+#FFLAGS=-O3 -fast -finline -fp-model fast=2 -xhost -no-ipo -fno-math-errno -c
 #FFLAGS= -O3 -check-all -extend-source -fast -fno-math-errno -finline -fp-model fast=2 -xhost -ipo  #-ipo 
 #FFLAGS= -O3 -c -extend-source -fast -fno-math-errno -finline -fp-model fast=2 -xSSE3 -ipo # -no-inline-factor -no-inline-min-size #-ipo 
 #FFLAGS= -O3 -c -extend-source -fast -fno-math-errno -finline -fp-model fast=2 -xhost -no-ipo # -no-inline-factor -no-inline-min-size #-ipo 
-MPI_HOME=/usr/local/mpich2-intel
+#MPI_HOME=/usr/local/mpich2-intel
 #---GNU
-#FC=gfortran
+FC=gfortran
 #FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  #-fopenmp 
-#FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno #-fbounds-check -frange-check 
-#MPI_HOME=/usr/local/mpich2-gnu
+FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno #-fbounds-check -frange-check 
+MPI_HOME=/usr/local/mpich2-gnu
 #---PATHSCALE
 #FC=pathf95
 #FFLAGS=-Ofast -fno-math-errno -extend-source -OPT:Olimit=8753 -INLINE -ipa -c
@@ -26,8 +27,8 @@ MPI_HOME=/usr/local/mpich2-intel
 #MPI_HOME=/usr/local/mpich2-g95
 #
 # G95 reguires no space between "-D" and the name
-DEFS=-Dint=integer -Dfloat=real*8 -Dbool=logical -Dint4mpi=integer*4 -Dmpiint=MPI_INTEGER -Dmpifloat=MPI_REAL -Dmpichar=MPI_CHARACTER -Dmpiint4=MPI_INTEGER4\
-     -Dmpibool=MPI_LOGICAL -Dint1="integer(kind=KIND('a'))" -D__DMOL -D__RCOMP
+DEFS=-Dint=integer -Dfloat=real*8 -Dbool=logical -Dint4mpi=integer*4 -Dmpiint=MPI_INTEGER -Dmpifloat=MPI_REAL8 -Dmpichar=MPI_CHARACTER -Dmpiint4=MPI_INTEGER4\
+     -Dmpibool=MPI_LOGICAL -Dint1="integer(kind=KIND('a'))" -D__DMOL -D__RCOMP -D__PARALLEL
 
 # ! note: the VEC routines are probably slower
 
@@ -53,7 +54,7 @@ TESTMSG=-include $(ROOT)/test.msg
 GLOBALDEPS=$(ROOT)/source.defs $(ROOT)/source.msg
 
 MPI_INCLUDE=-I $(MPI_HOME)/include
-MPI_LIB=-L $(MPI_HOME)/lib
+MPI_LIB=-L $(MPI_HOME)/lib -lmpich -lmpl -lpthread
 
 INCLUDES+=-I $(ROOT)/include
 LIBS+=-L $(ROOT)/lib

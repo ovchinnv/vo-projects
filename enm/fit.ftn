@@ -1,0 +1,159 @@
+program fit
+! read a matrix of fluctuations and compute optimal force constants using least squares with Newton-Raphson
+
+ use enm
+ use files
+ __DEP_OUTPUT
+ __DEP_CONST
+
+#if __PARALLEL
+ use multicom
+ __DEP_MULTICOM
+#endif
+
+ implicit none
+
+!
+ int :: flen, numarg, fid, ioerr, i, niter
+ character(len=80) :: fname, filename, fmt
+
+ int :: natom
+ int :: nbond
+ 
+ float, allocatable :: Corr(:,:)
+ int, allocatable :: bonds(:,:)
+
+ float, allocatable :: stiff(:), wgt(:)
+ float :: Temp
+
+ character(len=7) :: whoami='ENM_FIT';
+
+ __DECLARE_MSGBUF
+
+!*******************************************************************
+#ifdef __PARALLEL
+ if (.not.multicom_initialized) then 
+  call multicom_init()
+  _MSGBUF(1)='SET LOCAL 1'  ! set local comm to world (which is first in the communicator array, and points to "world") 
+  i=11;
+  call multicom_main( _MSGBUF(1),i)
+ endif
+ if (ME_LOCAL.gt.0) call set_minmessagelev(1) ! turn off output for slaves
+#endif
+
+!*******************************************************************
+ numarg=command_argument_count() ! number of arguments
+! ************** read correlation matrix
+ if (numarg.ge.1) then
+  call getarg(1, filename)
+  fname=filename
+  flen=len_trim(fname)
+  fid=100
+  open(fid, file=fname(1:flen), status='OLD', form='FORMATTED')
+ else
+  fid=5 ! if file name missing, read from standard input
+ endif
+!
+ natom=0
+ do 
+  read(fid,*,IOSTAT=ioerr)
+!  write(message_(1),*) alpha, ioerr
+  if (ioerr.eq.-1.or.ioerr.eq.-2) then ! EOF
+   exit
+  elseif (ioerr.ne.0) then
+   write(_MSGBUF,*) 'ERROR IN FILE: ',fname(1:flen) ; __PRINT(_MSGBUF)
+   stop
+  else
+   natom=natom+1
+  endif
+ enddo
+!
+ write(_MSGBUF,*) 'READING ',natom,' LINES FROM FILE ',fname(1:flen) ; call message(whoami,_MSGBUF(1))
+ rewind(fid)
+! 
+ allocate(Corr(natom, natom)) ! correlation matrix
+
+ do i=1,natom ;   read(fid,*) Corr(:,i) ; enddo
+!**************************************************
+ call message(whoami, 'Correlation matrix:')
+ call message(whoami, '===================================================')
+ write(fmt,*) natom
+! do i=1,natom ;   write(0,'('//fmt//'G25.15)') Corr(:,i) ; enddo
+ call message(whoami, '===================================================')
+
+!************** BOND LIST ************************************
+ if (numarg.ge.2) then
+  call getarg(2, filename)
+  fname=filename
+  flen=len_trim(fname)
+  fid=100
+  open(fid, file=fname(1:flen), status='OLD', form='FORMATTED')
+ else
+  fid=5 ! if file name missing, read from standard input
+ endif
+!
+ nbond=0
+ do 
+  read(fid,*,IOSTAT=ioerr)
+!  write(message_(1),*) alpha, ioerr
+  if (ioerr.eq.-1.or.ioerr.eq.-2) then ! EOF
+   exit
+  elseif (ioerr.ne.0) then
+   write(_MSGBUF,*) 'ERROR IN FILE: ',fname(1:flen) ; call warning(whoami, _MSGBUF(1), 1)
+   stop
+  else
+   nbond=nbond+1
+  endif
+ enddo
+!
+ write(_MSGBUF,*) 'READING ',nbond,' LINES FROM FILE ',fname(1:flen) ;  call message(whoami,_MSGBUF(1))
+ rewind(fid)
+! 
+ allocate(bonds(nbond,2)) ! bonds
+
+ do i=1,nbond ;   read(fid,*) bonds(i,:) ; enddo
+!**************************************************
+ call message(whoami,'BONDS:')
+ call message(whoami, '===================================================')
+ write(fmt,*) natom
+! do i=1,nbond ;   write(0,'(2I5)') bonds(i,:) ; enddo
+ call message(whoami, '===================================================')
+!**************************************************
+! number of iterations
+ if (numarg.ge.3) then
+  call getarg(3, filename)
+  read(filename,*) niter
+ else
+  niter=10
+ endif
+
+!**************************************************
+ call message(whoami, 'Fitting bond coefficients using N/R least squares:')
+ call message(whoami, '===================================================')
+! fit coefficients
+ allocate(stiff(nbond)); stiff=one/10d0;
+ allocate(wgt(natom)); wgt=one;
+!
+!
+ call stiffness_from_fluctuations(Corr, wgt, one/kboltzmann/three, bonds, stiff, niter) ! for test case
+ Temp=300d0;
+! call stiffness_from_fluctuations(Corr, wgt, Temp, bonds, stiff, niter)
+!
+ call message(whoami, 'Computed the following bond coefficicents')
+ call message(whoami, '===================================================')
+ do i=1,nbond ; write(_MSGBUF,'(2I5,G25.15)') bonds(i,:), stiff(i) 
+ __PRINT(_MSGBUF)
+ enddo
+
+ call message(whoami, '===================================================')
+
+ open(fid, file='stiff.dat', status='UNKNOWN', form='FORMATTED')
+ do i=1,nbond ;   write(fid,'(2I5,G25.15)') bonds(i,:), stiff(i) ; enddo
+ close(fid)
+
+ deallocate(stiff,wgt,Corr,bonds)
+
+end
+
+
+

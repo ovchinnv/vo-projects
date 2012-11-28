@@ -1,0 +1,237 @@
+module enm
+
+ use output
+ use constants
+ use lu
+
+ implicit none
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+ contains
+
+ subroutine stiffness_from_fluctuations(Corr,wgt,Temp,bonds,stiff,niter)
+ 
+ float, intent(in) :: Corr(:,:), Temp ! correlation matrix, temperature
+ float, intent(in) :: wgt(:) ! weights that are used to compute the COM, which is assumed to remain stationary
+ int, intent(in) :: bonds(:,:)
+ float, intent(inout) :: stiff(:) ! corresponds to the bonds list
+ int, intent(inout) :: niter
+!
+ float ::  dstiff(size(stiff)), w(size(wgt))
+ 
+ int :: natom, ndof, nbonds, iter
+ int :: i, j, ii, jj, kk
+ 
+ float :: normC, error, alpha
+ float, allocatable :: P(:,:), Pt(:,:) ! projection operator and transpose
+ float, allocatable :: K(:,:) ! stiffness matrix
+ float, allocatable :: Ki(:,:) ! stiffness matrix pseudo-inverse
+ float, allocatable :: K1(:,:,:) ! stiffness matrix derivative
+ float, allocatable :: Kp(:,:), Kpi(:,:) ! reduced stiffness matrix and inverse
+ float, allocatable :: Kp1(:,:,:), Kpi1(:,:,:), Kpj1(:,:,:) ! reduced stiffness matrix derivative and derivative of inverse
+ float, allocatable :: diff(:,:) ! difference matrix
+ float, allocatable :: L(:,:), M(:,:), M1(:,:), N(:,:), N1(:,:), Q(:,:), R(:,:) ! miscellaneous scratch matrices
+ 
+ float, allocatable :: error1(:) ! error derivative
+ float, allocatable :: H1(:,:), H2(:,:), H(:,:)
+ 
+ int, allocatable :: luperm(:)
+ 
+ character(len=27) :: whoiam='stiffness_from_fluctuations';
+ 
+ natom=size(Corr,1) ;
+ nbonds=(size(bonds,1)) ;
+ ndof=natom-1 
+!
+! projection
+ allocate(P(ndof,natom), Pt(natom,ndof)) ; P=zero 
+ do i=1,ndof ; P(i,i)=one; w(i)=wgt(i)/wgt(natom) ; P(i,natom)=-w(i);  ; enddo ; Pt=transpose(P);
+! stiffness mat 
+ allocate(K(natom, natom), Ki(natom, natom), K1(natom, natom, nbonds)); K=zero; K1=zero
+ allocate(diff(natom, natom))
+ allocate(Kp(ndof,ndof), Kp1(ndof, ndof, nbonds));
+ allocate(Kpi(ndof,ndof), Kpi1(ndof, ndof, nbonds), Kpj1(natom, natom, nbonds));
+
+ allocate(H1(nbonds,nbonds),H2(nbonds,nbonds),H(nbonds,nbonds),error1(nbonds))
+ allocate(L(ndof,ndof),M(ndof,ndof),M1(natom,natom),N(ndof,ndof),N1(natom,natom),Q(ndof,ndof),R(natom,natom) )
+
+ allocate(luperm(nbonds));
+
+ do i=1,nbonds
+  ii=bonds(i,1) ; jj=bonds(i,2)
+! derivative of the stiffness matrix
+  K1(ii,ii,i)= one; K1(jj,jj,i)= one;
+  K1(ii,jj,i)=-one; K1(jj,ii,i)=-one;
+! derivative of reduced stiffness matrix
+!  Kp1(:,:,i) = matmul(matmul(P, K1(:,:,i)),  Pt) ;
+  call PMPt(K1(:,:,i),Kp1(:,:,i),w,natom)
+
+!  write(0,*)   sum( Kp1(:,:,i)-Kpi1(:,:,i) ) ! test to make sure they are the same
+
+!  write(0,*) 'Making derivative matrix (bond counter) :',i
+
+ enddo 
+
+! normalization constants
+ normC = one/norm2(Corr,Corr,natom) ;
+! 
+ alpha = kboltzmann*Temp*three
+!
+! N/R iterations
+!
+ do iter=1, niter
+!
+! compute stiffness matrix **********************
+ do i=1,nbonds
+  ii=bonds(i,1) ; jj=bonds(i,2)
+  K(ii,jj) = -stiff(i)
+  K(jj,ii) = -stiff(i)
+ enddo 
+ do i=1,natom ;  K(i,i)=zero ; K(i,i)=-sum(K(i,:)); enddo
+! reduced stiffness matrix
+ call PMPt(K,Kp,w,natom)
+!************************************************
+! stiffness inverse
+ call inv_lu(Kp, Kpi, ndof, i)
+! full fluctuation matrix
+! Ki = matmul(matmul(Pt , Kpi), P)
+ call PtMP(Kpi,Ki,w,natom)
+
+! write(0,*) maxval(Ki-K), Ki(natom,natom),K(natom,natom) ! test : not exact but close (machine prec)
+! write(666,'(202G30.20)') Kpi ; close(666)
+! stop
+
+! difference matrix
+ diff = (Corr - alpha * Ki);
+ error=normC * norm2(diff,diff,natom)
+
+! derivatives of the r. stiffness inverse
+ do i=1,nbonds
+write(0,*) 'bond index: ',i
+  L = Kp1(:,:,i);
+  M =  - matmul ( Kpi  , matmul( L , Kpi) )
+!  M1 = matmul(Pt , matmul(M , P ) )
+  call PtMP(M,M1,w,natom)
+!
+  Kpi1(:,:,i)=M ;
+  Kpj1(:,:,i)=M1;
+
+
+! also: derivative of error w.r.t. bond constants
+  error1(i) = normC * norm2(diff,M1,natom)
+! also: compute the derivative matrices (basically, Hessians of the error)
+! this can be very slow (quadratic complexity) -- should parallelize ? 
+!
+  do j=1,i-1
+   N1=Kpj1(:,:,j);
+   H1(i,j)=norm2(M1,N1,natom);
+   H1(j,i)=H1(i,j);
+!
+   Q=Kp1(:,:,j);
+   N=Kpi1(:,:,j);  
+!   R = - matmul (Pt, matmul( matmul(matmul(M,Q) + matmul(N,L),   Kpi), P))
+   Q=matmul(M,Q)
+   Q=Q+matmul(N,L)
+   Q=matmul(Q,Kpi)
+   call PtMP(Q,R,w,natom)
+   R=-R
+
+   H2(i,j)=norm2(diff,R,natom);
+   H2(j,i)=H2(i,j); 
+
+  enddo
+ 
+  H1(i,i) = norm2(M1,M1,natom);
+!  H2(i,i) = -two * sum ( diff * ( matmul(Pt, matmul(matmul(matmul(M,L), Kpi), P))));
+  Q=matmul(M,L) 
+  Q=matmul(Q,Kpi)
+  call PtMP(Q,R,w,natom)
+  H2(i,j)=-two*norm2(diff,R,natom);
+
+!
+ enddo
+
+ H = normC * ( -alpha * H1 + H2 ) ! this is the derivative of the objective function w.r.t dof (fc. constants)
+!
+! solve : dstiff=H\err1; 
+ call LUDCMP(H, nbonds, luperm, i, j)
+ dstiff=error1
+ call LUBKSB(H, nbonds, luperm, dstiff)
+ stiff = stiff - dstiff
+
+ write(0,*) 'iteration/MSD error: ',iter,error
+! write(0,*) stiff
+! write(0,*) K
+ 
+ enddo ! N-R iterations
+
+
+ deallocate(P,Pt,K,Ki,K1,Kp,Kpi,Kpi1,Kpj1,Kp1,diff)
+ deallocate(L, M, M1, N1, R, Q, H1, H2, H)
+ deallocate(luperm, error1)
+!
+ end subroutine stiffness_from_fluctuations
+!**********************************************
+ subroutine PMPt(A,B,w,n)
+! perform matrix multiplication "B = P * A * P^T"
+! A has size (n, n) ; B has size (n-1, n-1)
+ float, intent(in) :: A(n,n), w(n)
+ float, intent(out) :: B(n-1,n-1)
+ float :: last, C(n,n)
+ int :: n,i,j
+ C=A
+! loop over all matrix and correct coefficients
+ last=C(n,n)
+!
+ do j=1,n-1
+  do i=1,n-1 
+   C(i,j) = C(i,j) - w(j) * C(i,n) - w(i) * ( C(n,j) - w(j)*last )
+  enddo
+ enddo
+!
+ B=C(1:n-1,1:n-1)
+!
+ end subroutine PMPt
+!**********************************************
+ subroutine PtMP(B,A,w,n)
+! perform matrix multiplication "A = Pt * B * P^T"
+! A has size (n, n) ; B has size (n-1, n-1)
+ float, intent(out) :: A(n,n)
+ float, intent(in) :: B(n-1,n-1), w(n)
+ float :: sumc, sumr, sumrc, C(n,n), wn(n), wsum
+ int :: n,i,j
+!
+ C(1:n-1,1:n-1)=B
+!use nromalized weights
+ wsum=sum(w(1:n-1))
+ wn=w/wsum;
+!
+  sumrc=zero
+  do i=1,n-1 
+   sumc=zero
+   sumr=zero
+   do j=1,n-1
+    sumc=sumc  +  wn(j) *C(i,j)
+    sumr=sumr  +  wn(j) *C(j,i)
+   enddo
+   sumrc=sumrc + wn(i) * sumc
+!
+   C(i,n) = -sumc*wsum
+   C(n,i) = -sumr*wsum
+  enddo
+  C(n,n)=sumrc*wsum*wsum
+!
+  A=C
+!
+ end subroutine PtMP
+!
+ function norm2(A,B,n)
+ float :: A(n,n), B(n,n), norm2
+ int :: n,i,j
+ norm2=zero
+ do i=1,n ; do j=1,n ; norm2=norm2+A(i,j)*B(i,j) ; enddo; enddo
+ end function norm2
+
+!
+end module enm
+

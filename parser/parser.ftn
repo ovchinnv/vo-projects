@@ -7,10 +7,21 @@
       type params
        character(len=200), dimension(:), pointer :: tag, val
        int, dimension(:), pointer :: tlen, vlen
-       int :: length ! length of the vector
+       int :: length=0 ! length of the vector
        int :: last ! index of last element
        bool :: initialized=.false. ! has the vector been initialized
       end type params
+!
+!     the current implementation (11/2012) does not allow for nested contexting because there is no apparent
+!     reason for this level of complexity
+!
+      type contexts ! for storing multiple parameter sets ('contexts') per single execution
+       character(len=200), pointer :: context_name(:)
+       type (params), pointer :: context_params(:)
+       int :: length=0
+       int :: last=0
+       int :: current=0
+      end type contexts
 !
        character(len=26), parameter  :: lower='abcdefghijklmnopqrstuvwxyz'
        character(len=26), parameter  :: upper='ABCDEFGHIJKLMNOPQRSTUVWXYZ'
@@ -28,14 +39,19 @@
        character, parameter, public :: space(4) = (/' ', tab, ',',';'/)
        character, parameter :: comment(4) = (/'*','!','#','%'/)
        character, parameter :: equals(1) = (/'='/)
-       character, parameter :: vector_open(1)=(/'('/)
-       character, parameter :: vector_close(1)=(/')'/)
+       character, parameter :: vector_open(2)=(/'(','['/)
+       character, parameter :: vector_close(2)=(/')',']'/)
+       character, parameter :: context_open(1)=(/'{'/)
+       character, parameter :: context_close(1)=(/'}'/)
        character(len=200), parameter :: allowed=upper//lower//digits//decimal//underscore//hyphen//slash//tilde
 !
       int, parameter, private :: expand_incr=100
+      int, parameter, private :: context_incr=1  ! expand increment for contexts
 !
       bool, save :: parser_initialized=.false. ! set to true after parse_file is called successfully; private
-      type (params), save :: parameters
+!
+      type (contexts), save :: context            ! contexts
+      type (params), save, pointer :: parameters  ! pointer to a single context (e.g. main parameter set)
 !
       public atoi     	! convert string to int 
       public atof	! convert string to double
@@ -72,7 +88,105 @@
       end interface
 !
       contains
-!******************************************** implement data routines*********************
+!********************************************************************************************
+       subroutine parser_init()
+!    initialize contexts
+       call parser_done()
+!
+       allocate(context%context_params(context_incr))
+       allocate(context%context_name(context_incr))
+       context%length=context_incr
+       context%last=1
+       context%current=1
+       context%context_name(1)='MAIN'
+!    initialize main context
+       parameters=>context%context_params(1)
+       call params_init(parameters)
+!
+       parser_initialized=.true.
+       end subroutine parser_init
+!********************************************************************************************
+       subroutine parser_done()
+       int :: i
+!    destroy contexts
+       if (context%last.gt.0) then
+        if (associated(context%context_params)) then
+         do i=1,context%last ; call params_done(context%context_params(i)) ; enddo
+         deallocate(context%context_params)
+        endif
+        if (associated(context%context_name)) deallocate(context%context_name)
+       endif
+!
+       context%last=0 ; context%length=0
+!
+       nullify(parameters)
+       parser_initialized=.false.
+!
+       end subroutine parser_done
+!********************************************************************************************
+       subroutine parser_context_expand()
+!    increase the size of contexts array
+       int :: newlength
+       type (params), pointer :: newcontexts(:)
+       character(len=200), pointer :: newnames(:)
+!
+       if ( .not. parser_initialized ) call parser_init()
+       newlength=context%length+context_incr
+       allocate(newcontexts(newlength), newnames(newlength))
+       newcontexts(1:context%length)=context%context_params ! copy members of context_params (incl. pointers)
+       newnames(1:context%length)=context%context_name
+       deallocate(context%context_params, context%context_name)
+       context%context_params=>newcontexts ; context%context_name=>newnames ! point to new arrays
+       context%length=newlength
+       nullify(newcontexts, newnames)
+!
+       end subroutine parser_context_expand
+!********************************************************************************************
+       function parser_find_context(cname)
+!    find the array index of a context specified by cname
+       character(len=*), intent(in) :: cname
+       character(len=len(cname)) :: copyname
+       int :: parser_find_context, j
+!
+       parser_find_context=-1
+       copyname=cname; call toupper(copyname)
+       call adjustleft(copyname)
+       if (.not.parser_initialized) call parser_init() 
+!    check current context for a match
+       if (context%context_name(context%current).eq.copyname) then
+        parser_find_context=context%current
+       else
+        do j=1,context%last
+         if (context%context_name(j).eq.copyname) then
+!    found element
+          parser_find_context=j
+         endif
+        enddo
+       endif
+!
+       end function parser_find_context
+!********************************************************************************************
+       function parser_context(cname)
+!    find the array index of a context specified by cname; if the context does exist, create it
+!    relevant to parsing input; will also be relevant to realtime execution when such is implemented
+       character(len=*), intent(in) :: cname
+       character(len=len(cname)) :: copyname
+       int :: parser_context, j
+!
+       parser_context=parser_find_context(cname)
+       if (parser_context.le.0) then
+        copyname=cname; call toupper(copyname)
+        if (context%last.eq.context%length) call parser_context_expand()
+        j=context%last+1
+        context%context_name(j)=copyname
+        context%last=j
+        parser_context=j
+       endif
+!
+       context%current=parser_context
+!
+       end function parser_context
+!********************************************************************************************
        subroutine params_init( v )
        type (params) :: v
 !       if (associated(v%...)) deallocate(v%...) ! testing unassigned pointer is an error!
@@ -122,9 +236,9 @@
        character(len=*) :: newtag, newval
        int :: j
 !
-       if (.not.v%initialized) call params_init(v) 
+       if (.not.v%initialized) call params_init(v)
 !    add element to the list
-       if (v%last.eq.v%length) call params_expand(v)       
+       if (v%last.eq.v%length) call params_expand(v)
        j=v%last+1
        v%tag(j)=newtag(1:ltag); v%tlen(j)=ltag
        v%val(j)=newval(1:lval); v%vlen(j)=lval
@@ -203,76 +317,75 @@
 !
        end function params_getval_nocase
 !****************************************** end of data routines **************************************
-       character(len=200) function getval(atag)
+       character(len=200) function getval(atag,ctx)
        use output, only: warning
        character(len=200) :: value
-       character(len=*) :: atag
+       character(len=*), intent(in) :: atag
+       character(len=*), intent(in), optional :: ctx
+       int :: ictx
+       ictx=1 ; if (present(ctx)) ictx=max(1,parser_find_context(ctx))
 !
-       value=params_getval(parameters,atag)
+       value=params_getval(context%context_params(ictx),atag)
        if (len_trim(value).eq.0) call warning('GETVAL','Parameter "'//trim(atag)//'" not found.',-1)
        getval=value
 !
        end function getval
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-       character(len=200) function getval_nocase(atag)
+       character(len=200) function getval_nocase(atag,ctx)
        use output, only: warning
        character(len=200) :: value
-       character(len=*) :: atag
+       character(len=*), intent(in) :: atag
+       character(len=*), intent(in), optional :: ctx ; int :: ictx
+       ictx=1 ; if (present(ctx)) ictx=max(1,parser_find_context(ctx))
 !
-       value=params_getval_nocase(parameters,atag)
+       value=params_getval_nocase(context%context_params(ictx),atag)
        if (len_trim(value).eq.0) call warning('GETVAL_NOCASE','Parameter "'//trim(atag)//'" not found.',-1)
        getval_nocase=value
 !
        end function getval_nocase
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-       character(len=200) function getval_nocase_upper(atag)
+       character(len=200) function getval_nocase_upper(atag,ctx)
        use output, only: warning
        character(len=200) :: value
-       character(len=*) :: atag
+       character(len=*), intent(in) :: atag
+       character(len=*), intent(in), optional :: ctx ; int :: ictx
+       ictx=1 ; if (present(ctx)) ictx=max(1,parser_find_context(ctx))
 !
-       value=params_getval_nocase(parameters,atag)
+       value=params_getval_nocase(context%context_params(ictx),atag)
        if (len_trim(value).eq.0) call warning('GETVAL_NOCASE_UPPER','Parameter "'//trim(atag)//'" not found.',-1)
        call toupper(value)
        getval_nocase_upper=value
 !
        end function getval_nocase_upper
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-       function existtag(atag)
+       function existtag(atag,ctx)
        use output, only: error
        bool :: existtag
        character(len=200) :: value
-       character(len=*) :: atag
+       character(len=*), intent(in) :: atag
+       character(len=*), intent(in), optional :: ctx ; int :: ictx
+       ictx=1 ; if (present(ctx)) ictx=max(1,parser_find_context(ctx))
 !
        existtag=.false.
        if (.not.parser_initialized) call parser_init()
-       value=params_getval(parameters,atag)
+       value=params_getval(context%context_params(ictx),atag)
        if (len_trim(value).gt.0) existtag=.true.
 !
        end function existtag
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-       function existtag_nocase(atag)
+       function existtag_nocase(atag,ctx)
        bool :: existtag_nocase
        character(len=200) :: value
-       character(len=*) :: atag
+       character(len=*), intent(in) :: atag
+       character(len=*), intent(in), optional :: ctx ; int :: ictx
+       ictx=1 ; if (present(ctx)) ictx=max(1,parser_find_context(ctx))
 !
        existtag_nocase=.false.
        if (.not.parser_initialized) call parser_init()
-       value=params_getval_nocase(parameters,atag)
+       value=params_getval_nocase(context%context_params(ictx),atag)
        if (len_trim(value).gt.0) existtag_nocase=.true.
 !
        end function existtag_nocase
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-       subroutine parser_init()
-!    initialize params structure
-       call params_done(parameters)
-       call params_init(parameters)
-       parser_initialized=.true.
-       end subroutine parser_init
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-       subroutine parser_done()
-       call params_done(parameters)
-       parser_initialized=.false.
-       end subroutine parser_done
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 !
        subroutine parse_file(fid &
@@ -300,6 +413,7 @@
        character :: allowed2(200),c
        bool :: qtag, qeq, qval, qerror
        bool :: qvector ! flag that is active when we are reading a vector (certain default behavior is overridden)
+       bool :: qcontext ! flag that is active when any context other than the main context is active
 !
        int :: ioerr, ierr
        int :: l=0, ltag=0, lval=0
@@ -316,6 +430,7 @@
 #endif
 !     do work
 !
+       qcontext=.false.
        qvector=.false.
        qerror=.false.
        if (.not. parser_initialized) call parser_init()
@@ -413,33 +528,33 @@
               qerror=.true.; exit 
              endif
 !
-             qval=.true. ; lval=0
+             qval=.true. ; lval=0   ! expecting a value next
              cmdline=cmdline(i+1:l) ! remove 'tag=' and leading spaces pair from string
              call adjustleft(cmdline) 
              l=len_trim(cmdline)
              i=0
 !
              qeq=.false.
-            elseif (qeq) then
+            elseif (qeq) then ! in case tag was followed by space; expect a value next
              qeq=.false.
              qval=.true. ; lval=0
              cmdline=cmdline(i+1:l) ! remove 'tag=' and leading spaces pair from string
              call adjustleft(cmdline) 
              l=len_trim(cmdline)
              i=0
-            elseif (qval) then
+            elseif (qval) then ! expected a value but found '='
              if (lval.eq.0) then
               call warning(whoami, 'Missing value for parameter "'//tag(1:ltag)//'". Skipping line',0)
               qerror=.true.; exit 
              elseif (qvector) then
               call warning(whoami, 'Missing closing bracket for vector parameter "'//tag(1:ltag)//'". Skipping line',0)
               qerror=.true.; exit 
-             else ! store tag and val
+             else ! store tag and val (despite the misplaced `=' sign ; leave that for next cycle)
               call adjustleft(val(1:lval)); lval=len_trim(val(1:lval));
               call message(whoami, tag(1:ltag)//' <= '//val(1:lval))
               j=params_uadd(parameters,tag,val,ltag,lval)
               ltag=0; lval=0
-              cmdline=cmdline(i:l) ! remove tag/val pair from string
+              cmdline=cmdline(i:l) ! remove tag/val pair from string (looks like keeping '=' in cmdline) 
               call adjustleft(cmdline) ! remove tag/val pair from string
               l=len_trim(cmdline)
               i=0
@@ -448,17 +563,81 @@
              qval=.false.
             endif ! qtag
 !
+!************************************** CONTEXTS **************************************
+           elseif (any(context_open.eq.c)) then ! encountered a context opening bracket
+!    check if already inside a context (currently nesting is not supported)
+            if (qcontext) then
+             call warning(whoami, 'Unexpected open brace while processing parameter "'//tag(1:ltag),0)
+             call message(whoami, 'Nested contexts are not allowed. Skipping line.')
+             qerror=.true.; exit
+!
+            elseif (qtag.or.qeq) then
+             if (ltag.gt.0) then
+              call toupper(tag)
+              call message(whoami, 'Switching to context "'//tag(1:ltag)//'".')
+              parameters=>context%context_params(parser_context(tag(1:ltag)))
+              qcontext=.true.
+              qtag=.true.
+              qeq=.false.
+              ltag=0
+              cmdline=cmdline(i+1:l) ! remove open brace from string
+              call adjustleft(cmdline)
+              l=len_trim(cmdline)
+              i=0
+             else
+              call warning(whoami, 'Missing context name. Skipping line.',0)
+              qerror=.true.; exit 
+             endif ! ltag
+!
+            else
+             call warning(whoami, 'Unexpected open brace while processing parameter "'//tag(1:ltag)//'". Skipping line.',0)
+             qerror=.true.; exit
+            endif ! qcontext
+!
+           elseif (any(context_close.eq.c)) then ! encountered a context closing bracket
+            if (.not. qcontext) then ! make sure that there was an open brace
+             call warning(whoami, 'Encountered a close brace without a matching open brace. Skipping line.',0)
+             qerror=.true.; exit
+            elseif (qtag.and.ltag.eq.0) then   ! if expecting a new tag
+             call message(whoami, 'Returning to main context.')
+             parameters=>context%context_params(parser_context('main')) ! switch to default context
+             qcontext=.false.
+             cmdline=cmdline(i+1:l) ! remove close bracket
+             call adjustleft(cmdline) 
+             l=len_trim(cmdline)
+             i=0
+            elseif (qval.and..not.qvector.and.lval.gt.0) then ! finished reading a parameter value
+!    first, store tag/value pair
+             qval=.false.
+             qtag=.true.
+             call message(whoami, tag(1:ltag)//' <= '//val(1:lval))
+             j=params_uadd(parameters,tag,val,ltag,lval)
+             ltag=0; lval=0
+             cmdline=cmdline(i+1:l) ! remove tag/val pair from string and also the close bracket
+             call adjustleft(cmdline)
+             l=len_trim(cmdline)
+             i=0
+             ltag=0
+!    now return to then main context
+             call message(whoami, 'Returning to main context.')
+             parameters=>context%context_params(parser_context('main')) ! switch to default context
+             qcontext=.false.
+            else
+             call warning(whoami, 'Unexpected close brace while processing parameter "'//tag(1:ltag)//'". Skipping line.',0)
+             qerror=.true.; exit
+            endif ! qcontext
+!************************************** VECTOR DATA *****************************************
            elseif (any(vector_open.eq.c)) then ! encountered an opening vector bracket
             if (qtag) then ! opening bracket not allowed
-             call warning(whoami, 'Unexpected opening bracket when processing parameter "'//tag(1:ltag)//'". Skipping line',0)
+             call warning(whoami, 'Unexpected opening bracket when processing parameter "'//tag(1:ltag)//'". Skipping line.',0)
              qerror=.true.; exit
             elseif (qeq) then
-             call warning(whoami, 'Unexpected opening bracket when processing parameter "'//tag(1:ltag)//'". Skipping line',0)
+             call warning(whoami, 'Unexpected opening bracket when processing parameter "'//tag(1:ltag)//'". Skipping line.',0)
              qerror=.true.; exit 
             elseif (qval) then
              if (qvector) then ! already read one bracket 
              call warning(whoami, & 
-                           'Unexpected opening bracket when processing vector parameter "'//tag(1:ltag)//'". Skipping line',0)
+                           'Unexpected opening bracket when processing vector parameter "'//tag(1:ltag)//'". Skipping line.',0)
              qerror=.true.; exit
              else
               qvector=.true. ! the only legitimate occurrence
@@ -468,28 +647,29 @@
            elseif (any(vector_close.eq.c)) then ! encountered a closing vector bracket
 !      write(0,*) '**', qtag, qeq, qval, qvector, tag, ltag, val, lval; !aa
             if (qtag) then ! closing bracket not allowed
-             call warning(whoami, 'Unexpected closing bracket when processing parameter 1"'//tag(1:ltag)//'". Skipping line',0)
+             call warning(whoami, 'Unexpected closing bracket when processing parameter "'//tag(1:ltag)//'". Skipping line.',0)
 !              write(0,*) cmdline(i:l) ! aa
              qerror=.true.; exit
             elseif (qeq) then
-             call warning(whoami, 'Unexpected closing bracket when processing parameter "'//tag(1:ltag)//'". Skipping line',0)
+             call warning(whoami, 'Unexpected closing bracket when processing parameter "'//tag(1:ltag)//'". Skipping line.',0)
              qerror=.true.; exit 
             elseif (qval) then
              qvector=.false. ! the only legitimate occurrence
 !     peek ahead to make sure we have a spacer, if not, issue a warning and skip line
+!     (the convention is that a vector value must be separated from a subsequent tag)
              c=cmdline(i+1:i+1)
              if ( (i.lt.l) .and. (all(space.ne.c)) .and. (all(comment.ne.c))) then 
-              call warning(whoami, 'Error reading vector value for parameter "'//tag(1:ltag)//'". Skipping line',0)
+              call warning(whoami, 'Error reading vector value for parameter "'//tag(1:ltag)//'". Skipping line.',0)
               qerror=.true.; exit 
 !     otherwise, attempt to add tag/value pair
              else
               if (lval.eq.0) then
-               call warning(whoami, 'Missing vector value for parameter "'//tag(1:ltag)//'". Skipping line',0)
+               call warning(whoami, 'Missing vector value for parameter "'//tag(1:ltag)//'". Skipping line.',0)
                qerror=.true.; exit 
               endif
               call adjustleft(val(1:lval)); lval=len_trim(val(1:lval));
               if (lval.eq.0) then
-               call warning(whoami, 'Missing vector value for parameter "'//tag(1:ltag)//'". Skipping line',0)
+               call warning(whoami, 'Missing vector value for parameter "'//tag(1:ltag)//'". Skipping line.',0)
                qerror=.true.; exit 
               else ! add pair
                call adjustleft(val(1:lval)); lval=len_trim(val(1:lval));
@@ -504,14 +684,14 @@
               qtag=.true. ; ltag=0
               qval=.false.
              endif ! (i.lt.l)
-            else ! no imput mode (qtag/qeq/qval) : this should never happen
+            else ! no input mode (qtag/qeq/qval) : this should never happen
              call warning(whoami, 'Misplaced closing bracket in input. Skipping line.',0)
              qerror=.true.; exit
             endif 
 !
            elseif (any(allowed2(1:allowed_len).eq.c)) then ! check that the characters are allowed
 !
-            if (qtag) then
+            if (qtag) then ! reading a tag
              if (all(lower2(1:26).ne.c).and.all(upper2(1:26).ne.c)) then
               if (ltag.eq.0) then 
                call warning(whoami, 'Parameter names must start with a letter. Skipping line.',0)
@@ -523,7 +703,7 @@
              endif
              ltag=ltag+1; tag(ltag:ltag)=c
             elseif (qeq) then
-             call warning(whoami, 'Missing value for parameter "'//tag(1:ltag)//'". Skipping line',0)
+             call warning(whoami, 'Missing value for parameter "'//tag(1:ltag)//'". Skipping line.',0)
              qerror=.true.; exit 
             elseif (qval) then
              lval=lval+1; val(lval:lval)=c
@@ -533,7 +713,7 @@
             endif
 !      
            else
-             call warning(whoami, 'UNRECOGNIZED CHARACTER "'//c//'". SKIPPING LINE.',0)
+             call warning(whoami, 'Unrecognized character "'//c//'". Skipping line.',0)
              exit 
            endif ! character loop
          enddo ! while l.gt.1
@@ -542,8 +722,14 @@
         endif
        enddo ! over all lines in the file
 !
+!    check to make sure that the file did not end while a context was being read
+       if (qcontext) then 
+        call warning(whoami, 'File ended while inside a context. Your input may be incomplete.',0)
+        qerror=.true.
+       endif
+!
 #ifdef __PARALLEL
-       call MPI_BCAST(error,MPI_BOOL,1,0,communicator,ioerror)
+       call MPI_BCAST(qerror,mpibool,1,0,communicator,ioerr)
 #endif
        if (qerror) then
          call warning(whoami, 'ERROR(S) FOUND IN INPUT.',0)
@@ -553,13 +739,16 @@
 !
        end subroutine parse_file
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-       subroutine list_params( &
+       subroutine list_params(ctx &
 #ifdef __PARALLEL
-       & me
+       & , me &
 #endif
        & )
 ! 
        use output
+!
+       character(len=*), intent(in), optional :: ctx ; int :: ictx
+!
        character(len=11), parameter :: whoami = 'LIST_PARAMS'
        int :: i
 #ifdef __PARALLEL
@@ -568,16 +757,18 @@
 !
        if (.not.parser_initialized) call parser_init()
 !
+       ictx=1 ; if (present(ctx)) ictx=max(1,parser_find_context(ctx)) ; parameters=>context%context_params(ictx)
+!
 #ifdef __PARALLEL
        if (me.le.0) then
 #endif
-        call message(whoami,'THE FOLLOWING PARAMETERS ARE DEFINED')
-        call message(whoami,'====================================')
+        call message(whoami,'THE FOLLOWING PARAMETERS ARE DEFINED IN CONTEXT "'//context%context_name(ictx)(1:len_trim(context%context_name(ictx)))//'":')
+        call message(whoami,'========================================================')
         do i=1,parameters%last
          call message(whoami,tab//parameters%tag(i)(1:parameters%tlen(i))//' = "'//parameters%val(i)(1:parameters%vlen(i))//'"')
         enddo
-        call message(whoami,'====================================')
-#ifdef __PRALLEL
+        call message(whoami,'========================================================')
+#ifdef __PARALLEL
        endif
 #endif
        end subroutine list_params
@@ -895,7 +1086,7 @@
    int, optional, intent(inout) :: n
    int :: j,l
 
-   if (present(n)) a(max(0,n):)='' ! erase string beyond length n
+   if (present(n)) a(max(0,n)+1:)='' ! erase string beyond length n
 !
    call adjustleft(a,space2)
    l=len_trim(a);
@@ -917,7 +1108,7 @@
   character, parameter :: space2(2) = (/' ',tab/)
 !
   copy=tag; call adjustleft(copy,space2); ltag=len_trim(copy)
-  if (present(n)) a(max(0,n):)=''        ! erase string beyond length n
+  if (present(n)) a(max(0,n)+1:)=''        ! erase string beyond length n
   call adjustleft(a,space2); n=len_trim(a);
   if (ltag.gt.0.and.n.ge.ltag) then ! proceed only if tag nontrivial and could fit inside string 
 ! note: we are only looking for matches that correspond to a new word (not mid-word)
@@ -950,7 +1141,7 @@
   character, parameter :: space2(2) = (/' ',tab/)
 !
   copy=tag; call adjustleft(copy,space2); ltag=len_trim(copy)
-  if (present(n)) a(max(0,n):)=''        ! erase string beyond length n
+  if (present(n)) a(max(0,n)+1:)=''        ! erase string beyond length n
   call adjustleft(a,space2); l=len_trim(a);
   if (ltag.gt.0.and.l.ge.ltag) then ! proceed only if tag nontrivial and could fit inside string 
 ! note: we are only looking for matches that correspond to a new word (not mid-word)
@@ -987,7 +1178,7 @@
 !
   b=''
   copy=tag; call adjustleft(copy,space2); ltag=len_trim(copy)
-  if (present(n)) a(max(0,n):)=''        ! erase string beyond length n
+  if (present(n)) a(max(0,n)+1:)=''        ! erase string beyond length n
   call adjustleft(a,space2); l=len_trim(a);
   if (ltag.gt.0.and.l.ge.ltag) then ! proceed only if tag nontrivial and could fit inside string 
 ! note: we are only looking for matches that correspond to a new word (not mid-word)
