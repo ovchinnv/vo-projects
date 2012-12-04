@@ -19,6 +19,7 @@ program fit
 
  int :: natom
  int :: nbond
+ int :: nwgt
  
  float, allocatable :: Corr(:,:)
  int, allocatable :: bonds(:,:)
@@ -118,10 +119,52 @@ program fit
  write(fmt,*) natom
 ! do i=1,nbond ;   write(0,'(2I5)') bonds(i,:) ; enddo
  call message(whoami, '===================================================')
-!**************************************************
-! number of iterations
+!************** WEIGHTS LIST ************************************
  if (numarg.ge.3) then
   call getarg(3, filename)
+  fname=filename
+  flen=len_trim(fname)
+  fid=100
+  open(fid, file=fname(1:flen), status='OLD', form='FORMATTED')
+ else
+  fid=5 ! if file name missing, read from standard input
+ endif
+!
+ nwgt=0
+ do 
+  read(fid,*,IOSTAT=ioerr)
+!  write(message_(1),*) alpha, ioerr
+  if (ioerr.eq.-1.or.ioerr.eq.-2) then ! EOF
+   exit
+  elseif (ioerr.ne.0) then
+   write(_MSGBUF,*) 'ERROR IN FILE: ',fname(1:flen) ; call warning(whoami, _MSGBUF(1), 1)
+   stop
+  else
+   nwgt=nwgt+1
+  endif
+ enddo
+!
+ if (nwgt.ne.natom) then 
+  __WARN(whoami,'INCORRECT NUMBER OF WEIGHTS IN FILE ',fname(1:flen))
+  stop
+ endif
+!
+ write(_MSGBUF,*) 'READING ',nwgt,' LINES FROM FILE ',fname(1:flen) ;  call message(whoami,_MSGBUF(1))
+ rewind(fid)
+! 
+ allocate(wgt(nwgt)) ! weights
+
+ do i=1,nwgt ;   read(fid,*) wgt(i) ; enddo
+!**************************************************
+ call message(whoami,'WEIGHTS:')
+ call message(whoami, '===================================================')
+! write(fmt,*) natom
+! do i=1,nwgt ;   write(0,'(2I5)') w(i) ; enddo
+ call message(whoami, '===================================================')
+!**************************************************
+! number of iterations
+ if (numarg.ge.4) then
+  call getarg(4, filename)
   read(filename,*) niter
  else
   niter=10
@@ -131,15 +174,15 @@ program fit
  call message(whoami, 'Fitting bond coefficients using N/R least squares:')
  call message(whoami, '===================================================')
 ! fit coefficients
- allocate(stiff(nbond)); stiff=one/10d0;
- allocate(wgt(natom)); wgt=one;
+ allocate(stiff(nbond)); stiff=0.05d0
+! wgt=one;
 !
 !
- call stiffness_from_fluctuations(Corr, wgt, one/kboltzmann/three, bonds, stiff, niter) ! for test case
+ call stiffness_from_fluctuations(Corr, wgt, one/kboltzmann/three, bonds, stiff, niter, .true.) ! for test case
  Temp=300d0;
-! call stiffness_from_fluctuations(Corr, wgt, Temp, bonds, stiff, niter)
+! call stiffness_from_fluctuations(Corr, wgt, Temp, bonds, stiff, niter, .true. )
 !
- call message(whoami, 'Computed the following bond coefficicents')
+ call message(whoami, 'Computed the following bond coefficients')
  call message(whoami, '===================================================')
  do i=1,nbond ; write(_MSGBUF,'(2I5,G25.15)') bonds(i,:), stiff(i) 
  __PRINT(_MSGBUF)
@@ -147,9 +190,15 @@ program fit
 
  call message(whoami, '===================================================')
 
+#ifdef __PARALLEL
+ if (ME_LOCAL.eq.0) then
+#endif
  open(fid, file='stiff.dat', status='UNKNOWN', form='FORMATTED')
  do i=1,nbond ;   write(fid,'(2I5,G25.15)') bonds(i,:), stiff(i) ; enddo
  close(fid)
+#ifdef __PARALLEL
+ endif
+#endif
 
  deallocate(stiff,wgt,Corr,bonds)
 

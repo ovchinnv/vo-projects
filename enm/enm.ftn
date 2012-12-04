@@ -2,6 +2,7 @@ module enm
 
  __DEP_OUTPUT
  __DEP_CONST
+ __DEP_PARSER
  use lu
 
  implicit none
@@ -9,7 +10,7 @@ module enm
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
  contains
 
- subroutine stiffness_from_fluctuations(Corr,wgt,Temp,bonds,stiff,niter)
+ subroutine stiffness_from_fluctuations(Corr,wgt,Temp,bonds,stiff,niter,qdiag_)
 
 #ifdef __PARALLEL
  __DEP_MPI
@@ -29,6 +30,8 @@ module enm
  int, intent(in) :: bonds(:,:)
  float, intent(inout) :: stiff(:) ! corresponds to the bonds list
  int, intent(inout) :: niter
+ bool, optional, intent(in) :: qdiag_
+ bool :: qdiag
 !
  float ::  dstiff(size(stiff)), w(size(wgt))
  
@@ -51,10 +54,12 @@ module enm
  int, allocatable :: luperm(:)
  
  character(len=27) :: whoami='stiffness_from_fluctuations';
- 
+!
  natom=size(Corr,1) ;
  nbonds=(size(bonds,1)) ;
  ndof=natom-1 
+!
+ if (present(qdiag_)) then ; qdiag=qdiag_ ; else ; qdiag = .false. ; endif ! decide what kind of norm will be computed
 !
 ! projection
 ! allocate(P(ndof,natom), Pt(natom,ndof)) ; P=zero 
@@ -103,7 +108,6 @@ module enm
   call PMPt(K1(:,:,i),Kp1(:,:,i),w,natom)
 
 !  write(0,*)   sum( Kp1(:,:,i)-Kpi1(:,:,i) ) ! test to make sure they are the same
-
 !  write(0,*) 'Making derivative matrix (bond counter) :',i
  enddo 
 ! =========== all-gather
@@ -119,7 +123,7 @@ module enm
 ! ==========
 !
 ! normalization constants
- normC = one/norm2(Corr,Corr,natom) ;
+ normC = one/norm2(Corr,Corr,natom,qdiag) ;
 ! 
  alpha = kboltzmann*Temp*three
 !
@@ -149,7 +153,9 @@ module enm
 
 ! difference matrix
  diff = (Corr - alpha * Ki);
- error=normC * norm2(diff,diff,natom)
+ error=normC * norm2(diff,diff,natom,qdiag)
+
+!if (me.eq.0) write(0,*) 'error: ',error, normC
 
 ! first loop: derivatives of the reduced stiffness matrix inverse
  do i=ibond,jbond
@@ -162,7 +168,7 @@ module enm
   Kpi1(:,:,i)=M ;
   Kpj1(:,:,i)=M1;
 ! also: derivative of error w.r.t. bond constants
-  error1(i) = normC * norm2(diff,M1,natom)
+  error1(i) = normC * norm2(diff,M1,natom,qdiag)
  enddo
 !
 #ifdef __PARALLEL
@@ -172,7 +178,7 @@ module enm
   call mpi_allgatherv(MPI_IN_PLACE,0,MPI_DATATYPE_NULL,error1,nbonds_local,bond_offsets,mpifloat,communicator,mpierr)
  endif
 #endif
-!write(0,*) error1
+!if (me.eq.0) write(101,*) 'error: ',error1
 !stop
 !
 ! compute the derivative matrices (basically, Hessians of the error)
@@ -186,7 +192,7 @@ module enm
 
   do j=1,nbonds ! over all bonds :  this is inefficient because the matrix H is symmetric, but easy to parallelize
    N1=Kpj1(:,:,j);
-   H1(j,i)=norm2(M1,N1,natom);
+   H1(j,i)=norm2(M1,N1,natom,qdiag);
 !   H1(i,j)=H1(j,i);
 !
    Q=Kp1(:,:,j);
@@ -198,17 +204,17 @@ module enm
    call PtMP(Q,R,w,natom)
    R=-R
 
-   H2(j,i)=norm2(diff,R,natom);
+   H2(j,i)=norm2(diff,R,natom,qdiag);
 !   H2(i,j)=H2(j,i); 
 
   enddo ! j-loop (fast-varying)
  
-!  H1(i,i) = norm2(M1,M1,natom);
+!  H1(i,i) = norm2(M1,M1,natom,qdiag);
 !  H2(i,i) = -two * sum ( diff * ( matmul(Pt, matmul(matmul(matmul(M,L), Kpi), P))));
 !  Q=matmul(M,L) 
 !  Q=matmul(Q,Kpi)
 !  call PtMP(Q,R,w,natom)
-!  H2(i,j)=-two*norm2(diff,R,natom);
+!  H2(i,j)=-two*norm2(diff,R,natom,qdiag);
 !
  enddo ! i-loop (slow-varying)
 
@@ -221,15 +227,31 @@ module enm
 #endif
 !
 ! H = half * (H + transpose(H)) ! symmetrize in case of roundoff
+! if (me.eq.0) write(600,'(379G20.10)') H
+! if (me.eq.0) write(700,'(203G20.10)') K
+! if (me.eq.0) write(700,'(203G20.10)') Kp
+!
 !
 ! solve : dstiff=H\err1; 
  call LUDCMP(H, nbonds, luperm, i, j)
  dstiff=error1
  call LUBKSB(H, nbonds, luperm, dstiff)
+ dstiff=0.25d0*dstiff ! ad hoc
  stiff = stiff - dstiff
+ stiff = max(stiff, one/1000d0) ! adhoc
+ stiff = min(stiff, 3d0) ! adhoc
 !
  __PMSG('iteration/MSD error: ',iter,error)
 !
+#ifdef __PARALLEL
+ if (ME_LOCAL.eq.0) then
+#endif
+ open(j, file='stiff'//itoa(iter)//'.dat', status='UNKNOWN', form='FORMATTED')
+ do i=1,nbonds ;   write(j,'(2I5,G25.15)') bonds(i,:), stiff(i) ; enddo
+ close(j)
+#ifdef __PARALLEL
+ endif
+#endif
 ! write(0,*) stiff
 ! write(0,*) K
  
@@ -297,11 +319,19 @@ module enm
 !
  end subroutine PtMP
 !
- function norm2(A,B,n)
+ function norm2(A,B,n,qdiag_)
  float :: A(n,n), B(n,n), norm2
  int :: n,i,j
+ bool, optional :: qdiag_
+ bool :: qdiag
+ if (present(qdiag_)) then ; qdiag=qdiag_ ; else ; qdiag = .false. ; endif
  norm2=zero
- do i=1,n ; do j=1,n ; norm2=norm2+A(i,j)*B(i,j) ; enddo; enddo
+!
+ if (qdiag) then ! only diagonal elements
+  do i=1,n ; norm2=norm2+A(i,i)*B(i,i) ; enddo
+ else ! all elements
+  do i=1,n ; do j=1,n ; norm2=norm2+A(i,j)*B(i,j) ; enddo; enddo
+ endif
  end function norm2
 
 !

@@ -26,8 +26,8 @@ MPI_HOME=/usr/local/mpich2-gnu
 #MPI_HOME=/usr/local/mpich2-g95
 #
 # G95 reguires no space between "-D" and the name
-DEFS=-Dint=integer -Dfloat=real*8 -Dbool=logical -Dint4mpi=integer*4 -Dmpiint=MPI_INTEGER -Dmpifloat=MPI_REAL8 -Dmpichar=MPI_CHARACTER -Dmpiint4=MPI_INTEGER4\
-     -Dmpibool=MPI_LOGICAL -Dint1="integer(kind=KIND('a'))" -D__DMOL -D__RCOMP -D__PARALLEL
+DEFS=-Dint=integer*8 -Dfloat=real*8 -Dbool=logical -Dint4mpi=integer*4 -Dmpiint=MPI_INTEGER -Dmpifloat=MPI_REAL8 -Dmpichar=MPI_CHARACTER -Dmpiint4=MPI_INTEGER4\
+     -Dmpibool=MPI_LOGICAL -Dint1="integer(kind=KIND('a'))" -D__DMOL -D__RCOMP -D__PARALLEL -D__DMOL
 
 # ! note: the VEC routines are probably slower
 

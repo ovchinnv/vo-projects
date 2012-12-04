@@ -14,4 +14,5 @@ fit.o: $(OBJS) fit.F90
 fit.F90 : fit.ftn
 
 clean :: 
-	rm -f fit fit.o fit.F90
+	rm -f fit fit.o fit.F90 stiff*.dat
+	
