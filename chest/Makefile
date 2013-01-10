@@ -3,7 +3,7 @@ COMMON=.
 OBJS=gridsize.o state.o bc.o grid.o multigrid.o PBmain.o ches.o
 NAME=chest
 SUBDIRS=io objects
-DEPS=output parser constants files timer
+DEPS=output parser constants files timer multicom
 EXE=ches
 
 LOCALDEPS=PBmacro1.def PBmacro2.def message.def
@@ -11,6 +11,7 @@ LOCALDEPS=PBmacro1.def PBmacro2.def message.def
 # additional objects for linking ches executable
 
 LINKOBJS=output.o files.o parser.o constants.o timer.o\
+     multicom.o multicom_aux.o parselist.o\
      plot3Dio.o chest.o util.o formats.o\
      object.o \
      molecule.o PDB.o\

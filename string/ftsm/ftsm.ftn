@@ -20,12 +20,14 @@ __CHARMM_ONLY##IF STRINGM
       private ftsm_calc
       private ftsm_compute_fe_fd
       private ftsm_repa
+      private ftsm_mini
       private ftsm_swap_bc
       private ftsm_update_overlap_coor
       private ftsm_save_com
       private ftsm_init
       private ftsm_done
       private ftsm_repa_init
+      private ftsm_mini_init
       private ftsm_list_atoms
       private ftsm_set_weights
       private ftsm_swap
@@ -128,6 +130,13 @@ __CHARMM_ONLY##IF STRINGM
         call ftsm_repa_init(comlyn, comlen)
        else
         if (ftsm_check(qorient)) call ftsm_repa()
+       endif
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      elseif (__STRNCMP(keyword,'MINI',4)) then
+       if (comlen.gt.0) then ! this is an initialization call!
+        call ftsm_mini_init(comlyn, comlen)
+       else
+        if (ftsm_check(qorient)) call ftsm_mini()
        endif
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       elseif (__STRNCMP(keyword,'STAT',4)) then
@@ -1182,7 +1191,7 @@ __CHARMM_ONLY##IF STRINGM
  __DECLARE_MSGBUF
 !
       CHARACTER(LEN=*) :: COMLYN
-      INTEGER :: COMLEN
+      int :: COMLEN
       character(len=16) :: whoami
       bool :: qprint, qroot
 !
@@ -1197,6 +1206,89 @@ __CHARMM_ONLY##IF STRINGM
  8002 format(/A,' USING SMCV INITIALIZATION ROUTINE')
 !
       end subroutine ftsm_repa_init
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      subroutine ftsm_mini_init(comlyn, comlen)
+      use ftsm_var
+      __DEP_OUTPUT
+      __DEP_PARSER 
+      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
+      __DEP_MPI 
+      __DEP_NUMBER
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      __IMPNONE
+!
+      character(len=*) :: comlyn
+      int :: comlen
+!
+      character(len=16) :: whoami
+      character(len=8) :: keyword
+!
+      int :: isd=0, iconj=0, mlen
+!
+!
+      bool :: qroot, qprint
+!
+ __DECLARE_MSGBUF
+!
+      character(len=20) :: methods(2), method
+      data methods/ 'STEEPEST DESCENT','CONJUGATE GRADIENT'/
+
+      data whoami /' FTSM_MINI_INIT>'/
+!
+      qroot=MPI_COMM_STRNG.ne.MPI_COMM_NULL
+      qprint=qroot.and.ME_STRNG.eq.0
+
+      ftsm_mini_method=0
+      ftsm_mini_initialized=.false.
+!
+      isd=__INDX_RM(comlyn, comlen, 'SD') ; if (isd.gt.0) ftsm_mini_method=sd
+      iconj=__INDX_RM(comlyn, comlen, 'CONJ') ; if (iconj.gt.0) ftsm_mini_method=conj
+!
+      if ((iconj).gt.0) then
+        __WRN(whoami,' ONLY SD MINIMIZATION IS CURRENTLY SUPPORTED. NOTHING DONE')
+        return
+      endif
+!ccccccc CHECK FOR MULTIPLE OR MISSING OPTIONS
+      if ((abs(isd)+abs(iconj)) .eq. 0) then
+       if (qprint) then  ; write(_MSGBUF,665) whoami, whoami ; __PRINT(_MSGBUF) ; endif
+ 665   FORMAT(A,' MINIMIZATION METHOD NOT SPECIFIED.',/,               &
+     & A,' WILL USE STEEPEST DESCENT.')
+       ftsm_mini_method=sd
+      elseif ((isd+iconj) .gt. 1) then
+       __WRN(whoami,'MORE THAN ONE MINIMIZATION METHOD SPECIFIED. NOTHING DONE')
+       return
+      endif
+!
+      ftsm_mini_step=__GET_RM_F(comlyn, comlen, 'STEP', one*0.001) ! cast to correct kind
+      if (ftsm_mini_step.le.0.0d0) then
+         __WRN(whoami,'MINIMIZATION STEP MUST BE POSITIVE. NOTHING DONE.')
+         return
+      endif
+!     number of minimization steps
+      ftsm_mini_iterations=__GET_RM_I(comlyn, comlen, 'ITER', ione*10)
+      if (ftsm_mini_iterations.le.0) then
+         __WRN(whoami,'NUMBER OF MINIMIZATION ITERATIONS MUST BE POSITIVE. NOTHING DONE.')
+         return
+      endif
+!
+!     print summary
+!
+      if (qprint) then
+       mlen=len(methods(ftsm_mini_method))
+       write(_MSGBUF(1),667) whoami, methods(ftsm_mini_method)(1:mlen)
+       write(_MSGBUF(2),668) whoami, ftsm_mini_step
+       write(_MSGBUF(3),669) whoami, ftsm_mini_iterations
+       __PRINT(_MSGBUF)
+!
+ 667  format(A,' WILL MINIMIZE STRING USING ',A,' MINIMIZATION')
+ 668  format(A,' WITH STEP ',F10.5)
+ 669  format(A,' FOR ',I5,' ITERATIONS.')
+!
+      endif
+!
+      ftsm_mini_initialized=.true.
+!
+      end subroutine ftsm_mini_init
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine ftsm_list_atoms()
       __DEP_OUTPUT
@@ -1483,11 +1575,12 @@ __CHARMM_ONLY##IF STRINGM
       subroutine ftsm_define_rtmd_type()
       use sm_config, only: sizeofreal
       __DEP_MPI 
+      __DEP_NUMBER
 !
       __IMPNONE
 !
-      int :: error
-      int(kind=MPI_ADDRESS_KIND) :: lb, extent
+      int4mpi :: error, norient_mpi
+      integer(kind=MPI_ADDRESS_KIND) :: lb, extent
 !
 !    create custom type for gathering array of shape (norient,3), in rows
 !    taken from rtmd code
@@ -1500,7 +1593,8 @@ __CHARMM_ONLY##IF STRINGM
       if (norient.gt.0) then
        lb=0
        extent=sizeofreal
-       call mpi_type_vector(3, 1, norient,                              &
+       norient_mpi=norient
+       call mpi_type_vector(3, 1, norient_mpi,                         &
      &   MPI_DOUBLE_PRECISION, MPI_RTMD_TYPE_, error)
 !    corresponding resized type
        call mpi_type_create_resized(MPI_RTMD_TYPE_,lb,extent,           &
@@ -1781,6 +1875,7 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_PARSER 
       __DEP_COORIO
       __DEP_MPI 
+      __DEP_NUMBER
 !
 !    will use fixed atom arrays to print only the path atoms
 !
@@ -1860,7 +1955,7 @@ __CHARMM_ONLY##IF STRINGM
        r3(:,3)=r(:,3)-rcom(3,c)
 #endif
 !
-       call ftsm_update_overlap_coor(1)
+       call ftsm_update_overlap_coor(ione)
        do j=1,nforced;ind=iatom_f(j);r3(ind,:)=r_f(j,:,c);enddo
        if (qdiffrot) then
        do j=1,norient;ind=iatom_o(j);r3(ind,:)=r_o(j,:,c);enddo
@@ -2124,6 +2219,7 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_SIZE
       __DEP_PARSER
       __DEP_COORIO
+      __DEP_NUMBER
 !
       __IMPNONE
       character(len=16) :: whoami
@@ -2167,7 +2263,7 @@ __CHARMM_ONLY##IF STRINGM
       if (qdiffrot) stringatoms(iatom_o)=1
 !      k=sum(stringatoms)
 !
-      call ftsm_update_overlap_coor(1)
+      call ftsm_update_overlap_coor(ione)
       do j=1, nforced
        ind=iatom_f(j);   r3(ind,:)=r_f(j,:,c)
       enddo
@@ -2305,7 +2401,7 @@ __CHARMM_ONLY##IF STRINGM
  __DECLARE_MSGBUF
 !
       CHARACTER(LEN=*) :: COMLYN
-      INTEGER :: COMLEN
+      int :: COMLEN
 !
       character(len=80) :: rex_fname_old
       int :: rex_flen_old, oldiol, error
@@ -2577,8 +2673,9 @@ __CHARMM_ONLY##IF STRINGM
       use ftsm_rex, only: ftsm_rex_print_map,  ftsm_rex_print_log
       __DEP_OUTPUT
       __DEP_MULTICOM       __CHARMM_ONLY !##MULTICOM
-      __DEP_PARSER 
-      __DEP_MPI 
+      __DEP_PARSER
+      __DEP_MPI
+      __DEP_NUMBER
 !
       __IMPNONE
       int :: i, fmt_len
@@ -2627,7 +2724,7 @@ __CHARMM_ONLY##IF STRINGM
       if (output_rmsd0) then
 !    compute rmsd
        if (qorient) then
-        if (qdiffrot) call ftsm_update_overlap_coor(1) ! just in case, make sure orientation coordiantes are up-to-date
+        if (qdiffrot) call ftsm_update_overlap_coor(ione) ! just in case, make sure orientation coordiantes are up-to-date
         call RMSBestFit( r_o(:,:,ref), r_o(:,:,center),                 &
      &                                orientWeights, u )  ! superpose ref onto center
        endif
@@ -2781,7 +2878,7 @@ __CHARMM_ONLY##IF STRINGM
      &       IBEG=i,                                                    &
 !     &       IBEG=(stat_iteration_counter-1) * nstring + 1,             &
 !     &       IEND=2**31-1) ! largest 4-byte int     
-     &       IEND= -1 + 2**30 + 2**30)
+     &       IEND= ione*(-1 + 2**30 + 2**30)) ! possible i4 => i8 cast
 !    NOTE: should write the correct number of records to header at the end of calculation
 !--------------------------------------------------------------------
 !    flush unit:
@@ -2866,6 +2963,7 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_MULTICOM       __CHARMM_ONLY !##MULTICOM
       __DEP_MPI 
       __DEP_OUTPUT
+      __DEP_NUMBER
 !
       __IMPNONE
 !
@@ -2923,7 +3021,7 @@ __CHARMM_ONLY##IF STRINGM
           if (qdiffrot) then
            r_o(:,:,left_old:right_old)=r_o(:,:,left:right)
 !    make sure orientation coordinates are current
-           call ftsm_update_overlap_coor(1) ! r_f --> r_o
+           call ftsm_update_overlap_coor(ione) ! r_f --> r_o
           endif
 !    see if reparametrization requested
           if (repa_on) then
@@ -2952,7 +3050,7 @@ __CHARMM_ONLY##IF STRINGM
            r_o(:,:,center_old)=r_o(:,:,center)
            r_o(:,:,center)=r_o(:,:,center_new)
 !    make sure orientation coordinates are current
-           call ftsm_update_overlap_coor(1) ! r_f --> r_o
+           call ftsm_update_overlap_coor(ione) ! r_f --> r_o
           endif
 !
 !    see if reparametrization requested
@@ -3038,8 +3136,8 @@ __CHARMM_ONLY##IF STRINGM
      &                                comm, ierror, rank, size)
       __CHARMM_ONLY __DEP_KINDS
        float :: message(*)
-       int :: size, type, rank, ierror, comm
-       int4mpi :: count(size), displ(size)
+       int :: ierror
+       int4mpi :: comm, rank, size, type, count(size), displ(size)
        end subroutine hypercube_allgatherv
       end interface
 !
@@ -3864,6 +3962,7 @@ __CHARMM_ONLY##IF STRINGM
       subroutine ftsm_swap_bc(qsendo)
       __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
       __DEP_MPI 
+      __DEP_NUMBER
       __IMPNONE
       bool :: qroot, qslave, qsend_o
       bool, optional :: qsendo
@@ -3966,7 +4065,7 @@ __CHARMM_ONLY##IF STRINGM
       endif
 !
 !    update any orientation coordinates that have changes
-      if (qdiffrot) call ftsm_update_overlap_coor(3)
+      if (qdiffrot) call ftsm_update_overlap_coor(ithree)
 !
       end subroutine ftsm_swap_bc
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -3975,6 +4074,7 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
       __DEP_MPI 
       __DEP_OUTPUT
+      __DEP_NUMBER
 !
       __IMPNONE
 ! local variables
@@ -4123,7 +4223,7 @@ __CHARMM_ONLY##IF STRINGM
 !    broadcast coordinates to slaves
       if (qslave) __BROADCAST_LOCAL_8B(rf,3*nforced)
 !    update any orientation coordinates that have changes
-      if (qdiffrot) call ftsm_update_overlap_coor(1)
+      if (qdiffrot) call ftsm_update_overlap_coor(ione)
 !
       call ftsm_save_com()
 !
@@ -4313,7 +4413,8 @@ __CHARMM_ONLY##IF STRINGM
 !
 !     make entry in REX log (only lower-rank replica does this)
         if (ME_STRNG.lt.which) then
-          i=int_vector_add(rex_log, ME_STRNG) ! this replica
+          j=ME_STRNG ! possible cast i4=>i8 accommodates in8 compilations
+          i=int_vector_add(rex_log, j) ! this replica
           i=int_vector_add(rex_log, which)    ! exchanged with this replica
           i=int_vector_add(rex_log, itime + rextime_offset)    ! at this time
         endif ! success

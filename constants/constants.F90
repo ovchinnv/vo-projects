@@ -19,6 +19,15 @@ module constants
 !
  public
 !
+! integer parameters
+ integer*4, parameter :: izero=0
+ integer*4, parameter :: ione=1
+ integer*4, parameter :: itwo=2
+ integer*4, parameter :: ithree=3
+ integer*4, parameter :: inine=9
+ integer*4, parameter :: itwentyseven=27
+!**********************************************************
+!real*8 parameters
  real*8, parameter :: pi = 3.141592653589793d0
  real*8, parameter :: twopi = 3.141592653589793d0*2d0
 !
@@ -33,13 +42,13 @@ module constants
  real*8, parameter :: twentyseven=27d0
  real*8, parameter :: half=0.5d0
  real*8, parameter :: quarter=0.25d0
- real*8, parameter :: third=1d0/3d0
- integer, parameter :: unknowni=(ishftc(1,-1)) ! smallest representable integer
- real*8, parameter :: unknownf=1d0*unknowni
+ real*8, parameter :: third=one/three
+ integer*4, parameter :: unknowni=(ishftc(1,-1)) ! smallest representable integer*4
+ real*8, parameter :: unknownf=one*unknowni
 !
 ! real*8, parameter :: DTOL = 1.0e-14
 ! real*8, parameter :: FTOL = 1.0e-7
- real*8, save, private :: TOL = -1 ! error tolerance
+ real*8, save, private :: TOL = -one ! error tolerance
 !**********************************************************
  contains
   function ERRTOL()
