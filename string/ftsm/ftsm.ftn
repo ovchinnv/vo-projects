@@ -66,6 +66,8 @@ __CHARMM_ONLY##IF STRINGM
 !
 #ifdef __CHARMM
       use ctitla 
+! need BNBND, BIMAG for ftsm_mini
+      use bases_ltm, only : BNBND, BIMAG
 #endif
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       __IMPNONE
@@ -133,10 +135,14 @@ __CHARMM_ONLY##IF STRINGM
        endif
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       elseif (__STRNCMP(keyword,'MINI',4)) then
-       if (comlen.gt.0) then ! this is an initialization call!
+       if (comlen.gt.0) then ! this is an initialization call
         call ftsm_mini_init(comlyn, comlen)
        else
-        if (ftsm_check(qorient)) call ftsm_mini()
+        if (ftsm_check(qorient)) call ftsm_mini(__X, __Y, __Z &
+#ifdef __CHARMM
+     &                                          ,BNBND, BIMAG     &
+#endif
+     &                                         )
        endif
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       elseif (__STRNCMP(keyword,'STAT',4)) then
@@ -1172,9 +1178,11 @@ __CHARMM_ONLY##IF STRINGM
       qdiffrot=.false.
       qorient=.false.
 !
-      call ftsm_define_rtmd_type() ! deallocate MPI type for transmitting forces
+      call ftsm_define_rtmd_type() ! deallocate MPI type for transmitting forces (this is the effect when norient=0)
 !
       call ftsm_rex_done()
+!
+      call ftsm_mini_done() ! deallocate minimization structures (if any)
 !
       ftsm_initialized=.false.
 !
@@ -1214,6 +1222,9 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
       __DEP_MPI 
       __DEP_NUMBER
+#ifdef __CHARMM
+      use datastr
+#endif
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       __IMPNONE
 !
@@ -1287,8 +1298,20 @@ __CHARMM_ONLY##IF STRINGM
       endif
 !
       ftsm_mini_initialized=.true.
+      __CHARMM_ONLY ftsm_nbond_image_data_initialized=.false. ! data for computing energy using CHARMM
 !
       end subroutine ftsm_mini_init
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      subroutine ftsm_mini_done()
+#ifdef __CHARMM
+      use datstr, only : FREEDT_nbond, FREEDT_image
+      call FREEDT_nbond(ftsm_nbond_copy)
+      call FREEDT_image(ftsm_image_copy)
+      ftsm_nbond_image_data_initialized=.false.
+#endif
+      ftsm_mini_method=0
+      ftsm_mini_initialized=.false.
+      end subroutine ftsm_mini_done
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine ftsm_list_atoms()
       __DEP_OUTPUT
@@ -1946,13 +1969,13 @@ __CHARMM_ONLY##IF STRINGM
 !      for first frame, output all coordinates: take from instantaneous set
        allocate(r3(natom,3)) ; r3=0d0
 #ifdef __CHARMM
-       r3(:,1)=x(1:natom)-rcom(1,c) ! bring all coordinates to the same COM for convenience
-       r3(:,2)=y(1:natom)-rcom(2,c)
-       r3(:,3)=z(1:natom)-rcom(3,c)
+       r3(:,1)=x(1:natom)-rcom(1,instant) ! bring all coordinates to zero COM for convenience (assume rcom(:,instant) is reasonably accurate)
+       r3(:,2)=y(1:natom)-rcom(2,instant)
+       r3(:,3)=z(1:natom)-rcom(3,instant)
 #elif defined (__DMOL)
-       r3(:,1)=r(:,1)-rcom(1,c)
-       r3(:,2)=r(:,2)-rcom(2,c)
-       r3(:,3)=r(:,3)-rcom(3,c)
+       r3(:,1)=r(:,1)-rcom(1,instant)
+       r3(:,2)=r(:,2)-rcom(2,instant)
+       r3(:,3)=r(:,3)-rcom(3,instant)
 #endif
 !
        call ftsm_update_overlap_coor(ione)
@@ -2958,12 +2981,19 @@ __CHARMM_ONLY##IF STRINGM
 !
       end function ftsm_check
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-      subroutine ftsm_main(x,y,z,fx,fy,fz,iteration)
+! VO 1/2013 modifying function call to include string minimization option
+      subroutine ftsm_main(x,y,z,fx,fy,fz,iteration           &
+#ifdef __CHARMM
+     &                    , wmain, nbond_data, image_data     & ! to be passed on to ftsm_mini
+#endif
+     &                    )
+!
       __DEP_PARSER 
       __DEP_MULTICOM       __CHARMM_ONLY !##MULTICOM
       __DEP_MPI 
       __DEP_OUTPUT
       __DEP_NUMBER
+      __CHARMM_ONLY use chm_types_ltm, only : nonbondDataStructure, imageDataStructure
 !
       __IMPNONE
 !
@@ -2973,6 +3003,12 @@ __CHARMM_ONLY##IF STRINGM
      &          fx(:), fy(:), fz(:)
       int :: iteration ! MD iteration
 !
+#ifdef __CHARMM
+! CHARMM - dependent energy evaluation routines/vars
+      float :: wmain(:)
+      type(nonbondDataStructure) :: nbond_data
+      type(imageDataStructure)   :: image_data
+#endif
 !     locals
       float :: s
       character(len=11) :: whoami
@@ -3110,7 +3146,7 @@ __CHARMM_ONLY##IF STRINGM
       int :: ind, i, j, k, obeg, oend, p, q, ierror
 !
       float :: u (3,3), u1(3,3), u2(3,3), u3(3,3)
-      float :: r_com(3) ! COM vector
+      float, pointer :: r_com(:)
       float :: rho, rho1, rho2, r1(3), r2(3), r3(3), d, d1, d2, d3,    &
      &                                                d4, d5, d6, w
       float :: omdpar
@@ -3151,6 +3187,7 @@ __CHARMM_ONLY##IF STRINGM
      &       .and.calc_bestfit_grad_para)
 ! shorthand
       ow=>orientWeights
+      r_com=>rcom(:,instant)
       roi=>r_o(:,:,instant);
       rol=>r_o(:,:,left); ror=>r_o(:,:,right); roc=>r_o(:,:,center);
       rol_rot=>r_o(:,:,left_rot); ror_rot=>r_o(:,:,right_rot)
@@ -3916,7 +3953,8 @@ __CHARMM_ONLY##IF STRINGM
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine ftsm_save_com(c)
       __IMPNONE
-      float :: r_com(3), w
+!      float :: r_com(3)
+      float :: w
       float, pointer :: ro_com(:)
       int, optional :: c
       int :: col, i
@@ -3930,7 +3968,7 @@ __CHARMM_ONLY##IF STRINGM
         if (col.le.num_sets.and.col.gt.0) then
          ro_com=>rcom(:,col)
 !
-         r_com=ro_com ! save old COM
+!         r_com=ro_com ! save old COM
          ro_com=0d0   ! will recompute COM using new weights
          ro  => r_o(:,:,col)
          rf  => r_f(:,:,col)
@@ -3952,7 +3990,7 @@ __CHARMM_ONLY##IF STRINGM
           rf(:,3)=rf(:,3) - ro_com(3)
          endif
 ! centroid relative to original coords:
-         ro_com = ro_com + r_com
+!         ro_com = ro_com + r_com ! this is no longer useful; VO 1/2013
        endif
       endif
 !
@@ -4069,6 +4107,267 @@ __CHARMM_ONLY##IF STRINGM
 !
       end subroutine ftsm_swap_bc
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      subroutine ftsm_mini(x, y, z &
+#ifdef __CHARMM
+     &                    , wmain, nbond_data, image_data     &
+#endif
+     &                    )
+
+      __DEP_PARSER 
+      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
+      __DEP_OUTPUT
+      __DEP_NUMBER
+#ifdef __CHARMM
+      use chm_types_ltm, only : nonbondDataStructure, imageDataStructure
+      use datstr, only : DUPLDT_nbond, DUPLDT_image
+#endif
+!
+      __IMPNONE
+      float :: x(:), y(:), z(:)
+!
+! local variables
+      character(len=11) :: whoami
+      bool :: qprint
+!      bool :: qroot, qslave
+!
+      float :: u(3,3)= RESHAPE( (/1,0,0,0,1,0,0,0,1/), (/3,3/) ) ! rotation matrix
+      float, pointer :: r_com(:), ow(:)
+      float, pointer, dimension(:,:) :: roi, roc, rfc, roc_rot, rfc_rot
+      float :: w
+!
+      int :: i, j, k, ierror
+!
+! temporary coordinate and force arrays
+      float :: xt(size(x,1))
+      float :: yt(size(x,1))
+      float :: zt(size(x,1))
+      float :: dxt(size(x,1))
+      float :: dyt(size(x,1))
+      float :: dzt(size(x,1))
+      int :: stringatoms(size(x,1))
+      int :: natom, ind, iter
+!
+ __DECLARE_MSGBUF
+!
+#ifdef __CHARMM
+! CHARMM - dependent energy evaluation routines/vars
+      float :: wmain(:), wt(size(x,1))
+      type(nonbondDataStructure) :: nbond_data
+      type(imageDataStructure)   :: image_data
+!
+      interface ! to subroutines which compute gradients
+!
+!*************************************************************
+! straight from CHARMM code v. c37a1
+ SUBROUTINE ENERGY(X, Y, Z, DX, DY, DZ, BNBND, BIMAG, &
+     NDD1, DD1, QSECD, ICALL)
+  !-----------------------------------------------------------------------
+  !       CALCULATES THE ENERGY AND FORCES FOR A STRUCTURE.
+  !     The total energy and individual energy contributions are
+  !     returned in the ENERGY.FCM common block.
+  !
+  !      X,Y,Z         - Coordinates
+  !      DX,DY,DZ      - Forces returned
+  !      BNBND,BIMAG   - Nonbond and Images data structure bases
+  !      NDD1            The dimension of the second derivative matrix.
+  !      DD1           - Second derivative arrays
+  !      QSECD         - Second derivative flags
+  !      ICALL         - ECALLS increment
+!
+  real(chm_real) X(*),Y(*),Z(*)
+  real(chm_real) DX(*),DY(*),DZ(*)
+!
+  type(nonbondDataStructure) BNBND
+  type(imageDataStructure) BIMAG
+!
+  INTEGER NDD1, ICALL
+  real(chm_real) DD1(*)
+  LOGICAL QSECD
+!
+ END SUBROUTINE ENERGY
+!***************************************************************
+      SUBROUTINE UPDECI(ISTEP,X,Y,Z,WMAIN, &
+                        LDYNAM,XOLD,YOLD,ZOLD,VX,VY,VZ)
+!-----------------------------------------------------------------------
+! By Stefan Fischer.
+!
+! Makes the decision whether to update the various non-bond lists.
+!
+! UPDECI() is controled through INBFRQ (in CONTRL.FCM)
+!  and ISTEP as follows :
+!
+! If INBFRQ = +n --> non-bond list is performed when MOD(ISTEP,n) == 0
+!                    Image and H-bond lists are updated according to
+!                    IMGFRQ and IHBFRQ.
+! If INBFRQ =  0 --> non-bond list update is not performed. Image and
+!                    H-bond lists are updated according to IMGFRQ
+!                    and IHBFRQ.
+! If INBFRQ = -n --> non-bond list is updated when necessary (heuristic
+!                    test) if n=-1. If n < -1, then update-testing is done
+!                    every n steps (not recommended !). Heuristic will
+!                    be used for Image and H-bond list-updates, but only
+!                    if IMGFRQ and IHBFRQ are also = -1 .
+!
+! Passed variables
+      INTEGER ISTEP
+      real(chm_real) X(*),Y(*),Z(*),WMAIN(*)
+      INTEGER LDYNAM
+      real(chm_real) XOLD(*),YOLD(*),ZOLD(*),VX(*),VY(*),VZ(*)
+!
+      END SUBROUTINE UPDECI
+!***************************************************************
+!
+      end interface
+#endif
+!
+      data whoami/' FTSM_MINI>'/
+!
+! check if the user has made an initialization call to the minimizer
+!
+      if (.not.ftsm_mini_initialized) then
+       __WRN( whoami,'NO MINIMIZATION OPTIONS SELECTED. NOTHING DONE.')
+       return
+      endif
+!
+!      qroot =MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.SIZE_STRNG.gt.1
+!      qslave=MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.SIZE_LOCAL.gt.1
+      qprint=MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.ME_STRNG.eq.0
+!
+#ifdef __CHARMM
+! initialize nbond data structure on first use
+      if (.not.ftsm_nbond_image_data_initialized) then
+       call DUPLDT_nbond(ftsm_nbond_copy, nbond_data)
+       call DUPLDT_image(ftsm_image_copy, image_data)
+       ftsm_nbond_image_data_initialized=.true.
+      endif
+#endif
+!
+      if (qprint) then
+       write(_MSGBUF,691) whoami ; __PRINTL(_MSGBUF,5)
+      endif
+ 691  format(/A,' PERFORMING STRING MINIMIZATION.')
+!
+!    create coordinate arrays
+!
+      ow=>orientWeights
+      r_com=>rcom(:,instant)
+      roi=>r_o(:,:,instant)
+      roc=>r_o(:,:,center)
+      rfc=>r_f(:,:,center)
+      roc_rot=>r_o(:,:,center_rot)
+      rfc_rot=>r_f(:,:,center_rot)
+      natom=size(x,1)
+! use instantaneous coordinates to fill missing coords
+      do i=1, natom ;  xt(i)=x(i) ;  yt(i)=y(i) ;  zt(i)=z(i) ; enddo
+      stringatoms=0;
+! copy string coordinates to corresponding instantaneous coordinates
+! first, align string coordinates with the instantaneous coordinates, if needed
+!
+      if (.not. restrained_on) then ! load coordinates, unless restraints on, in which case, they are loaded
+!
+       if (qorient) then
+        do k=1,norient
+          ind=iatom_o(k)
+          roi(k,1)=x(ind)
+          roi(k,2)=y(ind)
+          roi(k,3)=z(ind)
+        enddo
+!
+!       translate forced atoms to centroid
+!
+        r_com(:)=0d0;
+        do j=1,3 ; do k=1, norient;
+          r_com(j) = r_com(j)+ow(k)*roi(k,j)
+        enddo ;    enddo
+!
+        roi(:,1)=roi(:,1)-r_com(1)
+        roi(:,2)=roi(:,2)-r_com(2)
+        roi(:,3)=roi(:,3)-r_com(3)
+!
+       endif ! qorient
+      endif ! .not. restrained on
+!
+      if (qorient) then ! orient center image w.r.t. instantaneous coordinates
+       call RMSBestFit(roi,roc,ow,u) ! superpose roi onto roc
+       roc_rot = matmul(roc, u) !          apply transpose (=inverse) of u to roc
+!     move to COM of the instantaneous coordinates
+       roc_rot(:,1)=roc_rot(:,1)+r_com(1)
+       roc_rot(:,2)=roc_rot(:,2)+r_com(2)
+       roc_rot(:,3)=roc_rot(:,3)+r_com(3)
+       if (qdiffrot) then
+        rfc_rot = matmul(rfc, u) !          apply transpose (=inverse) of u to rfc
+        rfc_rot(:,1)=rfc_rot(:,1)+r_com(1)
+        rfc_rot(:,2)=rfc_rot(:,2)+r_com(2)
+        rfc_rot(:,3)=rfc_rot(:,3)+r_com(3)
+       endif ! qdiffrot
+!     insert orientation coordinates into all-atom coordinate array
+       do k=1,norient
+        ind=iatom_o(k)
+        xt(ind)=roc_rot(k,1)
+        yt(ind)=roc_rot(k,2)
+        zt(ind)=roc_rot(k,3)
+        stringatoms(ind)=-1 ! these coordinates are fixed through all minimization (unless they are also forced atoms)
+       enddo
+      else ! no orientation
+       rfc_rot=>rfc
+      endif ! qorient
+!
+!     insert forced coordinates into all-atom coordinate array
+!
+      do k=1,nforced
+       ind=iatom_f(k)
+       xt(ind)=rfc_rot(k,1)
+       yt(ind)=rfc_rot(k,2)
+       zt(ind)=rfc_rot(k,3)
+       stringatoms(ind)=1 ! these coordinates will be minimized (but at the end)
+      enddo
+!
+! perform minimization with string coordinates fixed
+!
+      __CHARMM_ONLY wt=wmain
+!
+      do iter=1, 2*ftsm_mini_iterations
+#ifdef __CHARMM
+       call UPDECI(iter, xt, yt, zt, wt, 0, 0, 0, 0, 0, 0, 0) ! following calling format in SD
+       call ENERGY(xt, yt, zt, dxt, dyt, dzt, ftsm_nbond_copy, ftsm_image_copy, 0, (/zero/), .false., one)
+#endif
+! first, minimize the instantaneous atoms with the string atoms fixed
+       if (iter.lt.ftsm_mini_iterations) then
+! SD hardwired below
+! note that the evolution below is not parallel
+        where(stringatoms.eq.0)
+         xt = xt - ftsm_mini_step * dxt
+         yt = yt - ftsm_mini_step * dyt
+         zt = zt - ftsm_mini_step * dzt
+        endwhere
+       else ! minimize all coordinates except the string orientation coordinates
+        where(stringatoms.gt.-1)
+         xt = xt - ftsm_mini_step * dxt
+         yt = yt - ftsm_mini_step * dyt
+         zt = zt - ftsm_mini_step * dzt
+        endwhere
+       endif ! iter
+!
+      enddo ! iterations
+!
+!     put minimized string coordinates back into r_f array
+      do k=1,nforced
+        ind=iatom_f(k)
+        rfc_rot(k,1)=xt(ind)
+        rfc_rot(k,2)=yt(ind)
+        rfc_rot(k,3)=zt(ind)
+      enddo
+!
+      if (qorient) then
+        u=transpose(u)
+        rfc = matmul(rfc_rot, u) ! rotate back for consistency
+        if (qdiffrot) call ftsm_update_overlap_coor(1) ! update orientation coordinates
+      endif
+!
+      call ftsm_save_com() !   remove COM from center coordinates
+!
+      end subroutine ftsm_mini
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine ftsm_repa(qbcast)
       __DEP_PARSER 
       __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
@@ -4082,7 +4381,7 @@ __CHARMM_ONLY##IF STRINGM
       bool :: qroot, qslave, qprint
       bool, optional :: qbcast
       float :: u(3,3)= RESHAPE( (/1,0,0,0,1,0,0,0,1/), (/3,3/) ) ! rotation matrix
-      float :: r_o_com(3)=(/0d0,0d0,0d0/) ! COM vector
+      float, pointer :: r_o_com(:) ! COM vector
       float, pointer, dimension(:,:) :: ro, rf, ro1, rf1
       float :: w
       float :: weights(nforced,3) ! assuming nforced is reasonably defined
@@ -4145,6 +4444,7 @@ __CHARMM_ONLY##IF STRINGM
       rf => r_f(:,:,center)
       ro  => r_o(:,:,center)
       ro1 => r_o(:,:,dummy)
+      r_o_com=>rcom(:,center)
 !
       if (qroot) then
 !
