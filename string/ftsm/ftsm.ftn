@@ -68,7 +68,7 @@ __CHARMM_ONLY##IF STRINGM
 #ifdef __CHARMM
       use ctitla 
 ! need BNBND, BIMAG for ftsm_mini
-      use bases_ltm, only : BNBND, BIMAG
+      use bases_fcm, only : BNBND, BIMAG
 #endif
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       __IMPNONE
@@ -139,12 +139,18 @@ __CHARMM_ONLY##IF STRINGM
        if (comlen.gt.0) then ! this is an initialization call
         call ftsm_mini_init(comlyn, comlen)
        else
-        if (ftsm_check(qorient)) call ftsm_mini(__X, __Y, __Z &
+        if (ftsm_check(qorient)) then
+         if (qorient.and.any(__XX(iatom_o).eq.__NAN)) then
+         __WRN(whoami,'MAIN ORIENTATION X-SET HAS UNDEFINED VALUES. NOTHING DONE.')
+         else
+          call ftsm_mini(__XX(1:natom), __YY(1:natom), __ZZ(1:natom) &
 #ifdef __CHARMM
-     &                                         ,WMAIN, BNBND, BIMAG     &
+     &                                         ,WMAIN(1:natom), BNBND, BIMAG     &
 #endif
      &                                         )
-       endif
+         endif ! qorient
+        endif ! ftsm_check
+       endif ! comlen
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       elseif (__STRNCMP(keyword,'STAT',4)) then
        if (comlen.gt.0) then ! this is an initialization call!
@@ -365,13 +371,13 @@ __CHARMM_ONLY##IF STRINGM
        qcomp=(__INDX_RM(comlyn, comlen, 'COMP').gt.0)
 !
        if (qcomp) then
-         if (qprint) then ; write(_MSGBUF,6657) whoami ; __PRINT(_MSGBUF) ; endif
+        if (qprint) then ; write(_MSGBUF,6657) whoami ; __PRINT(_MSGBUF) ; endif
  6657 format(/A,' WILL DEFINE PATH FROM COMPARISON COORDINATES.')
-         call ftsm_fill(__XCOMP,__YCOMP,__ZCOMP)
+        call ftsm_fill(__XCOMP,__YCOMP,__ZCOMP)
        else ! ~qcomp -- use main coordinates
-         if (qprint) then ; write(_MSGBUF,6660) whoami ; __PRINT(_MSGBUF) ; endif
+        if (qprint) then ; write(_MSGBUF,6660) whoami ; __PRINT(_MSGBUF) ; endif
  6660 format(/A,' WILL DEFINE PATH FROM MAIN COORDINATES.')
-         call ftsm_fill(__X,__Y,__Z)
+        call ftsm_fill(__X,__Y,__Z)
        endif ! qcomp
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 !     the option below will be useful to perform usual charmm operations on the STRING (if desired)
@@ -380,13 +386,21 @@ __CHARMM_ONLY##IF STRINGM
        qcomp=(__INDX_RM(comlyn, comlen, 'COMP').gt.0)
 !
        if (qcomp) then
-         if (qprint) then ; write(_MSGBUF,6657) whoami ; __PRINT(_MSGBUF) ; endif
+        if (qprint) then ; write(_MSGBUF,6658) whoami ; __PRINT(_MSGBUF) ; endif
  6658 format(/A,' WILL COPY STRING INTO COMPARISON COORDINATES.')
+        if (qorient.and.any(__XXCOMP(iatom_o).eq.__NAN)) then
+         __WRN(whoami,'COMPARISON ORIENTATION X-SET HAS UNDEFINED VALUES. NOTHING DONE.')
+        else
          call ftsm_lift(__XCOMP,__YCOMP,__ZCOMP)
+        endif
        else ! ~qcomp -- use main coordinates
-         if (qprint) then ; write(_MSGBUF,6660) whoami ; __PRINT(_MSGBUF) ; endif
+        if (qprint) then ; write(_MSGBUF,6661) whoami ; __PRINT(_MSGBUF) ; endif
  6661 format(/A,' WILL COPY STRING INTO MAIN COORDINATES.')
+        if (qorient.and.any(__XX(iatom_o).eq.__NAN)) then
+         __WRN(whoami,'MAIN ORIENTATION X-SET HAS UNDEFINED VALUES. NOTHING DONE.')
+        else
          call ftsm_lift(__X,__Y,__Z)
+        endif
        endif ! qcomp
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       elseif (__STRNCMP(keyword,'TEST',4)) then !
@@ -1239,7 +1253,7 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_MPI 
       __DEP_NUMBER
 #ifdef __CHARMM
-      use datastr
+      use datstr
 #endif
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       __IMPNONE
@@ -1264,7 +1278,7 @@ __CHARMM_ONLY##IF STRINGM
 !
       qroot=MPI_COMM_STRNG.ne.MPI_COMM_NULL
       qprint=qroot.and.ME_STRNG.eq.0
-
+!
       ftsm_mini_method=0
       ftsm_mini_initialized=.false.
 !
@@ -1277,16 +1291,15 @@ __CHARMM_ONLY##IF STRINGM
       endif
 !ccccccc CHECK FOR MULTIPLE OR MISSING OPTIONS
       if ((abs(isd)+abs(iconj)) .eq. 0) then
-       if (qprint) then  ; write(_MSGBUF,665) whoami, whoami ; __PRINT(_MSGBUF) ; endif
- 665   FORMAT(A,' MINIMIZATION METHOD NOT SPECIFIED.',/,               &
-     & A,' WILL USE STEEPEST DESCENT.')
+       if (qprint) then  ; write(_MSGBUF,665) whoami ; __PRINT(_MSGBUF) ; endif ! qprint
+ 665   FORMAT(A,' MINIMIZATION METHOD NOT SPECIFIED. WILL USE STEEPEST DESCENT.')
        ftsm_mini_method=sd
       elseif ((isd+iconj) .gt. 1) then
        __WRN(whoami,'MORE THAN ONE MINIMIZATION METHOD SPECIFIED. NOTHING DONE')
        return
       endif
 !
-      ftsm_mini_step=__GET_RM_F(comlyn, comlen, 'STEP', one*0.001) ! cast to correct kind
+      ftsm_mini_step=__GET_RM_F(comlyn, comlen, 'STEP', one*0.01) ! cast to correct kind
       if (ftsm_mini_step.le.0.0d0) then
          __WRN(whoami,'MINIMIZATION STEP MUST BE POSITIVE. NOTHING DONE.')
          return
@@ -1301,15 +1314,15 @@ __CHARMM_ONLY##IF STRINGM
 !     print summary
 !
       if (qprint) then
-       mlen=len(methods(ftsm_mini_method))
+       mlen=len_trim(methods(ftsm_mini_method))
        write(_MSGBUF(1),667) whoami, methods(ftsm_mini_method)(1:mlen)
        write(_MSGBUF(2),668) whoami, ftsm_mini_step
        write(_MSGBUF(3),669) whoami, ftsm_mini_iterations
        __PRINT(_MSGBUF)
 !
- 667  format(A,' WILL MINIMIZE STRING USING ',A,' MINIMIZATION')
- 668  format(A,' WITH STEP ',F10.5)
- 669  format(A,' FOR ',I5,' ITERATIONS.')
+ 667  format(A,'  WILL MINIMIZE STRING USING ',A,' MINIMIZATION')
+ 668  format(A,'  WITH STEP ',F10.5)
+ 669  format(A,'  FOR ',I5,' ITERATIONS.')
 !
       endif
 !
@@ -3009,7 +3022,7 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_MPI 
       __DEP_OUTPUT
       __DEP_NUMBER
-      __CHARMM_ONLY use chm_types_ltm, only : nonbondDataStructure, imageDataStructure
+      __CHARMM_ONLY use chm_types, only : nonbondDataStructure, imageDataStructure
 !
       __IMPNONE
 !
@@ -4156,12 +4169,14 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_OUTPUT
       __DEP_NUMBER
 #ifdef __CHARMM
-      use chm_types_ltm, only : nonbondDataStructure, imageDataStructure
+      use chm_types, only : nonbondDataStructure, imageDataStructure
       use datstr, only : DUPLDT_nbond, DUPLDT_image
+      use energym, only : eprop, epot
 #endif
 !
       __IMPNONE
       float :: x(:), y(:), z(:)
+      float :: dummy(0)
 !
 ! local variables
       character(len=11) :: whoami
@@ -4183,7 +4198,9 @@ __CHARMM_ONLY##IF STRINGM
       float :: dyt(size(x,1))
       float :: dzt(size(x,1))
       int :: stringatoms(size(x,1))
-      int :: natom, ind, iter
+      int :: natom, ind, iter, nbath, nfree, ibeg
+!    other variables for minimization
+      float :: oonbath, oonfree, gradnorm, mini_step, norm_step, energy_new, energy_old
 !
  __DECLARE_MSGBUF
 !
@@ -4211,6 +4228,9 @@ __CHARMM_ONLY##IF STRINGM
   !      DD1           - Second derivative arrays
   !      QSECD         - Second derivative flags
   !      ICALL         - ECALLS increment
+!
+  use chm_types, only : nonbondDataStructure, imageDataStructure
+  use chm_kinds
 !
   real(chm_real) X(*),Y(*),Z(*)
   real(chm_real) DX(*),DY(*),DZ(*)
@@ -4247,6 +4267,8 @@ __CHARMM_ONLY##IF STRINGM
 !                    if IMGFRQ and IHBFRQ are also = -1 .
 !
 ! Passed variables
+      use chm_kinds
+!
       INTEGER ISTEP
       real(chm_real) X(*),Y(*),Z(*),WMAIN(*)
       INTEGER LDYNAM
@@ -4295,6 +4317,7 @@ __CHARMM_ONLY##IF STRINGM
       roc_rot=>r_o(:,:,center_rot)
       rfc_rot=>r_f(:,:,center_rot)
       natom=size(x,1)
+! write(0,*) 'natom:', natom
 ! use instantaneous coordinates to fill missing coords
       do i=1, natom ;  xt(i)=x(i) ;  yt(i)=y(i) ;  zt(i)=z(i) ; enddo
       stringatoms=0;
@@ -4366,27 +4389,50 @@ __CHARMM_ONLY##IF STRINGM
 !
       __CHARMM_ONLY wt=wmain
 !
-      do iter=1, 2*ftsm_mini_iterations
+      mini_step=ftsm_mini_step ! initial minimization step
+
+      nbath=ithree*count(stringatoms.eq.0) ;  if (nbath.gt.0) oonbath=one/nbath ; 
+      nfree=ithree*count(stringatoms.ne.-1) ; if (nfree.gt.0) oonfree=one/nfree ; 
+!
+      if (nbath.eq.0) then ; ibeg = ftsm_mini_iterations+1 ; else ; ibeg=1 ; endif ! skip bath iterations is there are no bath atoms
+!
+      do iter=ibeg, 2*ftsm_mini_iterations
 #ifdef __CHARMM
-       call UPDECI(iter, xt, yt, zt, wt, 0, 0, 0, 0, 0, 0, 0) ! following calling format in SD
-       call ENERGY(xt, yt, zt, dxt, dyt, dzt, ftsm_nbond_copy, ftsm_image_copy, 0, (/zero/), .false., one)
+       call UPDECI(iter, xt, yt, zt, wt, 0, dummy, dummy, dummy, dummy, dummy, dummy) ! following calling format in SD
+       call ENERGY(xt, yt, zt, dxt, dyt, dzt, ftsm_nbond_copy, ftsm_image_copy, 0, dummy, .false., ione)
+       energy_new=eprop(epot)
 #endif
+! SD hardwired for now:
+!    adaptive minimization strategy  (a la CHARMM)
+!
+       if (energy_new .lt. energy_old .and. iter .gt. ibeg) then 
+        mini_step=mini_step*1.5d0 ! accelerate
+       else
+        mini_step=mini_step*half  ! decelerate
+       endif
+       energy_old=energy_new
+!
+! note that the evolution is not parallel
+       if (iter.le.ftsm_mini_iterations) then
 ! first, minimize the instantaneous atoms with the string atoms fixed
-       if (iter.lt.ftsm_mini_iterations) then
-! SD hardwired below
-! note that the evolution below is not parallel
-        where(stringatoms.eq.0)
-         xt = xt - ftsm_mini_step * dxt
-         yt = yt - ftsm_mini_step * dyt
-         zt = zt - ftsm_mini_step * dzt
+        where(stringatoms.ne.0) ! zero out gradients corresponding to string atoms
+         dxt=zero ; dyt=zero; dzt=zero
         endwhere
-       else ! minimize all coordinates except the string orientation coordinates
-        where(stringatoms.gt.-1)
-         xt = xt - ftsm_mini_step * dxt
-         yt = yt - ftsm_mini_step * dyt
-         zt = zt - ftsm_mini_step * dzt
+        gradnorm  = sqrt ( ( dot_product(dxt,dxt)+dot_product(dyt,dyt)+dot_product(dzt,dzt) ) * oonbath)
+!
+       else ! now minimize all coordinates except the string orientation coordinates
+        where(stringatoms.eq.-1) ! gradients on orientation atoms zero-ed
+         dxt=zero ; dyt=zero; dzt=zero
         endwhere
-       endif ! iter
+        gradnorm  = sqrt ( ( dot_product(dxt,dxt)+dot_product(dyt,dyt)+dot_product(dzt,dzt) ) * oonfree)
+       endif
+!
+       norm_step = mini_step/max(gradnorm,__ERRTOL) ! using __ERRTOL might lead to oscillations
+       xt = xt - norm_step * dxt
+       yt = yt - norm_step * dyt
+       zt = zt - norm_step * dzt
+!
+!write(0,*) 'step: ', iter, mini_step, norm_step, oonfree, oonbath
 !
       enddo ! iterations
 !
@@ -4401,7 +4447,7 @@ __CHARMM_ONLY##IF STRINGM
       if (qorient) then
         u=transpose(u)
         rfc = matmul(rfc_rot, u) ! rotate back for consistency
-        if (qdiffrot) call ftsm_update_overlap_coor(1) ! update orientation coordinates
+        if (qdiffrot) call ftsm_update_overlap_coor(ione) ! update orientation coordinates
       endif
 !
       call ftsm_save_com() !   remove COM from center coordinates
