@@ -454,7 +454,7 @@ __CHARMM_ONLY##IF STRINGM
          endif ! qprint
 !     decide whether the test was passed
          zval=abs(maxval(fd_error))
-         if (zval.lt.abs(step)*1d0) then
+         if (zval.lt.abs(step)*one) then
           write(_MSGBUF,7003) whoami, zval, whoami ; __PRINT(_MSGBUF)
          else
           write(_MSGBUF,7004) whoami, zval, whoami ; __PRINT(_MSGBUF)
@@ -765,7 +765,7 @@ __CHARMM_ONLY##IF STRINGM
 !
           allocate(iatom_o(norient)); iatom_o=0
           allocate(orientWeights(norient));
-          orientWeights=1d0/norient ! default behavior
+          orientWeights=one/norient ! default behavior
 !    build index array
           norient=0
 !
@@ -914,7 +914,7 @@ __CHARMM_ONLY##IF STRINGM
 !*************************************************************
 !      set k perpendicular to path (for off-path dynamics)
         elseif (__INDX(comlyn,comlen,'KPRP',4).gt.0) then
-          k=__GET_RM_F(comlyn,comlen,'KPRP',-1d0)
+          k=__GET_RM_F(comlyn,comlen,'KPRP',-one)
           if (k.ge.0d0) then
            kperp=k
            if (qprint) then  ; write(_MSGBUF,6746) whoami, k ; __PRINT(_MSGBUF) ; endif
@@ -925,7 +925,7 @@ __CHARMM_ONLY##IF STRINGM
           endif
 !**************************************************************
         elseif (__INDX(comlyn,comlen,'KRMS',4).gt.0) then
-          k=__GET_RM_F(comlyn,comlen,'KRMS',-1d0)
+          k=__GET_RM_F(comlyn,comlen,'KRMS',-one)
           if (k.ge.0d0) then
            krms=k
            if (qprint) then ; write(_MSGBUF,6752) whoami, k ; __PRINT(_MSGBUF) ; endif
@@ -3069,9 +3069,9 @@ __CHARMM_ONLY##IF STRINGM
 !
       if (restrained_on) then ! impose restraints
         if (restrained_eq_steps.gt.0) then
-         s=1.0d0*(iteration-restrained_eq0)/restrained_eq_steps ; s=min(max(s,zero),one); ! limit s to range [0,1]
+         s=one*(iteration-restrained_eq0)/restrained_eq_steps ; s=min(max(s,zero),one); ! limit s to range [0,1], even though calc works fine with s>1
         else
-         s=1d0
+         s=one
         endif ! restrained equilibration is on
 !aa
 ! write(600+ME_GLOBAL,*) iteration, restrained_eq0, restrained_eq_steps, s ; ! close(600+ME_GLOBAL)
@@ -3249,9 +3249,9 @@ __CHARMM_ONLY##IF STRINGM
 !
       tol=__ERRTOL
 !
-      if (present(t)) then ; s=min(max(t,zero),one); else ; s=1d0 ; endif
+      if (present(t)) then ; s=min(max(t,zero),one); else ; s=one ; endif ! limit the range of s for clarity; the code works for s>1 b/c of qcombine below
 !
-      qcombine=s.lt.1d0
+      qcombine=s.lt.one
 !
       qgrp=( SIZE_LOCAL.gt.1.and.MPI_COMM_LOCAL.ne.MPI_COMM_NULL        &
      &       .and.calc_bestfit_grad_para)
@@ -3305,14 +3305,14 @@ __CHARMM_ONLY##IF STRINGM
        endif ! qdiffrot
 !
       else
-       u = RESHAPE( (/1,0,0,0,1,0,0,0,1/), (/3,3/) ) ! rotation matrix
+       u = RESHAPE( (/one,zero,zero,zero,one,zero,zero,zero,one/), (/3,3/) ) ! rotation matrix
        u1= u
        u2= u
        u3= u
       endif ! qorient
 !
       if (qcombine) then ! use a combination of old and new reference structures for mild restart
-       oms=1d0-s
+       oms=one-s
 !
        rfl_old=>r_f(:,:,left_old); rfr_old=>r_f(:,:,right_old);
        rfc_old=>r_f(:,:,center_old);
@@ -4191,7 +4191,7 @@ __CHARMM_ONLY##IF STRINGM
 #ifdef __CHARMM
       use chm_types, only : nonbondDataStructure, imageDataStructure
       use datstr, only : DUPLDT_nbond, DUPLDT_image
-      use energym, only : eprop, epot
+      use energym, only : eprop, eterm, epot
 #endif
 !
       __IMPNONE
@@ -4220,7 +4220,7 @@ __CHARMM_ONLY##IF STRINGM
       int :: stringatoms(size(x,1))
       int :: natom, ind, iter, nbath, nfree, ibeg
 !    other variables for minimization
-      float :: oonbath, oonfree, gradnorm, mini_step, norm_step, energy_new, energy_old, energy_restore
+      float :: oonbath, oonfree, gradnorm, mini_step, norm_step, energy_new, energy_old
 !
  __DECLARE_MSGBUF
 !
@@ -4229,6 +4229,7 @@ __CHARMM_ONLY##IF STRINGM
       float :: wmain(:), wt(size(x,1))
       type(nonbondDataStructure) :: nbond_data
       type(imageDataStructure)   :: image_data
+      float :: eprop_save(size(eprop)), eterm_save(size(eterm)) ! arrays to save energy values (not certain how essential this is)
 !
       interface ! to subroutines which compute gradients
 !
@@ -4416,7 +4417,7 @@ __CHARMM_ONLY##IF STRINGM
 !
       if (nbath.eq.0) then ; ibeg = ftsm_mini_bath_iterations+1 ; else ; ibeg=1 ; endif ! skip bath iterations is there are no bath atoms
 !
-__CHARMM_ONLY   energy_restore=eprop(epot)  ! save current energy value, since CHARMM uses it to determine stability
+__CHARMM_ONLY   eprop_save=eprop ; eterm_save=eterm  ! save current energy value, since CHARMM uses it to determine stability
 !
       do iter=ibeg, ftsm_mini_bath_iterations+ftsm_mini_forced_iterations
 #ifdef __CHARMM
@@ -4427,7 +4428,9 @@ __CHARMM_ONLY   energy_restore=eprop(epot)  ! save current energy value, since C
 ! SD hardwired for now:
 !    adaptive minimization strategy  (a la CHARMM)
 !
-       if (energy_new .lt. energy_old .and. iter .gt. ibeg) then 
+       if (iter .eq. ftsm_mini_bath_iterations+1) then
+        mini_step=ftsm_mini_step                                        ! reset step for string minimization
+       elseif (energy_new .lt. energy_old .and. iter .gt. ibeg) then 
         mini_step=mini_step*1.5d0 ! accelerate
        else
         mini_step=mini_step*half  ! decelerate
@@ -4474,7 +4477,7 @@ __CHARMM_ONLY   energy_restore=eprop(epot)  ! save current energy value, since C
 !
       call ftsm_save_com() !   remove COM from center coordinates
 !
-__CHARMM_ONLY      eprop(epot)=energy_restore  ! restore current energy value
+__CHARMM_ONLY      eprop=eprop_save ; eterm=eterm_save  ! restore current energy value
 !
       end subroutine ftsm_mini
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
