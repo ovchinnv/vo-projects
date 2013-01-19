@@ -3096,7 +3096,7 @@ __CHARMM_ONLY##IF STRINGM
        if (update_on.and.update_freq.gt.0) then
         if (mod(iteration,update_freq).eq.0) then
          if (.not.string_noprint) then 
-          write(_MSGBUF,'(2A)') whoami,' UPDATING STRING.' ; __PRINTL(_MSGBUF,3)
+          write(_MSGBUF,'(2A,I10)') whoami,' UPDATING STRING AT STEP ',iteration ; __PRINTL(_MSGBUF,3)
          endif
 !
          if (proj_on) then
@@ -3115,6 +3115,7 @@ __CHARMM_ONLY##IF STRINGM
             call ftsm_mini(x, y, z                           &
 #ifdef __CHARMM
      &                    ,wmain, nbond_data, image_data     &
+     &                    ,fx, fy, fz                        & ! to make sure forces are not overwritten 
 #endif
      &                    )
           endif ! ftsm_mini_on
@@ -4180,7 +4181,8 @@ __CHARMM_ONLY##IF STRINGM
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine ftsm_mini(x, y, z &
 #ifdef __CHARMM
-     &                    , wmain, nbond_data, image_data     &
+     &                    ,wmain, nbond_data, image_data     &
+     &                    ,fx, fy, fz                        & 
 #endif
      &                    )
 
@@ -4192,16 +4194,24 @@ __CHARMM_ONLY##IF STRINGM
       use chm_types, only : nonbondDataStructure, imageDataStructure
       use datstr, only : DUPLDT_nbond, DUPLDT_image
       use energym, only : eprop, eterm, epot
+      use shake, only : qholo ! for turning off shake during the (unphysical) minimization
+!      use facts_module, only : FactsDataStructure, FCTBND, FCTBNDC, fctaim, fctrun ! an extremely ugly workaround for compatibility with FACTS
 #endif
 !
       __IMPNONE
       float :: x(:), y(:), z(:)
+#ifdef __CHARMM
+! to restore forces : some energy functions will access x and dx directly (sigh)
+      float, optional :: fx(:), fy(:), fz(:)
+      float :: fxt(size(x,1)), fyt(size(x,1)), fzt(size(x,1))
+      bool :: saveforces
+#endif
       float :: dummy(0)
 !
 ! local variables
       character(len=11) :: whoami
       bool :: qprint
-!      bool :: qroot, qslave
+      bool :: qshake
 !
       float :: u(3,3)= RESHAPE( (/1,0,0,0,1,0,0,0,1/), (/3,3/) ) ! rotation matrix
       float, pointer :: r_com(:), ow(:)
@@ -4229,6 +4239,7 @@ __CHARMM_ONLY##IF STRINGM
       float :: wmain(:), wt(size(x,1))
       type(nonbondDataStructure) :: nbond_data
       type(imageDataStructure)   :: image_data
+!      type(FactsDataStructure)   :: fctbnd_copy, fctbndc_copy   !##FACTS
       float :: eprop_save(size(eprop)), eterm_save(size(eterm)) ! arrays to save energy values (not certain how essential this is)
 !
       interface ! to subroutines which compute gradients
@@ -4340,6 +4351,12 @@ __CHARMM_ONLY##IF STRINGM
       natom=size(x,1)
 ! write(0,*) 'natom:', natom
 ! use instantaneous coordinates to fill missing coords
+! save forces:
+#ifdef __CHARMM
+      saveforces=present(fx).and.present(fy).and.present(fz)
+      if (saveforces) then ; do i=1, natom ;  fxt(i)=fx(i) ;  fyt(i)=fy(i) ;  fzt(i)=fz(i) ; enddo ; endif
+#endif
+!
       do i=1, natom ;  xt(i)=x(i) ;  yt(i)=y(i) ;  zt(i)=z(i) ; enddo
       stringatoms=0;
 ! copy string coordinates to corresponding instantaneous coordinates
@@ -4350,9 +4367,9 @@ __CHARMM_ONLY##IF STRINGM
        if (qorient) then
         do k=1,norient
           ind=iatom_o(k)
-          roi(k,1)=x(ind)
-          roi(k,2)=y(ind)
-          roi(k,3)=z(ind)
+          roi(k,1)=xt(ind)
+          roi(k,2)=yt(ind)
+          roi(k,3)=zt(ind)
         enddo
 !
 !       translate forced atoms to centroid
@@ -4386,9 +4403,9 @@ __CHARMM_ONLY##IF STRINGM
 !     insert orientation coordinates into all-atom coordinate array
         do k=1,norient
          ind=iatom_o(k)
-         xt(ind)=roc_rot(k,1)
-         yt(ind)=roc_rot(k,2)
-         zt(ind)=roc_rot(k,3)
+         x(ind)=roc_rot(k,1)
+         y(ind)=roc_rot(k,2)
+         z(ind)=roc_rot(k,3)
          stringatoms(ind)=-1 ! these coordinates are fixed through all minimization (unless they are also forced atoms)
         enddo
        endif ! qdiffrot
@@ -4400,15 +4417,19 @@ __CHARMM_ONLY##IF STRINGM
 !
       do k=1,nforced
        ind=iatom_f(k)
-       xt(ind)=rfc_rot(k,1)
-       yt(ind)=rfc_rot(k,2)
-       zt(ind)=rfc_rot(k,3)
+       x(ind)=rfc_rot(k,1)
+       y(ind)=rfc_rot(k,2)
+       z(ind)=rfc_rot(k,3)
        stringatoms(ind)=1 ! these coordinates will be minimized (but at the end)
       enddo
 !
 ! perform minimization with string coordinates fixed
 !
-      __CHARMM_ONLY wt=wmain
+#ifdef __CHARMM
+      wt=wmain
+      qshake=qholo ; if (qholo) qholo=.false. ! turn off shake for speed
+      eprop_save=eprop ; eterm_save=eterm  ! save current energy value, since CHARMM uses it to determine stability
+#endif
 !
       mini_step=ftsm_mini_step ! initial minimization step
 !
@@ -4417,12 +4438,10 @@ __CHARMM_ONLY##IF STRINGM
 !
       if (nbath.eq.0) then ; ibeg = ftsm_mini_bath_iterations+1 ; else ; ibeg=1 ; endif ! skip bath iterations is there are no bath atoms
 !
-__CHARMM_ONLY   eprop_save=eprop ; eterm_save=eterm  ! save current energy value, since CHARMM uses it to determine stability
-!
       do iter=ibeg, ftsm_mini_bath_iterations+ftsm_mini_forced_iterations
 #ifdef __CHARMM
-       call UPDECI(iter, xt, yt, zt, wt, 0, dummy, dummy, dummy, dummy, dummy, dummy) ! following calling format in SD
-       call ENERGY(xt, yt, zt, dxt, dyt, dzt, ftsm_nbond_copy, ftsm_image_copy, 0, dummy, .false., ione)
+       call UPDECI(iter, x, y, z, wt, 0, dummy, dummy, dummy, dummy, dummy, dummy) ! following calling format in SD
+       call ENERGY(x, y, z, dxt, dyt, dzt, ftsm_nbond_copy, ftsm_image_copy, 0, dummy, .false., 1)
        energy_new=eprop(epot)
 #endif
 ! SD hardwired for now:
@@ -4453,9 +4472,9 @@ __CHARMM_ONLY   eprop_save=eprop ; eterm_save=eterm  ! save current energy value
        endif
 !
        norm_step = mini_step/max(gradnorm,__ERRTOL) ! using __ERRTOL might lead to oscillations
-       xt = xt - norm_step * dxt
-       yt = yt - norm_step * dyt
-       zt = zt - norm_step * dzt
+       x = x - norm_step * dxt
+       y = y - norm_step * dyt
+       z = z - norm_step * dzt
 !
 !write(0,*) 'step: ', iter, mini_step, norm_step, oonfree, oonbath
 !
@@ -4464,9 +4483,9 @@ __CHARMM_ONLY   eprop_save=eprop ; eterm_save=eterm  ! save current energy value
 !     put minimized string coordinates back into r_f array
       do k=1,nforced
         ind=iatom_f(k)
-        rfc_rot(k,1)=xt(ind)
-        rfc_rot(k,2)=yt(ind)
-        rfc_rot(k,3)=zt(ind)
+        rfc_rot(k,1)=x(ind)
+        rfc_rot(k,2)=y(ind)
+        rfc_rot(k,3)=z(ind)
       enddo
 !
       if (qorient) then
@@ -4477,7 +4496,13 @@ __CHARMM_ONLY   eprop_save=eprop ; eterm_save=eterm  ! save current energy value
 !
       call ftsm_save_com() !   remove COM from center coordinates
 !
-__CHARMM_ONLY      eprop=eprop_save ; eterm=eterm_save  ! restore current energy value
+      do i=1, natom ;  x(i)=xt(i) ;  y(i)=yt(i) ;  z(i)=zt(i) ; enddo ! restore original coordinates
+!
+#ifdef __CHARMM
+      if (saveforces) then ; do i=1, natom ;  fx(i)=fxt(i) ;  fy(i)=fyt(i) ;  fz(i)=fzt(i) ; enddo ; endif ! restore forces
+      eprop=eprop_save ; eterm=eterm_save  ! restore current energy values
+      qholo=qshake
+#endif
 !
       end subroutine ftsm_mini
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
