@@ -2493,13 +2493,13 @@ __CHARMM_ONLY##ENDIF
 !
         cv_common_voronoi_initialized=.true.
        else
+        me=mestring+1
         if (qroot) then
 !
          if (.not.cv_common_Minv_initialized) then
           __WRN( whoami, 'TENSOR M^-1 HAS NOT BEEN SET.')
          endif
 !
-         me=mestring+1
 !     check if the old set is consistent
 !
          correct_cell_me=cv_common_voronoi_check_aux                      &
@@ -2523,7 +2523,7 @@ __CHARMM_ONLY##ENDIF
 !    roll back CVs
            cv%r(1:cv%num_cv,1)=cv%rall(1:cv%num_cv,me)
 !
-         else ! not correct_cell
+         else ! correct_cell
 !     begin iterative adjustment
           if (present(m_iter)) then
            max_iter=m_iter
@@ -2544,17 +2544,19 @@ __CHARMM_ONLY##ENDIF
            if (correct_cell.eq.1) then
             cv%rall=rall_temp
             cv%Mall=Mall_temp
-!          `roll back' cv's:
-            if (iter.gt.0) then ! otherwise they are fine
-             cv%r(1:cv%num_cv,1)=rall_temp(1:cv%num_cv,me)
-             cv%M(1:cv%num_cv,1:cv%num_cv,3)=Mall_temp(:,:,me)
-            endif
+! moved below 1/2013
+!!          `roll back' cv's:
+!            if (iter.gt.0) then ! otherwise they are fine
+!             cv%r(1:cv%num_cv,1)=rall_temp(1:cv%num_cv,me)
+!             cv%M(1:cv%num_cv,1:cv%num_cv,3)=Mall_temp(:,:,me)
+!            endif
             exit
            elseif (iter.ge.max_iter) then
             __WRN(whoami,' MAXIMUM NUMBER OF ITERATIONS EXCEEDED.')
-!          reset cv's to consistent Voronoi cell centers :
-            cv%r(1:cv%num_cv,1)=cv%rall(1:cv%num_cv,me)
-            cv%M(1:cv%num_cv,1:cv%num_cv,3)=cv%Mall(:,:,me)
+! moved below 1/2013
+!!          reset cv's to consistent Voronoi cell centers :
+!            cv%r(1:cv%num_cv,1)=cv%rall(1:cv%num_cv,me)
+!            cv%M(1:cv%num_cv,1:cv%num_cv,3)=cv%Mall(:,:,me)
             exit
            else
             rall_temp=0.5d0*(rall_temp+cv%rall)
@@ -2563,10 +2565,14 @@ __CHARMM_ONLY##ENDIF
            iter=iter+1
           enddo ! <empty>
          endif ! .not. correct_cell
-
+!
         endif ! qroot
        endif ! .not. initialized
-!   broadcast to slaves
+!   broadcast to slaves 
+! (1.2013: are cv%r broadcast, in case they change ? where ? 
+!  Answer: slaves do not need cv%r in voronoi; they only need cv%rall [ in voronoi_compute, which is parallel ], which is computed by roots & broadcast
+!  even in the case that the cv%r are evolving: the slaves will have incorrect evolution, but both reflections and image updates only use cv%r from roots
+!  however, for a clean look, I am setting cv%r = cv%rall(me) below (& commenting out above for roots)
        if (MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.SIZE_LOCAL.gt.1) then
 #ifdef __CHARMM
 __CHARMM_ONLY##IF SINGLE
@@ -2581,6 +2587,9 @@ __CHARMM_ONLY##ENDIF
         __BROADCAST_LOCAL(cv%Mall,(cv%num_cv**2)*nstring,mpifloat)
 #endif
        endif
+!    moved possible reassignment here (all ranks participate)
+       cv%r(1:cv%num_cv,1)=cv%rall(1:cv%num_cv,me)
+       cv%M(1:cv%num_cv,1:cv%num_cv,3)=cv%Mall(:,:,me)
 !
        end subroutine cv_common_voronoi_smart_update
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc

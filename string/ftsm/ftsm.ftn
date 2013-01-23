@@ -1154,12 +1154,15 @@ __CHARMM_ONLY##IF STRINGM
       qorient=.false.
       qdiffrot=.false.
 !
+      nullify(rall_o, rall_new_o, rall_f, rall_new_o, rcom_all)
+!
       ftsm_initialized=.true.
 !
       end subroutine ftsm_init
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine ftsm_done()
       use ftsm_rex, only: ftsm_rex_done
+      use ftsm_voronoi, only : ftsm_voronoi_done
 !
       __DEP_OUTPUT
       __DEP_PARSER 
@@ -1192,9 +1195,13 @@ __CHARMM_ONLY##IF STRINGM
       if (associated(iatom_a)) deallocate(iatom_a)
       if (associated(orientWeights)) deallocate(orientWeights)
       if (associated(forcedWeights)) deallocate(forcedWeights)
+      if (associated(rall_f)) deallocate(rall_f)
+      if (associated(rall_new_f)) deallocate(rall_new_f)
 !
       if (qdiffrot) then
        if (associated(r_o)) deallocate(r_o);
+       if (associated(rall_o)) deallocate(rall_o);
+       if (associated(rall_new_o)) deallocate(rall_new_o);
        if (associated(iatom_o)) deallocate(iatom_o);
        if (associated(iatom_both)) deallocate(iatom_both)
       endif
@@ -1208,6 +1215,7 @@ __CHARMM_ONLY##IF STRINGM
       nany=0
 !
       if (associated(rcom)) deallocate(rcom)
+      if (associated(rcom_all)) deallocate(rcom_all)
       if (allocated(ds)) deallocate(ds)
       if (allocated(curv)) deallocate(curv)
       if (allocated(fe)) deallocate(fe)
@@ -1225,6 +1233,8 @@ __CHARMM_ONLY##IF STRINGM
       call ftsm_rex_done()
 !
       call ftsm_mini_done() ! deallocate minimization structures (if any)
+!
+      call ftsm_voronoi_done()
 !
       ftsm_initialized=.false.
 !
@@ -3029,7 +3039,7 @@ __CHARMM_ONLY##IF STRINGM
       end function ftsm_check
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 ! VO 1/2013 modifying function call to include string minimization option
-      subroutine ftsm_main(x,y,z,fx,fy,fz,iteration           &
+      subroutine ftsm_main(x,y,z,xcomp,ycomp,zcomp,fx,fy,fz,iteration           & ! include comparison set for voronoi calculations
 #ifdef __CHARMM
      &                    , wmain, nbond_data, image_data     & ! to be passed on to ftsm_mini
 #endif
@@ -3135,7 +3145,7 @@ __CHARMM_ONLY##IF STRINGM
           endif
           call ftsm_swap_bc(.true.) ! VO changed from false to true 1/2013 (why was it false? problem only in parallel)
 !------------------------------------------------------------------------
-         else ! not proj_on
+         else ! not proj_on (voronoi tessellation also covered in this case)
 !    save old reference coordinates and switch to new reference coordinates
           if (.not.string_noprint) then 
            write(_MSGBUF,'(2A)') whoami,' UPDATING REFERENCE IMAGES.' ; __PRINTL(_MSGBUF,3)
@@ -3171,6 +3181,10 @@ __CHARMM_ONLY##IF STRINGM
           else
            call ftsm_save_com()
           endif ! repa_on
+!    smart-update voronoi data: if update too aggressive and some replicas end up in a wrong v. cell, string coords will be rolled back; 
+!    
+         if (voronoi_hist_on) call ftsm_voronoi_smart_update(x,y,z,xcomp,ycomp,zcomp) 
+!
 !    reset arrays for updating reference structure
           r_f(:,:,center_new)=r_f(:,:,center)
           if (qdiffrot) r_o(:,:,center_new)=r_o(:,:,center)
@@ -4191,6 +4205,7 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_OUTPUT
       __DEP_NUMBER
 #ifdef __CHARMM
+      use chm_kinds, only : wrnlev
       use chm_types, only : nonbondDataStructure, imageDataStructure
       use datstr, only : DUPLDT_nbond, DUPLDT_image
       use energym, only : eprop, eterm, epot
@@ -4205,6 +4220,7 @@ __CHARMM_ONLY##IF STRINGM
       float, optional :: fx(:), fy(:), fz(:)
       float :: fxt(size(x,1)), fyt(size(x,1)), fzt(size(x,1))
       bool :: saveforces
+      int :: wrnlev_
 #endif
       float :: dummy(0)
 !
@@ -4429,6 +4445,7 @@ __CHARMM_ONLY##IF STRINGM
       wt=wmain
       qshake=qholo ; if (qholo) qholo=.false. ! turn off shake for speed
       eprop_save=eprop ; eterm_save=eterm  ! save current energy value, since CHARMM uses it to determine stability
+      wrnlev_=wrnlev ! save warning level
 #endif
 !
       mini_step=ftsm_mini_step ! initial minimization step
@@ -4448,8 +4465,10 @@ __CHARMM_ONLY##IF STRINGM
 !    adaptive minimization strategy  (a la CHARMM)
 !
        if (iter .eq. ftsm_mini_bath_iterations+1) then
+__CHARMM_ONLY        wrnlev=wrnlev_ ! restore old level (works only is siter>0)
         mini_step=ftsm_mini_step                                        ! reset step for string minimization
        elseif (energy_new .lt. energy_old .and. iter .gt. ibeg) then 
+__CHARMM_ONLY        wrnlev=-1 ! turn off warnings for the first part of minimization
         mini_step=mini_step*1.5d0 ! accelerate
        else
         mini_step=mini_step*half  ! decelerate
@@ -4502,6 +4521,7 @@ __CHARMM_ONLY##IF STRINGM
       if (saveforces) then ; do i=1, natom ;  fx(i)=fxt(i) ;  fy(i)=fyt(i) ;  fz(i)=fzt(i) ; enddo ; endif ! restore forces
       eprop=eprop_save ; eterm=eterm_save  ! restore current energy values
       qholo=qshake
+      wrnlev=wrnlev_
 #endif
 !
       end subroutine ftsm_mini

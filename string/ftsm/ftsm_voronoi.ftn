@@ -1,0 +1,997 @@
+!
+!     FTSM_VORONOI.MOD
+!
+!     VORONOI TESSELLATION MODULE FOR THE FINITE TEMPERATURE STRING METHOD
+!     this module is modeled after Voronoi tessellation in SMCV
+__CHARMM_ONLY##IF STRINGM
+!
+      module ftsm_voronoi
+      __CHARMM_ONLY __DEP_KINDS
+      use ivector
+      use ftsm_var
+!
+      __IMPNONE
+!
+      private
+!
+      bool, save, public :: ftsm_voronoi_initialized=.false. &
+     &                      ftsm_voronoi_wrong_cell=.false.
+      int, dimension(:,:,:), pointer, save :: ftsm_voronoi_data ! holds the nine arrays listed below
+! local
+      int, dimension(:,:), pointer, save :: cross_attempt  ! holds the history of crossing attempts in 1st column
+      int, dimension(:,:), pointer, save :: cross_accept   ! history of successful crossing attempts in second column.
+      int, dimension(:), pointer, save   :: occupancy ! total # iterations voronoi cells are populated (watch out for max integer value !!!)
+! global
+      int, dimension(:,:), pointer, save :: cross_attemptG
+      int, dimension(:,:), pointer, save :: cross_acceptG
+      int, dimension(:), pointer, save   :: occupancyG
+! old global (for restarting)
+      int, dimension(:,:), pointer, save :: cross_attemptO
+      int, dimension(:,:), pointer, save :: cross_acceptO
+      int, dimension(:), pointer, save   :: occupancyO
+!
+      int, dimension(:), pointer :: ftsm_voronoi_map ! holds map between process rank and voronoi cell
+      type (int_vector) :: ftsm_voro_log             ! logs the history of crossing attempts ( which cells and when ); local to each replica
+      int :: ftsm_voronoi_whereami                   ! the voronoi cell this replica is inside
+      float :: ftsm_voronoi_cut                      ! voronoi cell cutoff in path-perpendicular direction (beyond which MD replicas are not allowed)
+!
+!
+      public ftsm_voronoi_init       ! initialize voronoi histogram matrix
+      public ftsm_voronoi_done       ! deallocate voronoi histogram matrix
+      public ftsm_voronoi_compute    ! determine which cell we are in
+      public ftsm_voronoi_whereami   !
+      public ftsm_voronoi_update     ! update voronoi cell centers
+      public ftsm_voronoi_smart_update ! update voronoi cell centers in such a way that the MD replicas remain inside their cells
+      public ftsm_voronoi_read_map   ! read replica map from file
+      public ftsm_voronoi_print_map  ! read replica map from file
+      public ftsm_voronoi_print_hist ! print voronoi histograms
+      public ftsm_voronoi_set_cutoff ! set voronoi cell cutoff
+!
+      contains
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       subroutine ftsm_voronoi_done()
+       __IMPNONE
+       if (ftsm_voronoi_initialized) then
+        deallocate(ftsm_voronoi_map)
+        deallocate(ftsm_voronoi_data)
+!
+        nullify(cross_attempt)
+        nullify(cross_accept)
+        nullify(occupancy)
+!
+        nullify(cross_attemptG)
+        nullify(cross_acceptG)
+        nullify(occupancyG)
+!
+        nullify(cross_attemptO)
+        nullify(cross_acceptO)
+        nullify(occupancyO)
+!
+        call int_vector_done(ftsm_voro_log) ! destroy Voronoi T. log
+        ftsm_voronoi_initialized=.false.
+       endif
+       end subroutine ftsm_voronoi_done
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       subroutine ftsm_voronoi_init
+!
+       if (.not.ftsm_initialized) call ftsm_init()
+       if (.not.ftsm_voronoi_initialized) then ! do not reallocate data if already initialized
+!
+!    allocate data for all replicas, if not already allocated elsewhere (voronoi is not the only module that is expected to use rall)
+!
+       if (.not. associated(rall_f)) allocate(rall_f(nforced,3,nstring))
+       if (qorient) then 
+        if (qdiffrot) then
+         if (.not. associated(rall_o)) allocate(rall_o(norient,3,nstring))
+        else
+         rall_o =>rall_f
+        endif !qdiffrot
+       endif ! qorient
+!
+        allocate(ftsm_voronoi_data(nstring,2*nstring+1,3))
+! assign pointers --  local
+        cross_attempt =>ftsm_voronoi_data(:,1:nstring,1)
+        cross_accept  =>ftsm_voronoi_data(:,nstring+1:2*nstring,1)
+        occupancy=>ftsm_voronoi_data(:,2*nstring+1,1)
+! assign pointers -- global
+        cross_attemptG =>ftsm_voronoi_data(:,1:nstring,2)
+        cross_acceptG  =>ftsm_voronoi_data(:,nstring+1:2*nstring,2)
+        occupancyG=>ftsm_voronoi_data(:,2*nstring+1,2)
+! assign pointers -- data from previous run (old)
+        cross_attemptO =>ftsm_voronoi_data(:,1:nstring,3)
+        cross_acceptO  =>ftsm_voronoi_data(:,nstring+1:2*nstring,3)
+        occupancyO=>ftsm_voronoi_data(:,2*nstring+1,3)
+!
+        allocate(ftsm_voronoi_map(nstring))
+!
+        call int_vector_init(ftsm_voro_log)
+!
+       endif
+!
+       ftsm_voronoi_data=0                           ! set all crossing data to zero
+!        ftsm_cross_acceptO=1 ! zero by default
+       ftsm_voronoi_cut=9999d0
+       ftsm_voronoi_whereami=-1                      ! -1 indicates this needs to be computed
+       ftsm_voronoi_map=-1
+!
+       ftsm_voronoi_initialized=.true.  ! this must be set because it affects the behavior of voronoi_update 
+       call ftsm_voronoi_update(.true.) ! communicate image data
+!
+       end subroutine ftsm_voronoi_init
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       subroutine ftsm_voronoi_update(qbcast_orient_)
+       __DEP_MULTICOM
+       __DEP_MPI 
+#include "../../mpitype.def"
+!
+       bool, optional :: bcast_orient_ ! whether orientation coordinates should be broadcast (usually not b/c they only evolve via forced coords)
+!      locals
+       bool :: bcast_orient
+       int :: ierror
+!      begin
+       if (present(bcast_orient_)) then ; bcast_orient=bcast_orient_ ; else bcast_orient=.false. ; endif 
+       bcast_orient=bcast_orient.and.qorient.and.qdiffrot ! with qdiffrot false rall_o and rall_f point to the same thing
+!
+       if (.not.ftsm_voronoi_initialized) then
+        call ftsm_voronoi_init() ! init will call update, so we are done after this call returns
+       else
+        if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.SIZE_STRNG.gt.1) then ! roots only
+         call MPI_ALLGATHER(r_f(:,:,center),3*nforced,mpifloat, &
+     &                      rall_f,3*nforced,mpifloat,MPI_COMM_STRNG, ierror)
+         if (bcast_orient) call MPI_ALLGATHER(r_o(:,:,center),3*norient,mpifloat, &
+     &                      rall_o,3*norient,mpifloat,MPI_COMM_STRNG, ierror)
+        endif ! roots only
+! broadcast to slaves
+        if (MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.SIZE_LOCAL.gt.1) then
+#ifdef __CHARMM
+__CHARMM_ONLY##IF SINGLE
+          __BROADCAST_LOCAL_4B(rall_f,3*nforced*nstring)
+          if (bcast_orient) __BROADCAST_LOCAL_4B(rall_o,3*norient*nstring)
+__CHARMM_ONLY##ELSE
+          __BROADCAST_LOCAL_8B(rall_f,3*nforced*nstring)
+          if (bcast_orient) __BROADCAST_LOCAL_8B(rall_o,3*norient*nstring)
+__CHARMM_ONLY##ENDIF
+#else
+          __BROADCAST_LOCAL(rall_f,3*nforced*nstring,mpifloat)
+          if (bcast_orient)  __BROADCAST_LOCAL(rall_o,3*norient*nstring,mpifloat)
+#endif
+        endif ! MPI_COMM_LOCAL
+!
+       endif ! ftsm_voronoi_initialized
+!
+       if (qorient.and.qdiffrot) then ; do i=1, nboth ; rall_o(iatom_both(2,i),:,:)=rall_f(iatom_both(1,i),:,:) ; enddo ; endif ! update overlap coords
+!    will assume that the coordinates have been shifted to their COM; this needs to be ensured in ftsm
+!
+       ftsm_voronoi_wrong_cell=.false.
+!
+       endif ! ftsm_voronoi_initialized
+!
+       end subroutine ftsm_voronoi_update
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       subroutine ftsm_voronoi_smart_update(x, y, z, xold, yold, zold, m_iter)
+       __DEP_OUTPUT
+!      ftsm_rall(:,:) is expected to have values from previous update that
+!      are consistent with rtemp; if this is not true, the routine
+!      just does a regular update and exits
+       __DEP_MULTICOM
+       __DEP_CONST 
+       __DEP_MPI 
+!      vars
+#include "../../mpitype.def"
+!
+       float, dimension(:) :: x, y, z, xold, yold, zold
+       int, optional :: m_iter
+!      locals
+!
+       float, pointer, dimension(:,:,:) :: rall_new_f, rall_new_o, rall_temp_f, rall_temp_o
+       float, pointer, dimension(:,:) :: rfi(:,:), roi(:,:), rfi_old(:,:), roi_old(:,:)
+       float, pointer, dimension(:) :: r_com(:), r_com_old(:)
+!
+       int :: correct_cell_me, correct_cell
+       int :: iter, max_iter
+       int, parameter :: default_iter=15
+       float :: dummy
+       int :: i, j, which(1), ierror, me, ind
+       character(len=27) :: whoami
+       bool :: qroot
+!
+       data whoami /' FTSM_VORONOI_SMART_UPDATE>'/
+!
+!      begin
+       if (.not.ftsm_voronoi_initialized) then
+        call ftsm_voronoi_init() ! init will call regular update; we are done after this
+       else
+!ccccccccccccccccc do some work ccccccccccccccccccccccccccccc
+!    allocate temporary arrays
+        if (.not. associated(rall_new_f)) allocate(rall_new_f (nforced,3,nstring)) ! these persist to save on communication
+        allocate(rall_temp_f(nforced,3,nstring))
+        if (qorient) then
+         if (qdiffrot) then
+          if (.not. associated(rall_new_o)) allocate(rall_new_o(norient,3,nstring)) ! these persist to save on communication
+          allocate(rall_temp_o(norient,3,nstring))
+         else
+          rall_new_o  =>rall_new_f
+          rall_temp_o =>rall_temp_f
+         endif !qdiffrot
+        endif ! qorient
+!
+        qroot=(MPI_COMM_STRNG.ne.MPI_COMM_NULL)
+        if (qroot.and.SIZE_STRNG.gt.1) then
+!      gather all main coordinate sets
+         call MPI_ALLGATHER(r_f(:,:,center),3*nforced,mpifloat,
+     &                      rall_new_f,3*nforced,mpifloat,MPI_COMM_STRNG,ierror)
+        endif ! qroot
+!
+! broadcast to slaves
+        if (MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.SIZE_LOCAL.gt.1) then
+#ifdef __CHARMM
+__CHARMM_ONLY##IF SINGLE
+          __BROADCAST_LOCAL_4B(rall_new_f,3*nforced*nstring)
+__CHARMM_ONLY##ELSE
+          __BROADCAST_LOCAL_8B(rall_new_f,3*nforced*nstring)
+__CHARMM_ONLY##ENDIF
+#else
+          __BROADCAST_LOCAL(rall_new_f,3*nforced*nstring,mpifloat)
+#endif
+        endif ! MPI_COMM_LOCAL
+!    update orientation coords if needed (all CPUs do this)
+        if (qorient.and.qdiffrot) then ! update orientation coords (which only evolve via r_f) :
+         rall_new_o=rall_o ! copy from previous update step
+         do i=1, nboth ; rall_new_o(iatom_both(2,i),:,:)=rall_new_f(iatom_both(1,i),:,:) ; enddo         ! update overlap coords
+        endif ! qorient
+!
+        me=mestring+1
+! load coordinates (code dup, alas) ;  this happens infrequently enough that we'll repeat (some computation in voronoi_check)
+! forcing
+        rfi=>r_f(:,:,instant); rfi_old=>r_f(:,:,dummy)
+        do k=1, nforced; ind=iatom_f(k); 
+         rfi    (k,1)=x   (ind); rfi    (k,2)=y   (ind); rfi    (k,3)=z   (ind);
+         rfi_old(k,1)=xold(ind); rfi_old(k,2)=yold(ind); rfi_old(k,3)=zold(ind);
+        enddo
+! orientation
+        roi=>r_o(:,:,instant); roi_old=>r_o(:,:,dummy)
+        if (qorient) then ; 
+         if (qdiffrot) then
+          do k=1, norient; ind=iatom_o(k); 
+           roi    (k,1)=x   (ind); roi    (k,2)=y   (ind); roi    (k,3)=z   (ind);
+           roi_old(k,1)=xold(ind); roi_old(k,2)=yold(ind); roi_old(k,3)=zold(ind);
+          enddo
+         endif
+         r_com=>rcom(:,:,instant);         r_com_old=>rcom(:,:,dummy)
+!       translate forced atoms to centroid
+         r_com=zero; r_com_old=zero
+         do j=1,3 ; do k=1, norient; 
+          r_com(j) = r_com(j)+ow(k)*roi(k,j)   ;  r_com_old(j) = r_com_old(j)+ow(k)*roi_old(k,j)
+         enddo ;    enddo
+!
+         rfi    (:,1)=rfi    (:,1)-r_com    (1) ;        rfi    (:,2)=rfi    (:,2)-r_com    (2) ;        rfi    (:,3)=rfi    (:,3)-r_com    (3)
+         rfi_old(:,1)=rfi_old(:,1)-r_com_old(1) ;        rfi_old(:,2)=rfi_old(:,2)-r_com_old(2) ;        rfi_old(:,3)=rfi_old(:,3)-r_com_old(3)
+!
+         if (qdiffrot) then
+          roi    (:,1)=roi    (:,1)-r_com    (1) ;       roi    (:,2)=roi    (:,2)-r_com    (2) ;        roi    (:,3)=roi    (:,3)-r_com    (3)
+          roi_old(:,1)=roi_old(:,1)-r_com_old(1) ;       roi_old(:,2)=roi_old(:,2)-r_com_old(2) ;        roi_old(:,3)=roi_old(:,3)-r_com_old(3)
+         endif ! qdiffrot
+        endif ! qorient
+!
+!     check if the old set is consistent with current
+        correct_cell_me=ftsm_voronoi_check(rfi_old, roi_old, rall_f, rall_o, me)
+!      are the coords in rold consistent with the current V. cell centers?
+        if  (correct_cell_me.eq.0) then
+!      if old set is outside cell, it means that we just crossed into a
+!                   neighbor cell; in this case, test rnew, not rold
+!                   repeat as above:
+          rfi_old=>rfi; roi_old=>roi
+!
+          correct_cell_me=ftsm_voronoi_check(rfi_old, roi_old, rall_f, rall_o, me)
+        endif ! .not. correct_cell_me
+
+!     pool all results
+        call MPI_ALLREDUCE(correct_cell_me, correct_cell, 1,           &
+     &                  mpiint, MPI_MIN, MPI_COMM_STRNG, ierror)
+!     broadcast to slaves
+        __BROADCAST_LOCAL(correct_cell, 1, mpiint)
+        if (correct_cell.eq.0) then
+          __WRN(whoami,' CURRENT VORONOI CELL CENTERS INCONSISTENT WITH COORDINATES.')
+!    roll back string
+           r_f(:,:,center)=rall_f(:,:,me) ; if (qorient.and.qdiffrot) r_o(:,:,center)=rall_o(:,:,me)
+!
+        else ! correct_cell
+!     begin iterative adjustment
+          if (present(m_iter)) then
+           max_iter=m_iter
+          else
+           max_iter=default_iter
+          endif
+!
+          iter=0
+          rall_temp_f=rall_new_f ;  if (qorient.and.qdiffrot) rall_temp_o=rall_new_o
+          do
+!     check if the new set is consistent
+           correct_cell_me=ftsm_voronoi_check(rfi_old, roi_old, rall_temp_f, rall_temp_o, me)
+!     pool all results
+           call MPI_ALLREDUCE(correct_cell_me, correct_cell, 1,         &
+     &                  mpiint, MPI_MIN, MPI_COMM_STRNG, ierror)
+!      broadcast to slaves
+           __BROADCAST_LOCAL(correct_cell, 1, mpiint)
+!
+           if (correct_cell.eq.1) then
+            rall_f=rall_temp_f ; if (qorient.and.qdiffrot) rall_o=rall_temp_o
+!          `roll back' cv's:
+            if (iter.gt.0) then ! otherwise they are fine
+             r_f(:,:,center)=rall_f(:,:,me) ; if (qorient.and.qdiffrot) r_o(:,:,center)=rall_o(:,:,me)
+            endif
+            exit
+           elseif (iter.ge.max_iter) then
+            __WRN(whoami,' MAXIMUM NUMBER OF ITERATIONS EXCEEDED.')
+!          reset cv's to consistent Voronoi cell centers :
+            r_f(:,:,center)=rall_f(:,:,me) ; if (qorient.and.qdiffrot) r_o(:,:,center)=rall_o(:,:,me)
+            exit
+           else
+            rall_temp_f=half*(rall_temp_f+rall_f) ; if (qorient.and.qdiffrot) rall_temp_o=half*(rall_temp_o+rall_o)
+           endif  ! correct cell
+           iter=iter+1
+          enddo ! <empty>
+        endif ! .not. correct_cell
+       endif ! .not. initialized
+!
+!   no need to broadcast anything to slaves because they, too, execute above loop
+!
+       deallocate(rall_temp_f)
+       if (qorient.and.qdiffrot) then ; deallocate(rall_temp_o) ; else ; nullify(rall_temp_o) ; endif
+!
+       end subroutine ftsm_voronoi_smart_update
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+! this is the function that computes the Voronoi distances
+       function ftsm_voronoi_check(r)
+      __DEP_OUTPUT
+      __DEP_MULTICOM
+      __DEP_CONST
+      __DEP_MPI
+#include "../../mpitype.def"
+!     variables
+       int :: ftsm_voronoi_check ! index of Voronoi cell that the system is in
+       float :: rtemp(ftsm_num_cv) ! current CV values (theta(x))
+!     locals
+       float :: msd(nstring,nstring), msdall(nstring,nstring) ! mean square distance
+       float :: dummy, z(ftsm_num_cv)
+       int :: i, j, k, n, m, iatom, which(1), q(nstring), me
+!    parallelization
+       bool :: qpara
+       int4mpi :: send_displ(SIZE_LOCAL), send_count(SIZE_LOCAL)
+       int :: mbeg, mend, ierror
+!
+       character(len=20) :: whoami
+!
+       data whoami /' FTSM_VORONOI_CHECK>'/
+!
+!      initialize, if necessary
+       if (.not.ftsm_voronoi_initialized) call ftsm_voronoi_init()
+!
+!      compute RMSD
+!      need to compute distances w.r.t. all M tensors on the string
+       msd=0d0
+       msdall=0d0
+!
+!     compute norms in parallel: each slave node is assigned a set of matrices
+!     compute index limits (this could be done once in the smcv_init routine)
+!
+       qpara=(MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.SIZE_LOCAL.gt.1       &
+     &   .and.calc_voronoi_para)
+       if (qpara) then
+!
+        j=ceiling(1.0d0*nstring/SIZE_LOCAL) ! max. number of CV assigned to slave node
+!
+        do i=1,SIZE_LOCAL
+         send_displ(i)=nstring*min((i-1)*j,nstring-1) ! cannot exceed nstring
+         send_count(i)=nstring*max(0,min(j,nstring-j*(i-1)))
+        enddo
+        me=ME_LOCAL+1
+!       indices are below
+        mbeg=send_displ(me)/nstring+1
+        mend=mbeg+send_count(me)/nstring-1
+       else
+        mbeg=1
+        mend=nstring
+       endif ! qpara
+!
+       do n=1, nstring ! loop over z
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+        do m=mbeg,mend ! loop over the M tensors
+         dummy=0d0
+         do i=1,ftsm_num_cv
+          j=i-1
+          do k=1, j
+           dummy=dummy +                                                &
+     &                z(i) * (ftsm_Mall(i,k,m)) * z(k)
+          enddo
+         enddo
+         dummy=2d0*dummy ! double contribution from off-diagonal terms
+!    contribution from diagonal terms
+         do i=1,ftsm_num_cv
+          dummy=dummy +                                                 &
+     &               z(i) * (ftsm_Mall(i,i,m)) * z(i)
+         enddo
+         msd(n,m)=dummy
+        enddo ! m=1,nstring
+       enddo ! i=1,nstring
+!
+!    pool norms on root
+       if (qpara)                                                       &
+     &  call MPI_GATHERV(msd(1,mbeg),send_count(me),                    &
+     &   mpifloat,                                                      &
+     &   msd, send_count, send_displ,                                   &
+     &   mpifloat, 0, MPI_COMM_LOCAL, ierror)
+
+!    root determines where theta(x) is
+        if (ME_LOCAL.eq.0.or..not.qpara) then
+         do n=1, nstring
+          q(n)=1
+          do m=1, nstring
+           if (msd(n,n)+msd(n,m).gt.msd(m,n)+msd(m,m)) then
+            q(n)=0
+            exit
+           endif
+          enddo
+         enddo
+         which=maxloc(q) ! maxloc needs an int array;
+         if (msd(which(1),which(1)).gt.ftsm_voronoi_cut**2)               &
+     &    which(1)=-which(1) ! outside of the allowed region (special code)
+        endif ! ME_LOCAL
+!
+       if (qpara)                                                       &
+#ifdef __CHARMM
+     &  __BROADCAST_LOCAL_4B(which,1)  !__CHARMM_ONLY##.not.INTEGER8
+     &  __BROADCAST_LOCAL_8B(which,1)  !__CHARMM_ONLY##INTEGER8
+#else
+        __BROADCAST_LOCAL(which,1,mpiint)
+#endif
+!          write(600+ME_GLOBAL,*) q
+!           write(600+ME_GLOBAL,'(32G12.4)') msd
+!           write(600+ME_GLOBAL,*) rtemp
+!            stop
+!
+       ftsm_voronoi_compute=which(1)
+!
+       end function ftsm_voronoi_check
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       subroutine ftsm_voronoi_print_data(iunit)
+!      assume that unit is prepared
+!      NOTE that this is a global print!
+       __DEP_OUTPUT
+       __DEP_MULTICOM
+       __DEP_MPI
+!
+       int iunit
+!      locals
+       character(len=80) :: fmt
+       int :: i, j
+       int :: voro_data_all(nstring,2*nstring+1)
+       int :: ierror, type
+!      do work
+!      gather all data on root
+       type=MPI_INTEGER                       !__CHARMM_ONLY##.not.INTEGER8
+       type=MPI_INTEGER8                      !__CHARMM_ONLY##INTEGER8
+
+       if (.not.ftsm_voronoi_initialized) call ftsm_voronoi_init()
+!
+       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then
+        if (SIZE_STRNG.gt.1) then
+         call MPI_ALLREDUCE(ftsm_voronoi_data(:,:,1),voro_data_all,       &
+     & nstring*(2*nstring+1),type,MPI_SUM,MPI_COMM_STRNG,ierror)
+        else
+         voro_data_all=ftsm_voronoi_data(:,:,1)
+        endif ! SIZE
+!
+        if (ME_STRNG.eq.0) then ! string root writes
+         write(fmt,int_format) nstring
+         do j=1,nstring
+          write(iunit,'('//fmt//int_format//')')                        &
+     &     voro_data_all(j,1:nstring)+ftsm_cross_attemptO(j,:)        ! crossing attemps
+         enddo
+         write(iunit,'("%")') ! break
+         do j=1,nstring
+          write(iunit,'('//fmt//int_format//')')                        &
+     &     voro_data_all(j,nstring+1:2*nstring)+ftsm_cross_acceptO(j,:) ! crossing accepts
+         enddo
+         write(iunit,'("%")') ! break
+         write(iunit,'('//fmt//int_format//')')                         &
+     &    voro_data_all(:,2*nstring+1)+ftsm_voro_occupancyO(:)        ! occupancy
+        endif ! ME
+       endif ! MPI_COMM_STRNG
+!
+       end subroutine ftsm_voronoi_print_data
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       subroutine ftsm_voronoi_read_data(iunit)
+!      assume that unit is prepared
+       __DEP_MULTICOM
+       __DEP_MPI
+!
+       int iunit
+!      locals
+       character(len=80) :: fmt
+       int :: i, j
+       int :: voro_data_all(SIZE_STRNG,2*SIZE_STRNG+1)
+       int :: ierror
+#include "../../mpitype.def"
+!      do work
+!      gather all data on root
+!
+       if (.not.ftsm_voronoi_initialized) call ftsm_voronoi_init()
+!
+       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then
+        if (ME_STRNG.eq.0) then ! string root reads
+         do j=1,nstring
+          read(iunit,*)  voro_data_all(j,1:nstring)      ! crossing attemps
+         enddo
+         read(iunit,'(A)') ! break
+         do j=1,nstring
+          read(iunit,*)  voro_data_all(j,nstring+1:2*nstring)      ! crossing accepts
+         enddo
+         read(iunit,'(A)') ! break
+         read(iunit,*) voro_data_all(:,2*nstring+1)      ! occupancy
+        endif ! ME
+!
+        ftsm_voronoi_data(:,:,3)=voro_data_all        ! place into "old" position
+!
+        if (SIZE_STRNG.gt.1) then
+         __BROADCAST_LOCAL(ftsm_voronoi_data(:,:,3),SIZE_STRNG*(2*SIZE_STRNG+1),mpiint)
+        endif
+       endif ! MPI_COMM_STRNG
+!    broadcast to slaves
+       if (MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.SIZE_LOCAL.gt.1)         &
+#ifdef __CHARMM
+     &  __BROADCAST_LOCAL_4B(ftsm_voronoi_data(:,:,3),nstring*(2*nstring+1))          !__CHARMM_ONLY##.not.INTEGER8
+     &  __BROADCAST_LOCAL_8B(ftsm_voronoi_data(:,:,3),nstring*(2*nstring+1))          !__CHARMM_ONLY##INTEGER8
+#else
+     &  __BROADCAST_LOCAL(ftsm_voronoi_data(:,:,3),nstring*(2*nstring+1),mpiint)
+#endif
+!
+       end subroutine ftsm_voronoi_read_data
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       subroutine ftsm_voronoi_print_log(iunit)
+!      assume that unit is prepared
+!      NOTE that this is a global print!
+!      this routine is redundant with ftsm_voronoi_print_hist
+       __DEP_MULTICOM
+       __DEP_MPI
+!
+       int iunit
+!      locals
+       int :: i
+       int4mpi :: voro_log_size4(SIZE_STRNG)
+       int   :: voro_log_size8(SIZE_STRNG)
+       int4mpi :: voro_log_disp4(SIZE_STRNG)
+       int :: total_size
+       int, allocatable, dimension(:) :: voro_log_all
+       int :: ierror
+#include "../../mpitype.def"
+!      do work
+!      gather all data on root
+!
+       if (.not.ftsm_voronoi_initialized) call ftsm_voronoi_init()
+!
+       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.SIZE_STRNG.gt.1) then
+!     calculate size of logs
+        voro_log_size8=0
+!       call MPI_GATHER(ftsm_voro_log%last,1,type,
+!     &                 voro_log_size8,1,type,
+!     &                 0,MPI_COMM_WORLD,ierror)
+        call MPI_ALLGATHER(ftsm_voro_log%last,1,mpiint,                     &
+     &                 voro_log_size8,1,mpiint,                           &
+     &                 MPI_COMM_STRNG,ierror)
+
+        total_size=sum(voro_log_size8)
+        voro_log_size4=voro_log_size8 ! type cast to 4 byte int
+!     allocate space to hold entire log
+        allocate(voro_log_all(total_size))
+!     calculate send displacements
+        voro_log_disp4(1)=0;
+        do i=1,SIZE_STRNG-1
+         voro_log_disp4(i+1)=voro_log_disp4(i)+voro_log_size4(i)
+        enddo
+!      now gather the logs
+!       call MPI_GATHERV(ftsm_voro_log%i,ftsm_voro_log%last,type,
+!     &                  voro_log_all,voro_log_size4,voro_log_disp4,type,
+!     &                  0,MPI_COMM_WORLD,ierror)
+        call MPI_ALLGATHERV(ftsm_voro_log%i,ftsm_voro_log%last,mpiint,        &
+     &                  voro_log_all,voro_log_size4,voro_log_disp4,mpiint,&
+     &                  MPI_COMM_STRNG,ierror)
+!
+        if (ME_STRNG.eq.0) write(iunit) voro_log_all
+!
+        call int_vector_init(ftsm_voro_log) ! erase log
+        deallocate(voro_log_all)
+       endif ! STRNG
+       end subroutine ftsm_voronoi_print_log
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+
+
+
+
+
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      subroutine ftsm_voronoi_whereami(x,y,z)
+      __DEP_OUTPUT
+!
+       float :: x(:), y(:), z(:)
+!     locals
+      int :: i
+!
+      character(len=23) :: whoami
+      data whoami /' FTSM_VORONOI_WHEREAMI>'/
+! populate instantaneous orientation and forcing coordinates
+
+
+
+      ftsm_voronoi_whereami=ftsm_voronoi_compute(rfi)
+
+!
+      end subroutine smcv_voronoi_whereami
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      function ftsm_voronoi_check(x,y,z,itime)
+! not parallelized yet; have to decide what level of parallelization is time-efficient
+      use lu ! for computing FE
+      __DEP_OUTPUT
+      __DEP_MULTICOM
+      __DEP_MPI 
+      __DEP_RANDOM
+!
+#include "../../mpitype.def"
+!
+      float :: x(:), y(:), z(:)
+      float :: mass(:) ! assumed shape
+!      float :: mass(size(x,1)) ! assumed size
+      int :: itime ! timestep -- needed by new version of Voronoi
+! local var.
+      int :: i, j, k, l, m, which, me
+      int4mpi :: ierror
+      int4mpi :: length(nstring-1)
+      int4mpi :: request(nstring-1)
+      bool :: smcv_voronoi_compute ! returns false if theta_i(x) does not correspond to z_i
+      bool :: calcz, deriv, addforce
+      float :: rtemp(ftsm_num_cv) ! for storing current CV values (theta(x))
+!
+      int, allocatable :: vtemp(:), vtemp2(:)        ! for gathering Voronoi stats; this is an upper bound
+      int4mpi :: stat(MPI_STATUS_SIZE)
+      bool :: voronoi_update
+      bool :: success, qgrp, qstring, ready(nstring-1), ok
+      float :: P_accept_cross
+!    for computing FE
+!      float :: flux(nstring, nstring), ! normalized probability flux
+!     &          prob(nstring),          ! probability of being in a Voronoi cell
+!     &          netflux(nstring)        ! net probability flux into a Voronoi cell
+!      int :: permut(nstring), d, code ! for LU decomposition routine
+!
+      character(len=22) :: whoami
+      data whoami /' SMCV_VORONOI_COMPUTE>'/
+!     loop over all cv and make calls by type
+      if (ftsm_num_cv.eq.0) then
+       __WRN( whoami, 'NO CV DEFINED.')
+      endif
+!
+      qstring=(MPI_COMM_STRNG.ne.MPI_COMM_NULL)                         &
+     &  .and.(SIZE_STRNG.gt.1)
+      qgrp=(MPI_COMM_LOCAL.ne.MPI_COMM_NULL)                            &
+     &  .and.(SIZE_LOCAL.gt.1)
+!
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!      pool crossing+occupancy
+      voronoi_update=voronoi_allow_cross.and.(voronoi_update_freq.gt.0)
+      if (voronoi_update)                                               &
+     &      voronoi_update=(mod(itime,voronoi_update_freq).eq.0)
+!
+      if (voronoi_update) then
+!      only roots
+         if (qstring) then
+! pack
+          allocate(vtemp(3*nstring*(2*nstring+1))) ! upper bound
+          k=0
+          do i=1, nstring
+!           do j=1, 2*nstring+1 ! send everything
+           do j=2*nstring+1, 2*nstring+1 ! send just the occupancy: this means FE cannot be computed
+            l=ftsm_voronoi_data(i,j,1)
+            if (l.gt.0) then
+             k=k+1; vtemp(k)=i; k=k+1; vtemp(k)=j; k=k+1;  vtemp(k)=l
+            endif
+           enddo
+          enddo
+!
+          if (ME_STRNG.ne.0) then
+           call MPI_ISEND(vtemp, k,                                     & ! send local attempts, accepts + occupancy to root packed in temp
+     &     mpiint, 0, ME_STRNG, MPI_COMM_STRNG, request(ME_STRNG), ierror)
+          else ! rank 0
+! wait for all messages to begin sending
+           ready=.false.
+           do while (any(.not.ready))
+            do m=1,nstring-1
+             if (.not.ready(m)) then
+              ok=.false. ! this is necessary
+              call MPI_IPROBE(m, m, MPI_COMM_STRNG, ok, stat, ierror)
+              if (ok) then
+!    get message length
+                call MPI_Get_count(stat,mpiint,length(m),ierror)
+!                write(600+ME_STRNG,*) ok, ready(m), m, length(m), stat
+                ready(m)=.true.
+              endif ! ok
+             endif ! .not.ready(m)
+            enddo ! m=1,nstring-1
+           enddo ! now have all the lengths
+!               close(600+ME_STRNG) !aa
+!    begin receiving
+           l=k+sum(length)
+           allocate(vtemp2(l))
+           do m=1,nstring-1
+            call MPI_IRECV(vtemp2(k+sum(length(1:m-1))+1), length(m),   &
+     &      mpiint, m, m, MPI_COMM_STRNG, request(m), ierror)
+           enddo ! m
+!    copy vtemp into vtemp2
+           vtemp2(1:k)=vtemp(1:k)
+          endif ! ME_STRNG
+         endif ! MPI_COMM_STRNG
+      endif ! voro_update
+!    do some work
+!
+      calcz=.true.; deriv=.false. ; addforce=.false.
+!
+      call frames_reset_calculate(.false.) ! make sure that frames recalculate their axes (but not gradients)
+      call quat_reset_calculate(.false.)
+!
+      do i=1, ftsm_num_cv
+       select case(ftsm_type(i))
+!
+        case(posi_com_x, posi_com_y, posi_com_z);
+         call cv_posi_com_calc(i,x,y,z,mass,x,y,z,calcz,deriv,addforce)
+        case(qcomp_1, qcomp_2, qcomp_3, qcomp_4);
+         call cv_qcomp_calc(i,x,y,z,mass,x,y,z,calcz,deriv,addforce)
+        case(angle_com);
+         call cv_angle_com_calc(i,x,y,z,mass,x,y,z,calcz,deriv,addforce)
+        case(anglvec);
+         call cv_anglvec_calc(i,x,y,z,mass,x,y,z,calcz,deriv,addforce)
+        case(dihe_com);
+         call cv_dihe_com_calc(i,x,y,z,mass,x,y,z,calcz,deriv,addforce)
+        case(rmsd);
+         call cv_rmsd_calc(i,x,y,z,mass,x,y,z,calcz,deriv,addforce)
+        case(drmsd);
+         call cv_drmsd_calc(i,x,y,z,mass,x,y,z,calcz,deriv,addforce)
+        case(proj);
+         call cv_proj_calc(i,x,y,z,mass,x,y,z,calcz,deriv,addforce)
+        case(dist_com);
+         call cv_dist_com_calc(i,x,y,z,mass,x,y,z,calcz,deriv,addforce)
+        case(cvrms);
+         call cv_cvrms_calc(i,x,y,z,mass,x,y,z,calcz,deriv,addforce)
+        case default
+         __WRN( whoami, 'UNKNOWN CV SPECIFIED.')
+       end select
+       rtemp(i)=ftsm_r(i,instant)
+      enddo
+!
+!     update
+      if (voronoi_update) then
+!     root waits for all messages; then sends back concatenated array
+       if (qstring) then
+        if (ME_STRNG.eq.0) then
+! wait for all messages to arrive
+         call MPI_WAITALL(nstring-1, request, MPI_STATUSES_IGNORE, ierror)
+! now send received array to all cpus:
+         do m=1, nstring-1
+           call MPI_ISEND(vtemp2, k+sum(length),                        & ! send local attempts, accepts + occupancy to root packed in temp
+     &     mpiint, m, m, MPI_COMM_STRNG, request(m), ierror)
+         enddo
+        else ! other roots
+!    first make sure previous send was successful
+         call MPI_WAIT(request(ME_STRNG), stat, ierror)
+!    test for message from root:
+         ok=.false.
+         do while (.not.ok)
+          call MPI_IPROBE(0, ME_STRNG, MPI_COMM_STRNG, ok, stat, ierror)
+         enddo
+!    a message is ready to be received : begin
+!    get message length
+         call MPI_Get_count(stat,mpiint,length(1),ierror)
+         l=length(1)
+!    begin receiving
+         allocate(vtemp2(l))
+         call MPI_IRECV(vtemp2, l, mpiint,                               &
+     &      0, ME_STRNG, MPI_COMM_STRNG, request(ME_STRNG), ierror)
+        endif ! ME
+       endif ! string root
+      endif ! voro_update
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!    do some more work
+      which=cv_common_voronoi_compute(rtemp)
+      me=ftsm_voronoi_whereami
+!
+      if (voronoi_update) then
+        if (qstring) then
+         if (ME_STRNG.ne.0) call MPI_WAIT(request(ME_STRNG), stat, ierror) ! make sure message is received
+! unpack message (all string roots do this)
+         ftsm_voronoi_data(:,:,2)=ftsm_voronoi_data(:,:,3) ! statistics from previous runs (if any)
+         k=0
+         do while (k.lt.l)
+           k=k+1; i=vtemp2(k); k=k+1; j=vtemp2(k); k=k+1;
+           ftsm_voronoi_data(i,j,2)=ftsm_voronoi_data(i,j,2)+vtemp2(k)
+         enddo
+         if (ME_STRNG.eq.0) call MPI_WAITALL(nstring-1, request,        &
+     &         MPI_STATUSES_IGNORE, ierror)
+         deallocate(vtemp, vtemp2)
+        endif ! string roots
+!
+        if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.SIZE_STRNG.eq.1)        &
+     &   ftsm_voronoi_data(:,:,2)=ftsm_voronoi_data(:,:,1)
+!
+      endif ! voronoi_update
+!
+!
+      if (which.lt.0) then
+        smcv_voronoi_compute=.false. ! cutoff exceeded ; reflect ; do not update log
+      elseif (which.eq.me) then ! stayed in the same cell as before
+       ftsm_voro_occupancy(which)=ftsm_voro_occupancy(which)+1     ! update occupancy log
+       smcv_voronoi_compute=.true.
+      else ! crossed into a different cell
+       ftsm_cross_attempt(me,which)=ftsm_cross_attempt(me,which)+1
+!
+       if (voronoi_allow_cross.and.itime.gt.voronoi_nocross_ini) then
+!    decide whether to allow the crossing
+!    roots decide
+        if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then
+!         do i=1,nstring
+!          if (ftsm_voro_occupancyG(i).eq.0) ftsm_voro_occupancyG(i)=1
+!         enddo
+!         dummy=1d0/sum(ftsm_voro_occupancyG)
+!************************* acceptance criterion ********************
+!         P_accept_cross=
+!     &  (sum(1d0*ftsm_cross_acceptG(:,me)/ftsm_voro_occupancyG(:) )*
+!     &       ftsm_voro_occupancyG(me)                                  ! note: cross_accept(i,i)=0
+!     & -(sum(ftsm_cross_acceptG(me,:))-ftsm_cross_acceptG(me,which)))/
+!     &  (max(ftsm_cross_attemptG(me,which),1))
+!********************************************************************
+!     &  ( sum(1d0*ftsm_cross_attemptG(:,me)/ftsm_voro_occupancyG(:))-
+!     &    sum(1d0*ftsm_cross_attemptG(me,:))/ftsm_voro_occupancyG(me) )
+!     &  /
+!     &  ( sum(1d0*ftsm_cross_attemptG(:,which)/ftsm_voro_occupancyG(:))-
+!     &    sum(1d0*ftsm_cross_attemptG(which,:))/ftsm_voro_occupancyG(which))
+!********************************************************************
+!     &  sum(1d0*ftsm_cross_attemptG(:,me)-ftsm_cross_attemptG(me,:))/
+!     &  sum(1d0*ftsm_cross_attemptG(:,which)-ftsm_cross_attemptG(which,:))
+!********************************************************************
+! compute free energy from crossing attemps
+!         do i=2,nstring
+!          flux(i,:)=
+!     &        1d0*ftsm_cross_attemptG(:,i)/ftsm_voro_occupancyG(:)
+!          flux(i,i)=
+!     &        -1d0*sum(ftsm_cross_attemptG(i,:))/ftsm_voro_occupancyG(i)
+!          if (flux(i,i-1).eq.0d0) flux(i,i-1)=
+!     &       1d0/ftsm_voro_occupancyG(i-1)              ! crude regularization
+!          if (flux(i-1,i).eq.0d0) flux(i-1,i)=
+!     &       1d0/ftsm_voro_occupancyG(i)
+!         enddo
+!         netflux(2:nstring)=0d0;
+!         netflux(1)=1d0                       ! boundary condition (p(1)=1)
+!         flux(1,1)=1d0; flux(1,2:nstring)=0d0 ! boundary condition
+!         prob=netflux;
+!         call ludcmp(flux, nstring, permut, d, code)
+!         call lubksb(flux, nstring, permut, prob)
+!
+         P_accept_cross=1d0                                             &
+     &   * (2-abs(which-me))                                            & ! allow crosses only between adjacent cells (ad hoc)
+!     & *prob(me)/prob(which) ! free energy estimate
+!     & *exp(10d0*(ftsm_voro_occupancyG(me)/ftsm_voro_occupancyG(which)-1d0))
+     & *(ftsm_voro_occupancyG(me)/max(ftsm_voro_occupancyG(which),1))
+!********************************************************************
+         if (P_accept_cross.ge.1) then
+          success=.true.
+         else
+          success=(__RANDOMU(__SEED).le.P_accept_cross)
+         endif
+        endif ! string roots
+!        write(600+ME_STRNG,*) P_accept_cross, success, ' * ', prob
+!    broadcast to slaves
+        if (qgrp) __BROADCAST_LOCAL_4B(success,1)
+!    if successful, update
+        if (success) then
+         ftsm_cross_accept(me,which)=ftsm_cross_accept(me,which)+1
+         ftsm_voro_occupancy(which)=ftsm_voro_occupancy(which)+1
+         ftsm_voronoi_whereami=which
+        else
+         ftsm_voro_occupancy(me)=ftsm_voro_occupancy(me)+1
+        endif
+!
+        smcv_voronoi_compute=success
+       else ! crossing not allowed, so reflect
+        smcv_voronoi_compute=.false.
+        ftsm_voro_occupancy(me)=ftsm_voro_occupancy(me)+1     ! update occupancy log
+       endif ! voronoi_allow_cross
+!     update voronoi log.
+       i=int_vector_add(ftsm_voro_log, ME_STRNG+1) ! replica ID
+       i=int_vector_add(ftsm_voro_log, me)    ! from this cell
+       i=int_vector_add(ftsm_voro_log, which) ! into this cell
+       i=int_vector_add(ftsm_voro_log, ftsm_voronoi_whereami) ! now in this cell
+       i=int_vector_add(ftsm_voro_log, itime+vtime_offset)    ! at this time
+      endif ! which<0
+!
+      end function smcv_voronoi_compute
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       subroutine ftsm_voronoi_set_cutoff(cut)
+       float :: cut
+       if (cut.gt.zero) then ! reject invalid values without warning
+        if (.not. ftsm_voronoi_initialized) call ftsm_voronoi_init()
+        ftsm_voronoi_cut=cut
+       endif
+       end subroutine ftsm_voronoi_set_cutoff
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       subroutine ftsm_voronoi_print_map(iunit,fmt)
+       __DEP_OUTPUT
+!       __DEP_MULTICOM
+       __DEP_MPI 
+       int :: iunit
+!       int :: ierr
+       character(len=*), optional :: fmt
+!      local
+!#include "../../mpitype.def"
+!
+       int :: i
+       character(len=80) :: frm
+       character(len=21) :: whoami
+       data whoami /' FTSM_VORO_PRINT_MAP>'/
+!      begin
+       if (.not.ftsm_voronoi_initialized) call ftsm_voronoi_init()
+!
+!       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.SIZE_STRNG.gt.1) then
+!        call MPI_ALLGATHER(ftsm_voronoi_whereami, 1, mpiint,
+!     &         ftsm_voronoi_map, 1, mpiint, MPI_COMM_STRNG, ierr)
+!
+! assume that the map has been communicated elsewhere
+        if (ME_STRNG.eq.0) then
+         if (.not.present(fmt)) then
+          write(frm,'("(",I5,"I5)")') nstring
+         else
+          frm=fmt
+         endif
+         write(iunit,frm) (/ (i, i=1,nstring) /)
+         write(iunit,frm) ftsm_voronoi_map(1:nstring)
+        endif ! ME_STRNG
+!       endif ! MPI_COMM_STRNG
+!
+       end subroutine ftsm_voronoi_print_map
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       subroutine ftsm_voronoi_read_map(iunit)
+       __DEP_OUTPUT
+       __DEP_MULTICOM
+       __DEP_MPI 
+!
+#include "../../mpitype.def"
+!
+       int :: iunit, ierror
+       character(len=20) :: whoami
+       data whoami /' FTSM_READ_VORO_MAP>'/
+!      begin
+       if (.not.ftsm_voronoi_initialized) then
+        call ftsm_voronoi_init()
+       endif
+!
+       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then
+        if (ME_STRNG.eq.0) then
+         read(iunit,*) ftsm_voronoi_map(1:nstring) ! first row contains indices 0 -- nstring-1
+         read(iunit,*) ftsm_voronoi_map(1:nstring) ! second row is what we want
+         if (any(ftsm_voronoi_map.lt.0)) __WRN( whoami,' READ NEGATIVE RANK.')
+        endif ! ME_
+        if (SIZE_STRNG.gt.1)                                            &
+     &  __BROADCAST_STRING(ftsm_voronoi_map, nstring,mpiint)
+       endif ! MPI_COMM_STRNG
+!    broadcast to slave nodes
+       if (ME_LOCAL.ne.MPI_UNDEFINED.and.SIZE_LOCAL.gt.1)               &
+!     &  call MPI_BCAST(ftsm_voronoi_map, nstring, MPI_INTEGER,
+!     &                     0,MPI_COMM_LOCAL,ierr)
+#ifdef __CHARMM
+     &  __BROADCAST_LOCAL_4B(ftsm_voronoi_map,nstring)     !__CHARMM_ONLY##.not.INTEGER8
+     &  __BROADCAST_LOCAL_8B(ftsm_voronoi_map,nstring)     !__CHARMM_ONLY##INTEGER8
+#else
+     &  __BROADCAST_LOCAL(ftsm_voronoi_map,nstring,mpiint)
+#endif
+!
+       end subroutine ftsm_voronoi_read_map
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      end module ftsm_voronoi
+__CHARMM_ONLY##ENDIF
