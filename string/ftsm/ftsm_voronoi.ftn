@@ -14,7 +14,7 @@ __CHARMM_ONLY##IF STRINGM
 !
       private
 !
-      bool, save, public :: ftsm_voronoi_initialized=.false. &
+      bool, save, public :: ftsm_voronoi_initialized=.false., &
      &                      ftsm_voronoi_wrong_cell=.false.
       int, dimension(:,:,:), pointer, save :: ftsm_voronoi_data ! holds the nine arrays listed below
 ! local
@@ -36,15 +36,18 @@ __CHARMM_ONLY##IF STRINGM
       float :: ftsm_voronoi_cut                      ! voronoi cell cutoff in path-perpendicular direction (beyond which MD replicas are not allowed)
 !
 !
+      public ftsm_voronoi_map
+      public ftsm_voronoi_whereami
       public ftsm_voronoi_init       ! initialize voronoi histogram matrix
       public ftsm_voronoi_done       ! deallocate voronoi histogram matrix
-      public ftsm_voronoi_compute    ! determine which cell we are in
-      public ftsm_voronoi_whereami   !
+      public ftsm_voronoi_compute    ! determine which cell we are in using rall_o & rall_f
+      public ftsm_voronoi_whereami_compute ! determine cell using x,y,z coordinates
+      public ftsm_voronoi_check      ! determine whether coordinates should be reversed (include allow_cross case)
       public ftsm_voronoi_update     ! update voronoi cell centers
       public ftsm_voronoi_smart_update ! update voronoi cell centers in such a way that the MD replicas remain inside their cells
       public ftsm_voronoi_read_map   ! read replica map from file
       public ftsm_voronoi_print_map  ! read replica map from file
-      public ftsm_voronoi_print_hist ! print voronoi histograms
+      public ftsm_voronoi_print_log ! print voronoi histograms
       public ftsm_voronoi_set_cutoff ! set voronoi cell cutoff
 !
       contains
@@ -72,21 +75,21 @@ __CHARMM_ONLY##IF STRINGM
        endif
        end subroutine ftsm_voronoi_done
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       subroutine ftsm_voronoi_init
+       subroutine ftsm_voronoi_init()
 !
        if (.not.ftsm_initialized) call ftsm_init()
        if (.not.ftsm_voronoi_initialized) then ! do not reallocate data if already initialized
 !
 !    allocate data for all replicas, if not already allocated elsewhere (voronoi is not the only module that is expected to use rall)
 !
-       if (.not. associated(rall_f)) allocate(rall_f(nforced,3,nstring))
-       if (qorient) then 
-        if (qdiffrot) then
-         if (.not. associated(rall_o)) allocate(rall_o(norient,3,nstring))
-        else
-         rall_o =>rall_f
-        endif !qdiffrot
-       endif ! qorient
+        if (.not. associated(rall_f)) allocate(rall_f(nforced,3,nstring))
+        if (qorient) then 
+         if (qdiffrot) then
+          if (.not. associated(rall_o)) allocate(rall_o(norient,3,nstring))
+         else
+          rall_o =>rall_f
+         endif !qdiffrot
+        endif ! qorient
 !
         allocate(ftsm_voronoi_data(nstring,2*nstring+1,3))
 ! assign pointers --  local
@@ -106,10 +109,10 @@ __CHARMM_ONLY##IF STRINGM
 !
         call int_vector_init(ftsm_voro_log)
 !
-       endif
+       endif ! not initialized
 !
        ftsm_voronoi_data=0                           ! set all crossing data to zero
-!        ftsm_cross_acceptO=1 ! zero by default
+!        cross_acceptO=1 ! zero by default
        ftsm_voronoi_cut=9999d0
        ftsm_voronoi_whereami=-1                      ! -1 indicates this needs to be computed
        ftsm_voronoi_map=-1
@@ -119,7 +122,7 @@ __CHARMM_ONLY##IF STRINGM
 !
        end subroutine ftsm_voronoi_init
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       subroutine ftsm_voronoi_update(qbcast_orient_)
+       subroutine ftsm_voronoi_update(bcast_orient_)
        __DEP_MULTICOM
        __DEP_MPI 
 #include "../../mpitype.def"
@@ -127,9 +130,9 @@ __CHARMM_ONLY##IF STRINGM
        bool, optional :: bcast_orient_ ! whether orientation coordinates should be broadcast (usually not b/c they only evolve via forced coords)
 !      locals
        bool :: bcast_orient
-       int :: ierror
+       int :: i, ierror
 !      begin
-       if (present(bcast_orient_)) then ; bcast_orient=bcast_orient_ ; else bcast_orient=.false. ; endif 
+       if (present(bcast_orient_)) then ; bcast_orient=bcast_orient_ ; else ; bcast_orient=.false. ; endif 
        bcast_orient=bcast_orient.and.qorient.and.qdiffrot ! with qdiffrot false rall_o and rall_f point to the same thing
 !
        if (.not.ftsm_voronoi_initialized) then
@@ -157,12 +160,9 @@ __CHARMM_ONLY##ENDIF
 #endif
         endif ! MPI_COMM_LOCAL
 !
-       endif ! ftsm_voronoi_initialized
-!
-       if (qorient.and.qdiffrot) then ; do i=1, nboth ; rall_o(iatom_both(2,i),:,:)=rall_f(iatom_both(1,i),:,:) ; enddo ; endif ! update overlap coords
+        if (qorient.and.qdiffrot) then ; do i=1, nboth ; rall_o(iatom_both(2,i),:,:)=rall_f(iatom_both(1,i),:,:) ; enddo ; endif ! update overlap coords
 !    will assume that the coordinates have been shifted to their COM; this needs to be ensured in ftsm
-!
-       ftsm_voronoi_wrong_cell=.false.
+        ftsm_voronoi_wrong_cell=.false.
 !
        endif ! ftsm_voronoi_initialized
 !
@@ -184,14 +184,13 @@ __CHARMM_ONLY##ENDIF
 !      locals
 !
        float, pointer, dimension(:,:,:) :: rall_new_f, rall_new_o, rall_temp_f, rall_temp_o
-       float, pointer, dimension(:,:) :: rfi(:,:), roi(:,:), rfi_old(:,:), roi_old(:,:)
-       float, pointer, dimension(:) :: r_com(:), r_com_old(:)
+       float, pointer, dimension(:,:) :: rfi, roi, rfi_old, roi_old
+       float, pointer, dimension(:) :: r_com, r_com_old, ow
 !
-       int :: correct_cell_me, correct_cell
+       bool :: correct_cell_me, correct_cell
        int :: iter, max_iter
        int, parameter :: default_iter=15
-       float :: dummy
-       int :: i, j, which(1), ierror, me, ind
+       int :: i, j, k, which(1), ierror, me, ind
        character(len=27) :: whoami
        bool :: qroot
 !
@@ -218,7 +217,7 @@ __CHARMM_ONLY##ENDIF
         qroot=(MPI_COMM_STRNG.ne.MPI_COMM_NULL)
         if (qroot.and.SIZE_STRNG.gt.1) then
 !      gather all main coordinate sets
-         call MPI_ALLGATHER(r_f(:,:,center),3*nforced,mpifloat,
+         call MPI_ALLGATHER(r_f(:,:,center),3*nforced,mpifloat, &
      &                      rall_new_f,3*nforced,mpifloat,MPI_COMM_STRNG,ierror)
         endif ! qroot
 !
@@ -241,7 +240,7 @@ __CHARMM_ONLY##ENDIF
         endif ! qorient
 !
         me=mestring+1
-! load coordinates (code dup, alas) ;  this happens infrequently enough that we'll repeat (some computation in voronoi_check)
+! load coordinates (code dup, alas) ;  this happens infrequently enough that we'll repeat the code
 ! forcing
         rfi=>r_f(:,:,instant); rfi_old=>r_f(:,:,dummy)
         do k=1, nforced; ind=iatom_f(k); 
@@ -257,7 +256,8 @@ __CHARMM_ONLY##ENDIF
            roi_old(k,1)=xold(ind); roi_old(k,2)=yold(ind); roi_old(k,3)=zold(ind);
           enddo
          endif
-         r_com=>rcom(:,:,instant);         r_com_old=>rcom(:,:,dummy)
+         ow=>orientWeights
+         r_com=>rcom(:,instant);         r_com_old=>rcom(:,dummy)
 !       translate forced atoms to centroid
          r_com=zero; r_com_old=zero
          do j=1,3 ; do k=1, norient; 
@@ -274,23 +274,23 @@ __CHARMM_ONLY##ENDIF
         endif ! qorient
 !
 !     check if the old set is consistent with current
-        correct_cell_me=ftsm_voronoi_check(rfi_old, roi_old, rall_f, rall_o, me)
+        correct_cell_me=(me.eq.ftsm_voronoi_compute(rfi_old, roi_old, rall_f, rall_o))
 !      are the coords in rold consistent with the current V. cell centers?
-        if  (correct_cell_me.eq.0) then
+        if  (.not.correct_cell_me) then
 !      if old set is outside cell, it means that we just crossed into a
 !                   neighbor cell; in this case, test rnew, not rold
 !                   repeat as above:
           rfi_old=>rfi; roi_old=>roi
 !
-          correct_cell_me=ftsm_voronoi_check(rfi_old, roi_old, rall_f, rall_o, me)
+          correct_cell_me=(me.eq.ftsm_voronoi_compute(rfi_old, roi_old, rall_f, rall_o))
         endif ! .not. correct_cell_me
 
 !     pool all results
         call MPI_ALLREDUCE(correct_cell_me, correct_cell, 1,           &
-     &                  mpiint, MPI_MIN, MPI_COMM_STRNG, ierror)
+     &                  mpibool, MPI_LAND, MPI_COMM_STRNG, ierror)
 !     broadcast to slaves
-        __BROADCAST_LOCAL(correct_cell, 1, mpiint)
-        if (correct_cell.eq.0) then
+        __BROADCAST_LOCAL(correct_cell, 1, mpibool)
+        if (.not.correct_cell) then
           __WRN(whoami,' CURRENT VORONOI CELL CENTERS INCONSISTENT WITH COORDINATES.')
 !    roll back string
            r_f(:,:,center)=rall_f(:,:,me) ; if (qorient.and.qdiffrot) r_o(:,:,center)=rall_o(:,:,me)
@@ -307,14 +307,14 @@ __CHARMM_ONLY##ENDIF
           rall_temp_f=rall_new_f ;  if (qorient.and.qdiffrot) rall_temp_o=rall_new_o
           do
 !     check if the new set is consistent
-           correct_cell_me=ftsm_voronoi_check(rfi_old, roi_old, rall_temp_f, rall_temp_o, me)
+           correct_cell_me=(me.eq.ftsm_voronoi_compute(rfi_old, roi_old, rall_temp_f, rall_temp_o))
 !     pool all results
            call MPI_ALLREDUCE(correct_cell_me, correct_cell, 1,         &
-     &                  mpiint, MPI_MIN, MPI_COMM_STRNG, ierror)
+     &                  mpibool, MPI_LAND, MPI_COMM_STRNG, ierror)
 !      broadcast to slaves
-           __BROADCAST_LOCAL(correct_cell, 1, mpiint)
+           __BROADCAST_LOCAL(correct_cell, 1, mpibool)
 !
-           if (correct_cell.eq.1) then
+           if (correct_cell) then
             rall_f=rall_temp_f ; if (qorient.and.qdiffrot) rall_o=rall_temp_o
 !          `roll back' cv's:
             if (iter.gt.0) then ! otherwise they are fine
@@ -342,35 +342,36 @@ __CHARMM_ONLY##ENDIF
        end subroutine ftsm_voronoi_smart_update
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 ! this is the function that computes the Voronoi distances
-       function ftsm_voronoi_check(r)
+       function ftsm_voronoi_compute(rf, ro, rfall, roall)
       __DEP_OUTPUT
       __DEP_MULTICOM
       __DEP_CONST
       __DEP_MPI
+      __DEP_BESTFIT
 #include "../../mpitype.def"
 !     variables
-       int :: ftsm_voronoi_check ! index of Voronoi cell that the system is in
-       float :: rtemp(ftsm_num_cv) ! current CV values (theta(x))
+       int :: ftsm_voronoi_compute ! index of Voronoi cell that the system is in
+       float, intent(in) :: rf(:,:), ro(:,:), rfall(:,:,:), roall(:,:,:)
 !     locals
-       float :: msd(nstring,nstring), msdall(nstring,nstring) ! mean square distance
-       float :: dummy, z(ftsm_num_cv)
-       int :: i, j, k, n, m, iatom, which(1), q(nstring), me
+       float :: rf_rot(nforced,3)
+       float :: msd(nstring) ! mean square distance
+       int :: i, j, k, which(1), q(nstring)
+       float :: u(3,3,nstring) ! array of nstring-rotation matrices for transforming ro to roall
 !    parallelization
        bool :: qpara
        int4mpi :: send_displ(SIZE_LOCAL), send_count(SIZE_LOCAL)
-       int :: mbeg, mend, ierror
+       int :: mbeg, mend, ierror, me
 !
-       character(len=20) :: whoami
+       character(len=22) :: whoami
 !
-       data whoami /' FTSM_VORONOI_CHECK>'/
+       data whoami /' FTSM_VORONOI_COMPUTE>'/
 !
 !      initialize, if necessary
        if (.not.ftsm_voronoi_initialized) call ftsm_voronoi_init()
 !
 !      compute RMSD
 !      need to compute distances w.r.t. all M tensors on the string
-       msd=0d0
-       msdall=0d0
+       msd=zero
 !
 !     compute norms in parallel: each slave node is assigned a set of matrices
 !     compute index limits (this could be done once in the smcv_init routine)
@@ -379,64 +380,51 @@ __CHARMM_ONLY##ENDIF
      &   .and.calc_voronoi_para)
        if (qpara) then
 !
-        j=ceiling(1.0d0*nstring/SIZE_LOCAL) ! max. number of CV assigned to slave node
+        j=ceiling(one*nstring/SIZE_LOCAL) ! max. number of CV assigned to slave node
 !
         do i=1,SIZE_LOCAL
-         send_displ(i)=nstring*min((i-1)*j,nstring-1) ! cannot exceed nstring
-         send_count(i)=nstring*max(0,min(j,nstring-j*(i-1)))
+         send_displ(i)=min((i-1)*j,nstring-1) ! cannot exceed nstring
+         send_count(i)=max(0,min(j,nstring-j*(i-1)))
         enddo
         me=ME_LOCAL+1
 !       indices are below
-        mbeg=send_displ(me)/nstring+1
-        mend=mbeg+send_count(me)/nstring-1
+        mbeg=send_displ(me)+1
+        mend=mbeg+send_count(me)-1
        else
         mbeg=1
         mend=nstring
        endif ! qpara
+! call best fitting routine (obtain RMSD from eigenvalues)
+!      when running in parallel, each slave node computes norms for string replicas mbeg -- mend (and the current coor. set)
+       do i=mbeg, mend
+        if (qorient) then
+         call RMSBestFit(roall(:,:,i),ro,orientWeights,u(:,:,i))
+         rf_rot=matmul(rf,u(:,:,i))
+        else
+         rf_rot=rf
+        endif ! qorient
 !
-       do n=1, nstring ! loop over z
-!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-        do m=mbeg,mend ! loop over the M tensors
-         dummy=0d0
-         do i=1,ftsm_num_cv
-          j=i-1
-          do k=1, j
-           dummy=dummy +                                                &
-     &                z(i) * (ftsm_Mall(i,k,m)) * z(k)
-          enddo
-         enddo
-         dummy=2d0*dummy ! double contribution from off-diagonal terms
-!    contribution from diagonal terms
-         do i=1,ftsm_num_cv
-          dummy=dummy +                                                 &
-     &               z(i) * (ftsm_Mall(i,i,m)) * z(i)
-         enddo
-         msd(n,m)=dummy
-        enddo ! m=1,nstring
-       enddo ! i=1,nstring
+        msd(i)=rmsd(rf_rot,rfall(:,:,i),forcedWeights,.false.)
+       enddo
 !
 !    pool norms on root
+!       if (qpara)                                                       &
+!     &  call MPI_GATHERV(msd(mbeg),send_count(me),                    &
+!     &   mpifloat,                                                      &
+!     &   msd, send_count, send_displ,                                   &
+!     &   mpifloat, 0, MPI_COMM_LOCAL, ierror)
        if (qpara)                                                       &
-     &  call MPI_GATHERV(msd(1,mbeg),send_count(me),                    &
+     &  call MPI_GATHERV(MPI_IN_PLACE, send_count(me),                    &
      &   mpifloat,                                                      &
      &   msd, send_count, send_displ,                                   &
      &   mpifloat, 0, MPI_COMM_LOCAL, ierror)
 
 !    root determines where theta(x) is
         if (ME_LOCAL.eq.0.or..not.qpara) then
-         do n=1, nstring
-          q(n)=1
-          do m=1, nstring
-           if (msd(n,n)+msd(n,m).gt.msd(m,n)+msd(m,m)) then
-            q(n)=0
-            exit
-           endif
-          enddo
-         enddo
-         which=maxloc(q) ! maxloc needs an int array;
-         if (msd(which(1),which(1)).gt.ftsm_voronoi_cut**2)               &
+         which=minloc(msd) ! minloc needs an int array;
+         if (msd(which(1)).gt.ftsm_voronoi_cut**2)               &
      &    which(1)=-which(1) ! outside of the allowed region (special code)
-        endif ! ME_LOCAL
+        endif ! ME_LOCAL (root)
 !
        if (qpara)                                                       &
 #ifdef __CHARMM
@@ -452,7 +440,56 @@ __CHARMM_ONLY##ENDIF
 !
        ftsm_voronoi_compute=which(1)
 !
-       end function ftsm_voronoi_check
+       end function ftsm_voronoi_compute
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       subroutine ftsm_voronoi_whereami_compute(x,y,z)
+       __DEP_OUTPUT
+       __DEP_CONST
+!
+       float :: x(:), y(:), z(:)
+!     locals
+       float, pointer, dimension(:,:) :: rfi, roi
+       float, pointer, dimension(:) :: r_com, ow
+       int :: j, k, ind
+!
+       character(len=31) :: whoami
+       data whoami /' FTSM_VORONOI_WHEREAMI_COMPUTE>'/
+!
+!      make sure string coordinates have been defined
+!
+       if (.not.ftsm_voronoi_initialized) call ftsm_voronoi_init()
+!
+! populate instantaneous orientation and forcing coordinates
+! load coordinates (code dup, alas)
+! forcing
+       rfi=>r_f(:,:,instant)
+       do k=1, nforced; ind=iatom_f(k); 
+         rfi(k,1)=x(ind); rfi(k,2)=y(ind); rfi(k,3)=z(ind);
+       enddo
+! orientation
+       roi=>r_o(:,:,instant)
+       if (qorient) then ; 
+         if (qdiffrot) then
+          do k=1, norient; ind=iatom_o(k); 
+           roi(k,1)=x(ind); roi(k,2)=y(ind); roi(k,3)=z(ind);
+          enddo
+         endif
+         r_com=>rcom(:,instant)
+         ow=>orientWeights
+!       translate forced atoms to centroid
+         r_com=zero;
+         do j=1,3 ; do k=1, norient; 
+          r_com(j) = r_com(j)+ow(k)*roi(k,j)
+         enddo ;    enddo
+         rfi(:,1)=rfi(:,1)-r_com(1) ;        rfi(:,2)=rfi(:,2)-r_com(2) ;        rfi(:,3)=rfi(:,3)-r_com(3)
+         if (qdiffrot) then
+          roi(:,1)=roi(:,1)-r_com(1) ;       roi(:,2)=roi(:,2)-r_com(2) ;        roi(:,3)=roi(:,3)-r_com(3)
+         endif ! qdiffrot
+       endif ! qorient
+!
+       ftsm_voronoi_whereami=ftsm_voronoi_compute(rfi, roi, rall_f, rall_o)
+!
+       end subroutine ftsm_voronoi_whereami_compute
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine ftsm_voronoi_print_data(iunit)
 !      assume that unit is prepared
@@ -471,7 +508,7 @@ __CHARMM_ONLY##ENDIF
 !      gather all data on root
        type=MPI_INTEGER                       !__CHARMM_ONLY##.not.INTEGER8
        type=MPI_INTEGER8                      !__CHARMM_ONLY##INTEGER8
-
+!
        if (.not.ftsm_voronoi_initialized) call ftsm_voronoi_init()
 !
        if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then
@@ -486,16 +523,16 @@ __CHARMM_ONLY##ENDIF
          write(fmt,int_format) nstring
          do j=1,nstring
           write(iunit,'('//fmt//int_format//')')                        &
-     &     voro_data_all(j,1:nstring)+ftsm_cross_attemptO(j,:)        ! crossing attemps
+     &     voro_data_all(j,1:nstring)+cross_attemptO(j,:)        ! crossing attemps
          enddo
          write(iunit,'("%")') ! break
          do j=1,nstring
           write(iunit,'('//fmt//int_format//')')                        &
-     &     voro_data_all(j,nstring+1:2*nstring)+ftsm_cross_acceptO(j,:) ! crossing accepts
+     &     voro_data_all(j,nstring+1:2*nstring)+cross_acceptO(j,:) ! crossing accepts
          enddo
          write(iunit,'("%")') ! break
          write(iunit,'('//fmt//int_format//')')                         &
-     &    voro_data_all(:,2*nstring+1)+ftsm_voro_occupancyO(:)        ! occupancy
+     &    voro_data_all(:,2*nstring+1)+occupancyO(:)        ! occupancy
         endif ! ME
        endif ! MPI_COMM_STRNG
 !
@@ -604,52 +641,29 @@ __CHARMM_ONLY##ENDIF
        endif ! STRNG
        end subroutine ftsm_voronoi_print_log
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-
-
-
-
-
-!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-      subroutine ftsm_voronoi_whereami(x,y,z)
-      __DEP_OUTPUT
-!
-       float :: x(:), y(:), z(:)
-!     locals
-      int :: i
-!
-      character(len=23) :: whoami
-      data whoami /' FTSM_VORONOI_WHEREAMI>'/
-! populate instantaneous orientation and forcing coordinates
-
-
-
-      ftsm_voronoi_whereami=ftsm_voronoi_compute(rfi)
-
-!
-      end subroutine smcv_voronoi_whereami
-!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       function ftsm_voronoi_check(x,y,z,itime)
-! not parallelized yet; have to decide what level of parallelization is time-efficient
+! code based mainly on smcv_voronoi_compute
+!
       use lu ! for computing FE
       __DEP_OUTPUT
       __DEP_MULTICOM
-      __DEP_MPI 
+      __DEP_MPI
       __DEP_RANDOM
+      __DEP_CONST
 !
 #include "../../mpitype.def"
 !
       float :: x(:), y(:), z(:)
-      float :: mass(:) ! assumed shape
 !      float :: mass(size(x,1)) ! assumed size
       int :: itime ! timestep -- needed by new version of Voronoi
 ! local var.
-      int :: i, j, k, l, m, which, me
+      float, pointer, dimension(:,:) :: rfi, roi
+      float, pointer, dimension(:) :: r_com, ow
+      int :: i, j, k, l, m, which, me, ind
       int4mpi :: ierror
       int4mpi :: length(nstring-1)
       int4mpi :: request(nstring-1)
-      bool :: smcv_voronoi_compute ! returns false if theta_i(x) does not correspond to z_i
-      bool :: calcz, deriv, addforce
-      float :: rtemp(ftsm_num_cv) ! for storing current CV values (theta(x))
+      bool :: ftsm_voronoi_check ! returns false if the algorithm tells to revert momenta
 !
       int, allocatable :: vtemp(:), vtemp2(:)        ! for gathering Voronoi stats; this is an upper bound
       int4mpi :: stat(MPI_STATUS_SIZE)
@@ -662,24 +676,18 @@ __CHARMM_ONLY##ENDIF
 !     &          netflux(nstring)        ! net probability flux into a Voronoi cell
 !      int :: permut(nstring), d, code ! for LU decomposition routine
 !
-      character(len=22) :: whoami
-      data whoami /' SMCV_VORONOI_COMPUTE>'/
-!     loop over all cv and make calls by type
-      if (ftsm_num_cv.eq.0) then
-       __WRN( whoami, 'NO CV DEFINED.')
-      endif
+      character(len=20) :: whoami
+      data whoami /' FTSM_VORONOI_CHECK>'/
 !
-      qstring=(MPI_COMM_STRNG.ne.MPI_COMM_NULL)                         &
-     &  .and.(SIZE_STRNG.gt.1)
-      qgrp=(MPI_COMM_LOCAL.ne.MPI_COMM_NULL)                            &
-     &  .and.(SIZE_LOCAL.gt.1)
+      if (.not.ftsm_voronoi_initialized) call ftsm_voronoi_init()
+!
+      qstring=(MPI_COMM_STRNG.ne.MPI_COMM_NULL).and.(SIZE_STRNG.gt.1)
+      qgrp=(MPI_COMM_LOCAL.ne.MPI_COMM_NULL).and.(SIZE_LOCAL.gt.1)
 !
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 !      pool crossing+occupancy
       voronoi_update=voronoi_allow_cross.and.(voronoi_update_freq.gt.0)
-      if (voronoi_update)                                               &
-     &      voronoi_update=(mod(itime,voronoi_update_freq).eq.0)
-!
+      if (voronoi_update) voronoi_update=(mod(itime,voronoi_update_freq).eq.0)
       if (voronoi_update) then
 !      only roots
          if (qstring) then
@@ -689,7 +697,7 @@ __CHARMM_ONLY##ENDIF
           do i=1, nstring
 !           do j=1, 2*nstring+1 ! send everything
            do j=2*nstring+1, 2*nstring+1 ! send just the occupancy: this means FE cannot be computed
-            l=ftsm_voronoi_data(i,j,1)
+            l=ftsm_voronoi_data(i,j,1) ! voronoi data hosts targets of cross_attemps, cross_accept, 
             if (l.gt.0) then
              k=k+1; vtemp(k)=i; k=k+1; vtemp(k)=j; k=k+1;  vtemp(k)=l
             endif
@@ -697,7 +705,7 @@ __CHARMM_ONLY##ENDIF
           enddo
 !
           if (ME_STRNG.ne.0) then
-           call MPI_ISEND(vtemp, k,                                     & ! send local attempts, accepts + occupancy to root packed in temp
+           call MPI_ISEND(vtemp, k,       & ! send local attempts, accepts + occupancy to root packed in vtemp
      &     mpiint, 0, ME_STRNG, MPI_COMM_STRNG, request(ME_STRNG), ierror)
           else ! rank 0
 ! wait for all messages to begin sending
@@ -731,41 +739,36 @@ __CHARMM_ONLY##ENDIF
       endif ! voro_update
 !    do some work
 !
-      calcz=.true.; deriv=.false. ; addforce=.false.
+! calculate instantaneous string orientation/forced coordinates (r_o, r_f) based on x, y, z (repeated code for now)
+! note: in a typical V. calculation, this will be the only string routine called at every step, so we can assume
+! the coordinates need to be calculated
+! forcing
+       rfi=>r_f(:,:,instant)
+       do k=1, nforced; ind=iatom_f(k); 
+         rfi(k,1)=x(ind); rfi(k,2)=y(ind); rfi(k,3)=z(ind);
+       enddo
+! orientation
+       roi=>r_o(:,:,instant)
+       if (qorient) then ; 
+         if (qdiffrot) then
+          do k=1, norient; ind=iatom_o(k); 
+           roi(k,1)=x(ind); roi(k,2)=y(ind); roi(k,3)=z(ind);
+          enddo
+         endif
+         ow=>orientWeights
+         r_com=>rcom(:,instant)
+!       translate forced atoms to centroid
+         r_com=zero;
+         do j=1,3 ; do k=1, norient; 
+          r_com(j) = r_com(j)+ow(k)*roi(k,j)
+         enddo ;    enddo
+         rfi(:,1)=rfi(:,1)-r_com(1) ;        rfi(:,2)=rfi(:,2)-r_com(2) ;        rfi(:,3)=rfi(:,3)-r_com(3)
+         if (qdiffrot) then
+          roi(:,1)=roi(:,1)-r_com(1) ;       roi(:,2)=roi(:,2)-r_com(2) ;        roi(:,3)=roi(:,3)-r_com(3)
+         endif ! qdiffrot
+       endif ! qorient
+!    do the actual check later, first, check on the communication
 !
-      call frames_reset_calculate(.false.) ! make sure that frames recalculate their axes (but not gradients)
-      call quat_reset_calculate(.false.)
-!
-      do i=1, ftsm_num_cv
-       select case(ftsm_type(i))
-!
-        case(posi_com_x, posi_com_y, posi_com_z);
-         call cv_posi_com_calc(i,x,y,z,mass,x,y,z,calcz,deriv,addforce)
-        case(qcomp_1, qcomp_2, qcomp_3, qcomp_4);
-         call cv_qcomp_calc(i,x,y,z,mass,x,y,z,calcz,deriv,addforce)
-        case(angle_com);
-         call cv_angle_com_calc(i,x,y,z,mass,x,y,z,calcz,deriv,addforce)
-        case(anglvec);
-         call cv_anglvec_calc(i,x,y,z,mass,x,y,z,calcz,deriv,addforce)
-        case(dihe_com);
-         call cv_dihe_com_calc(i,x,y,z,mass,x,y,z,calcz,deriv,addforce)
-        case(rmsd);
-         call cv_rmsd_calc(i,x,y,z,mass,x,y,z,calcz,deriv,addforce)
-        case(drmsd);
-         call cv_drmsd_calc(i,x,y,z,mass,x,y,z,calcz,deriv,addforce)
-        case(proj);
-         call cv_proj_calc(i,x,y,z,mass,x,y,z,calcz,deriv,addforce)
-        case(dist_com);
-         call cv_dist_com_calc(i,x,y,z,mass,x,y,z,calcz,deriv,addforce)
-        case(cvrms);
-         call cv_cvrms_calc(i,x,y,z,mass,x,y,z,calcz,deriv,addforce)
-        case default
-         __WRN( whoami, 'UNKNOWN CV SPECIFIED.')
-       end select
-       rtemp(i)=ftsm_r(i,instant)
-      enddo
-!
-!     update
       if (voronoi_update) then
 !     root waits for all messages; then sends back concatenated array
        if (qstring) then
@@ -798,9 +801,9 @@ __CHARMM_ONLY##ENDIF
       endif ! voro_update
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 !    do some more work
-      which=cv_common_voronoi_compute(rtemp)
+      which=ftsm_voronoi_compute(rfi, roi, rall_f, rall_o)
       me=ftsm_voronoi_whereami
-!
+! receive the rest
       if (voronoi_update) then
         if (qstring) then
          if (ME_STRNG.ne.0) call MPI_WAIT(request(ME_STRNG), stat, ierror) ! make sure message is received
@@ -821,49 +824,48 @@ __CHARMM_ONLY##ENDIF
 !
       endif ! voronoi_update
 !
-!
       if (which.lt.0) then
-        smcv_voronoi_compute=.false. ! cutoff exceeded ; reflect ; do not update log
+        ftsm_voronoi_check=.false. ! cutoff exceeded ; reflect ; do not update log
       elseif (which.eq.me) then ! stayed in the same cell as before
-       ftsm_voro_occupancy(which)=ftsm_voro_occupancy(which)+1     ! update occupancy log
-       smcv_voronoi_compute=.true.
+       occupancy(which)=occupancy(which)+1     ! update occupancy log
+       ftsm_voronoi_check=.true.
       else ! crossed into a different cell
-       ftsm_cross_attempt(me,which)=ftsm_cross_attempt(me,which)+1
+       cross_attempt(me,which)=cross_attempt(me,which)+1
 !
        if (voronoi_allow_cross.and.itime.gt.voronoi_nocross_ini) then
 !    decide whether to allow the crossing
 !    roots decide
         if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then
 !         do i=1,nstring
-!          if (ftsm_voro_occupancyG(i).eq.0) ftsm_voro_occupancyG(i)=1
+!          if (occupancyG(i).eq.0) occupancyG(i)=1
 !         enddo
-!         dummy=1d0/sum(ftsm_voro_occupancyG)
+!         dummy=1d0/sum(occupancyG)
 !************************* acceptance criterion ********************
 !         P_accept_cross=
-!     &  (sum(1d0*ftsm_cross_acceptG(:,me)/ftsm_voro_occupancyG(:) )*
-!     &       ftsm_voro_occupancyG(me)                                  ! note: cross_accept(i,i)=0
-!     & -(sum(ftsm_cross_acceptG(me,:))-ftsm_cross_acceptG(me,which)))/
-!     &  (max(ftsm_cross_attemptG(me,which),1))
+!     &  (sum(1d0*cross_acceptG(:,me)/occupancyG(:) )*
+!     &       occupancyG(me)                                  ! note: cross_accept(i,i)=0
+!     & -(sum(cross_acceptG(me,:))-cross_acceptG(me,which)))/
+!     &  (max(cross_attemptG(me,which),1))
 !********************************************************************
-!     &  ( sum(1d0*ftsm_cross_attemptG(:,me)/ftsm_voro_occupancyG(:))-
-!     &    sum(1d0*ftsm_cross_attemptG(me,:))/ftsm_voro_occupancyG(me) )
+!     &  ( sum(1d0*cross_attemptG(:,me)/occupancyG(:))-
+!     &    sum(1d0*cross_attemptG(me,:))/occupancyG(me) )
 !     &  /
-!     &  ( sum(1d0*ftsm_cross_attemptG(:,which)/ftsm_voro_occupancyG(:))-
-!     &    sum(1d0*ftsm_cross_attemptG(which,:))/ftsm_voro_occupancyG(which))
+!     &  ( sum(1d0*cross_attemptG(:,which)/occupancyG(:))-
+!     &    sum(1d0*cross_attemptG(which,:))/occupancyG(which))
 !********************************************************************
-!     &  sum(1d0*ftsm_cross_attemptG(:,me)-ftsm_cross_attemptG(me,:))/
-!     &  sum(1d0*ftsm_cross_attemptG(:,which)-ftsm_cross_attemptG(which,:))
+!     &  sum(1d0*cross_attemptG(:,me)-cross_attemptG(me,:))/
+!     &  sum(1d0*cross_attemptG(:,which)-cross_attemptG(which,:))
 !********************************************************************
 ! compute free energy from crossing attemps
 !         do i=2,nstring
 !          flux(i,:)=
-!     &        1d0*ftsm_cross_attemptG(:,i)/ftsm_voro_occupancyG(:)
+!     &        1d0*cross_attemptG(:,i)/occupancyG(:)
 !          flux(i,i)=
-!     &        -1d0*sum(ftsm_cross_attemptG(i,:))/ftsm_voro_occupancyG(i)
+!     &        -1d0*sum(cross_attemptG(i,:))/occupancyG(i)
 !          if (flux(i,i-1).eq.0d0) flux(i,i-1)=
-!     &       1d0/ftsm_voro_occupancyG(i-1)              ! crude regularization
+!     &       1d0/occupancyG(i-1)              ! crude regularization
 !          if (flux(i-1,i).eq.0d0) flux(i-1,i)=
-!     &       1d0/ftsm_voro_occupancyG(i)
+!     &       1d0/occupancyG(i)
 !         enddo
 !         netflux(2:nstring)=0d0;
 !         netflux(1)=1d0                       ! boundary condition (p(1)=1)
@@ -872,11 +874,11 @@ __CHARMM_ONLY##ENDIF
 !         call ludcmp(flux, nstring, permut, d, code)
 !         call lubksb(flux, nstring, permut, prob)
 !
-         P_accept_cross=1d0                                             &
+         P_accept_cross=one                                             &
      &   * (2-abs(which-me))                                            & ! allow crosses only between adjacent cells (ad hoc)
 !     & *prob(me)/prob(which) ! free energy estimate
-!     & *exp(10d0*(ftsm_voro_occupancyG(me)/ftsm_voro_occupancyG(which)-1d0))
-     & *(ftsm_voro_occupancyG(me)/max(ftsm_voro_occupancyG(which),1))
+!     & *exp(10d0*(occupancyG(me)/occupancyG(which)-1d0))
+     & *(occupancyG(me)/max(occupancyG(which),1))
 !********************************************************************
          if (P_accept_cross.ge.1) then
           success=.true.
@@ -889,17 +891,17 @@ __CHARMM_ONLY##ENDIF
         if (qgrp) __BROADCAST_LOCAL_4B(success,1)
 !    if successful, update
         if (success) then
-         ftsm_cross_accept(me,which)=ftsm_cross_accept(me,which)+1
-         ftsm_voro_occupancy(which)=ftsm_voro_occupancy(which)+1
+         cross_accept(me,which)=cross_accept(me,which)+1
+         occupancy(which)=occupancy(which)+1
          ftsm_voronoi_whereami=which
         else
-         ftsm_voro_occupancy(me)=ftsm_voro_occupancy(me)+1
+         occupancy(me)=occupancy(me)+1
         endif
 !
-        smcv_voronoi_compute=success
+        ftsm_voronoi_check=success
        else ! crossing not allowed, so reflect
-        smcv_voronoi_compute=.false.
-        ftsm_voro_occupancy(me)=ftsm_voro_occupancy(me)+1     ! update occupancy log
+        ftsm_voronoi_check=.false.
+        occupancy(me)=occupancy(me)+1     ! update occupancy log
        endif ! voronoi_allow_cross
 !     update voronoi log.
        i=int_vector_add(ftsm_voro_log, ME_STRNG+1) ! replica ID
@@ -909,11 +911,10 @@ __CHARMM_ONLY##ENDIF
        i=int_vector_add(ftsm_voro_log, itime+vtime_offset)    ! at this time
       endif ! which<0
 !
-      end function smcv_voronoi_compute
-!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-
+      end function ftsm_voronoi_check
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine ftsm_voronoi_set_cutoff(cut)
+       __DEP_CONST
        float :: cut
        if (cut.gt.zero) then ! reject invalid values without warning
         if (.not. ftsm_voronoi_initialized) call ftsm_voronoi_init()
@@ -923,7 +924,7 @@ __CHARMM_ONLY##ENDIF
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine ftsm_voronoi_print_map(iunit,fmt)
        __DEP_OUTPUT
-!       __DEP_MULTICOM
+       __DEP_MULTICOM
        __DEP_MPI 
        int :: iunit
 !       int :: ierr

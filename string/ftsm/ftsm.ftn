@@ -52,6 +52,7 @@ __CHARMM_ONLY##IF STRINGM
 !
       subroutine ftsm_parse(COMLYN,COMLEN)
       use ftsm_rex, only: ftsm_rex_set_temp
+      use ftsm_voronoi, only: ftsm_voronoi_map, ftsm_voronoi_initialized, ftsm_voronoi_whereami
 !----------------------------------------------------------------------
 ! command parser for the finite temperature string
 !----------------------------------------------------------------------
@@ -82,10 +83,10 @@ __CHARMM_ONLY##IF STRINGM
       character(len=8) :: keyword
       character(len=80) :: fname
       character(len=6) :: whoami
-      float :: zval, k, step
+      float :: zval, k, step, voro_cut
       int :: ifile, c1, c2, qcor, qdcd, flen,            &
      &           num_ave_samples, irep, i, imode,        &
-     &           iorie, irmsd, ierror
+     &           iorie, irmsd, ierror, me
 !
 #ifdef __CHARMM
       int :: oldiol, isele
@@ -96,7 +97,7 @@ __CHARMM_ONLY##IF STRINGM
 #endif
       float, pointer :: fd_error(:,:)
 !
-      bool :: qroot, qslave, qprint, qcomp
+      bool :: qroot, qslave, qprint, qcomp, voronoi_check_map, ok
 !
  __DECLARE_MSGBUF
 !
@@ -174,6 +175,90 @@ __CHARMM_ONLY##IF STRINGM
        call joinwd(comlyn, mxcmsz, comlen, 'LEAP ', 5)
 #endif
 !ccccccccccccccc PARSE OTHER DYNAMICS OPTIONS
+! code from SMCV
+       voronoi_hist_on=(__INDX_RM(comlyn,comlen,'VORO').gt.0)
+       if (voronoi_hist_on) then
+        voro_cut=__NAN
+        if (__INDX(comlyn, comlen, 'VCUT',4).gt.0) then
+         voro_cut=__GET_RM_F(comlyn,comlen,'VCUT',zero)
+         if (voro_cut.le.zero) then
+          __WRN(whoami,'VCUT MUST BE POSITIVE. NOT SET.')
+         else
+          call ftsm_voronoi_set_cutoff(voro_cut)
+         endif
+        endif
+        voronoi_allow_cross=(__INDX_RM(comlyn,comlen, 'VCRS').gt.0)
+        if (voronoi_allow_cross) then
+         voronoi_update_freq=__GET_RM_I(comlyn,comlen,'VCRF',0)
+         if (voronoi_update_freq.le.0) then
+          __WRN(whoami,'MUST SPECIFY POSITIVE VCRF. VORONOI CELL CROSSING DISABLED.')
+          voronoi_allow_cross=.false.
+         elseif (__INDX(comlyn, comlen, 'VINI',4).gt.0) then ! if vini is present
+          voronoi_nocross_ini=__GET_RM_I(comlyn,comlen,'VINI',0) ! get it
+          if (voronoi_nocross_ini.le.0) then
+           __WRN(whoami,'NONPOSITIVE VINI SPECIFIED. WILL SET TO ZERO.')
+           voronoi_nocross_ini=0
+          endif ! voronoi_nocross_ini>0
+         else
+          voronoi_nocross_ini=0
+         endif ! voronoi_nocross_ini present
+        endif ! voronoi_allow_cross
+!
+!    initialize Voronoi data
+        if (.not.ftsm_voronoi_initialized)                           &
+     &    call ftsm_voronoi_init()
+!    standard V. calculation case -- no crossing
+        compute_whereami=.false.
+        if (.not.voronoi_allow_cross) then
+!    create standard map (unless map is present)
+!         if (.not.any(ftsm_voronoi_map.ne.-1)) then
+! I think this is a more appropriate criterion:
+         if (any(ftsm_voronoi_map.eq.-1)) then
+          ftsm_voronoi_map=(/ (i, i=1, nstring) /)
+          compute_whereami=.true. ! will be computed by dynamc routine
+         endif
+        endif
+!
+        voronoi_check_map=(__INDX_RM(comlyn,comlen, 'CHCK').gt.0)
+!
+!    compute whereami
+!
+        if (voronoi_check_map) then
+         if (qprint) then
+          write(_MSGBUF, 660) whoami ; __PRINT(_MSGBUF)
+         endif
+ 660  FORMAT(A,' CHECKING VORONOI MAP AGAINST CURRENT COORDINATES.')
+!
+         compute_whereami=.false.
+         call ftsm_voronoi_whereami_compute(__X,__Y,__Z)
+!
+         if (all(ftsm_voronoi_map.ne.-1)) then ! does the map have valid entries
+           me=ftsm_voronoi_map(mestring+1)
+!    compare me and whereami:
+           if (qroot) then
+            if(SIZE_STRNG.gt.1) then
+             call MPI_ALLREDUCE(me.eq.ftsm_voronoi_whereami, ok,          &
+     &         1, MPI_LOGICAL, MPI_LAND, MPI_COMM_STRNG, ierror)
+            else
+             ok=me.eq.ftsm_voronoi_whereami
+            endif
+           endif ! qroot
+           if (qslave) then 
+            __BROADCAST_LOCAL_4B(ok,1)
+           endif
+           if (.not.ok) then
+            __WRN(whoami,'VORONOI MAP INCONSISTENT WITH CURRENT COORDINATES. ABORTING.')
+            return
+           endif ! .not. ok
+         else ! voronoi map invalid (or was not read); proceed anyway using current whereami
+          __WRN( whoami,'VORONOI MAP CONTAINS INVALID ENTRIES.')
+         endif ! ftsm_voronoi_map.ne.-1
+!
+        else
+         ftsm_voronoi_whereami=ftsm_voronoi_map(mestring+1)
+        endif ! voronoi_check_map
+!
+       endif ! voronoi_hist_on
 !      reset internal interation counter for ftsm_master
        olditeration=0
 !
@@ -2719,6 +2804,73 @@ __CHARMM_ONLY##IF STRINGM
      & A,' ',A,'.DAT')
 !
       endif ! replica exchange log
+!cccccccccccc process Voronoi histogram output options ccccccccccc
+      voronoi_flen=0
+      if (__INDX_RM(comlyn,comlen,'VORO').gt.0) then
+!       get file name
+        __GET_RM_A(COMLYN,COMLEN,'VNAM',4,voronoi_fname,80,voronoi_flen)
+!ccccccccccc print summary
+        if (voronoi_flen.gt.0) then
+         output_voronoi_hist=.true.
+         if (qprint) then
+          write(_MSGBUF,6622) whoami,voronoi_fname(1:voronoi_flen)
+         endif
+        else
+         __WRN(whoami,'NO FILE NAME GIVEN. WILL NOT WRITE VORONOI HISTOGRAMS.')
+        endif
+ 6622 format(A,' WILL WRITE VORONOI HISTOGRAMS TO FILE ',A,'.DAT')
+!
+      endif ! voronoi histograms
+!cccccccccccccc voronoi map cccccccccccccccccccccccccccccccccccccccc
+      if (__INDX_RM(comlyn,comlen,'VMAP').gt.0) then
+!       get file name
+        if (voronoi_flen.eq.0) then
+         __GET_RM_A(COMLYN,COMLEN,'VNAM',4,voronoi_fname,80,voronoi_flen)
+        endif
+!
+        if (voronoi_flen.gt.0) then
+         output_voronoi_map=.true.
+         if (qprint) then
+          write(_MSGBUF,6627) whoami,voronoi_fname(1:voronoi_flen)
+          __PRINT(_MSGBUF)
+         endif
+        else
+          __WRN(whoami,'NO FILE NAME GIVEN. WILL NOT WRITE VORONOI MAP.')
+        endif
+ 6627 format(A,' WILL WRITE VORONOI MAP TO FILE ',A,'.MAP')
+!
+      endif ! voronoi map
+!cccccccccccccc voronoi log cccccccccccccccccccccccccccccccccccccccc
+      if (__INDX_RM(comlyn,comlen,'VLOG').gt.0) then
+!       get file name
+        if (voronoi_flen.eq.0) then
+         __GET_RM_A(COMLYN,COMLEN,'VNAM',4,voronoi_fname,80,voronoi_flen)
+        endif
+!       check for timestep offset
+        vtime_offset=__GET_RM_I(comlyn, comlen, 'VOFF', 0);
+        if (vtime_offset.gt.0) then
+         if (qprint) then ; write(_MSGBUF,6624) whoami, vtime_offset ; __PRINT(_MSGBUF) ; endif
+ 6624 format(A,' WILL OFFSET STEP COUNTER IN VORONOI LOG BY ',I10)
+        endif
+!
+        if (voronoi_flen.gt.0) then
+         output_voronoi_log=.true.
+         if (qprint) then
+          write(_MSGBUF,6623) whoami,voronoi_fname(1:voronoi_flen)
+          __PRINT(_MSGBUF)
+         endif
+         if (__INDX_RM(comlyn,comlen,'VLAP').gt.0) then ! APPEND?
+           vlform='APPEND'
+         else
+           vlform='WRITE'
+         endif ! vlap
+!
+        else
+          __WRN(whoami,'NO FILE NAME GIVEN. WILL NOT WRITE VORONOI LOG.')
+        endif ! voronoi_flen.gt.0
+ 6623 format(A,' WILL WRITE VORONOI LOG TO BINARY FILE ',A,'.DAT')
+!
+      endif ! complete voronoi log
 !cccccccccccccccccc process forces output options cccccccccccccccccc
       if (__INDX_RM(comlyn,comlen,'FORC').gt.0) then
 !       get nergy file name
@@ -3056,8 +3208,7 @@ __CHARMM_ONLY##IF STRINGM
 !
       __DECLARE_MSGBUF
 !
-      float :: x(:), y(:), z(:),                                       &
-     &          fx(:), fy(:), fz(:)
+      float, dimension(:) :: x, y, z, xcomp, ycomp, zcomp, fx, fy, fz
       int :: iteration ! MD iteration
 !
 #ifdef __CHARMM

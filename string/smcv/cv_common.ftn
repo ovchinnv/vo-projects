@@ -2596,6 +2596,11 @@ __CHARMM_ONLY##ENDIF
        int function cv_common_voronoi_check_aux                       &
      &           (r, rall, ncv, nstring, Mall, me)
 !    auxiliary function for use with voronoi_smart_update
+!    here, I only need to know whether the host cell is "me";
+!    in contrast, in voronoi_compute, I need to know what the host cell is,
+!    because that information is used to construct the MSM
+!    this is a straightforward implementation of eqs 29/30 (perhaps a bit inefficient but at the benefit of clarity)
+!
        __DEP_CONST 
        __IMPNONE
        int :: ncv, nstring, me
@@ -2640,7 +2645,7 @@ __CHARMM_ONLY##ENDIF
            enddo
            msd_n(ii)=0.5*dummy
          enddo ! ii=1,nstring
-        else  ! compute rmsd_i; coputed only for different tensors (hence if/else)
+        else  ! compute rmsd_i; computed only for different tensors (hence if/else)
 !    same code as above
          dummy=0d0
          do j=1,ncv
@@ -2703,6 +2708,7 @@ __CHARMM_ONLY##ENDIF
        end subroutine cv_common_voronoi_done
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        function cv_common_voronoi_compute(rtemp) ! rtemp calculated elsewhere and passed in
+!    this is a very straightforward implementation of eqations 29 and 30 in the string paper
        use cv_types
        use sm_var, only: nstring, mestring
        use sm_config, only: calc_voronoi_para
@@ -2741,8 +2747,8 @@ __CHARMM_ONLY##ENDIF
        if (.not.cv_common_voronoi_initialized) call cv_common_voronoi_init()
 !      compute RMSD
 !      need to compute distances w.r.t. all M tensors on the string
-       msd=0d0
-       msdall=0d0
+       msd=zero
+       msdall=zero
 !
 !     compute norms in parallel: each slave node is assigned a set of matrices
 !     compute index limits (this could be done once in the smcv_init routine)
@@ -2783,25 +2789,28 @@ __CHARMM_ONLY##ENDIF
         enddo ! j
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
         do m=mbeg,mend ! loop over the M tensors
+!cccc compute z_n M_m z_n below
+!==============================
          dummy=0d0
          do i=1,cv%num_cv
           j=i-1
-          do k=1, j
+          do k=1, j     ! M is symmetric, so do not need to iterate over all indices when computing norm
            dummy=dummy +                                                &
      &                z(i) * (cv%Mall(i,k,m)) * z(k)
           enddo
          enddo
-         dummy=2d0*dummy ! double contribution from off-diagonal terms
+         dummy=2d0*dummy ! double contribution from off-diagonal terms (because M is symmetric)
 !    contribution from diagonal terms
          do i=1,cv%num_cv
           dummy=dummy +                                                 &
      &               z(i) * (cv%Mall(i,i,m)) * z(i)
          enddo
          msd(n,m)=dummy
+!==============================
         enddo ! m=1,nstring
-       enddo ! i=1,nstring
+       enddo ! n=1,nstring
 !
-!    pool norms on root
+!    pool norms on root (gather over matrices (m-index) ):
        if (qpara)                                                       &
      &  call MPI_GATHERV(msd(1,mbeg),send_count(me),                    &
      &   mpifloat,                                                      &
@@ -2809,12 +2818,12 @@ __CHARMM_ONLY##ENDIF
      &   mpifloat, 0, MPI_COMM_LOCAL, ierror)
 
 !    root determines where theta(x) is
-        if (ME_LOCAL.eq.0.or..not.qpara) then
+       if (ME_LOCAL.eq.0.or..not.qpara) then
          do n=1, nstring
-          q(n)=1
+          q(n)=1          ! assume replica lives in cell "n" 
           do m=1, nstring
-           if (msd(n,n)+msd(n,m).gt.msd(m,n)+msd(m,m)) then
-            q(n)=0
+           if (msd(n,n)+msd(n,m).gt.msd(m,n)+msd(m,m)) then ! note that this is false for m=n, as should be
+            q(n)=0 ! Voronoi test failed, n is not the cell !
             exit
            endif
           enddo
@@ -2822,7 +2831,7 @@ __CHARMM_ONLY##ENDIF
          which=maxloc(q) ! maxloc needs an int array;
          if (msd(which(1),which(1)).gt.cv%voronoi_cut**2)               &
      &    which(1)=-which(1) ! outside of the allowed region (special code)
-        endif ! ME_LOCAL
+       endif ! ME_LOCAL
 !
        if (qpara)                                                       &
 #ifdef __CHARMM
