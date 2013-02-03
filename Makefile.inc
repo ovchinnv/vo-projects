@@ -53,7 +53,7 @@ TESTMSG=-include $(ROOT)/test.msg
 GLOBALDEPS=$(ROOT)/source.defs $(ROOT)/source.msg
 
 MPI_INCLUDE=-I $(MPI_HOME)/include
-MPI_LIB=-L $(MPI_HOME)/lib -lmpich -lmpl -lpthread
+MPI_LIBS=-L $(MPI_HOME)/lib -lmpich -lmpl -lpthread
 
 INCLUDES+=-I $(ROOT)/include
 LIBS+=-L $(ROOT)/lib
@@ -117,7 +117,7 @@ $(ROOT)/$(NAME).stamp:: $(OBJS) $(DISTRIB)
 test.F90:test.ftn $(LOCALDEPS) $(GLOBALDEPS) $(ROOT)/test.msg
 	$(FPP) $(FPPFLAGS) $(DEFS) -U__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(TESTMSG) -P $< > $@
 test :: $(OBJS) test.o force_look
-	$(LD) $(LDFLAGS) test.o $(OBJS) $(LOBJS) $(LIBS) -o test
+	$(LD) $(LDFLAGS) test.o $(OBJS) $(LOBJS) $(LIBS) $(MPI_LIBS) -o test
 	echo "==================================================="
 	echo "Running test :"
 	echo "==================================================="
@@ -130,7 +130,7 @@ $(OBJS):$(addsuffix .stamp, $(DEPS))
 
 ####################### EXECUTABLE ######################
 $(EXE): $(OBJS)
-	$(LD) $(LDFLAGS) $(OBJS) $(LOBJS) $(LIBS) $(MPI_LIB) -o $(EXE)
+	$(LD) $(LDFLAGS) $(OBJS) $(LOBJS) $(LIBS) $(MPI_LIBS) -o $(EXE)
 
 dynamol:
 	$(MAKE) -C $(ROOT)/dynamol
