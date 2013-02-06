@@ -13,12 +13,21 @@ __CHARMM_ONLY##IF STRINGM
 !
       private
 !
+!    custom type for sending rex data by MPI
+      type rex_string_datatype
+       float :: dpar0, dperp0, drms0, kpara, kperp, krms, evolve_expo_mem
+       int :: num_evolve_samples
+      end type rex_string_datatype
+!
+      int4mpi, save, public :: rex_string_data_mpi
+!
       float, save, public :: rex_beta
       int, save, allocatable, public :: rex_map(:)
       type (int_vector), save, public :: rex_log
 !
       bool, save, public :: rex_initialized=.false.
 !
+      public rex_string_datatype
       public ftsm_rex_init
       public ftsm_rex_done
       public ftsm_rex_set_temp
@@ -30,10 +39,14 @@ __CHARMM_ONLY##IF STRINGM
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine ftsm_rex_init(temp)
       __DEP_CONST 
+      __DEP_MPI
+!
+#include "../../mpitype.def"
 !
        float, optional :: temp
        float :: t
        int :: i
+       int :: offsets(2), counts(2), oldtypes(2), extent
 !
        if (.not.rex_initialized) then
         if (present(temp)) then ; t=temp; else ; t=300d0; endif
@@ -44,15 +57,25 @@ __CHARMM_ONLY##IF STRINGM
         rex_map=(/ (i, i=0,nstring-1) /)
         call int_vector_init(rex_log)
         rex_initialized=.true.
+! initialize MPI type for rex ; arrays must match type def above
+        offsets(1)=0; oldtypes(1)=mpifloat; counts(1)=7
+        call MPI_TYPE_EXTENT(mpifloat,extent,i)
+        offsets(2)=counts(1)*extent; oldtypes(2)=mpiint ; counts(2)=1
+        call MPI_TYPE_STRUCT(2, counts, offsets, oldtypes, rex_string_data_mpi, i) 
+        call MPI_TYPE_COMMIT(rex_string_data_mpi, i) 
+!
        endif
 !
        end subroutine ftsm_rex_init
 !!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine ftsm_rex_done()
+       __DEP_MPI
+       int :: i
        if (rex_initialized) then
         deallocate(rex_map)
         call int_vector_done(rex_log)
         rex_initialized=.false.
+        call mpi_type_free(rex_string_data_mpi,i)
        endif
        end subroutine ftsm_rex_done
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc

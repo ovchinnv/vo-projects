@@ -4968,7 +4968,7 @@ __CHARMM_ONLY        wrnlev=-1 ! turn off warnings for the first part of minimiz
 !     attempt to swap restraints that correspond to two adjacent replicas
       use multicom, only: multicom_permute_string_ranks
       use ftsm_rex, only: ftsm_rex_init, rex_initialized, rex_map,      &
-     &   rex_log, rex_beta
+     &   rex_log, rex_beta, rex_string_datatype, rex_string_data_mpi
       use ivector, only: int_vector_add
 !
       __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
@@ -4990,12 +4990,14 @@ __CHARMM_ONLY        wrnlev=-1 ! turn off warnings for the first part of minimiz
 !
       int :: which   ! replica with which the exchange was attempted
       bool :: success ! whether the exchange attempt was successful
-      int :: nodelist(nstring) ! holds new string replica order after excahnge attempt
+      int :: nodelist(nstring) ! holds new string replica order after exchange attempt
       int :: itype ! MPI_INTEGER type
       int :: ndata, nfiles
 !
+!     variables for exchanging string-dependent properties
+      type(rex_string_datatype) :: rex_string_data, rex_string_data_new
       float :: dE_me, dE, s, dpar0i, dperp0i, drms0i, dpar_ori,        &
-     &                                 dperp_ori, drms_ori, fac, fac2
+     &                                 dperp_ori, drms_ori, fac
 !
       character(len=150) :: fnames(5)              ! for storing output file names
       character(len=150) :: new_fnames(5)          ! for storing swapped file names
@@ -5031,32 +5033,43 @@ __CHARMM_ONLY        wrnlev=-1 ! turn off warnings for the first part of minimiz
        qvalid=(which.ge.0).and.(which.lt.SIZE_STRNG)
        if (qvalid) then
 !     store reference values in dummy
-        r_f(1,1,dummy)=dpar0; r_f(2,1,dummy)=dperp0; r_f(3,1,dummy)=drms0
+!     need to store all replica-dependent parameters
+        rex_string_data%dpar0 = dpar0;
+        rex_string_data%dperp0= dperp0;
+        rex_string_data%drms0 = drms0;
+        rex_string_data%kpara = kpara;
+        rex_string_data%kperp = kperp;
+        rex_string_data%krms  = krms;
+        rex_string_data%evolve_expo_mem = evolve_expo_mem;
+        rex_string_data%num_evolve_samples = num_evolve_samples;
+!
 !     send/receive
 !     allocate storage for new restraints
         allocate(r_f2(nforced,3,num_sets))
-        ndata=3*(nforced*9+1) ! number of reals to send
-        call MPI_SENDRECV(r_f, ndata, MPI_DOUBLE_PRECISION,             &      ! send almost everything
-     &   which, which, r_f2, ndata, MPI_DOUBLE_PRECISION,               & ! put into the same array, starting at position 11
+        ndata=3*(nforced*9) ! number of reals to send
+        call MPI_SENDRECV(r_f, ndata, mpifloat,             & ! send almost everything
+     &   which, which, r_f2, ndata, mpifloat,               & ! put into the same array, starting at position 11
      &   which, ME_STRNG, MPI_COMM_STRNG, stat, ierror)
         if (qorient) then
          if (qdiffrot) then ! orientation atoms
 !     allocate storage for new restraints
           allocate(r_o2(nforced,3,num_sets))
           ndata=27*norient
-          call MPI_SENDRECV(r_o, ndata, MPI_DOUBLE_PRECISION,           &
-     &    which, which, r_o2, ndata, MPI_DOUBLE_PRECISION,              &
+          call MPI_SENDRECV(r_o, ndata, mpifloat,           &
+     &    which, which, r_o2, ndata, mpifloat,              &
      &    which, ME_STRNG, MPI_COMM_STRNG, stat, ierror)
          else
           r_o2=>r_f2
          endif ! qdiffrot
         endif ! qorient
+! also exchange string image properties
+        call MPI_SENDRECV(rex_string_data, 1, rex_string_data_mpi, which, which, & 
+     &                    rex_string_data_new, 1, rex_string_data_mpi, which, ME_STRNG,&
+     &                    MPI_COMM_STRNG, stat, ierror)
+
 ! NOTE: in the above communication it is essential to have certain sets adjacent, as indicated by numbering in fts_var; do not break this
 !     calculate new string energies
-        dpar0i=r_f2(1,1,dummy); dperp0i=r_f2(2,1,dummy);
-        drms0i=r_f2(3,1,dummy) ! copy new reference values
-!
-        dpar_ori=dpar; dperp_ori=dperp; drms_ori=drms; ! save this replica's projection values
+        dpar_ori=dpar; dperp_ori=dperp; drms_ori=drms; ! first, save this replica's projection values
 !     swap arrays:
         r_f3=>r_f; r_o3=>r_o ! save in case move is rejected
         r_f=>r_f2; r_o=>r_o2 ! point to new array
@@ -5069,37 +5082,35 @@ __CHARMM_ONLY        wrnlev=-1 ! turn off warnings for the first part of minimiz
         endif ! restrained equilibration is on
 !
         deriv=.false. ! skip derivative calculation
-        call ftsm_calc(x,y,z,deriv,s)
+        call ftsm_calc(x,y,z,deriv,s) ! will compute new dpar, dperp, drms
 !
-!    calculate energies (adopted from _addforce):
+!    calculate energies (adapted from _addforce):
 !
         if (proj_on) then
 ! restraint force parallel to string
          qendpoint=(which.eq.0.or.which.eq.nstring-1)
-         if (qendpoint) then ; fac=0.5d0 ; fac2=1d0
-                        else ; fac=1.0d0 ; fac2=0.5d0
-         endif
+         if (qendpoint) then ; fac=half ; else ; fac=one  ; endif
+! compare energies (NOTE: in this version of REX, I am sending reference values, NOT coordinates)
 !    new energy
-         dE_me =  kpara * fac * fac * ( dpar-dpar0i )**2                &                ! scale down the force constant of endpoints (one for d, one for gradients)
-     &         +  kperp * fac * max   ( fac * dperp - dperp0i, 0d0 )**2 ! ignore negative values; dperp0 criterion in inner-replica d-metric
+         dE_me =  rex_string_data_new%kpara * fac * fac * ( dpar-rex_string_data_new%dpar0 )**2               & ! scale down the force constant of endpoints (one for d, one for gradients)
+     &         +  rex_string_data_new%kperp * fac * max   ( fac * dperp - rex_string_data_new%dperp0, zero )**2 ! ignore negative values; dperp0 criterion in inner-replica d-metric
 !    old energy
          qendpoint=(mestring.eq.0.or.mestring.eq.nstring-1)
-         if (qendpoint) then ; fac=0.5d0 ; fac2=1d0
-                        else ; fac=1.0d0 ; fac2=0.5d0
-         endif
+         if (qendpoint) then ; fac=half ; else ; fac=one  ; endif
+!
          dE_me =  dE_me                                                 &
      &        - kpara * fac * fac * ( dpar_ori-dpar0 )**2               &
-     &        - kperp * fac * max   ( fac * dperp_ori - dperp0, 0d0 )**2
+     &        - kperp * fac * max   ( fac * dperp_ori - dperp0, zero )**2
 
         else ! .not.  proj_on
-         dE_me = krms * ( ( drms-drms0i )**2 - ( drms_ori-drms0 )**2 )
+         dE_me = rex_string_data_new%krms * ( ( drms-rex_string_data_new%drms0 )**2 - ( drms_ori-drms0 )**2 )
         endif
 !
 !    combine energies from two replicas:
-        call MPI_SENDRECV(dE_me, 1, MPI_DOUBLE_PRECISION,               &
-     &   which, which, dE, 1, MPI_DOUBLE_PRECISION,                     &
+        call MPI_SENDRECV(dE_me, 1, mpifloat,               &
+     &   which, which, dE, 1, mpifloat,                     &
      &   which, ME_STRNG, MPI_COMM_STRNG, stat, ierror)
-        dE = 0.5d0 * ( dE+dE_me )
+        dE = half * ( dE+dE_me )
 !    5) apply Metropolis criterion
         if (dE.le.0d0) then
          success=.true.
@@ -5110,10 +5121,10 @@ __CHARMM_ONLY        wrnlev=-1 ! turn off warnings for the first part of minimiz
          if (which.lt.ME_STRNG) then
           success=(__RANDOMU(__SEED).le.exp(-rex_beta*dE))
 !     send to othe replica
-          call MPI_SEND(success, 1, MPI_LOGICAL, which, which,          &
+          call MPI_SEND(success, 1, mpibool, which, which,          &
      &    MPI_COMM_STRNG, ierror)
          else
-          call MPI_RECV(success, 1, MPI_LOGICAL, which, ME_STRNG,       &
+          call MPI_RECV(success, 1, mpibool, which, ME_STRNG,       &
      &    MPI_COMM_STRNG, stat, ierror)
          endif ! which lt ME_STRNG
         endif ! apply Metropolis
@@ -5130,7 +5141,7 @@ __CHARMM_ONLY        wrnlev=-1 ! turn off warnings for the first part of minimiz
           i=int_vector_add(rex_log, j) ! this replica
           i=int_vector_add(rex_log, which)    ! exchanged with this replica
           i=int_vector_add(rex_log, itime + rextime_offset)    ! at this time
-        endif ! success
+        endif ! ME_STRNG
 !
 !********************************************************************************************
 !     swap restart & traj file info; otherwise restart files will correspond to wrong replica
@@ -5202,24 +5213,20 @@ __CHARMM_ONLY        wrnlev=-1 ! turn off warnings for the first part of minimiz
 !#endif
 !     done with swap output file info
 !********************************************************************************************
-!       finish updating reference values
-        if (qvalid) then
-         dpar0=dpar0i ; dperp0=dperp0i ; drms0=drms0i
+!
          deallocate(r_f3); nullify(r_f2);
          if (qorient) then
           nullify(r_o2);
           if (qdiffrot) then ; deallocate(r_o3);
           else ; nullify(r_o3); endif
-         endif
-        endif ! qvalid
-       else
+         endif ! qorient
+       else ! success ( move rejected )
         call MPI_ALLGATHER(ME_STRNG, 1, mpiint,                          &
      &       nodelist, 1, mpiint, MPI_COMM_STRNG, ierror)
 !
-!    move rejected, so restore reference values
+!    move rejected, so restore string
 !
         if (qvalid) then
-         dpar=dpar_ori ; dperp=dperp_ori ; drms=drms_ori
          r_f=>r_f3; deallocate(r_f2); nullify(r_f3);
          if (qorient) then
           r_o=>r_o3; nullify(r_o3);
@@ -5245,7 +5252,7 @@ __CHARMM_ONLY        wrnlev=-1 ! turn off warnings for the first part of minimiz
        __BROADCAST_LOCAL(success,1,mpibool)
        __BROADCAST_LOCAL(nodelist,nstring,mpiint)
 #endif
-!    broadcast new cv to slaves
+!    broadcast new reference to slaves (what about dperp0, dpar0, drms0?) 
        if (success) then
 #ifdef __CHARMM
         __BROADCAST_LOCAL_4B(r_f,27*nforced)       !__CHARMM_ONLY##SINGLE
@@ -5261,7 +5268,12 @@ __CHARMM_ONLY        wrnlev=-1 ! turn off warnings for the first part of minimiz
          __BROADCAST_LOCAL(r_o,27*norient,mpifloat) ; 
 #endif
         endif
-       endif
+!
+!       broadcast reference values
+!
+        __BROADCAST_LOCAL(rex_string_data_new,1,rex_string_data_mpi) ! broadcast to slaves
+!
+       endif ! success
       endif ! qgrp
 !
 !        write(600+ME_GLOBAL, *) ME_STRNG
@@ -5287,16 +5299,28 @@ __CHARMM_ONLY        wrnlev=-1 ! turn off warnings for the first part of minimiz
      &  call multicom_permute_string_ranks(nodelist+1) ! special-purpose routine to reorder ranks in order of string replicas
 !                                                        added 1 because in multicom node indices start from 1
       if (success) then
+!    finish updating reference values
+       dpar0 =rex_string_data_new%dpar0
+       dperp0=rex_string_data_new%dperp0
+       drms0 =rex_string_data_new%drms0
+       kpara =rex_string_data_new%kpara
+       kperp =rex_string_data_new%kperp
+       krms  =rex_string_data_new%krms
+       evolve_expo_mem=rex_string_data_new%evolve_expo_mem
+       num_evolve_samples=rex_string_data_new%num_evolve_samples
+!
        if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) mestring=ME_STRNG
 !      broadcast string size to all slave nodes
+       if (qgrp) then
 #ifdef __CHARMM
-       __BROADCAST_LOCAL_4B(mestring,1)             !__CHARMM_ONLY##.not.INTEGER8
-       __BROADCAST_LOCAL_8B(mestring,1)             !__CHARMM_ONLY##INTEGER8
-       call setmsi('MESTRING',mestring)
+        __BROADCAST_LOCAL_4B(mestring,1)             !__CHARMM_ONLY##.not.INTEGER8
+        __BROADCAST_LOCAL_8B(mestring,1)             !__CHARMM_ONLY##INTEGER8
+        call setmsi('MESTRING',mestring)
 #else
-       __BROADCAST_LOCAL(mestring,1,mpiint)
+        __BROADCAST_LOCAL(mestring,1,mpiint)
 #endif
-      endif
+       endif ! qgrp
+      endif ! success
 !        write(600+ME_GLOBAL, *) ME_STRNG
 !           close(600+ME_GLOBAL)
 !
