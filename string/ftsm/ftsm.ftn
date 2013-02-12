@@ -2607,6 +2607,8 @@ __CHARMM_ONLY##IF STRINGM
 !
       fe_fname=''
       output_fe=.false.
+      fe_curvature=.false.
+      fe_curv=0d0
 !
       centers_fname=''
       output_centers=.false.
@@ -2709,6 +2711,8 @@ __CHARMM_ONLY##IF STRINGM
            feform='WRITE'
          endif
         endif
+!
+        fe_curvature=(__INDX_RM(comlyn,comlen,'NOCV').le.0)
 !ccccccccccc print summary cccccccccccccccccccccccccccccccccccccc
         if (qprint) then
          if (fe_flen.gt.0) then
@@ -2716,9 +2720,13 @@ __CHARMM_ONLY##IF STRINGM
          else
           write(_MSGBUF,6530) whoami ; __PRINT(_MSGBUF)
          endif
+         if (.not.fe_curvature) then
+          write(_MSGBUF,6540) whoami ; __PRINT(_MSGBUF)
+         endif
         endif
  6520 format(A,' WILL WRITE FREE ENERGY TO FILE ',A)
  6530 format(A,' WILL WRITE FREE ENERGY TO STDOUT.')
+ 6540 format(A,' FREE ENERGY PROFILE WILL EXCLUDE CONTRIBUTIONS FROM STRING CURVATURE.')
 !
       endif ! F.E.
 !cccccccccc process PATH CENTERS output options ccccccccccccccccccccccc
@@ -2920,7 +2928,7 @@ __CHARMM_ONLY##IF STRINGM
       character(len=80) :: fmt_real, fmt_int, fmt
       float :: r_com(3)
       float :: u (3,3)= RESHAPE( (/1,0,0,0,1,0,0,0,1/), (/3,3/) ) ! rotation matrix
-      float :: rmsd0, rmsd0_all(nstring), fc_all(2,nstring)
+      float :: rmsd0, rmsd0_all(nstring), fc_all(3,nstring)
 !
       int :: error
       character(len=11) :: whoami
@@ -3122,8 +3130,8 @@ __CHARMM_ONLY##IF STRINGM
       if (output_forces) then ! NOTE: these are the forces acting on the projection variables
 !    gather on root processor
        if (qroot) then
-        call mpi_gather(avforce,2,MPI_DOUBLE_PRECISION,                 & ! heads communicate
-     &                 fc_all,2,MPI_DOUBLE_PRECISION,0,                 &
+        call mpi_gather(avforce,3,MPI_DOUBLE_PRECISION,                 & ! heads communicate
+     &                 fc_all,3,MPI_DOUBLE_PRECISION,0,                 &
      &                 MPI_COMM_STRNG, error)
 !
         fmt='('//fmt_real(1:fmt_len)//real_format//')'
@@ -3138,7 +3146,8 @@ __CHARMM_ONLY##IF STRINGM
 !
 !    print
          write(forces_funit, fmt) fc_all(1,:) ! parallel forces
-         write(forces_funit, fmt) fc_all(2,:) ! perpendicular forces
+         if (fe_curvature) write(forces_funit, fmt) fc_all(2,:) ! curvature forces
+         write(forces_funit, fmt) fc_all(3,:) ! perpendicular forces
 !
 !     flush unit: close and reopen later
          if (forces_funit.ne.__OSTREAM)                                      &
@@ -3264,43 +3273,18 @@ __CHARMM_ONLY##IF STRINGM
          if (proj_on) then
 !    save old reference coordinates
           r_f(:,:,left_old:right_old)=r_f(:,:,left:right)
+          r_f(:,:,center)=r_f(:,:,center_new)
           if (qdiffrot) then
            r_o(:,:,left_old:right_old)=r_o(:,:,left:right)
+           r_o(:,:,center)=r_o(:,:,center_new)
 !    make sure orientation coordinates are current
            call ftsm_update_overlap_coor(ione) ! r_f --> r_o
           endif
-! VO 1.2013 : see if image minimization is requested
-          if (ftsm_mini_on) then
-            if (.not.string_noprint) then 
-             write(_MSGBUF,'(2A)') whoami,' MINIMIZING IMAGE ENERGY.' ; __PRINTL(_MSGBUF,3)
-            endif
-            call ftsm_mini(x, y, z                           &
-#ifdef __CHARMM
-     &                    ,wmain, nbond_data, image_data     &
-     &                    ,fx, fy, fz                        & ! to make sure forces are not overwritten 
-#endif
-     &                    )
-          endif ! ftsm_mini_on
-!    see if reparametrization requested
-          if (repa_on) then
-            if (.not.string_noprint) then 
-             write(_MSGBUF,'(2A)') whoami,' REPARAMETRIZING IMAGES.' ; __PRINTL(_MSGBUF,3)
-            endif
-            call ftsm_repa(.false.) ! reparametrize string, do not broadcast to slaves; removes COM
-          else
-!    recompute and remove centers of mass (which will change due to repa)
-           call ftsm_save_com()
-          endif ! repa_on
-!    update reference coordinates
-          if (.not.string_noprint) then 
-           write(_MSGBUF,'(2A)') whoami,' UPDATING NEIGHBOR IMAGES.' ; __PRINTL(_MSGBUF,3)
-          endif
-          call ftsm_swap_bc(.true.) ! VO changed from false to true 1/2013 (why was it false? problem only in parallel)
-!------------------------------------------------------------------------
-         else ! not proj_on (voronoi tessellation also covered in this case)
+         else  ! not proj_on (voronoi tessellation should also be covered in this case)
 !    save old reference coordinates and switch to new reference coordinates
           if (.not.string_noprint) then 
-           write(_MSGBUF,'(2A)') whoami,' UPDATING REFERENCE IMAGES.' ; __PRINTL(_MSGBUF,3)
+           write(_MSGBUF,'(2A)') whoami,' UPDATING REFERENCE IMAGES.' 
+           __PRINTL(_MSGBUF,3)
           endif
           r_f(:,:,center_old)=r_f(:,:,center)
           r_f(:,:,center)=r_f(:,:,center_new)
@@ -3310,39 +3294,49 @@ __CHARMM_ONLY##IF STRINGM
 !    make sure orientation coordinates are current
            call ftsm_update_overlap_coor(ione) ! r_f --> r_o
           endif
+         endif ! proj_on
 !
 ! VO 1.2013 : see if image minimization is requested
-          if (ftsm_mini_on) then
+         if (ftsm_mini_on) then
             if (.not.string_noprint) then 
              write(_MSGBUF,'(2A)') whoami,' MINIMIZING IMAGE ENERGY.' ; __PRINTL(_MSGBUF,3)
             endif
             call ftsm_mini(x, y, z                           &
 #ifdef __CHARMM
      &                    ,wmain, nbond_data, image_data     &
+     &                    ,fx, fy, fz                        & ! to make sure forces are not overwritten 
 #endif
      &                    )
-          endif ! ftsm_mini_on
+         endif ! ftsm_mini_on
 !    see if reparametrization requested
-          if (repa_on) then
-            if (.not.string_noprint) then 
-             write(_MSGBUF,'(2A)') whoami,' REPARAMETRIZING IMAGES.' ; __PRINTL(_MSGBUF,3)
-            endif
-            call ftsm_repa(.true.) ! reparametrize string and broadcast to slaves
-!    recompute centers of mass (which will change due to repa or regular evolution)
-!          call ftsm_save_com() ! moved to repa routine
-          else
+         if (repa_on) then
+          if (.not.string_noprint) then 
+             write(_MSGBUF,'(2A)') whoami,' REPARAMETRIZING IMAGES.' 
+             __PRINTL(_MSGBUF,3)
+          endif
+          call ftsm_repa(.not.proj_on) ! reparametrize string, proj_on: do not broadcast to slaves b/c ftsm_swap_bc ; removes COM
+         else
+!    recompute and remove centers of mass (which will change due to repa)
            call ftsm_save_com()
-          endif ! repa_on
+         endif ! repa_on
+!    update reference coordinates
+         if (proj_on) then
+          if (.not.string_noprint) then 
+           write(_MSGBUF,'(2A)') whoami,' UPDATING NEIGHBOR IMAGES.' ; __PRINTL(_MSGBUF,3)
+          endif
+          call ftsm_swap_bc(.true.) ! VO changed from false to true 1/2013 (why was it false? problem only in parallel)
+         endif
+!------------------------------------------------------------------------
+!    Voronoi tessellation:
 !    smart-update voronoi data: if update too aggressive and some replicas end up in a wrong v. cell, string coords will be rolled back; 
-!    
          if (voronoi_hist_on) call ftsm_voronoi_smart_update(x,y,z,xcomp,ycomp,zcomp) 
 !
 !    reset arrays for updating reference structure
-          r_f(:,:,center_new)=r_f(:,:,center)
-          if (qdiffrot) r_o(:,:,center_new)=r_o(:,:,center)
+         r_f(:,:,center_new)=r_f(:,:,center)
+         if (qdiffrot) r_o(:,:,center_new)=r_o(:,:,center)
 !
-         endif
          restrained_eq0=iteration
+!
         endif ! update_on
        endif ! update_on
 !
@@ -3390,10 +3384,10 @@ __CHARMM_ONLY##IF STRINGM
       float :: a11, a12, a13, a21, a22, a23, a31, a32, a33
       float :: b11, b12, b13, b21, b22, b23, b31, b32, b33
       float, dimension(:,:,:,:), pointer :: ugrad, ugrad1, ugrad2
-      float, pointer, dimension(:,:) :: roi,rol,ror,roc,rol_rot,ror_rot&
-     &   ,rol_old,roc_old,ror_old,rol_cur,roc_cur,ror_cur
+      float, pointer, dimension(:,:) :: roi,rol,ror,roc,               &
+     &    rol_old,roc_old,ror_old,rol_cur,roc_cur,ror_cur
       float, pointer, dimension(:,:) :: rfi,rfl,rfr,rfc,rfl_rot,rfr_rot&
-     &   ,rfl_old,rfc_old,rfr_old,rfl_cur,rfc_cur,rfr_cur
+     &   ,rfc_rot,rfl_old,rfc_old,rfr_old,rfl_cur,rfc_cur,rfr_cur
       float, pointer, dimension(:,:) :: fopar, foprp, ffpar, ffprp
       float, pointer, dimension(:,:) :: rfpar, rfprp
       float, pointer :: M(:,:)
@@ -3427,13 +3421,12 @@ __CHARMM_ONLY##IF STRINGM
       r_com=>rcom(:,instant)
       roi=>r_o(:,:,instant);
       rol=>r_o(:,:,left); ror=>r_o(:,:,right); roc=>r_o(:,:,center);
-      rol_rot=>r_o(:,:,left_rot); ror_rot=>r_o(:,:,right_rot)
       fopar=>r_o(:,:,fpar);  foprp=>r_o(:,:,fperp) ! parallel forces
 !--------------------------------------------------------------------------------------
       fw=>forcedWeights
       rfi=>r_f(:,:,instant);
       rfl=>r_f(:,:,left); rfr=>r_f(:,:,right); rfc=>r_f(:,:,center);
-      rfl_rot=>r_f(:,:,left_rot);  rfr_rot=>r_f(:,:,right_rot)
+      rfl_rot=>r_f(:,:,left_rot);  rfr_rot=>r_f(:,:,right_rot); rfc_rot=>r_f(:,:,center_rot);
       ffpar=>r_f(:,:,fpar);  ffprp=>r_f(:,:,fperp) ! forces
       rfpar=>r_f(:,:,vpar);  rfprp=>r_f(:,:,vperp) ! displacement vectors
 !
@@ -3534,7 +3527,9 @@ __CHARMM_ONLY##IF STRINGM
         rol=>rol_cur
         ror=>ror_cur
 !
-       else ! .not. proj
+       endif ! proj
+!
+       if (.not.proj_on .or. fe_curvature) then
         rfc_cur=0d0;
         if (qorient) then
          call RMSBestFit(roc,roi,ow,u)
@@ -3567,7 +3562,7 @@ __CHARMM_ONLY##IF STRINGM
         rfc=>rfc_cur
         roc=>roc_cur
 !
-       endif ! proj_on
+       endif ! (not proj) / curvature
       endif ! qcombine
 !
 !!                write(600+me_global,*) matmul(ow,rol) ! correct (0)
@@ -3605,42 +3600,56 @@ __CHARMM_ONLY##IF STRINGM
 !
           call RMSBestFit(rol,roi,ow,u, obeg,oend,ugrad)
           call RMSBestFit(ror,roi,ow,u1,obeg,oend,ugrad1)
+! fe_curvature (do not need gradient)
+          if (fe_curvature) call RMSBestFit(roc,roi,ow,u2) ! here, u2 corresponds to the center image
+!
          elseif (qdiffrot) then ! not proj_on but need derivatives of rotations
           allocate(ugrad (3,3,3,norient))
-          call RMSBestFit(roc,roi,ow,u, obeg,oend,ugrad)
-         else ! no need to calculatte gradients
-          call RMSBestFit(roc,roi,ow,u)
+          call RMSBestFit(roc,roi,ow,u2, obeg,oend,ugrad)
+         else ! no need to calculate gradients
+          call RMSBestFit(roc,roi,ow,u2)
          endif ! proj_on
 !
-       else
+       else ! not deriv
          if (proj_on) then
           call RMSBestFit(rol,roi,ow,u)
           call RMSBestFit(ror,roi,ow,u1)
+          if (fe_curvature) call RMSBestFit(roc,roi,ow,u2)
          else  ! not proj_on
-          call RMSBestFit(roc,roi,ow,u) ! orientation between center image and current coords
+          call RMSBestFit(roc,roi,ow,u2) ! orientation between center image and current coords
          endif ! proj_on
        endif ! deriv
 
 !     rotate target structures to overlap with current
 !     conventional way (might be faster)
-       rfl_rot=0d0;
-       if (proj_on) then
-        rfr_rot=0d0;
+       if (proj_on .and. fe_curvature) then
+        rfr_rot=0d0;   rfl_rot=0d0;    rfc_rot=0d0;
         do k=1,3; do j=1,3
-           rfl_rot(:,j)=rfl_rot(:,j)+rfl(:,k)*u(j,k)
+           rfl_rot(:,j)=rfl_rot(:,j)+rfl(:,k)*u (j,k)
+           rfr_rot(:,j)=rfr_rot(:,j)+rfr(:,k)*u1(j,k)
+           rfc_rot(:,j)=rfc_rot(:,j)+rfc(:,k)*u2(j,k)
+        enddo;    enddo
+!
+       elseif (proj_on) then
+        rfr_rot=0d0;   rfl_rot=0d0;
+        do k=1,3; do j=1,3
+           rfl_rot(:,j)=rfl_rot(:,j)+rfl(:,k)*u (j,k)
            rfr_rot(:,j)=rfr_rot(:,j)+rfr(:,k)*u1(j,k)
         enddo;    enddo
-       else
+!
+       else  ! not proj_on
+        rfc_rot=0d0
         do k=1,3; do j=1,3
-           rfl_rot(:,j)=rfl_rot(:,j)+rfc(:,k)*u(j,k)
+           rfc_rot(:,j)=rfc_rot(:,j)+rfc(:,k)*u2(j,k)
         enddo;    enddo
-       endif
+       endif ! proj_on
 !
       else ! not qorient
        if (proj_on) then
         rfl_rot=>rfl; rfr_rot=>rfr ! no rotation
+        if (fe_curvature) rfc_rot=>rfc
        else
-        rfl_rot=>rfc
+        rfc_rot=>rfc
        endif
       endif ! qorient
 !
@@ -3649,6 +3658,7 @@ __CHARMM_ONLY##IF STRINGM
        rho=0d0
        rho1=0d0
        rho2=0d0
+       fe_curv=0d0
 !
        if (deriv) then
 !
@@ -3656,14 +3666,15 @@ __CHARMM_ONLY##IF STRINGM
         do k=1,3 ; do j=1,nforced
                      d = rfi(j,k)    -rfl_rot(j,k)
                      d1= rfr_rot(j,k)-rfl_rot(j,k)
+                     d2= rfc_rot(j,k)-rfl_rot(j,k) ! for curvature
 !
                      rfpar(j,k) = d    ! displacement to first reference
                      rfprp(j,k) = d-d1 ! displacement to second reference
+                     fe_curv = fe_curv + fw(j) * ( d1-2d0*d2 ) * (d-d2 ) ! curvature
 !
-                     rho1=rho1 + d1*d1 *fw(j) ! denominator in dpar
+                     rho1=rho1 + d1*d1 * fw(j) ! denominator in dpar
                      d1 = d1 * fw(j)
                      rho =rho  + d *d1        ! numerator
-!
 !     COM contribution to gradient for orientation atoms:
                      r1(k)=r1(k)+d1 ! will only be used if (qdiffrot)
 !     derivative components from the forcing atoms:
@@ -3672,6 +3683,7 @@ __CHARMM_ONLY##IF STRINGM
         if (rho1.le.tol) then ; rho1=1d0 ; else ; rho1=1d0/rho1 ; endif ! a rather unlikely event
         dpar=rho*rho1 ! length projection along line connecting left and right structures
         rho=sqrt(rho1)! for normalization of perpendicular derivatives
+        fe_curv = fe_curv * rho1 * 4d0 ! for internal pts will need x 4 because rho1 is (2)^2 times the string length increment ds
         omdpar=1d0-dpar
         d5=dpar*omdpar
 ! the next loop is required for the perpendicular component
@@ -3880,15 +3892,18 @@ __CHARMM_ONLY##IF STRINGM
          do k=1,3 ; do j=1,nforced
                     d = rfi(j,k)    -rfl_rot(j,k)
                     d1= rfr_rot(j,k)-rfl_rot(j,k)
+                    d2= rfc_rot(j,k)-rfl_rot(j,k) ! for curvature
 !
                     rfpar(j,k) = d    ! displacement to first reference
                     rfprp(j,k) = d-d1 ! displacement to second reference
+                    fe_curv = fe_curv + fw(j) * ( d1-2d0*d2 ) * (d-d2 ) ! curvature
 !
                     rho =rho  + d *d1 *fw(j) ! numerator
                     rho1=rho1 + d1*d1 *fw(j) ! denominator
          enddo ;    enddo
          if (rho1.le.tol) then ; rho1=1d0 ; else ; rho1=1d0/rho1 ; endif ! a very unlikely event
          dpar=rho*rho1 ! length projection along line connecting left and right structures
+         fe_curv = fe_curv * rho1 * 4d0 ! for internal pts, will need x 4 because rho1 is (2)^2 times the string length increment ds
          omdpar=1d0-dpar
 ! the next loop is required for the perpendicular component
          do k=1,3 ; do j=1,nforced
@@ -3904,7 +3919,7 @@ __CHARMM_ONLY##IF STRINGM
       else ! not proj_on
 !    NOTE: will put forces into parallel force array; fperp is unused
 !    compute the RMSD
-        drms=rmsd(rfi, rfl_rot, fw)
+        drms=rmsd(rfi, rfc_rot, fw)
 !
         if (deriv) then
 !    to scale derivatives by 1/drms
@@ -3919,7 +3934,7 @@ __CHARMM_ONLY##IF STRINGM
 !     and add forces on forcing atoms
           r1(:)=0d0;
           do k=1, nforced
-           ffpar(k,:) = rho * fw(k) * (rfi(k,:)-rfl_rot(k,:))
+           ffpar(k,:) = rho * fw(k) * (rfi(k,:)-rfc_rot(k,:))
            r1(:)      = r1(:) + ffpar(k,:)
           enddo
           do j=obeg, oend
@@ -3959,7 +3974,7 @@ __CHARMM_ONLY##IF STRINGM
          else ! not qdiffrot .or. not qorient
 !     apply forces to the forcing atoms
           do j=1,nforced
-           ffpar(j,:)=rho * fw(j) * (rfi(j,:)-rfl_rot(j,:))
+           ffpar(j,:)=rho * fw(j) * (rfi(j,:)-rfc_rot(j,:))
           enddo
          endif ! qdiffrot.and.qorient
 !
@@ -4003,7 +4018,7 @@ __CHARMM_ONLY##IF STRINGM
 ! for the internal points, integrating the force through one inter-image distance is equivalent to multiplying
 ! the force by 0.5 (0.5 is the scaled distance between adjacent inner images)
 ! for the endpoints, the distance between adjacent images is 1, so take the force (scaled down) and multiply by 1
-      if (qendpoint) then ; fac=0.5d0 ; fac2=1d0
+      if (qendpoint) then ; fac=0.5d0 ; fac2=1d0 ; fe_curv=0d0 ! no curvature at endpoints
                      else ; fac=1.0d0 ; fac2=0.5d0
       endif
 !
@@ -4013,7 +4028,8 @@ __CHARMM_ONLY##IF STRINGM
        pre2 = kperp * fac * max   ( fac * dperp - dperp0, 0d0 ) ! ignore negative values; dperp0 criterion in inner-replica d-metric
 ! update force: for inner points, multiply force by 0.5; for boundary use 1d0; the FE is then simply the sum of the forces along the string
        avforce(1) = t * avforce(1) + omt * pre1 * fac2 ! force acting on dpar0 is pre1 (integrate negative to get f.e.)
-       avforce(2) = t * avforce(2) + omt * pre2 * fac2 ! force acting on derp0 is pre2 ( NOTE: this is not a true force along the path)
+       avforce(2) = t * avforce(2) - omt * pre1 * fac2 * (fe_curv * fac * fac) ! force due to curvature (note: either fac=1 or curv=0)
+       avforce(3) = t * avforce(3) + omt * pre2 * fac2 ! force acting on derp0 is pre2 ( NOTE: this is not a true force along the path)
 !                                                      ! even if I am treating it here as such; it is an orthogonal `correction'
        if (pre2 .gt. 0d0) then
 !
@@ -4085,13 +4101,9 @@ __CHARMM_ONLY##IF STRINGM
       ow=>orientWeights
       rfi=>r_f(:,:,instant)
       r_com=>rcom(:,instant)
-      if (proj_on) then
-       roc=>r_o(:,:,center)
-       rfc=>r_f(:,:,center)
-      else
-       roc=>r_o(:,:,center_new)
-       rfc=>r_f(:,:,center_new)
-      endif
+!
+      roc=>r_o(:,:,center_new)
+      rfc=>r_f(:,:,center_new)
 !
       if (evolve_aver_on) then
        if (num_evolve_samples.lt.max_evolve_samples.or.                 &
@@ -4157,9 +4169,12 @@ __CHARMM_ONLY##IF STRINGM
       subroutine ftsm_compute_fe_fd()
       __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
       __DEP_MPI 
+      __DEP_NUMBER
       __IMPNONE
 !
-      float :: avforces(2,nstring)
+#include "../../mpitype.def"
+!
+      float :: avforces(3,nstring), qcurv
       int :: ierror, i
       character(len=20) :: whoami
       data whoami /' FTSM_COMPUTE_FE_FD>'/
@@ -4168,15 +4183,18 @@ __CHARMM_ONLY##IF STRINGM
        if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.                         &
      &                         SIZE_STRNG.gt.1) then
 
-        call MPI_GATHER(avforce, 2, MPI_DOUBLE_PRECISION,               &
-     &                 avforces, 2, MPI_DOUBLE_PRECISION,               &
+        call MPI_GATHER(avforce, 3, mpifloat,               &
+     &                 avforces, 3, mpifloat,               &
      &                 0, MPI_COMM_STRNG, ierror)
         fe(1)=0d0
+!
+        if (fe_curvature) then ; qcurv=one ; else ; qcurv=zero ; endif
+!
         do i=2, nstring
-         fe(i)  =fe(i-1) - 0.5d0 * ( avforces(1,i-1) + avforces(1,i) )
-         fe(i-1)=fe(i-1) - ( avforces(2,i-1) - avforces(2,1) )
+         fe(i)  =fe(i-1) - half * ( avforces(1,i-1) + avforces(1,i) + qcurv*( avforces(2,i-1) + avforces(2,i) ) )
+!         fe(i-1)=fe(i-1) - ( avforces(2,i-1) - avforces(2,1) )
         enddo
-        fe(nstring)=fe(nstring) - ( avforces(2,nstring) - avforces(2,1))
+!        fe(nstring)=fe(nstring) - ( avforces(2,nstring) - avforces(2,1))
        endif ! qroot
       endif ! proj_on
 !
@@ -5042,6 +5060,7 @@ __CHARMM_ONLY        wrnlev=-1 ! turn off warnings for the first part of minimiz
         rex_string_data%krms  = krms;
         rex_string_data%evolve_expo_mem = evolve_expo_mem;
         rex_string_data%num_evolve_samples = num_evolve_samples;
+        rex_string_data%avforce = avforce
 !
 !     send/receive
 !     allocate storage for new restraints
@@ -5314,6 +5333,7 @@ __CHARMM_ONLY        wrnlev=-1 ! turn off warnings for the first part of minimiz
        krms  =rex_string_data_new%krms
        evolve_expo_mem=rex_string_data_new%evolve_expo_mem
        num_evolve_samples=rex_string_data_new%num_evolve_samples
+       avforce=rex_string_data_new%avforce
 !
        if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) mestring=ME_STRNG
 !      broadcast string size to all slave nodes
