@@ -428,17 +428,17 @@ __CHARMM_ONLY##IF STRINGM
 !
             write(_MSGBUF,665) whoami, restrained_eq_steps ;   __PRINT(_MSGBUF)
  665  format(A, ' WILL ADJUST TO NEW RESTRAINTS OVER ',I11, ' STEPS.')
-        endif ! restrained
 !
 !       proj_on is necessary to compute free energies
-        if (proj_on) then
+         if (proj_on) then
             write (_MSGBUF,'(2A)') whoami,                                 &
      & ' WILL RESTRAIN SYSTEM TO PLANE PERPENDICULAR TO PATH.' ; __PRINT(_MSGBUF)
-        else
+         else
             write (_MSGBUF,'(2A)') whoami,                                 &
      & ' WILL RESTRAIN SYSTEM TO PATH IMAGE.'//                         &
      & ' (FE/MFPT CANNOT BE COMPUTED).' ; __PRINT(_MSGBUF)
-        endif
+         endif ! proj_on
+        endif !restrained
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
         if (stat_on) then
             write(_MSGBUF,668) whoami, stat_freq ;                __PRINT(_MSGBUF)
@@ -451,6 +451,46 @@ __CHARMM_ONLY##IF STRINGM
  691  format(A, ' WILL ATTEMPT TO EXCHANGE NEIGHBORING REPLICAS ',/     &
      &       A, ' ONCE IN EVERY ',I6,' ITERATIONS AT ',F11.3, ' K.')
         endif ! repl_x_on
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+        if (voronoi_hist_on) then
+            write(_MSGBUF,670) whoami ; __PRINT(_MSGBUF)
+ 670  format(A, ' WILL COMPUTE FREE ENERGY ALONG STRING USING VORONOI TESSELLATION.' )
+         if (voronoi_allow_cross) then
+          write(_MSGBUF,601) whoami ; __PRINT(_MSGBUF)
+          write(_MSGBUF,602) whoami, whoami, voronoi_update_freq ; __PRINT(_MSGBUF)
+          if (voronoi_nocross_ini.gt.0) then
+           write(_MSGBUF, 603) whoami, whoami, voronoi_nocross_ini ; __PRINT(_MSGBUF)
+          endif
+ 601  format(A, ' WILL ALLOW REPLICAS TO CROSS BETWEEN V. CELLS.')
+ 602  format(A, ' WILL UPDATE CROSSING STATISTICS ONCE IN EVERY',/,     &
+     &      A, I6, ' ITERATIONS.')
+ 603  format(A, ' WILL DISALLOW CROSSING DURING THE INITIAL ',/,A,I6,   &
+     &       ' ITERATIONS.')
+         endif
+         if (voro_cut.gt.zero) then 
+          write(_MSGBUF,'(2A,/2A,F11.7,A)')            &
+     & whoami,' STRING WILL BE RESTRICTED TO STAY WITHIN ',             &
+     & whoami,' THE WEIGHTED DISTANCE ',voro_cut,' OF THE CELL CENTERS.' ; __PRINT(_MSGBUF)
+         endif
+         if (restrained_on) then 
+          write(_MSGBUF,'(2A,/2A)')   &
+     &      whoami, ' STRING DYNAMICS SHOULD BE USED WITH CAUTION',     &
+     &      whoami, ' DURING VORONOI FE COMPUTATION.' ; __PRINT(_MSGBUF)
+         endif
+         if (update_on) then
+          if (.not.voronoi_allow_cross) then
+           write(_MSGBUF,'(2A,/2A)')                                       &
+     &    whoami, ' STRING UPDATE DURING VORONOI FE COMPUTATION IS',     &
+     &    whoami, ' EXPERIMENTAL AND SHOULD BE USED WITH CAUTION ' ; __PRINT(_MSGBUF)
+          else
+           write(_MSGBUF,'(2A,/2A,/2A)')                                   &
+     &    whoami, ' STRING CANNOT BE UPDATED ON THE FLY',     &
+     &    whoami, ' IF VORONOI CELL CROSSING IS ALLOWED.',      &
+     &    whoami, ' VORONOI CELL CROSSING WILL BE OFF.' ; __PRINT(_MSGBUF)
+           voronoi_allow_cross=.false.
+          endif ! voronoi_allow_cross
+         endif ! update_on
+        endif ! voronoi_hist_on
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        endif ! qprint
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -2823,6 +2863,7 @@ __CHARMM_ONLY##IF STRINGM
          output_voronoi_hist=.true.
          if (qprint) then
           write(_MSGBUF,6622) whoami,voronoi_fname(1:voronoi_flen)
+          __PRINT(_MSGBUF)
          endif
         else
          __WRN(whoami,'NO FILE NAME GIVEN. WILL NOT WRITE VORONOI HISTOGRAMS.')
@@ -2912,6 +2953,7 @@ __CHARMM_ONLY##IF STRINGM
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine ftsm_stat()
       use ftsm_rex, only: ftsm_rex_print_map,  ftsm_rex_print_log
+      use ftsm_voronoi
       __DEP_OUTPUT
       __DEP_MULTICOM       __CHARMM_ONLY !##MULTICOM
       __DEP_PARSER
@@ -2919,18 +2961,20 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_NUMBER
 !
       __IMPNONE
-      int :: i, fmt_len
+      int :: i, fmt_len, ifile
 !
 #ifdef __CHARMM
       int :: oldiol
 #endif
+!
+#include "../../mpitype.def"
 !
       character(len=80) :: fmt_real, fmt_int, fmt
       float :: r_com(3)
       float :: u (3,3)= RESHAPE( (/1,0,0,0,1,0,0,0,1/), (/3,3/) ) ! rotation matrix
       float :: rmsd0, rmsd0_all(nstring), fc_all(3,nstring)
 !
-      int :: error
+      int :: ierror
       character(len=11) :: whoami
       data whoami/' FTSM_STAT>'/
 !
@@ -2974,7 +3018,7 @@ __CHARMM_ONLY##IF STRINGM
 !
           if (qroot) call mpi_gather(rmsd0,1,MPI_DOUBLE_PRECISION       & ! heads communicate
      &                ,rmsd0_all,1,MPI_DOUBLE_PRECISION,0,              &
-     &                 MPI_COMM_STRNG, error)
+     &                 MPI_COMM_STRNG, ierror)
           if (qprint) then ! root writes
            if (rmsd0_funit.eq.__OSTREAM) then
             fmt='("RMSD0> '//fmt_int(1:5)//' ",'                        &
@@ -2988,7 +3032,7 @@ __CHARMM_ONLY##IF STRINGM
            write(rmsd0_funit,fmt) (rmsd0_all(i),i=1,nstring)
 !
            if (rmsd0_funit.ne.__OSTREAM) then
-            __CLOSE_FILE(rmsd0_funit, 'KEEP', error)
+            __CLOSE_FILE(rmsd0_funit, 'KEEP', ierror)
            endif
           endif ! qprint
           rform='APPEND'
@@ -3011,7 +3055,7 @@ __CHARMM_ONLY##IF STRINGM
          write(s_funit, fmt) ds * sqrt(3d0) ! correction factor for consistency with atomic RMSD
 !     flush unit: close and reopen later
          if (s_funit.ne.__OSTREAM) then
-          __CLOSE_FILE(s_funit, 'KEEP', error)
+          __CLOSE_FILE(s_funit, 'KEEP', ierror)
          endif
         else ! repa
           __WRN(whoami,'NO REPARAMETRIZATION OPTIONS SELECTED. SKIPPING ARCLENGTH.')
@@ -3037,7 +3081,7 @@ __CHARMM_ONLY##IF STRINGM
          write(s_funit, fmt) curv / sqrt(3d0) ! correction factor for consistency with atomic RMSD
 !     flush unit: close and reopen later
          if (c_funit.ne.__OSTREAM) then
-          __CLOSE_FILE(c_funit, 'KEEP', error)
+          __CLOSE_FILE(c_funit, 'KEEP', ierror)
          endif
         else
           __WRN(whoami,'NO REPARAMETRIZATION OPTIONS SELECTED. SKIPPING CURVATURE.')
@@ -3064,7 +3108,7 @@ __CHARMM_ONLY##IF STRINGM
          write(fe_funit, fmt) fe
 !     flush unit: close and reopen later
          if (fe_funit.ne.__OSTREAM) then
-          __CLOSE_FILE(fe_funit, 'KEEP', error)
+          __CLOSE_FILE(fe_funit, 'KEEP', ierror)
          endif
        endif ! qprint
        feform='APPEND'
@@ -3081,7 +3125,7 @@ __CHARMM_ONLY##IF STRINGM
          rex_fname(rex_flen+1:)='' ! erase extension
          call ftsm_rex_print_map(rex_funit) ! all processes enter
 !
-         __CLOSE_FILE(rex_funit, 'KEEP', error)
+         __CLOSE_FILE(rex_funit, 'KEEP', ierror)
         endif ! qprint
        endif
       endif
@@ -3100,7 +3144,7 @@ __CHARMM_ONLY##IF STRINGM
 !
         call ftsm_rex_print_log(rex_funit)
 !    flush unit:
-        if (qprint) __CLOSE_FILE(rex_funit,'KEEP',error)
+        if (qprint) __CLOSE_FILE(rex_funit,'KEEP',ierror)
        endif
       endif
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -3123,7 +3167,7 @@ __CHARMM_ONLY##IF STRINGM
 !    NOTE: should write the correct number of records to header at the end of calculation
 !--------------------------------------------------------------------
 !    flush unit:
-        if (qprint) __CLOSE_FILE(centers_funit, 'KEEP', error)
+        if (qprint) __CLOSE_FILE(centers_funit, 'KEEP', ierror)
         cenform='APPEND'
       endif
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -3132,7 +3176,7 @@ __CHARMM_ONLY##IF STRINGM
        if (qroot) then
         call mpi_gather(avforce,3,MPI_DOUBLE_PRECISION,                 & ! heads communicate
      &                 fc_all,3,MPI_DOUBLE_PRECISION,0,                 &
-     &                 MPI_COMM_STRNG, error)
+     &                 MPI_COMM_STRNG, ierror)
 !
         fmt='('//fmt_real(1:fmt_len)//real_format//')'
         if (qprint) then
@@ -3151,12 +3195,78 @@ __CHARMM_ONLY##IF STRINGM
 !
 !     flush unit: close and reopen later
          if (forces_funit.ne.__OSTREAM)                                      &
-     &     __CLOSE_FILE(forces_funit, 'KEEP', error)
+     &     __CLOSE_FILE(forces_funit, 'KEEP', ierror)
         endif ! qprint
         fform='APPEND'
        endif ! qroot
 !
       endif ! output_force
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      if (output_voronoi_hist) then ! output voronoi data
+        if (voronoi_flen.eq.0) then
+         __WRN(whoami,'NO FILE NAME SPECIFIED. WILL NOT WRITE VORONOI DATA.')
+        else
+         if (qprint) then
+          ifile=-1
+          voronoi_fname(voronoi_flen+1:voronoi_flen+4)='.dat'
+          __OPEN_FILE(ifile,voronoi_fname(1:voronoi_flen+4),'FORMATTED','WRITE')
+          voronoi_fname(voronoi_flen+1:)=''
+         endif
+         call ftsm_voronoi_print_data(ifile) ! all root processes enter
+         if (qprint) then ; __CLOSE_FILE(ifile,'KEEP',ierror) ; endif
+        endif
+      endif
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      if (output_voronoi_log) then
+       if (voronoi_flen.eq.0) then
+         __WRN(whoami,'NO FILE NAME SPECIFIED. WILL NOT WRITE VORONOI LOG.')
+       else
+         if (qprint) then
+           vlog_funit=-1
+           voronoi_fname(voronoi_flen+1:voronoi_flen+4)='.log'
+           __OPEN_FILE(vlog_funit,voronoi_fname(1:voronoi_flen+4),'UNFORMATTED', vlform)
+           voronoi_fname(voronoi_flen+1:)=''
+         endif
+         vlform='APPEND'
+         if (qroot) call ftsm_voronoi_print_log(vlog_funit)
+!    flush unit:
+         if (qprint) then ; __CLOSE_FILE(vlog_funit,'KEEP',ierror) ; endif
+       endif
+      endif
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      if (output_voronoi_map) then ! output voronoi map
+        if (voronoi_flen.eq.0) then
+         __WRN(whoami,'NO FILE NAME SPECIFIED. WILL NOT WRITE VORONOI MAP.')
+        else
+!    put 'whereami' into the map
+          if (qroot.and.SIZE_STRNG.gt.1) then
+           call MPI_ALLGATHER(ftsm_voronoi_whereami, 1, mpiint,       &
+     &      ftsm_voronoi_map, 1, mpiint, MPI_COMM_STRNG, ierror)
+          else
+           ftsm_voronoi_map(mestring+1)=ftsm_voronoi_whereami
+          endif
+          if (qgrp) then
+#ifdef __CHARMM
+           __BROADCAST_LOCAL_4B(ftsm_voronoi_map,nstring)  !__CHARMM_ONLY##.not.INTEGER8
+           __BROADCAST_LOCAL_8B(ftsm_voronoi_map,nstring)  !__CHARMM_ONLY##INTEGER8
+#elif defined (__DMOL)
+           __BROADCAST_LOCAL(ftsm_voronoi_map,nstring,mpiint)
+#endif
+          endif ! qgrp
+!
+         if (qroot) then
+          ifile=-1
+          voronoi_fname(voronoi_flen+1:voronoi_flen+4)='.map'
+          if (qprint) then 
+           __OPEN_FILE(ifile,voronoi_fname(1:voronoi_flen+4), 'FORMATTED','WRITE')
+           voronoi_fname(voronoi_flen+1:)=''
+          endif
+          call ftsm_voronoi_print_map(ifile)
+          if (qprint) then ; __CLOSE_FILE(ifile,'KEEP',ierror) ; endif
+         endif ! qroot
+        endif
+      endif
+!
 !
 #ifdef __CHARMM
 !     ad hoc fix for REX
