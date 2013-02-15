@@ -75,7 +75,7 @@ __CHARMM_ONLY##IF STRINGM
        endif
        end subroutine ftsm_voronoi_done
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       subroutine ftsm_voronoi_init()
+       recursive subroutine ftsm_voronoi_init()
 !
        if (.not.ftsm_initialized) return ! cannot call ftsm_init because this creates a circular dependency
        if (.not.ftsm_voronoi_initialized) then ! do not reallocate data if already initialized
@@ -118,16 +118,16 @@ __CHARMM_ONLY##IF STRINGM
        ftsm_voronoi_map=-1
 !
        ftsm_voronoi_initialized=.true.  ! this must be set because it affects the behavior of voronoi_update 
-       call ftsm_voronoi_update(.true.) ! communicate image data
+       call ftsm_voronoi_update(.true.) ! communicate orientation atoms
 !
        end subroutine ftsm_voronoi_init
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       subroutine ftsm_voronoi_update(bcast_orient_)
+       recursive subroutine ftsm_voronoi_update(bcast_orient_)
        __DEP_MULTICOM
        __DEP_MPI 
 #include "../../mpitype.def"
 !
-       bool, optional :: bcast_orient_ ! whether orientation coordinates should be broadcast (usually not b/c they only evolve via forced coords)
+       bool, optional, intent(in) :: bcast_orient_ ! whether orientation coordinates should be broadcast (usually not b/c they only evolve via forced coords)
 !      locals
        bool :: bcast_orient
        int :: i, ierror
@@ -212,12 +212,11 @@ __CHARMM_ONLY##ENDIF
          endif !qdiffrot
         endif ! qorient
 !
-        qroot=(MPI_COMM_STRNG.ne.MPI_COMM_NULL)
-        if (qroot.and.SIZE_STRNG.gt.1) then
+        qroot=(MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.SIZE_STRNG.gt.1)
 !      gather all main coordinate sets
-         call MPI_ALLGATHER(r_f(:,:,center),3*nforced,mpifloat, &
+        if (qroot) &
+     &    call MPI_ALLGATHER(r_f(:,:,center),3*nforced,mpifloat, &
      &                      rall_new_f,3*nforced,mpifloat,MPI_COMM_STRNG,ierror)
-        endif ! qroot
 !
 ! broadcast to slaves
         if (MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.SIZE_LOCAL.gt.1) then
@@ -284,7 +283,7 @@ __CHARMM_ONLY##ENDIF
         endif ! .not. correct_cell_me
 
 !     pool all results
-        call MPI_ALLREDUCE(correct_cell_me, correct_cell, 1,           &
+        if (qroot) call MPI_ALLREDUCE(correct_cell_me, correct_cell, 1,           &
      &                  mpibool, MPI_LAND, MPI_COMM_STRNG, ierror)
 !     broadcast to slaves
         __BROADCAST_LOCAL(correct_cell, 1, mpibool)
@@ -307,7 +306,7 @@ __CHARMM_ONLY##ENDIF
 !     check if the new set is consistent
            correct_cell_me=(me.eq.ftsm_voronoi_compute(rfi_old, roi_old, rall_temp_f, rall_temp_o))
 !     pool all results
-           call MPI_ALLREDUCE(correct_cell_me, correct_cell, 1,         &
+           if (qroot) call MPI_ALLREDUCE(correct_cell_me, correct_cell, 1,         &
      &                  mpibool, MPI_LAND, MPI_COMM_STRNG, ierror)
 !      broadcast to slaves
            __BROADCAST_LOCAL(correct_cell, 1, mpibool)
@@ -368,7 +367,7 @@ __CHARMM_ONLY##ENDIF
        if (.not.ftsm_voronoi_initialized) call ftsm_voronoi_init()
 !
 !      compute RMSD
-!      need to compute distances w.r.t. all M tensors on the string
+!      need to compute distances w.r.t. all string images
        msd=zero
 !
 !     compute norms in parallel: each slave node is assigned a set of matrices
@@ -378,7 +377,7 @@ __CHARMM_ONLY##ENDIF
      &   .and.calc_voronoi_para)
        if (qpara) then
 !
-        j=ceiling(one*nstring/SIZE_LOCAL) ! max. number of CV assigned to slave node
+        j=ceiling(one*nstring/SIZE_LOCAL) ! max. number of calculations assigned to a slave node
 !
         do i=1,SIZE_LOCAL
          send_displ(i)=min((i-1)*j,nstring-1) ! cannot exceed nstring
@@ -406,17 +405,20 @@ __CHARMM_ONLY##ENDIF
        enddo
 !
 !    pool norms on root
-!       if (qpara)                                                       &
-!     &  call MPI_GATHERV(msd(mbeg),send_count(me),                    &
-!     &   mpifloat,                                                      &
-!     &   msd, send_count, send_displ,                                   &
-!     &   mpifloat, 0, MPI_COMM_LOCAL, ierror)
-       if (qpara)                                                       &
-     &  call MPI_GATHERV(MPI_IN_PLACE, send_count(me),                    &
+       if (qpara) then
+        if (ME_LOCAL.eq.0) then
+         call MPI_GATHERV(MPI_IN_PLACE, send_count(me),                 &
      &   mpifloat,                                                      &
      &   msd, send_count, send_displ,                                   &
      &   mpifloat, 0, MPI_COMM_LOCAL, ierror)
-
+        else
+         call MPI_GATHERV(msd(mbeg),send_count(me),                     &
+     &   mpifloat,                                                      &
+     &   msd, send_count, send_displ,                                   &
+     &   mpifloat, 0, MPI_COMM_LOCAL, ierror)
+        endif
+       endif
+!
 !    root determines where theta(x) is
         if (ME_LOCAL.eq.0.or..not.qpara) then
          which=minloc(msd) ! minloc needs an int array;
@@ -443,6 +445,7 @@ __CHARMM_ONLY##ENDIF
        subroutine ftsm_voronoi_whereami_compute(x,y,z)
        __DEP_OUTPUT
        __DEP_NUMBER
+       __DEP_MULTICOM ! aa
 !
        float :: x(:), y(:), z(:)
 !     locals

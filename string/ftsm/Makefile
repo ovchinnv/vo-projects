@@ -2,7 +2,7 @@ ROOT=../..
 OBJS=ftsm_var.o ftsm_rex.o ftsm.o ftsm_voronoi.o
 NAME=string/ftsm
 COMMON=..
-DEPS=constants bestfit output vectors dynamol multicom parser
+DEPS=constants bestfit output vectors dynamol multicom parser lu
 INCLUDES= -I $(COMMON)
 
 LOCALMACROS=-include source.defs -include ../source.defs -include $(ROOT)/dmol.defs
