@@ -211,9 +211,7 @@ __CHARMM_ONLY##IF STRINGM
         compute_whereami=.false.
         if (.not.voronoi_allow_cross) then
 !    create standard map (unless map is present)
-!         if (.not.any(ftsm_voronoi_map.ne.-1)) then
-! I think this is a more appropriate criterion:
-         if (any(ftsm_voronoi_map.eq.-1)) then
+         if (all(ftsm_voronoi_map.eq.-1)) then
           ftsm_voronoi_map=(/ (i, i=1, nstring) /)
           compute_whereami=.true. ! will be computed by dynamc routine
          endif
@@ -238,7 +236,7 @@ __CHARMM_ONLY##IF STRINGM
            if (qroot) then
             if(SIZE_STRNG.gt.1) then
              call MPI_ALLREDUCE(me.eq.ftsm_voronoi_whereami, ok,          &
-     &         1, MPI_LOGICAL, MPI_LAND, MPI_COMM_STRNG, ierror)
+     &         1, mpibool, MPI_LAND, MPI_COMM_STRNG, ierror)
             else
              ok=me.eq.ftsm_voronoi_whereami
             endif
@@ -387,9 +385,12 @@ __CHARMM_ONLY##IF STRINGM
      &      whoami, ' STRING EVOLUTION ENABLED.',                       &
      &      whoami, ' WILL EVOLVE AFTER EVERY ',                        &
      &      evolve_freq,' ITERATIONS.'; __PRINT(_MSGBUF)
-            WRITE (_MSGBUF,'(2A,I7,A)')                                 &
-     &      whoami, ' THE FIRST', evolve_nskip,                         &
-     &      ' ITERATIONS WILL NOT CONTRIBUTE TO AVERAGES.'; __PRINT(_MSGBUF)
+            if (restrained_on.and.evolve_nskip.gt.0) then
+             WRITE (_MSGBUF,'(2A,I7,A)')                                 &
+     &       whoami, ' THE FIRST', evolve_nskip,                         &
+     &       ' ITERATIONS WILL NOT CONTRIBUTE TO AVERAGES.'; 
+             __PRINT(_MSGBUF)
+            endif
             if (evolve_expo_on) then
                write(_MSGBUF,671) whoami, whoami, evolve_expo_mem ; __PRINT(_MSGBUF)
  671  format(A,' STRING EVOLUTION WILL BE OF THE FORM:',/,              &
@@ -398,10 +399,10 @@ __CHARMM_ONLY##IF STRINGM
                write(_MSGBUF,6710) whoami, whoami, num_evolve_samples ; __PRINT(_MSGBUF)
  6710 format(A,' CV EVOLUTION WILL BE OF THE FORM:',/,                  &
      & A,' R(N)=AVERAGE_0^{N}(RINST).  INITIAL NUMBER OF SAMPLES IS ',  &
-     & I5,'.')
+     & I9,'.')
              if (max_evolve_samples.gt.0)                               &
      &          write(_MSGBUF, 6711) whoami, max_evolve_samples ; __PRINT(_MSGBUF)
- 6711 format(A, ' ONLY THE MOST RECENT ', I5,' SAMPLES WILL BE USED.')
+ 6711 format(A, ' ONLY THE MOST RECENT ', I9,' SAMPLES WILL BE USED.')
 
             endif
         endif ! evolve_ftsm_on
@@ -506,6 +507,103 @@ __CHARMM_ONLY##IF STRINGM
        ftsm_on=.false.
        repa_on=.false. ! turn off after dynamics because SM0K also uses this flag; therefore a subsequent minimization would call reparametrization
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!ccccccccccccccccccc ADDITIONAL VORONOI OPTIONS cccccccccccccccccccccccccccccccccccc
+      elseif (__STRNCMP(keyword,'VORO',4)) then
+!    get voronoi command
+       keyword=__NEXTA(comlyn,comlen)
+       if (__STRNCMP(keyword,'VMAP',4)) then
+        if (__INDX_RM(comlyn, comlen, 'CALC').gt.0) then
+          if (qprint) then ; write(_MSGBUF,6010) whoami ; 
+          __PRINT(_MSGBUF) ; endif
+ 6010 format(A,' WILL CALCULATE VORONOI MAP FROM MAIN COORDINATES.')
+          call ftsm_voronoi_whereami_compute(__X,__Y,__Z)
+!    put 'whereami' into the map
+          if (qroot.and.SIZE_STRNG.gt.1) then
+           call MPI_ALLGATHER(ftsm_voronoi_whereami, 1, mpiint,       &
+     &      ftsm_voronoi_map, 1, mpiint, MPI_COMM_STRNG, ierror)
+          else
+           ftsm_voronoi_map(mestring+1)=ftsm_voronoi_whereami
+          endif
+          if (qslave) then
+#ifdef __CHARMM
+          __BROADCAST_LOCAL_4B(ftsm_voronoi_map,nstring)  !__CHARMM_ONLY##.not.INTEGER8
+          __BROADCAST_LOCAL_8B(ftsm_voronoi_map,nstring)  !__CHARMM_ONLY##INTEGER8
+#elif defined (__DMOL)
+          __BROADCAST_LOCAL(ftsm_voronoi_map,nstring,mpiint)
+#endif
+!
+          endif
+!    print cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+        elseif (__INDX_RM(comlyn, comlen, 'PRIN').gt.0) then
+          ifile=__GET_RM_I(comlyn,comlen,'UNIT',-1)
+          __GET_RM_A(COMLYN,COMLEN,'NAME',4,FNAME,80,FLEN)
+!        note: FNAME will be UPPER CASE
+          if (qroot) then
+           if (flen.GT.0) then
+            if (qprint) then 
+             __OPEN_FILE(ifile,fname,'FORMATTED','WRITE')
+             write(_MSGBUF,6011) whoami, fname(1:flen) ; __PRINT(_MSGBUF)
+            endif
+ 6011 format(A,' WRITING VORONOI MAP TO FILE ',A,'.')
+            call ftsm_voronoi_print_map(ifile)
+            if (qprint) then ; __CLOSE_FILE(ifile,'KEEP',ierror) ; endif
+           else
+            __WRN(whoami,'FILE NAME NOT SPECIFIED. NOTHING DONE.')
+           endif ! flen
+          endif ! qroot
+!    read ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+        elseif (__INDX_RM(comlyn, comlen, 'READ').gt.0) then
+          ifile=__GET_RM_I(comlyn,comlen,'UNIT',-1)
+          __GET_RM_A(COMLYN,COMLEN,'NAME',4,FNAME,80,FLEN)
+!        note: FNAME will be UPPER CASE
+          if (flen.GT.0) then
+            if (qprint) then 
+            __OPEN_FILE(ifile,fname,'FORMATTED','WRITE')
+             write(_MSGBUF,6013) whoami, fname(1:flen) ; __PRINT(_MSGBUF)
+            endif
+!
+ 6013 format(A,' READING VORONOI MAP FROM FILE ',A,'.')
+            call ftsm_voronoi_read_map(ifile)
+            if (qprint) then ; __CLOSE_FILE(ifile,'KEEP',ierror) ; endif
+           else
+            __WRN(whoami,'FILE NAME NOT SPECIFIED. NOTHING DONE.')
+           endif ! flen
+        endif ! 'CALC'
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       elseif (__STRNCMP(keyword,'READ',4)) then
+!    read "restart" file that contains (1) crossing_attempt (2) crossing_accepts (3) occupancy
+         ifile=__GET_RM_I(comlyn,comlen,'UNIT',-1)
+         __GET_RM_A(COMLYN,COMLEN,'NAME',4,FNAME,80,FLEN)
+!        note: FNAME will be UPPER CASE
+         if (flen.GT.0) then
+          if (qprint) then
+           __OPEN_FILE(ifile,fname,'FORMATTED','WRITE')
+           write(_MSGBUF,6014) whoami, fname(1:flen) ; __PRINT(_MSGBUF) 
+          endif
+ 6014 format(A,' READING VORONOI CROSSING DATA FROM FILE ',A,'.')
+          call ftsm_voronoi_read_data(ifile)
+          if (qprint) then ; __CLOSE_FILE(ifile,'KEEP',ierror) ; endif
+         else
+          __WRN(whoami,'FILE NAME NOT SPECIFIED. NOTHING DONE.')
+         endif ! flen
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       elseif (__STRNCMP(keyword,'PRIN',4)) then
+         ifile=__GET_RM_I(comlyn,comlen,'UNIT',-1)
+         __GET_RM_A(COMLYN,COMLEN,'NAME',4,FNAME,80,FLEN)
+!        note: FNAME will be UPPER CASE
+         if (flen.gt.0) then
+           if (qprint) then
+            __OPEN_FILE(ifile,fname,'FORMATTED','WRITE')
+            write(_MSGBUF,6015) whoami, fname(1:flen) ; __PRINT(_MSGBUF)
+ 6015 format(A,' WRITING VORONOI CROSSING DATA TO FILE ',A,'.')
+           endif
+           call ftsm_voronoi_print_data(ifile)
+           if (qprint) then ; __CLOSE_FILE(ifile,'KEEP',ierror) ; endif
+         else
+            __WRN(whoami,'FILE NAME NOT SPECIFIED. NOTHING DONE.')
+         endif ! flen
+       endif ! VMAP
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       elseif (__STRNCMP(keyword,'FILL',4)) then ! set path from current coordinates
 !
        qcomp=(__INDX_RM(comlyn, comlen, 'COMP').gt.0)
@@ -3437,7 +3535,7 @@ __CHARMM_ONLY##IF STRINGM
            write(_MSGBUF,'(2A)') whoami,' UPDATING NEIGHBOR IMAGES.' ; __PRINTL(_MSGBUF,3)
           endif
           call ftsm_swap_bc(.true.) ! VO changed from false to true 1/2013 (why was it false? problem only in parallel)
-         endif
+         endif ! proj_on
 !------------------------------------------------------------------------
 !    Voronoi tessellation:
 !    smart-update voronoi data: if update too aggressive and some replicas end up in a wrong v. cell, string coords will be rolled back; 
@@ -5173,6 +5271,9 @@ __CHARMM_ONLY        wrnlev=-1 ! turn off warnings for the first part of minimiz
         rex_string_data%evolve_expo_mem = evolve_expo_mem;
         rex_string_data%num_evolve_samples = num_evolve_samples;
         rex_string_data%avforce = avforce
+        rex_string_data%ftsm_mini_on = ftsm_mini_on
+        rex_string_data%evolve_expo_on = evolve_expo_on
+        rex_string_data%evolve_aver_on = evolve_aver_on
 !
 !     send/receive
 !     allocate storage for new restraints
@@ -5443,9 +5544,13 @@ __CHARMM_ONLY        wrnlev=-1 ! turn off warnings for the first part of minimiz
        kpara =rex_string_data_new%kpara
        kperp =rex_string_data_new%kperp
        krms  =rex_string_data_new%krms
-       evolve_expo_mem=rex_string_data_new%evolve_expo_mem
+       evolve_expo_mem   =rex_string_data_new%evolve_expo_mem
        num_evolve_samples=rex_string_data_new%num_evolve_samples
-       avforce=rex_string_data_new%avforce
+       avforce           =rex_string_data_new%avforce
+       ftsm_mini_on      =rex_string_data_new%ftsm_mini_on
+       evolve_expo_on    =rex_string_data_new%evolve_expo_on
+       evolve_aver_on    =rex_string_data_new%evolve_aver_on
+
 !
        if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) mestring=ME_STRNG
 !      broadcast string size to all slave nodes
