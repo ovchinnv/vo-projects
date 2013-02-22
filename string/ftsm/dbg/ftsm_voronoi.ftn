@@ -167,7 +167,7 @@ __CHARMM_ONLY##ENDIF
 !
        end subroutine ftsm_voronoi_update
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       subroutine ftsm_voronoi_smart_update(x, y, z, xold, yold, zold, m_iter)
+       subroutine ftsm_voronoi_smart_update(x, y, z, xold, yold, zold, m_iter, iteration)
        __DEP_OUTPUT
 !      ftsm_rall(:,:) is expected to have values from previous update that
 !      are consistent with rtemp; if this is not true, the routine
@@ -180,13 +180,14 @@ __CHARMM_ONLY##ENDIF
 !
        float, dimension(:) :: x, y, z, xold, yold, zold
        int, optional :: m_iter
+       int, optional :: iteration
 !      locals
 !
        float, pointer, dimension(:,:,:) :: rall_new_f, rall_new_o, rall_temp_f, rall_temp_o
        float, pointer, dimension(:,:) :: rfi, roi, rfi_old, roi_old
        float, pointer, dimension(:) :: r_com, r_com_old, ow
 !
-       logical(kind(m_iter)) :: correct_cell_me, correct_cell ! trying to make the logical the same size as an integer for bcast
+       int :: correct_cell_me, correct_cell
        int :: iter, max_iter
        int, parameter :: default_iter=15
        int :: i, j, k, which(1), ierror, me, ind
@@ -201,7 +202,7 @@ __CHARMM_ONLY##ENDIF
        else
 !ccccccccccccccccc do some work ccccccccccccccccccccccccccccc
 !    allocate temporary arrays
-        allocate(rall_new_f(nforced,3,nstring), rall_temp_f(nforced,3,nstring))
+        allocate(rall_new_f (nforced,3,nstring), rall_temp_f(nforced,3,nstring))
         if (qorient) then
          if (qdiffrot) then
           allocate(rall_new_o(norient,3,nstring), rall_temp_o(norient,3,nstring))
@@ -212,14 +213,14 @@ __CHARMM_ONLY##ENDIF
         endif ! qorient
 !
         qroot=(MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.SIZE_STRNG.gt.1)
-        qgrp=(MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.SIZE_LOCAL.gt.1)
+        qgrp= (MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.SIZE_LOCAL.gt.1)
 !      gather all main coordinate sets
         if (qroot) &
      &    call MPI_ALLGATHER(r_f(:,:,center),3*nforced,mpifloat, &
      &                      rall_new_f,3*nforced,mpifloat,MPI_COMM_STRNG,ierror)
 !
 ! broadcast to slaves
-        if (MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.SIZE_LOCAL.gt.1) then
+        if (qgrp) then
 #ifdef __CHARMM
 __CHARMM_ONLY##IF SINGLE
           __BROADCAST_LOCAL_4B(rall_new_f,3*nforced*nstring)
@@ -271,24 +272,37 @@ __CHARMM_ONLY##ENDIF
         endif ! qorient
 !
 !     check if the old set is consistent with current
-        correct_cell_me=(me.eq.ftsm_voronoi_compute(rfi_old, roi_old, rall_f, rall_o))
+        if (me.eq.ftsm_voronoi_compute(rfi_old, roi_old, rall_f, rall_o)) then ; correct_cell_me=1 ; else ; correct_cell_me=0; endif
 !      are the coords in rold consistent with the current V. cell centers?
-        if  (.not.correct_cell_me) then
+        if  (correct_cell_me.eq.0) then
 !      if old set is outside cell, it means that we just crossed into a
 !                   neighbor cell; in this case, test rnew, not rold
 !                   repeat as above:
           rfi_old=>rfi; roi_old=>roi
 !
-          correct_cell_me=(me.eq.ftsm_voronoi_compute(rfi_old, roi_old, rall_f, rall_o))
-        endif ! .not. correct_cell_me
+          if (me.eq.ftsm_voronoi_compute(rfi_old, roi_old, rall_f, rall_o)) then ; correct_cell_me=1 ; else ; correct_cell_me=0; endif
+        endif ! incorrect cell
+!
 
 !     pool all results
         if (qroot) call MPI_ALLREDUCE(correct_cell_me, correct_cell, 1,           &
-     &                  mpibool, MPI_LAND, MPI_COMM_STRNG, ierror)
+     &                  mpiint, MPI_MIN, MPI_COMM_STRNG, ierror)
 !     broadcast to slaves
-        if (qgrp) then ; __BROADCAST_LOCAL(correct_cell, 1, mpibool) ; endif
+        if (qgrp) then
+#ifdef __CHARMM
+         __BROADCAST_LOCAL_4B(correct_cell,1)  !__CHARMM_ONLY##.not.INTEGER8
+         __BROADCAST_LOCAL_8B(correct_cell,1)  !__CHARMM_ONLY##INTEGER8
+#else
+         __BROADCAST_LOCAL(correct_cell,1,mpiint)
+#endif
+        endif
 !
-        if (.not.correct_cell) then
+!        if (qgrp) then ; __BROADCAST_LOCAL(correct_cell, 1, mpiint) ; endif
+!
+!           write(ME_GLOBAL+600,*) me, correct_cell, correct_cell_me ; close(ME_GLOBAL+600) ! aa
+
+
+        if (correct_cell.eq.0) then
           __WRN(whoami,' CURRENT VORONOI CELL CENTERS INCONSISTENT WITH COORDINATES.')
 !    roll back string
            r_f(:,:,center)=rall_f(:,:,me) ; if (qorient.and.qdiffrot) r_o(:,:,center)=rall_o(:,:,me)
@@ -301,26 +315,42 @@ __CHARMM_ONLY##ENDIF
            max_iter=default_iter
           endif
 !
+! write(ME_GLOBAL+700,*) rall_new_f ; 
+! write(ME_GLOBAL+700,*) rall_new_o ; 
+! write(ME_GLOBAL+700,*) rfi , roi ;
+! write(ME_GLOBAL+700,*) rfi_old , roi_old ; 
+! close(ME_GLOBAL+700)
           iter=0
           rall_temp_f=rall_new_f ;  if (qorient.and.qdiffrot) rall_temp_o=rall_new_o
           do
 !     check if the new set is consistent
-           correct_cell_me=(me.eq.ftsm_voronoi_compute(rfi_old, roi_old, rall_temp_f, rall_temp_o))
+           if (me.eq.ftsm_voronoi_compute(rfi_old, roi_old, rall_temp_f, rall_temp_o)) then ; correct_cell_me=1 ; else ; correct_cell_me=0; endif
 !     pool all results
-           if (qroot) call MPI_ALLREDUCE(correct_cell_me, correct_cell, 1,         &
-     &                  mpibool, MPI_LAND, MPI_COMM_STRNG, ierror)
-!      broadcast to slaves
-           if (qgrp) then
-!#ifdef __CHARMM
-!            __BROADCAST_LOCAL_4B(correct_cell,1) !__CHARMM_ONLY##.not.INTEGER8
-!            __BROADCAST_LOCAL_8B(correct_cell,1) !__CHARMM_ONLY##INTEGER8
-!#else
-            __BROADCAST_LOCAL(correct_cell,1,mpiint)
-!#endif
-           endif ! qgrp
-!           __BROADCAST_LOCAL(correct_cell, 1, mpibool) ! Gfortran 4.6.3 hangs with this on two cores per local comm (maybe a bug ?)
 !
-           if (correct_cell) then
+           if (qroot) call MPI_ALLREDUCE(correct_cell_me, correct_cell, 1,         &
+     &                  mpiint, MPI_MIN, MPI_COMM_STRNG, ierror)
+!      broadcast to slaves
+!           if (qgrp) then  ;
+!           write(ME_GLOBAL+600,*) iteration, ' voro before ',iter, me, correct_cell.eq.1, correct_cell_me.eq.1
+!            __BROADCAST_LOCAL(correct_cell, 1, mpiint) 
+           if (qgrp) then
+#ifdef __CHARMM
+            __BROADCAST_LOCAL_4B(correct_cell,1)  !__CHARMM_ONLY##.not.INTEGER8
+            __BROADCAST_LOCAL_8B(correct_cell,1)  !__CHARMM_ONLY##INTEGER8
+#else
+            __BROADCAST_LOCAL(correct_cell,1,mpiint)
+#endif
+           endif
+!
+!
+ write(ME_GLOBAL+600,*) iteration,iter, me, correct_cell ; close(ME_GLOBAL+600)
+!            ; endif
+
+!
+          deallocate(rall_new_f, rall_temp_f) ; return
+!
+
+           if (correct_cell.eq.1) then
             rall_f=rall_temp_f ; if (qorient.and.qdiffrot) rall_o=rall_temp_o
 !          `roll back' cv's:
             if (iter.gt.0) then ! otherwise they are fine
@@ -339,13 +369,12 @@ __CHARMM_ONLY##ENDIF
           enddo ! <empty>
         endif ! .not. correct_cell
 !
-       deallocate(rall_temp_f, rall_new_f)
-       if (qorient.and.qdiffrot) then ; deallocate(rall_temp_o, rall_new_o) ; else ; nullify(rall_temp_o, rall_new_o) ; endif
+        deallocate(rall_new_f, rall_temp_f)
+        if (qorient.and.qdiffrot) then ; deallocate(rall_new_o, rall_temp_o) ; else ; nullify(rall_new_o, rall_temp_o) ; endif
 !
        endif ! .not. initialized
 !
-!   NOTE : no need to broadcast anything to slaves because they also execute above loop
-!
+!   no need to broadcast anything to slaves because they, too, execute above loop
        end subroutine ftsm_voronoi_smart_update
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 ! this is the function that computes the Voronoi distances
@@ -436,14 +465,13 @@ __CHARMM_ONLY##ENDIF
      &    which(1)=-which(1) ! outside of the allowed region (special code)
         endif ! ME_LOCAL (root)
 !
-       if (qpara) then
+       if (qpara)                                                       &
 #ifdef __CHARMM
-        __BROADCAST_LOCAL_4B(which,1)  !__CHARMM_ONLY##.not.INTEGER8
-        __BROADCAST_LOCAL_8B(which,1)  !__CHARMM_ONLY##INTEGER8
+     &  __BROADCAST_LOCAL_4B(which,1)  !__CHARMM_ONLY##.not.INTEGER8
+     &  __BROADCAST_LOCAL_8B(which,1)  !__CHARMM_ONLY##INTEGER8
 #else
         __BROADCAST_LOCAL(which,1,mpiint)
 #endif
-       endif
 !          write(600+ME_GLOBAL,*) q
 !           write(600+ME_GLOBAL,'(32G12.4)') msd
 !           write(600+ME_GLOBAL,*) rtemp
