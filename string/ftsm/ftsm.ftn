@@ -81,7 +81,7 @@ __CHARMM_ONLY##IF STRINGM
       int :: ivver, ivv2, iorig, ileap ! for dynamics
       int :: error, klen, strl
 !
-      character(len=8) :: keyword
+      character(len=16) :: keyword
       character(len=80) :: fname
       character(len=6) :: whoami
       float :: zval, k, step, voro_cut
@@ -762,6 +762,33 @@ __CHARMM_ONLY##IF STRINGM
        enddo ! comlen
  7009  format(/A, ' PARALLEL COMPUTATION OF ',A,' ',A)
 !
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+! specify whether to use custom allgather hypercube
+      elseif (__STRNCMP(keyword,'COMM',4)) then
+       do while (comlen .gt. 1)
+        keyword=__NEXTA(comlyn, comlen)
+        select case(keyword)
+           case('allg','ALLG','ALLGATHE','allgathe')
+            keyword='ALLGATHER'; allgather_method=allgather_
+            if (qprint) then 
+             write(_MSGBUF,7012) whoami, keyword ; __PRINT(_MSGBUF)
+            endif
+           case('hycu','HYCU','HYPER','hyper','hcube','HCUBE')
+            keyword='HYPERCUBE' ; allgather_method=hypercube_
+            if (qprint) then
+             write(_MSGBUF,7012) whoami, keyword ; __PRINT(_MSGBUF)
+            endif
+           case('gatherb','GATHERB','gather','GATHER','bcast','BCAST')
+            keyword='GATHER + BCAST' ; allgather_method=gather_bcast_
+            if (qprint) then
+             write(_MSGBUF,7012) whoami, keyword ; __PRINT(_MSGBUF)
+            endif
+           case default
+            __WRN(whoami,'UNKNOWN OPTION SPECIFIED')
+          end select
+       enddo ! comlen
+ 7012  format(/A, ' WILL COMMUNICATE FTSM FORCES USING ',A)
+!
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       elseif (__STRNCMP(keyword,'PRIN',4)) then
 !      can write both coordinate files and a global dcd file
@@ -875,7 +902,7 @@ __CHARMM_ONLY##IF STRINGM
 !cccccccccccccccccc assume file is open, read ccccccccccccccccccc
 ! broadcast ifile so that all slaves also know whether handle is valid
 ! because they need to enter read_cor
-       __BROADCAST_LOCAL(ifile,1,mpiint)
+       if (qslave) then ; __BROADCAST_LOCAL(ifile,1,mpiint) ; endif
        if (ifile.ge.0) then
         if (c1.gt.0) then ! column spec
          if (qprint) then ; write(_MSGBUF,6699) whoami, c1 ; __PRINT(_MSGBUF) ; endif
@@ -3079,6 +3106,16 @@ __CHARMM_ONLY##IF STRINGM
 !
       bool :: qroot, qprint, qgrp
 !
+      interface
+       subroutine hypercube_allgatherv(message,count,displ,type,        &
+     &                                comm, ierror, rank, size)
+      __CHARMM_ONLY __DEP_KINDS
+       float :: message(*)
+       int :: ierror
+       int4mpi :: comm, rank, size, type, count(size), displ(size)
+       end subroutine hypercube_allgatherv
+      end interface
+!
       qroot=MPI_COMM_STRNG.ne.MPI_COMM_NULL
       qprint=qroot.and.ME_STRNG.eq.0
       qgrp=MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.SIZE_LOCAL.gt.1
@@ -3339,8 +3376,9 @@ __CHARMM_ONLY##IF STRINGM
         else
 !    put 'whereami' into the map
           if (qroot.and.SIZE_STRNG.gt.1) then
-           call MPI_ALLGATHER(ftsm_voronoi_whereami, 1, mpiint,       &
-     &      ftsm_voronoi_map, 1, mpiint, MPI_COMM_STRNG, ierror)
+! GATHER +BCAST
+           call MPI_GATHER(ftsm_voronoi_whereami, 1, mpiint, ftsm_voronoi_map, 1, mpiint, 0, MPI_COMM_STRNG, ierror)
+           __BROADCAST_STRING(ftsm_voronoi_map,nstring,mpiint)
           else
            ftsm_voronoi_map(mestring+1)=ftsm_voronoi_whereami
           endif
@@ -4067,26 +4105,48 @@ __CHARMM_ONLY##IF STRINGM
 !
 !    NOTE: when diffrot false, fopar and ffpar point to the same thing; gather below should still work fine
          if (qgrp) then ! gather orientation forces
-          if (mod(SIZE_LOCAL,2).eq.0) then ! use hypercube allgather
+          if (mod(SIZE_LOCAL,2).eq.0.and.allgather_method.eq.hypercube_) then ! use hypercube allgather
            call hypercube_allgatherv(                                   &
      &         fopar, orient_count, orient_displ, MPI_RTMD_TYPE,        &
      &         MPI_COMM_LOCAL, ierror, ME_LOCAL, SIZE_LOCAL )
            call hypercube_allgatherv(                                   &
      &         foprp, orient_count, orient_displ, MPI_RTMD_TYPE,        &
      &         MPI_COMM_LOCAL, ierror, ME_LOCAL, SIZE_LOCAL )
-          else ! regular gather
-           call MPI_GATHERV(fopar(obeg,1),                              &
+          elseif (allgather_method.eq.allgather_) then
+! ALLGATHER
+           call MPI_ALLGATHERV(MPI_IN_PLACE,                            &
+     &         orient_count(ME_LOCAL+1),MPI_RTMD_TYPE,                  &
+     &         fopar, orient_count, orient_displ, MPI_RTMD_TYPE,        &
+     &         MPI_COMM_LOCAL, ierror)
+           call MPI_ALLGATHERV(MPI_IN_PLACE,                            &
+     &         orient_count(ME_LOCAL+1),MPI_RTMD_TYPE,                  &
+     &         foprp, orient_count, orient_displ, MPI_RTMD_TYPE,        &
+     &         MPI_COMM_LOCAL, ierror)
+          elseif (allgather_method.eq.gather_bcast_.or.mod(SIZE_LOCAL,2).eq.1) then ! default method when cores are not in multiples of two
+! GATHER + BCAST
+           if (ME_LOCAL.eq.0) then
+            call MPI_GATHERV(MPI_IN_PLACE,                              &
      &         orient_count(ME_LOCAL+1),MPI_RTMD_TYPE,                  &
      &         fopar, orient_count, orient_displ, MPI_RTMD_TYPE,        &
      &         0, MPI_COMM_LOCAL, ierror)
-           call MPI_GATHERV(foprp(obeg,1),                              &
+            call MPI_GATHERV(MPI_IN_PLACE,                             &
      &         orient_count(ME_LOCAL+1),MPI_RTMD_TYPE,                  &
      &         foprp, orient_count, orient_displ, MPI_RTMD_TYPE,        &
      &         0, MPI_COMM_LOCAL, ierror)
+           else
+            call MPI_GATHERV(fopar(obeg,1),                             &
+     &         orient_count(ME_LOCAL+1),MPI_RTMD_TYPE,                  &
+     &         fopar, orient_count, orient_displ, MPI_RTMD_TYPE,        &
+     &         0, MPI_COMM_LOCAL, ierror)
+            call MPI_GATHERV(foprp(obeg,1),                             &
+     &         orient_count(ME_LOCAL+1),MPI_RTMD_TYPE,                  &
+     &         foprp, orient_count, orient_displ, MPI_RTMD_TYPE,        &
+     &         0, MPI_COMM_LOCAL, ierror)
+           endif ! ME_LOCAL
 ! send to slaves
            __BROADCAST_LOCAL_8B(r_o(1,1,fpar),6*norient) ! perp follows par in memory, so send both by doubling data count
-          endif ! powers of two
-         endif
+          endif ! hypercube_allgather
+         endif ! qgrp
 !
 !    free memory
          deallocate(ugrad, ugrad1, ugrad2)
@@ -4166,15 +4226,29 @@ __CHARMM_ONLY##IF STRINGM
           deallocate(ugrad)
 !
           if (qgrp) then ! gather orientation forces
-           if (mod(SIZE_LOCAL,2).eq.0) then ! use hypercube allgather
-           call hypercube_allgatherv(                                   &
+           if (mod(SIZE_LOCAL,2).eq.0.and.allgather_method.eq.hypercube_) then ! use hypercube allgather
+            call hypercube_allgatherv(                                   &
      &         fopar, orient_count, orient_displ, MPI_RTMD_TYPE,        &
      &         MPI_COMM_LOCAL, ierror, ME_LOCAL, SIZE_LOCAL )
-           else
-            call MPI_GATHERV(fopar(obeg,1),                             &
+           elseif (allgather_method.eq.allgather_) then
+!ALLGATHER
+            call MPI_ALLGATHERV(MPI_IN_PLACE,                           &
+     &         orient_count(ME_LOCAL+1),MPI_RTMD_TYPE,                  &
+     &         fopar, orient_count, orient_displ, MPI_RTMD_TYPE,        &
+     &         MPI_COMM_LOCAL, ierror)
+           elseif (allgather_method.eq.gather_bcast_.or.mod(SIZE_LOCAL,2).eq.1) then ! default method when cores are not in multiples of two
+! GATHER + BCAST
+            if (ME_LOCAL.eq.0) then
+             call MPI_GATHERV(MPI_IN_PLACE,                             &
      &         orient_count(ME_LOCAL+1),MPI_RTMD_TYPE,                  &
      &         fopar, orient_count, orient_displ, MPI_RTMD_TYPE,        &
      &         0, MPI_COMM_LOCAL, ierror)
+            else
+             call MPI_GATHERV(fopar(obeg,1),                             &
+     &         orient_count(ME_LOCAL+1),MPI_RTMD_TYPE,                  &
+     &         fopar, orient_count, orient_displ, MPI_RTMD_TYPE,        &
+     &         0, MPI_COMM_LOCAL, ierror)
+            endif
 ! send to slaves
             __BROADCAST_LOCAL_8B(fopar,3*norient)
            endif
@@ -5160,7 +5234,7 @@ __CHARMM_ONLY        wrnlev=-1 ! turn off warnings for the first part of minimiz
       endif ! root
 !
 !    broadcast coordinates to slaves
-      if (qslave) __BROADCAST_LOCAL_8B(rf,3*nforced)
+      if (qslave) then ; __BROADCAST_LOCAL_8B(rf,3*nforced) ; endif
 !    update any orientation coordinates that have changes
       if (qdiffrot) call ftsm_update_overlap_coor(ione)
 !
