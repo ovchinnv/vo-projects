@@ -20,12 +20,15 @@ module constants
  public
 !
 ! integer parameters
- integer*4, parameter :: izero=0
- integer*4, parameter :: ione=1
- integer*4, parameter :: itwo=2
- integer*4, parameter :: ithree=3
- integer*4, parameter :: inine=9
- integer*4, parameter :: itwentyseven=27
+ integer*8, parameter :: izero=0
+ integer*8, parameter :: ione=1
+ integer*8, parameter :: itwo=2
+ integer*8, parameter :: ithree=3
+ integer*8, parameter :: ifour=4
+ integer*8, parameter :: ifive=5
+ integer*8, parameter :: isix=6
+ integer*8, parameter :: inine=9
+ integer*8, parameter :: itwentyseven=27
 !**********************************************************
 !real*8 parameters
  real*8, parameter :: pi = 3.141592653589793d0
@@ -43,7 +46,7 @@ module constants
  real*8, parameter :: half=0.5d0
  real*8, parameter :: quarter=0.25d0
  real*8, parameter :: third=one/three
- integer*4, parameter :: unknowni=(ishftc(1,-1)) ! smallest representable integer*4
+ integer*8, parameter :: unknowni=(ishftc(1,-1)) ! smallest representable integer*8
  real*8, parameter :: unknownf=one*unknowni
 !
 ! real*8, parameter :: DTOL = 1.0e-14
