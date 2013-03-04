@@ -16,19 +16,19 @@ FC=gfortran
 FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno #-fbounds-check -frange-check 
 MPI_HOME=/usr/local/mpich2-gnu
 #---PATHSCALE
-FC=pathf95
-FFLAGS=-Ofast -fno-math-errno -extend-source -INLINE -ipa -c
+#FC=pathf95
+#FFLAGS=-Ofast -fno-math-errno -extend-source -INLINE -ipa -c
 #FFLAGS=-Ofast -fno-math-errno -extend-source -ffortran-bounds-check -OPT:Olimit=8753 -INLINE -ipa -c
 #FFLAGS=-extend-source -OPT:Olimit=8753 -INLINE -c
-MPI_HOME=/usr/local/mpich2-path64
+#MPI_HOME=/usr/local/mpich2-path64
 #FC=g95
 #FFLAGS=-O3 -c -ffree-line-length-huge -ffixed-line-length-132 -fno-second-underscore -cpp
 #MPI_HOME=/usr/local/mpich2-g95
 #
 # G95 reguires no space between "-D" and the name
-DEFS=-Dint=integer*8 -Dfloat=real*8 -Dbool=logical -Dint4mpi=integer*4 -Dmpiint=MPI_INTEGER -Dmpifloat=MPI_REAL8 -Dmpichar=MPI_CHARACTER -Dmpiint4=MPI_INTEGER4\
+DEFS=-Dint=integer*8 -Dfloat=real*8 -Dbool=logical -Dmpiint=MPI_INTEGER -Dmpifloat=MPI_REAL8 -Dmpichar=MPI_CHARACTER -Dmpiint4=MPI_INTEGER4\
      -Dmpibool=MPI_LOGICAL -Dint1="integer(kind=KIND('a'))" -D__DMOL -D__RCOMP -D__PARALLEL -D__DMOL -D__CHES -D__FC=$(FC) \
-     -D__PATHSCALE
+     -Dint4mpi=integer #-Dint4mpi="integer(KIND=MPI_INTEGER_KIND)"   #-D__PATHSCALE
 
 # ! note: the VEC routines are probably slower
 
