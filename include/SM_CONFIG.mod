@@ -1,0 +1,1 @@
+/home/taly/projects/string/SM_CONFIG.mod

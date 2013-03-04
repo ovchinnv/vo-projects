@@ -1,0 +1,1 @@
+/home/taly/projects/string/smcv/CV_QCOMP.mod

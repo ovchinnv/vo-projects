@@ -1,1 +1,1 @@
-/home/surgeon/projects/string/sm_var.mod
+/home/taly/projects/string/sm_var.mod

@@ -1,0 +1,1 @@
+/home/taly/projects/chest/objects/OBJECT.mod
