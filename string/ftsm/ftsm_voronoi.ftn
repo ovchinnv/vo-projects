@@ -358,11 +358,13 @@ __CHARMM_ONLY##ENDIF
 #include "../../mpitype.def"
 !     variables
        int :: ftsm_voronoi_compute ! index of Voronoi cell that the system is in
-       float, intent(in) :: rf(:,:), ro(:,:), rfall(:,:,:), roall(:,:,:)
+       float, intent(in), pointer :: rf(:,:), ro(:,:), rfall(:,:,:), roall(:,:,:)
 !     locals
-       float :: rf_rot(nforced,3)
+       float, dimension(nforced,3) :: rf_rot, rfl_rot, rfr_rot ! for computing perpendicular projection
+       float, dimension(:,:), pointer :: rfl, rfr, rol, ror
        float :: msd(nstring) ! mean square distance
-       int :: i, j, k, which(1), q(nstring)
+       float :: d, d1, rho, rho1
+       int :: i, j, k, l, which(1), q(nstring)
        float :: u(3,3,nstring) ! array of nstring-rotation matrices for transforming ro to roall
 !    parallelization
        bool :: qpara
@@ -405,13 +407,13 @@ __CHARMM_ONLY##ENDIF
 !      when running in parallel, each slave node computes norms for string replicas mbeg -- mend (and the current coor. set)
        do i=mbeg, mend
         if (qorient) then
-         call RMSBestFit(roall(:,:,i),ro,orientWeights,u(:,:,i))
-         rf_rot=matmul(rf,u(:,:,i))
+         call RMSBestFit(ro,roall(:,:,i),orientWeights,u(:,:,i)) ; ! u fits ro onto roall (string)
+         rf_rot=matmul(rfall(:,:,i),u(:,:,i)) ; ! rotate rfall (string) to fit roall onto ro (taking u transpose) 
         else
-         rf_rot=rf
+         rf_rot=rfall(:,:,i)
         endif ! qorient
 !
-        msd(i)=rmsd(rf_rot,rfall(:,:,i),forcedWeights,.false.)
+        msd(i)=rmsd(rf_rot,rf,forcedWeights,.false.) ! rf_rot : rotated string atoms
        enddo
 !
 !    pool norms on root
@@ -432,9 +434,46 @@ __CHARMM_ONLY##ENDIF
 !    root determines where theta(x) is
         if (ME_LOCAL.eq.0.or..not.qpara) then
          which=minloc(msd) ! minloc needs an int array;
-         if (msd(which(1)).gt.ftsm_voronoi_cut**2)               &
+! now that we know which cell the MD replica belongs to, compute the perpendicular distance to the string (project)
+         if (ftsm_voronoi_cut.gt.zero) then
+          i=max(1,which(1)-1)
+          j=min(nstring,which(1)+1)
+          rfl=>rfall(:,:,i)
+          rfr=>rfall(:,:,j)
+!
+          if (qorient) then
+           rol=>roall(:,:,i)
+           ror=>roall(:,:,j)
+           call RMSBestFit(ro,rol,orientWeights,u(:,:,i)) ! fit ro onto rol
+           call RMSBestFit(ro,ror,orientWeights,u(:,:,j)) ! fit ro onto ror
+!
+           rfr_rot=0d0;   rfl_rot=0d0;
+           do l=1,3; do k=1,3
+            rfl_rot(:,k)=rfl_rot(:,k)+rfl(:,l)*u(l,k,i) ! eqv. u^t x rfl, which rotates rfl so that rol fits ro
+            rfr_rot(:,k)=rfr_rot(:,k)+rfr(:,l)*u(l,k,j)
+           enddo;    enddo
+!
+          else ! (not qorient)
+           rfl_rot=rfl ; rfr_rot=rfr
+          endif ! qorient
+! compute projection
+          rho=zero ; rho1=zero
+          do k=1,3 ; do j=1,nforced
+                    d = rf(j,k)     -rf_rot(j,k)   ! disp. vector to string point
+                    d1= rfr_rot(j,k)-rfl_rot(j,k) ! disp. vector between neighboring string points
+!
+                    rho =rho  + d *d1 *forcedWeights(j)
+                    rho1=rho1 + d1*d1 *forcedWeights(j)
+          enddo ;    enddo
+!
+          if (rho1.le.__ERRTOL) then ; rho1=1d0 ; else ; rho1=1d0/rho1 ; endif ! a very unlikely event
+!
+!    check cutoff
+!
+         if ( ( msd(which(1)) - rho*rho*rho1 ).gt.ftsm_voronoi_cut**2)               &
      &    which(1)=-which(1) ! outside of the allowed region (special code)
-        endif ! ME_LOCAL (root)
+         endif ! ME_LOCAL (root)
+        endif ! cutoff > zero
 !
        if (qpara) then
 #ifdef __CHARMM
