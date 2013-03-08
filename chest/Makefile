@@ -1,6 +1,6 @@
 ROOT=..
 COMMON=.
-OBJS=gridsize.o state.o bc.o grid.o multigrid.o PBmain.o ches.o
+OBJS=gridsize.o state.o bc.o grid.o multigrid.o PBmain.o ches.o fieldbcdef.o
 NAME=chest
 SUBDIRS=io objects
 DEPS=output parser constants files timer multicom
@@ -36,7 +36,7 @@ multigrid.o: grid.o state.o bc.o
 multigrid.F90: mgutil/multigrid_bc.src mgutil/mg_macro1.src mgutil/mg_resout.src \
                mgutil/GS.src mgutil/Jacobi.src mgutil/residual.src mgutil/coarsen.src mgutil/refine.src
 grid.F90: message.def
-state.o: gridsize.o
+state.o: gridsize.o fieldbcdef.o
 bc.o grid.o: gridsize.o state.o
 
 clean::
