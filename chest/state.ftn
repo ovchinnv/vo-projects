@@ -3,6 +3,7 @@ module state
  __DEP_CONST
  __DEP_PARSER
   use fieldbcdef
+  use SIZE, only: nx, ny, nz, size_initialized, me, communicator
 !
  __IMPNONE
 !
@@ -41,7 +42,6 @@ module state
  contains
 !*******************************************************************
   subroutine state_initialize()
-  use SIZE, only: nx, ny, nz, size_initialized, me, communicator
 !
   character(len=16) :: whoami='STATE_INITIALIZE';
   int :: i, j
@@ -93,7 +93,6 @@ module state
 !******************************************************************
   subroutine state_add3df(vname_, vdescription, vcontext_, nx_, ny_, nz_)
 !
-  use SIZE, only: nx, ny, nz, me, communicator
   use files
   use formats
 !
@@ -315,23 +314,28 @@ module state
   use files
   character(len=*), intent(in) :: vname_
   character(len=*), optional, intent(in) :: vcontext_
+  int, optional :: nx_, ny_
   character(len=varnamelen) :: vname
   character(len=contextnamelen):: vcontext
-
+!
   int :: ibc ! boundary number (see fieldbcdef)
 !
   type(varray3df), pointer :: v ! dummy pointer
-  float, dimension(:,:,:) :: v3df
+  float, pointer :: v3df(:,:,:), vbcd(:,:)
 !
   character(len=15) :: whoami='STATE_BC_ADD3DF'
   character(len=80) :: filename
   character(len=20) :: keyword
   character(len=varnamelen+len(bc_names(1))+1) :: bcname
-  int :: i, k, ii, jj, bcsize, bcsizei, bcsizej, l,m
-  int : mx, my
+  int :: i, k, ii, jj, bcsize, bcsizei, bcsizej, l, m
+  int :: mx, my, i1, i2
   int :: fid
   integer :: iostatus
   float :: value
+!
+#ifdef __PARALLEL
+  int :: bug
+#endif
 !
 ! basic checks:
 ! find variable
@@ -374,7 +378,8 @@ module state
   endif ! present (ny_)
 !
 ! parse BC-spec from input file
-  bcname=v%vname(1:len_trim(v%vname))//'_'//bc_names(ibc))
+  bcname=v%vname(1:len_trim(v%vname))//'_'//bc_names(ibc)
+  l=len_trim(bcname)
 !
   keyword=trim(getval_nocase_upper(bcname))
   select case(keyword)
@@ -389,109 +394,90 @@ module state
    case('NEUMANNG');
     v%vbc_type(ibc)=neumanng;   v%vbc_wgt(ibc)=one  !   Neumann applied at ghostpoint
    case default
-    call warning(whoami, 'Unknown boundary condition for '//bcname//'.',-1)
+    call warning(whoami, 'Unknown boundary condition for '//bcname(1:l)//'.',-1)
    return
   end select
 !
 !     set the actual boundary condition values
+  if (associated(v%vbcs(ibc)%d)) then
+   call warning(whoami, 'Data for boundary "'//bcname(1:l)//'" already allocated (this should not happen). Abort.',0)
+   return
+  endif
   allocate(v%vbcs(ibc)%d(mx,my))
-  
+  vbcd=>v%vbcs(ibc)%d
+
   if (v%vbc_type(ibc).eq.dirichlet .or. &
 &     v%vbc_type(ibc).eq.dirichletg.or. &
-&     v%vbc_type(ibc).eq.neumann)       &
+&     v%vbc_type(ibc).eq.neumann)       & ! others can potentially be added below, such as convective (for pressure)
 &        then
-
-    if (existtag_nocase(bcname//'_CONSTANT')) then
-     v%vbcs(ibc)%d=atof(getval_nocase(bcname//'_CONSTANT'))
-    elseif (existtag_nocase(bcname//'_CONST')) then
-     v%vbcs(i)%d=atof(getval_nocase(bcname(ibc)//'_CONST'))
-
-    elseif (existtag_nocase(bcname//'_FILE')) then
+!
+   if (existtag_nocase(bcname(1:l)//'_CONSTANT')) then
+    vbcd=atof(getval_nocase(bcname(1:l)//'_CONSTANT'))
+   elseif (existtag_nocase(bcname(1:l)//'_CONST')) then
+    vbcd=atof(getval_nocase(bcname(1:l)//'_CONST'))
+   elseif (existtag_nocase(bcname(1:l)//'_FILE')) then
 ! open and read boundary condition file
-     filename=getval_nocase(bcname//'_FILE')
-     call adjustleft(filename)
-     l=len_trim(filename)
+    filename=getval_nocase(bcname(1:l)//'_FILE')
+    call adjustleft(filename)
+    m=len_trim(filename)
 !
-     bcsizei=mx-2; ! size of first dimension (inner pts only)
-     bcsizej=my-2; ! size of second dimension (inner pts only)
-     bcsize=bcsizei*bcsizej;     ! total inner size
+    bcsizei=mx-2; ! size of first dimension (inner pts only)
+    bcsizej=my-2; ! size of second dimension (inner pts only)
+    bcsize=bcsizei*bcsizej;     ! total inner size
 !
-     if (me.le.0) then
-      call message(whoami, 'Reading boundary conditions from file '//filename(1:l))
-      if (l.gt.0) then
+    if (me.le.0) then
+     call message(whoami, 'Reading boundary conditions ('//bcname(1:l)//') from file '//filename(1:m))
+     if (l.gt.0) then
       fid=-1
-      call files_open(fid, name_=filename(1:l), form_='FORMATTED', action_='READ')
+      call files_open(fid, name_=filename(1:m), form_='FORMATTED', action_='READ')
       if (fid.lt.0) call warning(whoami, 'Cannot open file. Abort.',-1)
-       else
-        call warning(whoami, 'File name not specified. Abort.',-1)
-           endif ! l
-          endif ! me
-          if (fatal_warning(__COMM)) return
+     else
+      call warning(whoami, 'File name not specified. Abort.',-1)
+     endif ! length positive
+    endif ! me>0 
+    if (fatal_warning(__COMM)) then ; deallocate(v%vbcs(ibc)%d) ; return ; endif ! in case there was an error on the root processor, stop here
 !
-          if (me.le.0) then
-           k=0
-           read(fid, *, IOSTAT=iostatus) value
-           do while (iostatus.eq.0)
-            k=k+1
+    if (me.le.0) then
+     k=0
+     read(fid, *, IOSTAT=iostatus) value
+     do while (iostatus.eq.0)
+      k=k+1
 !    individual indices
-            jj=(k-1)/bcsizei+2                     ! slowly-varying second index ; offset is 2 for inner points only
-            ii=mod((k-1),bcsizei)+2                ! fast-varying first index
-            if (k.le.bcsize) bcs(i)%p(ii,jj)=value ! make assignment if not out of bounds of bcs(i)
-            read(fid, *, IOSTAT=iostatus) value
-           enddo
-           call files_close(fid)
-          endif ! me
+      jj=(k-1)/bcsizei+2                          ! slowly-varying second index ; offset is 2 for inner points only
+      ii=mod((k-1),bcsizei)+2                     ! fast-varying first index
+      if (k.le.bcsize) vbcd(ii,jj)=value ! make assignment if not out of bounds of bcs(i)
+      read(fid, *, IOSTAT=iostatus) value
+     enddo
+     call files_close(fid)
+    endif ! me
 !    check that the right number of entries was read
-#if PARALLEL
-          if (ncpu.gt.1) then 
-           call MPI_BCAST(k,1,mpi_int,0,communicator,bug)
-           call MPI_BCAST(bcs(i)%p,size(bcs(i)%p),mpi_float,0,communicator,bug)
-          endif
+#ifdef __PARALLEL
+    if (ncpu.gt.1) then 
+     call MPI_BCAST(k,1,mpi_int,0,communicator,bug)
+     call MPI_BCAST(vbcd,size(vbcd),mpi_float,0,communicator,bug)
+    endif
 #endif
 !
 !        write(0,*) k, bcsizei, bcsizej,bcsize ! aa
-          if     (k.gt.bcsize) then 
-           call warning(whoami, 'FILE "'//filename(1:l)//'" HAS MORE ENTRIES THAN EXPECTED.', 0)
-          elseif (k.lt.bcsize) then 
-           call warning(whoami, 'FILE "'//filename(1:l)//'" DOES NOT CONTAIN ENOUGH ENTRIES. ABORT.', -1)
-           return
-          endif
+    if (k.gt.bcsize) then
+     call warning(whoami, 'File "'//filename(1:m)//'" contains more entries than expected.', 0)
+    elseif (k.lt.bcsize) then
+     call warning(whoami, 'File "'//filename(1:m)//'" does not contain enough entries. Abort.', -1)
+     deallocate(v%vbcs(ibc)%d)
+     return
+    endif
 !
-         else
-           call warning(whoami, 'No values specified at boundary '//bcname//'. Abort.', -1)
-           return
-         endif ! read bc values
-        endif !  BC data input
-       enddo ! over all boundaries
+   else
+    call warning(whoami, 'No values specified for boundary conditions ('//bcname(1:l)//'). Abort.', -1)
+     deallocate(v%vbcs(ibc)%d)
+     return
+   endif ! read bc values
+  endif !  certain bc_types
 !
-       v%vbcinit(ibc)=.true.
+  v%vbcinit(ibc)=.true.
 !
-       end subroutine state_bc_add3df
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+  end subroutine state_bc_add3df
+!
+!******************************************************************
+!
 end module state

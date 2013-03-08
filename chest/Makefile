@@ -37,7 +37,9 @@ multigrid.F90: mgutil/multigrid_bc.src mgutil/mg_macro1.src mgutil/mg_resout.src
                mgutil/GS.src mgutil/Jacobi.src mgutil/residual.src mgutil/coarsen.src mgutil/refine.src
 grid.F90: message.def
 state.o: gridsize.o fieldbcdef.o
-bc.o grid.o: gridsize.o state.o
+grid.o: gridsize.o state.o
+fieldbcdef.F90 : bcutil/bc_util.src
+fieldbcdef.o : gridsize.o
 
 clean::
 	for d in $(SUBDIRS); do (cd $$d; $(MAKE) clean); done
