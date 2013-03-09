@@ -1,16 +1,17 @@
       module PBmain
 !
 !    include other modules
+      use datatypes
       use state     ! main physical variables
       __DEP_PARSER    ! parses input unit and stores input parameters
       use SIZE      ! basic size information
       use grid      ! grid module
-      use bc        ! boundary conditions
       __DEP_OUTPUT    ! runtime output
       use object    ! objects that modify problem coefficients
 !      use plot3Dio ! output in plot3D (CFD) format; compile as a library, not as a module
       use multigrid ! multigrid solver module
 !      use openDXio ! output in openDX format ; not implemented yet
+      __IMPNONE
 !**************************************************************************************
 !     routines:
       public PB_init
@@ -21,6 +22,8 @@
 !     variables:
 !
       bool :: PB_initialized=.false.
+      character(len=16), parameter :: pbctx='PoissonBoltzmann'
+      type(varray3df), pointer :: p_, eps_, kappa_, rhs_
 !
       contains
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -32,7 +35,7 @@
      &)
 #endif
        use files
-       __IMPNONE
+       use fieldbcdef
 !
 #ifdef __PARALLEL
        int4mpi, optional :: comm
@@ -113,15 +116,21 @@
 !    initialize state variables
        call message(whoami, 'Initializing state variables.');
 !
-       call state_add3df('PHI'  ,'Electrostatic Potential' )
-       call state_add3df('EPS'  ,'Dielectric Constant'     )
-       call state_add3df('KAPPA','Ionic Strength Parameter')
-       call state_add3df('RHS'  ,'Source Density Vector'   )
+       call state_add3df('PHI'  ,'Electrostatic Potential' , pbctx, vptr=p_)
+       call state_add3df('EPS'  ,'Dielectric Constant'     , pbctx, vptr=eps_)
+       call state_add3df('KAPPA','Ionic Strength Parameter', pbctx, vptr=kappa_)
+       call state_add3df('RHS'  ,'Source Density Vector'   , pbctx, vptr=rhs_)
 ! add more variables here as needed
 !
 !    initialize boundary conditions
        call message(whoami, 'Initializing boundary condition variables.');
-       call bc_initialize()
+!
+       call state_bc_add3df('PHI', pbctx, left )   ;   call state_bc_add3df('PHI', pbctx, right )
+       call state_bc_add3df('PHI', pbctx, bottom ) ;   call state_bc_add3df('PHI', pbctx, top )
+       if (.not.q2D) then
+        call state_bc_add3df('PHI', pbctx, front ) ;   call state_bc_add3df('PHI', pbctx, back )
+       endif
+!
 !    check whether object specified; if so, initialize
        if     (existtag('OBJECT') .or. existtag('object')) then 
 !    check if the object has not yet been initialized (as could happen via grid module above); if not, initialize
@@ -164,7 +173,6 @@
        end subroutine PB_init
 !************************************************************************************
        subroutine PB_solve()
-       __IMPNONE
 !
        character(len=20) :: solver
 !
@@ -192,6 +200,7 @@
        select case(solver)
 !*********************************************************************************!
 #define __NM MULTIGRID
+#define __ARGS p_, eps_, kappa_, rhs_
 #include "PBmacro1.def"
 !*********************************************************************************!
        case default;
@@ -203,7 +212,6 @@
        subroutine PB_output()
        use object, only : object_surface_pointer, object_initialized
        use formats
-       __IMPNONE
 !
        character(len=9), parameter :: whoami='PB_OUTPUT'
        int :: ifmt=plot3d
@@ -213,10 +221,10 @@
 !
        character(len=80) :: filename, output_format, output_mode
 !
-       p=>state_get3df('phi')
-       eps=>state_get3df('eps')
-       kappa=>state_get3df('kappa')
-       rhs=>state_get3df('rhs')
+       p=>state_get3df('phi',pbctx)
+       eps=>state_get3df('eps',pbctx)
+       kappa=>state_get3df('kappa',pbctx)
+       rhs=>state_get3df('rhs',pbctx)
 !
        if (existtag_nocase('output_format')) then 
         output_format=getval_nocase_upper('output_format');
@@ -340,7 +348,6 @@
 !*********************************************************************************!
        subroutine PB_done()
        use files, only: files_done
-       __IMPNONE
 !
        character(len=7), parameter :: whoami='PB_DONE'
 !
@@ -354,7 +361,6 @@
 !
        call state_done()
        call grid_done()
-       call bc_done()
 !
        if     (existtag('SOLVER')) then ; solver=getval('SOLVER'); call toupper(solver);
        elseif (existtag('solver')) then ; solver=getval('solver'); call toupper(solver); 

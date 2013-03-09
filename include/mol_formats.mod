@@ -1,1 +1,1 @@
-/home/surgeon/projects/dynamol/coor/mol_formats.mod
+/home/taly/projects/dynamol/coor/mol_formats.mod

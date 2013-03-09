@@ -1,1 +1,1 @@
-/home/surgeon/projects/dynamol/stats.mod
+/home/taly/projects/dynamol/stats.mod

@@ -1,1 +1,1 @@
-/home/surgeon/projects/dynamol/param/dihepar.mod
+/home/taly/projects/dynamol/param/dihepar.mod

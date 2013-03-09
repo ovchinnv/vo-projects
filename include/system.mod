@@ -1,1 +1,1 @@
-/home/surgeon/projects/dynamol/system.mod
+/home/taly/projects/dynamol/system.mod

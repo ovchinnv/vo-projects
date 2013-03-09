@@ -1,1 +1,1 @@
-/home/surgeon/projects/dynamol/molsim.mod
+/home/taly/projects/dynamol/molsim.mod

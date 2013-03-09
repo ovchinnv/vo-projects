@@ -1,1 +1,1 @@
-/home/surgeon/projects/dynamol/param/ch_param.mod
+/home/taly/projects/dynamol/param/ch_param.mod

@@ -1,1 +1,1 @@
-/home/surgeon/projects/dynamol/param/atompar.mod
+/home/taly/projects/dynamol/param/atompar.mod

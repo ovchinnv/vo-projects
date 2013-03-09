@@ -1,1 +1,1 @@
-/home/surgeon/projects/parser/parser.mod
+/home/taly/projects/parser/parser.mod

@@ -1,1 +1,1 @@
-/home/surgeon/projects/dynamol/coor/charmmio.mod
+/home/taly/projects/dynamol/coor/charmmio.mod

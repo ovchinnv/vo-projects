@@ -1,1 +1,1 @@
-/home/surgeon/projects/dynamol/struc/psfatom.mod
+/home/taly/projects/dynamol/struc/psfatom.mod

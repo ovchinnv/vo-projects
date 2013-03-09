@@ -1,1 +1,1 @@
-/home/surgeon/projects/random/rng.mod
+/home/taly/projects/random/rng.mod

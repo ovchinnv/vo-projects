@@ -1,1 +1,1 @@
-/home/surgeon/projects/timer/timer.mod
+/home/taly/projects/timer/timer.mod

@@ -1,1 +1,1 @@
-/home/surgeon/projects/dynamol/param/anglpar.mod
+/home/taly/projects/dynamol/param/anglpar.mod

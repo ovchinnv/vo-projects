@@ -1,1 +1,1 @@
-/home/surgeon/projects/dynamol/coor/pdbio.mod
+/home/taly/projects/dynamol/coor/pdbio.mod

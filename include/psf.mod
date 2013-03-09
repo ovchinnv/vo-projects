@@ -1,1 +1,1 @@
-/home/surgeon/projects/dynamol/struc/psf.mod
+/home/taly/projects/dynamol/struc/psf.mod

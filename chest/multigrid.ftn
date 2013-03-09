@@ -18,6 +18,8 @@
 !DEC$ ATTRIBUTES INLINE :: compute_fd_coef
 !DEC$ ATTRIBUTES INLINE :: compute_fd_coef2d
  module multigrid
+ use datatypes
+ use fieldbcdef
 !
  __DEP_CONST
 #ifdef __TIMER
@@ -26,10 +28,15 @@
  private
 
  bool, public :: multigrid_initialized=.false.
- 
+!
  int, parameter :: nxmin=3, nymin=3, nzmin=3 ! minimum allowed number of inner points
  int, save :: maxlev                         ! maximum number of allowed levels (user defined)
  int, parameter :: default_maxlev=1000
+!
+! pointers to physical data arrays
+ float, pointer, dimension(:,:,:) :: eps, kappa, rhs, p
+ type(parray) :: bcs(numbc) ! pointers to boundary conditions on "p"
+ int :: bc_type(numbc)
 !
  float, pointer, save, dimension(:) :: dxall, dyall, dzall, odxall, odyall, odzall, & ! arrays that hold all metrics
                                        allp, alleps, allkappa, allrhs,& ! arrays that hold coefficients, sources, and solution
@@ -95,13 +102,17 @@
 !
  contains 
 !*******************************************************************************!
-  subroutine multigrid_init()
+  subroutine multigrid_init(p_, eps_, kappa_, rhs_)
   use SIZE, only: nx, ny, nz, me, communicator, q2D
   use grid
+!
   __DEP_OUTPUT
   __DEP_PARSER
   __DEP_CONST
   __IMPNONE
+!
+!  pointers to data structures:
+  type(varray3df) :: p_, eps_, kappa_, rhs_
 !
   character(len=14), parameter :: whoami = 'MULTIGRID_INIT'
   character(len=100) :: msg
@@ -112,7 +123,7 @@
   float, allocatable, dimension(:) :: x0,x1,y0,y1,z0,z1,dx0,dy0,dz0 
   float :: fac1d, fac2d, fac3d
   int :: i, ii, j
-!  
+!
   if (multigrid_initialized) call multigrid_done()
 !
   if (.not.grid_initialized) then 
@@ -122,7 +133,7 @@
 !
   if (q2d) then ; i3d=0 ;  call message(whoami, '2D configuration specified'); else ; i3d=1 ; endif ; i2d=1-i3d;
 !
-  default_max_residual=1.d0*ERRTOL()
+  default_max_residual=one*ERRTOL()
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% request a few parameters from parser %%%%%%%%%%%%%%%%%%%%%%%%%%%%
 #define __DEFAULT
 #define __INT
@@ -393,6 +404,10 @@
 ! write(0,*) len3d, nnx*nny*nnz, len3dbc, nx*ny*nz !aa
 ! 
   allocate(allp(len3Dbc),alleps(len3Dbc)) ! 3D solution array and epsilon array (with boundary points)
+! initialize pointers to data arrays
+  p=>p_%v; eps=>eps_%v; kappa=>kappa_%v; rhs=>rhs_%v
+  bcs=p_%vbcs
+  bc_type=p_%vbc_type
 !
   allocate(allkappa(len3D),allrhs(len3D)) ! 3D coefficient arrays w/o boundary points
   allocate(alleast(len2Dyz), allwest(len2Dyz), allnorth(len2Dxz), allsouth(len2Dxz), allback(len2Dxy), allfront(len2Dxy)) ! 2D bc arrays
@@ -409,11 +424,15 @@
 !*****************************************************************************************************
   subroutine multigrid_done()
   __IMPNONE
+  int :: i
   if (multigrid_initialized) then 
    if (associated(mcycle).and..not.associated(mcycle, target=vcycle)) deallocate(mcycle)
    deallocate(allp,alleps,allkappa,allrhs,&
 &              allwest, alleast, allnorth, allsouth, allback, allfront,&
 &              dxall, odxall, dyall, odyall, dzall, odzall, vcycle)
+   nullify(eps, kappa, rhs, p)
+   do i=1,numbc ; nullify(bcs(i)%d) ; enddo
+   bc_type=undefined
    multigrid_initialized=.false.
   endif
 !  
@@ -422,8 +441,6 @@
 ! this routine handles both 2 and 3 dimensions; however, nz has to be equal to 3 for the 2D case to work
   subroutine multigrid_update_coef(update_eps, update_kappa, update_rhs, update_p)
   use SIZE, only : nx, ny, nz, q2D
-  use state
-  use bc
   __IMPNONE
   bool :: update_eps, update_kappa, update_rhs, update_p
   int :: l, inew, iold, inewb, ioldb
@@ -432,18 +449,14 @@
 !
   character(len=21), parameter :: whoami='MULTIGRID_UPDATE_COEF'
 ! BC MACRO:
-#define __EPS_BC(__BD)  if (bc_type(__BD).eq.periodic)then;ibc=periodic;else;ibc=neumann;endif;call apply_bc(alleps(inewb),z,nnx,nny,nnz,__BD,ibc,bc_wgt(__BD,l))
+#define __EPS_BC(__BD)  if (bc_type(__BD).eq.periodic)then;ibc=periodic;else;ibc=neumann;endif;\
+                        call apply_bc_dnp(alleps(inewb),z,nnx,nny,nnz,__BD,ibc,bc_wgt(__BD,l))
 ! (note that if the bc is zero neumann, the value of bc_wgt does not matter)
-!
-  if (.not.state_initialized) then 
-    call warning(whoami, 'State not initialized. Nothing done.', 0)
-    return
-  endif
 !
   nnx=nx;  nny=ny;   nnz=nz;
 ! store first level 
   nullify(z)
-  if (update_eps  ) then
+  if (update_eps) then
    call copy3d(eps, alleps, nnx,nny,nnz   )
 ! compute boundary points for epsilon using apply_bc via _EPS_BC MACRO:
   l=1;  inewb=1;
@@ -508,8 +521,7 @@
   end subroutine multigrid_update_coef
 !*****************************************************************************************************
   subroutine multigrid_update_bc()
-  use SIZE, only: nx, ny, nz
-  use bc
+  use SIZE, only: nx, ny, nz, q2D
   __DEP_OUTPUT
   __DEP_CONST
   __IMPNONE
@@ -519,31 +531,26 @@
   int :: level, i1, j1, k1, ibd
   float :: dplus, dminus
 !
-  if (.not.bc_initialized) then 
-    call warning(whoami, 'Boundary conditions not initialized. Nothing done.', 0)
-    return
-  endif
-!
   nnx=nx-2;  nny=ny-2;  nnz=nz-2;
 !
   allwest=0.; alleast=0.; allsouth=0.; allnorth=0.; allfront=0.; allback=0.;
 !
 ! only need to store first level -- other levels are zero; in the case of PBC, bc arrays not used at all
-  call copy3d(bcs(west)%p(2:nny+1,2:nnz+1),  allwest,  nny, nnz, 1)
-  call copy3d(bcs(east)%p(2:nny+1,2:nnz+1),  alleast,  nny, nnz, 1)
+  call copy3d(bcs(west)%d(2:nny+1,2:nnz+1),  allwest,  nny, nnz, 1)
+  call copy3d(bcs(east)%d(2:nny+1,2:nnz+1),  alleast,  nny, nnz, 1)
 !
-  call copy3d(bcs(south)%p(2:nnx+1,2:nnz+1),  allsouth, nnx, nnz, 1)
-  call copy3d(bcs(north)%p(2:nnx+1,2:nnz+1),  allnorth, nnx, nnz, 1)
+  call copy3d(bcs(south)%d(2:nnx+1,2:nnz+1),  allsouth, nnx, nnz, 1)
+  call copy3d(bcs(north)%d(2:nnx+1,2:nnz+1),  allnorth, nnx, nnz, 1)
 !
-  if (ndim.gt.2) then 
-   call copy3d(bcs(front)%p(2:nnx+1,2:nny+1),  allfront, nnx, nny, 1)
-   call copy3d(bcs(back )%p(2:nnx+1,2:nny+1),  allback,  nnx, nny, 1)
+  if (.not.q2D) then 
+   call copy3d(bcs(front)%d(2:nnx+1,2:nny+1),  allfront, nnx, nny, 1)
+   call copy3d(bcs(back )%d(2:nnx+1,2:nny+1),  allback,  nnx, nny, 1)
   endif
 !
 ! now need to set scaling coefficients for bc data at all levels
   i1=nnx+2; j1=nny+2; k1=1+nnz-i2d+i3d
   do level=1,numlev ! loop over all levels
-   do ibd=1,2*ndim  ! loop over all dimensions; note, only the z-dimension can have trivial metric arrays
+   do ibd=1,2*(2+i3d)  ! loop over all dimensions; note, only the z-dimension can have trivial metric arrays
     select case(ibd)
      case(west) ; dplus=dxall(i1);       dminus=dxall(nx)
      case(east) ; dplus=dxall(i1+nnx-1); dminus=dxall(2*nx-3)
@@ -574,8 +581,6 @@
   use SIZE, only: nx, ny, nz, communicator, q2d
   __DEP_OUTPUT
   __DEP_PARSER, only: itoa, ftoa
-  use bc ! boundary conditions
-  use state, only: p ! for copying solution to main array
 !
   __IMPNONE
   character(len=15), parameter :: whoami = 'MULTIGRID_SOLVE'

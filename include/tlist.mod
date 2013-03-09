@@ -1,1 +1,1 @@
-/home/surgeon/projects/dynamol/struc/tlist.mod
+/home/taly/projects/dynamol/struc/tlist.mod

@@ -1,1 +1,1 @@
-/home/surgeon/projects/dynamol/param/bondpar.mod
+/home/taly/projects/dynamol/param/bondpar.mod

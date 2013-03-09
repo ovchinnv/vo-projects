@@ -1,1 +1,1 @@
-/home/surgeon/projects/dynamol/sysinfo.mod
+/home/taly/projects/dynamol/sysinfo.mod
