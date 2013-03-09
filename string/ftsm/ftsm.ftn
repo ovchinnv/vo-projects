@@ -5085,13 +5085,14 @@ __CHARMM_ONLY        wrnlev=-1 ! turn off warnings for the first part of minimiz
       __DEP_MPI 
       __DEP_OUTPUT
       __DEP_NUMBER
+      __DEP_CONST
 !
       __IMPNONE
 ! local variables
       character(len=11) :: whoami
       bool :: qroot, qslave, qprint
       bool, optional :: qbcast
-      float :: u(3,3)= RESHAPE( (/1,0,0,0,1,0,0,0,1/), (/3,3/) ) ! rotation matrix
+      float :: u(3,3)= RESHAPE( (/one,zero,zero,zero,one,zero,zero,zero,one/), (/3,3/) ) ! rotation matrix
       float, pointer :: r_o_com(:) ! COM vector
       float, pointer, dimension(:,:) :: ro, rf, ro1, rf1
       float :: w
@@ -5161,6 +5162,8 @@ __CHARMM_ONLY        wrnlev=-1 ! turn off warnings for the first part of minimiz
 !
        if (qorient) then
 !       translate structure to centroid
+!       note: this should not be needed because the structure should always be kept COM-free
+!       but is kept in case things change in the future (overhead of repa is small)
         r_o_com=zero
         do i=1, norient
          w=orientWeights(i)
@@ -5168,7 +5171,7 @@ __CHARMM_ONLY        wrnlev=-1 ! turn off warnings for the first part of minimiz
          r_o_com(2)=r_o_com(2) + w * ro(i,2)
          r_o_com(3)=r_o_com(3) + w * ro(i,3)
         enddo
-! orientation atoms ! comment out to preserve ro
+! orientation atoms ! comment out to avoid unneeded roudoff with qdiffrot=false
 !        ro(:,1)=ro(:,1)-r_o_com(1)
 !        ro(:,2)=ro(:,2)-r_o_com(2)
 !        ro(:,3)=ro(:,3)-r_o_com(3)
@@ -5191,18 +5194,25 @@ __CHARMM_ONLY        wrnlev=-1 ! turn off warnings for the first part of minimiz
          call RMSBestFit(ro,ro1,orientWeights,u)
 !       transform current structure to overlap with reference
 !       (if orientation is off, u=I)
+         if (.not.qdiffrot) ro1=>rf
          ro1(:,1)=ro(:,1)-r_o_com(1)
          ro1(:,2)=ro(:,2)-r_o_com(2)
          ro1(:,3)=ro(:,3)-r_o_com(3)
 !
          u=transpose(u)
          ro1=matmul(ro1,u)
-         if (qdiffrot) then ; rf=matmul(rf,u)
-         else ;               rf=ro1         ; endif
+         if (qdiffrot) rf=matmul(rf,u)
 !
-        else
-         ro1=>ro ! make sure 1st replica sends the center, not dummy coords
-        endif ! me
+        else ! first replica enters below
+!         ro1=>ro ! make sure 1st replica sends the center, not dummy coords
+! technically, the above line is correct (since ro is com-free; com is never subtracted with qdiffrot=false above)
+! however, conceptually, the COM _should_ be subtracted as in the loop above (e.g. note ro1=>rf, which can modify both rf and ro)
+! I also do not like the fact that the code below involves copying, which slows down the first replica!
+         if (.not.qdiffrot) ro1=>rf ! will remove the COM from actual ro/rf coordinates below (they are modified anyway by interp)
+         ro1(:,1)=ro(:,1)-r_o_com(1)
+         ro1(:,2)=ro(:,2)-r_o_com(2)
+         ro1(:,3)=ro(:,3)-r_o_com(3)
+        endif ! mestring
 !
         if (mestring.lt.nstring-1) then
          call mpi_send(ro1,3*norient,rtype,mestring+1, 1,               &
@@ -5222,8 +5232,8 @@ __CHARMM_ONLY        wrnlev=-1 ! turn off warnings for the first part of minimiz
        endif
 !
        if (qorient) then
-        u=transpose(u)  ! STOPPED HERE
-        rf=matmul(rf, u)      ! rotate back
+        u=transpose(u)
+        if (mestring.gt.0) rf=matmul(rf, u)    ! rotate back
 !     restore original COM
         rf(:,1)=rf(:,1)+r_o_com(1)
         rf(:,2)=rf(:,2)+r_o_com(2)
