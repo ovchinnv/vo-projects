@@ -1,0 +1,470 @@
+module state
+ __DEP_OUTPUT
+ __DEP_CONST
+ __DEP_PARSER
+  use fieldbcdef
+  use datatypes
+  use SIZE, only: nx, ny, nz, size_initialized, me, communicator
+!
+ __IMPNONE
+!
+ private
+!
+ type(varray3df), pointer, public :: vars3df(:) ! holds all field arrays 
+!================================================================
+ int, parameter :: expand_increment=8
+ int :: nvar3df
+!
+ bool, save :: state_initialized=.false.
+!
+ public state_add3df ! add a 3D array
+ public state_bc_add3df ! add a 3D array
+ public state_get3df ! return pointer to a 3D array
+ public state_initialized
+ public state_initialize
+ public state_done
+!
+ contains
+!*******************************************************************
+  subroutine state_initialize()
+!
+  character(len=16) :: whoami='STATE_INITIALIZE';
+  int :: i, j
+  type(varray3df), pointer :: v
+!
+  if (state_initialized) call state_done()
+  if (.not. size_initialized) then
+   call warning(whoami, 'SIZE NOT INITIALIZED. NOTHING DONE.', -1)
+   return
+  else ! allocate space on pointer stack (no actual variables defined)
+! (1) 3D field arrays
+   nvar3df=izero
+   allocate(vars3df(expand_increment))
+   do i=1, expand_increment
+    v=>vars3df(i)
+    v%v=>null()
+    v%vname='UNDEFINED';
+    v%vdescription='UNDEFINED';
+    v%vcontext='UNDEFINED';
+    v%vinit=.false.
+! bc data
+    v%vbcinit(:)=.false.
+    v%vbc_type(:)=undefined
+    v%vbc_wgt(:)=zero
+    do j=1,numbc ;  v%vbcs(j)%d=>null() ; enddo
+   enddo
+
+  endif
+  state_initialized=.true.
+!
+  end subroutine state_initialize
+!*******************************************************************
+  subroutine state_done()
+  int :: i, j
+  type(varray3df), pointer :: v
+!
+  if (state_initialized) then
+   do i=1, size(vars3df) 
+    v=>vars3df(i)
+    if (associated(v%v)) deallocate(v%v)
+    do j=1,numbc ; if (associated(v%vbcs(j)%d)) deallocate(v%vbcs(j)%d) ;  enddo
+   enddo
+!
+   deallocate(vars3df)
+   state_initialized=.false.
+  endif
+!
+  end subroutine state_done
+!******************************************************************
+  subroutine state_add3df(vname_, vdescription, vcontext_, nx_, ny_, nz_, vptr)
+!
+  use files
+  use formats
+!
+  character(len=*) :: vname_, vdescription
+  character(len=*), optional, intent(in) :: vcontext_
+  int, optional, intent(in) :: nx_, ny_, nz_
+  type(varray3df), pointer, optional, intent(out) :: vptr
+!
+  character(len=12) :: whoami='STATE_ADD3DF';
+  character(len=varnamelen) :: vname
+  character(len=contextnamelen):: vcontext
+!
+  int :: i, j, k, l, m, fid, ifmt
+  int :: mx, my, mz
+  float :: value
+  bool :: qbin
+  type(varray3df), pointer :: var, vars3df_bkp(:) ! dummy pointers
+  character(len=80) :: filename, fmt, file_mode, file_format
+!
+  if (.not. state_initialized) call state_initialize()
+!
+! check if name is valid (first convert to upper case)
+  vname=vname_; l=len(vname);
+  __TRIMA(vname,l)
+  call toupper(vname)
+!
+  if (present(vcontext_)) then
+   vcontext=vcontext_; l=len(vname);
+   __TRIMA(vcontext,m)
+   call toupper(vcontext)
+  else
+   vcontext='DEFAULT';m=6
+  endif
+!
+!
+  if (vname.eq.'') then 
+   call warning(whoami, 'Variable name cannot be blank. Nothing done', 0)
+   return
+  elseif (vcontext.eq.'') then 
+   call warning(whoami, 'Variable context can be omitted but cannot be blank. Returning null.', 0)
+   return
+  else
+   do i=1, size(vars3df)
+    if (vname.eq.vars3df(i)%vname.and.vcontext.eq.vars3df(i)%vcontext) then
+     call warning(whoami, 'Variable with name "'//vname(1:l)//'" already exists in context "'//vcontext(1:m)//'"',0)
+     call warning(whoami, ' and has description "'//vars3df(i)%vdescription//'". Nothing done',0)
+     return
+     endif
+   enddo ! i
+  endif ! vname
+!
+  if (present(nx_)) then 
+   if (nx_.ne.nx) then 
+    call warning(whoami, 'Custom x-dimension size specified: '//itoa(nx_),0)
+    if (nx_.lt.0) then 
+     call warning(whoami, 'Custom x-dimension cannot be negative. Nothing done.',0)
+     return
+    endif
+   endif
+   mx=nx_
+  else ;   mx=nx ;  endif ! present (nx_)
+!
+  if (present(ny_)) then 
+   if (ny_.ne.ny) then 
+    call warning(whoami, 'Custom y-dimension size specified: '//itoa(ny_),0)
+    if (ny_.lt.0) then 
+     call warning(whoami, 'Custom y-dimension cannot be negative. Nothing done.',0)
+     return
+    endif
+   endif
+   my=ny_
+  else ;   my=ny ;  endif ! present (ny_)
+!
+  if (present(nz_)) then 
+   if (nz_.ne.nz) then 
+    call warning(whoami, 'Custom z-dimension size specified: '//itoa(nz_),0)
+    if (nz_.lt.0) then 
+     call warning(whoami, 'Custom z-dimension cannot be negative. Nothing done.',0)
+     return
+    endif
+   endif
+   mz=nz_
+  else ;   mz=nz ;  endif ! present (nz_)
+!
+! check size
+  if (nvar3df.eq.size(vars3df)) then ! reallocate
+   allocate(vars3df_bkp(nvar3df + expand_increment))
+   vars3df_bkp(1:nvar3df)=vars3df
+   deallocate(vars3df) ; vars3df=>vars3df_bkp ; nullify(vars3df_bkp)
+  endif 
+!
+  nvar3df=nvar3df+1
+  var=>vars3df(nvar3df)
+  allocate(var%v(mx,my,mz))
+  var%vname=vname
+  var%vdescription=vdescription
+  var%vcontext=vcontext
+  call message(whoami, 'Variable "'//vname(1:l)//'" added to context "'//vcontext(1:m)//'"')
+  if (present(vptr)) vptr=>var
+!
+! check for assignments to variable (at present, this probably conflicts with 'molecule.src', in that you cannot use both assignments)
+! note that the boundary points are read, too; this is necessary because interpolated (e.g.) epsilon & kappa values are needed at cell boundaries
+!
+! check if initialization is specified
+  var%vinit=.false.
+  l=len_trim(var%vname)
+  select case(getval_nocase_upper(var%vname(1:l)//'INIT'))
+   case('CONST','CONSTANT')
+    if (existtag_nocase(var%vname(1:l)//'CONSTANT')) then
+     var%v=atof(getval_nocase(var%vname(1:l)//'CONSTANT'))
+     var%vinit=.true.
+    elseif (existtag_nocase(var%vname(1:l)//'CONST')) then
+     var%v=atof(getval_nocase(var%vname(1:l)//'CONST'))
+     var%vinit=.true.
+    else
+     call warning(whoami, 'Initialization constant for variable "'//var%vname(1:l)//'" not specified',-1)
+    endif
+   case('FILE')
+    if (existtag_nocase(var%vname(1:l)//'FILE')) then
+     filename=getval_nocase(var%vname(1:l)//'FILE')
+     call adjustleft(filename)
+     k=len_trim(filename)
+     call message(whoami, 'Will initialize variable "'//var%vname(1:l)//'" from file "'//filename(1:k)//'"')
+    else
+     call warning(whoami, 'Initialization file for variable "'//var%vname(1:l)//'" not specified',-1)
+    endif
+!
+    if (existtag_nocase(var%vname(1:l)//'_MODE')) then
+     file_mode=getval_nocase_upper(var%vname(1:l)//'_MODE')
+     select case(file_mode);
+      case('BINARY', 'BIN');      call message(whoami,'Using binary mode');  qbin=.true.
+      case('ASCII', 'TEXT');      call message(whoami,'Using ASCII mode');   qbin=.false.
+      case default ;  call warning(whoami,'Unknown output mode "'//file_mode(1:len_trim(file_mode))//'" requested',-1); qbin=.false.
+     end select
+    else
+     qbin=.true.
+    endif
+!
+    ifmt=chest ! default format
+    if (existtag_nocase(var%vname(1:l)//'_FORMAT')) then
+     file_format=getval_nocase_upper(var%vname(1:l)//'_FORMAT');
+     ifmt=-999
+     do j=1,num_fmt
+      if (file_format.eq.format_name(j)) then 
+       ifmt=j
+       exit
+      endif
+     enddo
+    endif
+!
+    if (ifmt.gt.0) then
+     call message(whoami,format_name(ifmt)(1:len_trim(format_name(ifmt)))//' format will be used');
+    else
+     call warning(whoami,'Format "'//file_format(1:len_trim(file_format))//'" is not recognized',-1)
+    endif
+!
+!      if (me.le.0) &
+!       call message(whoami, 'Reading data for variable "'//var%vname(1:l)//'" from file '//filename(1:k))
+!
+    select case(ifmt)
+     case(plot3d); call plot3Dread_scalar(filename,var%v,mx,my,mz,1,qbin)
+     case(chest);  call chest_read_scalar(filename,var%v,mx,my,mz,qbin)
+    end select
+!
+    if (.not.fatal_warning(__COMM)) var%vinit=.true.
+!
+   case('OBJECT') ! do nothing : expect that object_grid_parameters will take care of correct initialization
+    call message(whoami, 'Initialization for variable "'//var%vname(1:l)//'" will be computed from object')
+    var%vinit=.true.
+    case default
+     call warning(whoami, 'Initialization option for variable "'//var%vname(1:l)//'" not recognized',-1)
+  end select
+!
+  end subroutine state_add3df
+!******************************************************************
+  function state_get3df(vname_, vcontext_, ind) ! returns a pointer to the variable with name vname, in context vcontext_
+  character(len=*), intent(in) :: vname_
+  character(len=*), optional, intent(in) :: vcontext_
+  character(len=varnamelen) :: vname
+  int, optional, intent(out) :: ind ! index into the vars3df array
+  character(len=contextnamelen):: vcontext
+  int :: i, l, m
+  float, dimension(:,:,:), pointer :: state_get3df
+  character(len=12) :: whoami='STATE_GET3DF'
+  nullify(state_get3df)
+!
+  if (.not.state_initialized) call state_initialize()
+!
+  vname=vname_; l=len(vname);
+  __TRIMA(vname,l)
+  call toupper(vname)
+!
+  if (present(vcontext_)) then
+   vcontext=vcontext_; l=len(vname);
+   __TRIMA(vcontext,m)
+   call toupper(vcontext)
+  else
+   vcontext='DEFAULT';m=6
+  endif
+!
+  if (present(ind)) ind=-1 ! initialize
+!
+  if (vname.eq.'') then 
+   call warning(whoami, 'Variable name cannot be blank. Returning null.', 0)
+  elseif (vcontext.eq.'') then 
+   call warning(whoami, 'Variable context can be omitted but cannot be blank. Returning null.', 0)
+  else
+   do i=1, nvar3df
+    if (vname.eq.vars3df(i)%vname.and.vcontext.eq.vars3df(i)%vcontext) then
+     state_get3df=>vars3df(i)%v ; if (present(ind)) ind=i ; exit
+    endif
+   enddo ! i
+   if (.not.associated(state_get3df)) &
+&   call warning(whoami, 'Cannot find variable with name "'//vname(1:l)//'" in context "'//vcontext(1:m)//'". Returning null.',0)
+  endif
+!
+  end function state_get3df
+!******************************************************************
+! boundary condition routines for 3D fields
+  subroutine state_bc_add3df(vname_, vcontext_, ibc, nx_, ny_)
+  use files
+  character(len=*), intent(in) :: vname_
+  character(len=*), optional, intent(in) :: vcontext_
+  int, optional :: nx_, ny_
+  character(len=varnamelen) :: vname
+  character(len=contextnamelen):: vcontext
+!
+  int :: ibc ! boundary number (see fieldbcdef)
+!
+  type(varray3df), pointer :: v ! dummy pointer
+  float, pointer :: v3df(:,:,:), vbcd(:,:)
+!
+  character(len=15) :: whoami='STATE_BC_ADD3DF'
+  character(len=80) :: filename
+  character(len=20) :: keyword
+  character(len=varnamelen+len(bc_names(1))+1) :: bcname
+  int :: i, k, ii, jj, bcsize, bcsizei, bcsizej, l, m
+  int :: mx, my, i1, i2
+  int :: fid
+  integer :: iostatus
+  float :: value
+!
+#ifdef __PARALLEL
+  int :: bug
+#endif
+!
+! basic checks:
+! find variable
+  if (present(vcontext_)) then ; v3df=>state_get3df(vname_, vcontext_, i) ; else ; v3df=>state_get3df(vname_, IND=i) ; endif
+  if (i .lt. 0) return ! variable not found; warning issued by _get3df
+  v=>vars3df(i)
+!
+! make sure bc index is valid
+! bounds check
+  select case(ibc)
+    case(bcx0, bcx1); i1 = 2 ; i2 = 3
+    case(bcy0, bcy1); i1 = 1 ; i2 = 3
+    case(bcz0, bcz1); i1 = 1 ; i2 = 2
+    case default
+     call warning(whoami, 'Unknown boundary type "'//itoa(ibc)//'". Nothing done',0)
+     return
+  end select
+  mx=size(v%v,i1) ; my=size(v%v,i2) 
+!
+  if (present(nx_)) then 
+   if (nx_.ne.mx) then 
+    call warning(whoami, 'Custom boundary 1-dimension size specified (hope you know what you are doing): '//itoa(nx_),0)
+    if (nx_.lt.0) then 
+     call warning(whoami, 'Custom boundary 1-dimension cannot be negative. Nothing done.',0)
+     return
+    endif
+   endif
+   mx=nx_
+  endif ! present (nx_)
+!
+  if (present(ny_)) then 
+   if (ny_.ne.my) then 
+    call warning(whoami, 'Custom boundary 2-dimension size specified (hope you know what you are doing): '//itoa(ny_),0)
+    if (ny_.lt.0) then 
+     call warning(whoami, 'Custom boundary 2-dimension cannot be negative. Nothing done.',0)
+     return
+    endif
+   endif
+   my=ny_
+  endif ! present (ny_)
+!
+! parse BC-spec from input file
+  bcname=v%vname(1:len_trim(v%vname))//'_'//bc_names(ibc)
+  l=len_trim(bcname)
+!
+  keyword=trim(getval_nocase_upper(bcname))
+  select case(keyword)
+   case('DIRICHLET');                               !   Dirichlet applied between grid nodes
+    v%vbc_type(ibc)=dirichlet;  v%vbc_wgt(ibc)=two
+   case('DIRICHLETG');                              !   Dirichlet applied at grid node
+    v%vbc_type(ibc)=dirichletg; v%vbc_wgt(ibc)=one
+   case('PERIODIC');
+    v%vbc_type(ibc)=periodic;
+   case('NEUMANN');
+    v%vbc_type(ibc)=neumann;    v%vbc_wgt(ibc)=one  !   valid assuming BC data have been scaled by metric
+   case('NEUMANNG');
+    v%vbc_type(ibc)=neumanng;   v%vbc_wgt(ibc)=one  !   Neumann applied at ghostpoint
+   case default
+    call warning(whoami, 'Unknown boundary condition for '//bcname(1:l)//'.',-1)
+   return
+  end select
+!
+!     set the actual boundary condition values
+  if (associated(v%vbcs(ibc)%d)) then
+   call warning(whoami, 'Data for boundary "'//bcname(1:l)//'" already allocated (this should not happen). Abort.',0)
+   return
+  endif
+  allocate(v%vbcs(ibc)%d(mx,my))
+  vbcd=>v%vbcs(ibc)%d
+
+  if (v%vbc_type(ibc).eq.dirichlet .or. &
+&     v%vbc_type(ibc).eq.dirichletg.or. &
+&     v%vbc_type(ibc).eq.neumann)       & ! others can potentially be added below, such as convective (for pressure)
+&        then
+!
+   if (existtag_nocase(bcname(1:l)//'_CONSTANT')) then
+    vbcd=atof(getval_nocase(bcname(1:l)//'_CONSTANT'))
+   elseif (existtag_nocase(bcname(1:l)//'_CONST')) then
+    vbcd=atof(getval_nocase(bcname(1:l)//'_CONST'))
+   elseif (existtag_nocase(bcname(1:l)//'_FILE')) then
+! open and read boundary condition file
+    filename=getval_nocase(bcname(1:l)//'_FILE')
+    call adjustleft(filename)
+    m=len_trim(filename)
+!
+    bcsizei=mx-2; ! size of first dimension (inner pts only)
+    bcsizej=my-2; ! size of second dimension (inner pts only)
+    bcsize=bcsizei*bcsizej;     ! total inner size
+!
+    if (me.le.0) then
+     call message(whoami, 'Reading boundary conditions ('//bcname(1:l)//') from file '//filename(1:m))
+     if (l.gt.0) then
+      fid=-1
+      call files_open(fid, name_=filename(1:m), form_='FORMATTED', action_='READ')
+      if (fid.lt.0) call warning(whoami, 'Cannot open file. Abort.',-1)
+     else
+      call warning(whoami, 'File name not specified. Abort.',-1)
+     endif ! length positive
+    endif ! me>0 
+    if (fatal_warning(__COMM)) then ; deallocate(v%vbcs(ibc)%d) ; return ; endif ! in case there was an error on the root processor, stop here
+!
+    if (me.le.0) then
+     k=0
+     read(fid, *, IOSTAT=iostatus) value
+     do while (iostatus.eq.0)
+      k=k+1
+!    individual indices
+      jj=(k-1)/bcsizei+2                          ! slowly-varying second index ; offset is 2 for inner points only
+      ii=mod((k-1),bcsizei)+2                     ! fast-varying first index
+      if (k.le.bcsize) vbcd(ii,jj)=value ! make assignment if not out of bounds of bcs(i)
+      read(fid, *, IOSTAT=iostatus) value
+     enddo
+     call files_close(fid)
+    endif ! me
+!    check that the right number of entries was read
+#ifdef __PARALLEL
+    if (ncpu.gt.1) then 
+     call MPI_BCAST(k,1,mpi_int,0,communicator,bug)
+     call MPI_BCAST(vbcd,size(vbcd),mpi_float,0,communicator,bug)
+    endif
+#endif
+!
+!        write(0,*) k, bcsizei, bcsizej,bcsize ! aa
+    if (k.gt.bcsize) then
+     call warning(whoami, 'File "'//filename(1:m)//'" contains more entries than expected.', 0)
+    elseif (k.lt.bcsize) then
+     call warning(whoami, 'File "'//filename(1:m)//'" does not contain enough entries. Abort.', -1)
+     deallocate(v%vbcs(ibc)%d)
+     return
+    endif
+!
+   else
+    call warning(whoami, 'No values specified for boundary conditions ('//bcname(1:l)//'). Abort.', -1)
+     deallocate(v%vbcs(ibc)%d)
+     return
+   endif ! read bc values
+  endif !  certain bc_types
+!
+  v%vbcinit(ibc)=.true.
+!
+  end subroutine state_bc_add3df
+!
+!******************************************************************
+!
+end module state

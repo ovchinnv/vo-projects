@@ -1,0 +1,144 @@
+module object
+ __DEP_PARSER
+ __DEP_OUTPUT
+! this module will be a wrapper around various shapes that define grid properties
+! in the future, may support many objects; now this seems superfluous
+
+#define __USE1(__S)  use __S, only : __S ## _ndim, __S ## _initialize, __S ## _center, __S ## _align, __S ## _dimens,&
+#define __USE2(__S) & __S ## _done, __S ## _grid_objects, __S ## _ok, __S ## _surface_pointer, __S ## _read_parameters
+
+__USE1(molecule)
+__USE2(molecule)
+
+ int, parameter :: num_objects=1
+ int, parameter :: type_undefined=0
+ int, parameter :: type_molecule=1
+ character(len=20), parameter, dimension(0:num_objects) :: type_names=&
+#ifndef __PATHSCALE
+&  [character(len=20) :: 'UNDEFINED','MOLECULE'] 
+#else
+&  (/'UNDEFINED           ','MOLECULE            '/)
+#endif
+!
+ bool, public :: object_initialized=.false.
+ int, public :: object_type=type_undefined
+! 
+ public object_init
+ public object_read_parameters
+ private object_initialize
+ private object_ok
+ public object_ndim
+ public object_dimens
+ public object_center
+ public object_grid_objects
+ public object_done
+ public object_surface_pointer ! function that returns a pointer to the surface array in object
+!
+!
+ contains
+!*********************************************************************************!
+#define __NM OK
+#define __TYPE bool
+#include "function.def"
+!*********************************************************************************!
+#define __NM NDIM
+#define __TYPE int
+#define __BODY0 OBJECT_NDIM=-1
+#include "function.def"
+!*********************************************************************************!
+#define __NM SURFACE_POINTER
+#define __TYPE float, pointer, dimension(:,:,:)
+#define __ASSIGN =>
+#include "function.def"
+!********************************************************************************!
+#define __NM DIMENS
+#define __TYPE float, pointer, dimension(:,:)
+#define __BODY0 ALLOCATE(OBJECT_DIMENS (object_ndim(),3)); OBJECT_DIMENS=-1
+#include "function.def"
+!********************************************************************************!
+#define __NM DONE
+#define __BODY1 object_initialized=.false. ; object_type=type_undefined
+#include "subroutine.def"
+!********************************************************************************!
+#define __NM CENTER
+#define __ARGS rcenter, qmass
+#define __VARS float :: rcenter(3); bool :: qmass
+#include "subroutine.def"
+!********************************************************************************!
+#define __NM ALIGN
+#define __ARGS qmass
+#define __VARS bool :: qmass
+#include "subroutine.def"
+!********************************************************************************!
+#define __NM GRID_OBJECTS
+#define __ARGS xcen, ycen, zcen, dxcor, dycor, dzcor, eps, kappa, rhs, nx, ny, nz
+#define __VARS float, dimension(:,:,:) :: eps,kappa,rhs ; float, dimension(:) :: xcen,ycen,zcen,dxcor,dycor,dzcor ; int :: nx,ny,nz
+#include "subroutine.def"
+!********************************************************************************!
+#define __NM INITIALIZE
+#include "subroutine.def"
+!********************************************************************************!
+#define __NM READ_PARAMETERS
+#include "subroutine.def"
+!********************************************************************************!
+
+  subroutine object_init()
+  __IMPNONE
+  character(len=11), parameter :: whoami='OBJECT_INIT'
+  character(len=20) :: o, ou
+  bool :: found, qmass, qalign
+  int :: i
+  float :: r_center(3)
+!
+  if (object_initialized) then 
+   call message(whoami, 'OBJECT OF TYPE '//type_names(object_type)(1:len_trim(type_names(object_type)))//' IS ALREADY INITIALIZED.')
+   return
+  endif
+!
+  if     (existtag('OBJECT')) then ; o=getval('OBJECT'); ou=o; call toupper(ou);
+  elseif (existtag('object')) then ; o=getval('object'); ou=o; call toupper(ou)
+  else 
+   call warning(whoami, 'OBJECT NOT SPECIFIED.',0)
+   return
+  endif
+! check the type of object requested and call the appropriate initialization routine
+  object_type=type_undefined
+!
+  found=.false.
+  do i=1,num_objects
+   if ( ( type_names(i) .eq. o ) .or. ( type_names(i) .eq. ou ) ) then 
+    object_type=i
+    found=.true.
+    exit
+   endif  
+  enddo
+!
+  if (.not.found) then 
+   call warning(whoami, 'OBJECT NAME '//o(1:len_trim(o))//' NOT RECOGNIZED.',0)
+   return
+  endif
+! call auxiliary initialization routine
+  object_initialized=.true.  ! hack to pass initialization checking in auxiliary routine
+  call object_initialize()
+! check the success of the initialization : 
+  object_initialized=object_ok()
+!
+  if (.not. object_initialized) call warning(whoami,'OBJECT INITIALIZATION FAILED.',0)
+!*********** process object orientation commands  
+  qmass=.false.
+  if (existtag_nocase('OBJECT_CENTER')) then ; 
+   r_center=atofv(getval_nocase('OBJECT_CENTER'),3); 
+   if (existtag_nocase('OBJECT_MASSW')) qmass=atol(getval_nocase('OBJECT_MASSW'))
+   call object_center(r_center,qmass)
+  endif
+!
+  if (existtag_nocase('OBJECT_ALIGN')) then
+   if (atol(getval_nocase('OBJECT_ALIGN'))) then
+    if (existtag_nocase('OBJECT_MASSW')) qmass=atol(getval_nocase('OBJECT_MASSW'))
+    call object_align(qmass);
+   endif
+  endif
+!  
+  end subroutine object_init
+
+end module object

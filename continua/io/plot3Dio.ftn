@@ -1,0 +1,459 @@
+!module plot3Dio
+! use output
+!
+! contains
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+  subroutine plot3Dwrite_grid(filename,x,y,z,nx,ny,nz,nblock,qbin &
+#ifdef __PARALLEL
+& , communicator &
+#endif
+&  )
+#ifdef __PARALLEL
+  __DEP_MPI
+#endif
+!
+  __DEP_OUTPUT
+  use files
+  __DEP_PARSER
+  __IMPNONE
+!  
+  int :: fid=-1
+  float :: x(*),y(*),z(*)
+  int :: nx(*), ny(*), nz(*) ! have dimensions of nblock[if present] or 1, whichever is greater
+! there may be problems with optional arguments here
+!  int, optional :: nblock
+!  bool, optional :: qbin
+  int :: nblock
+  bool :: qbin
+#ifdef __PARALLEL
+  int4mpi :: communicator, ierror, me
+#endif
+!
+  character(len=11) :: fmt
+!
+  int :: nb
+  bool :: bin
+  bool :: q3d
+!
+  int :: i, j, k, m, ioff, joff, koff
+!
+  character(len=*) :: filename
+  character(len=len(filename)) :: fname
+  character(len=16) , parameter :: whoami='PLOT3DWRITE_GRID'
+  int :: flen
+!
+#ifdef __PARALLEL
+  call mpi_comm_rank(communicator, me, ierror)
+  if (me.gt.0) return ! may need better parallel treatment
+#endif
+!
+!  if ( present(nblock) ) then ; nb=nblock ; else ; nb=1       ; endif;
+!  if ( present(qbin  ) ) then ; bin=qbin  ; else ; bin=.false. ; endif;
+  nb=nblock
+  bin=qbin
+  q3d=(nz(1).gt.3)
+!
+  if (bin) then; fmt='UNFORMATTED'; else ; fmt='FORMATTED'; endif
+!
+  fname=filename
+  call adjustleft(fname)
+  flen=len_trim(fname)
+  if (flen.gt.0) then
+#ifdef __PARALLEL
+   if (me.eq.0) then 
+#endif
+    call files_open(fid, name_=fname(1:flen), form_=fmt, action_='WRITE')
+    if (fid.lt.0) then
+     call warning(whoami, 'Cannot open grid file. Abort.',-1)
+    endif
+#ifdef __PARALLEL
+   endif ! me
+#endif
+   if (fatal_warning(__COMM)) return
+!
+  else
+   call warning(whoami, 'Grid file name not specified. Abort.',0)
+   return
+  endif
+!
+  if (bin) then 
+   if (nb.gt.1) write(fid) nb
+   if (q3d) then;write(fid) ( nx(m), ny(m), nz(m), m = 1, nb ) ;
+            else;write(fid) ( nx(m), ny(m),        m = 1, nb ) ; endif
+
+   ioff=0; joff=0; koff=0;
+   do  m = 1, nblock
+    if (q3d) then 
+     write(fid) (((real(x(i+ioff)), i=1,nx(m)), j=1,ny(m)), k=1, nz(m)), &
+&               (((real(y(j+joff)), i=1,nx(m)), j=1,ny(m)), k=1, nz(m)), &
+&               (((real(z(k+koff)), i=1,nx(m)), j=1,ny(m)), k=1, nz(m))
+     koff=koff+nz(m);
+    else
+     write(fid) ((real(x(i+ioff)), i=1,nx(m)), j=1,ny(m)), &
+&               ((real(y(j+joff)), i=1,nx(m)), j=1,ny(m))
+    endif
+!
+    ioff=ioff+nx(m)
+    joff=joff+ny(m)
+!
+   enddo ! blocks
+!
+  else ! bin
+!aa
+   if (nb.gt.1) write(fid,*) nb
+   if (q3d) then;write(fid,*) ( nx(m), ny(m), nz(m), m = 1, nb ) ;
+            else;write(fid,*) ( nx(m), ny(m),        m = 1, nb ) ; endif
+   ioff=0; joff=0; koff=0;
+   do  m = 1, nb
+    if (q3d) then 
+     write(fid,*) (((x(i+ioff), i=1,nx(m)), j=1,ny(m)), k=1, nz(m)), &
+&                 (((y(j+joff), i=1,nx(m)), j=1,ny(m)), k=1, nz(m)), &
+&                 (((z(k+koff), i=1,nx(m)), j=1,ny(m)), k=1, nz(m))
+     koff=koff+nz(m);
+    else
+     write(fid,*) ((x(i+ioff), i=1,nx(m)), j=1,ny(m)), &
+&                 ((y(j+joff), i=1,nx(m)), j=1,ny(m))
+    endif
+!
+    ioff=ioff+nx(m)
+    joff=joff+ny(m)
+!
+   enddo
+  endif ! qbin
+!
+  call files_close(fid)
+!
+  if (bin) then ; call message(whoami, 'Binary grid file "'//fname(1:flen)//'" written.')
+  else          ; call message(whoami,  'ASCII grid file "'//fname(1:flen)//'" written.')
+  endif
+!
+  end subroutine plot3Dwrite_grid
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+  subroutine plot3Dwrite_scalar(filename,q,nx,ny,nz,nblock,qbin &
+#ifdef __PARALLEL
+& , communicator &
+#endif
+&  )
+#ifdef __PARALLEL
+  __DEP_MPI
+#endif
+  __DEP_OUTPUT
+  use files
+  __DEP_PARSER
+  __IMPNONE
+!
+  float :: q(*)
+  int :: nx(*), ny(*), nz(*) ! have dimensions of nblock[if present] or 1, whichever is greater
+!  int, optional :: nblock
+!  bool, optional :: qbin
+  int :: nblock
+  bool :: qbin
+  character(len=11) :: fmt
+  character(len=18) , parameter :: whoami='PLOT3DWRITE_SCALAR'
+!
+  int :: nb, offset
+  bool :: bin
+#ifdef __PARALLEL
+  int4mpi :: communicator, me, ierror
+#endif
+  bool :: q3d
+! 
+  int :: i, j, k, m, ioff, joff, koff
+!
+  character(len=*) :: filename
+  character(len=len(filename)) :: fname
+  int :: flen, fid=-1
+!
+!  if ( present(qbin  ) ) then ; bin=qbin  ; else ; bin=.true. ; endif;
+  bin=qbin
+  if (bin) then; fmt='UNFORMATTED'; else ; fmt='FORMATTED'; endif
+!
+  fname=filename
+  call adjustleft(fname)
+  flen=len_trim(fname)
+  if (flen.gt.0) then
+#ifdef __PARALLEL
+   call mpi_comm_rank(communicator, me, ierror)
+   if (me.eq.0) then 
+#endif
+    call files_open(fid, name_=fname(1:flen), form_=fmt, action_='WRITE')
+    if (fid.lt.0) then
+     call warning(whoami, 'Cannot open output file. Abort.',-1)
+    endif
+#ifdef __PARALLEL
+   endif ! me
+#endif
+   if (fatal_warning(__COMM)) return
+  else
+   call warning(whoami, 'Output file name not specified. Abort.',0)
+   return
+  endif
+!
+#ifdef __PARALLEL
+  if (me.gt.0) return ! may change parallel behavior in the future
+#endif
+!
+!  if ( present(nblock) ) then ; nb=nblock ; else ; nb=1       ; endif;
+  nb=nblock
+  if (nz(1).gt.3) then ; q3d=.true. ; else ; q3d=.false.; endif;
+!************** header *******
+!
+  if (bin) then 
+   if (nb.gt.1) write(fid) nb
+   if (q3d) then 
+    write(fid) ( nx(m), ny(m), nz(m), m = 1, nb )
+   else   
+    write(fid) ( nx(m), ny(m), 1, m = 1, nb )
+   endif ! q3d
+  else ! qbin
+   if (nb.gt.1) write(fid,*) nb
+   if (q3d) then 
+    write(fid,*) ( nx(m), ny(m), nz(m), m = 1, nb )
+   else   
+    write(fid,*) ( nx(m), ny(m), m = 1, nb )
+   endif ! q3d
+  endif
+!
+!********* write scalar *******
+  offset=0
+  do m=1, nblock
+   call writeblock(fid,q(offset+1),nx(m),ny(m),nz(m),bin,q3d) ! trick fortran into redimensioning q
+   offset=offset+nx(m)*ny(m)*nz(m)
+  enddo
+!
+  call files_close(fid)
+!
+  if (bin) then ; call message(whoami, 'Binary scalar file "'//fname(1:flen)//'" written.')
+  else          ; call message(whoami,  'ASCII scalar file "'//fname(1:flen)//'" written.')
+  endif
+!
+  end subroutine plot3Dwrite_scalar
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+  subroutine plot3Dread_scalar(filename,q,nx,ny,nz,nblock,qbin &
+#ifdef __PARALLEL
+& , communicator &
+#endif
+&  )
+#ifdef __PARALLEL
+  __DEP_MPI
+#endif
+
+  __DEP_OUTPUT
+  use files
+  __DEP_PARSER
+  __IMPNONE
+!
+  float :: q(*)
+  int :: nx(*), ny(*), nz(*) ! have dimensions of nblock[if present] or 1, whichever is greater
+  int, allocatable, dimension(:) :: mx, my, mz
+!  int, optional :: nblock
+!  bool, optional :: qbin
+  int :: nblock
+  bool :: qbin
+#ifdef __PARALLEL
+  int4mpi :: communicator, me, ncpu, ierror
+#endif
+  character(len=11) :: fmt
+  character(len=17) , parameter :: whoami='PLOT3DREAD_SCALAR'
+!
+  int :: nb, offset, bug
+  bool :: bin
+  bool :: q3d
+! 
+  int :: i, j, k, m, ioff, joff, koff
+!
+  character(len=*) :: filename
+  character(len=len(filename)) :: fname
+  int :: flen, fid=-1
+!
+  bin=qbin
+  if (bin) then; fmt='UNFORMATTED'; else ; fmt='FORMATTED'; endif
+!
+  fname=filename
+  call adjustleft(fname)
+  flen=len_trim(fname)
+  if (flen.gt.0) then
+#ifdef __PARALLEL
+   call mpi_comm_rank(communicator, me, ierror)
+   if (me.eq.0) then 
+#endif
+    call files_open(fid, name_=fname(1:flen), form_=fmt, action_='READ')
+    if (fid.lt.0) then
+     call warning(whoami, 'Cannot open input file. Abort.',-1)
+    endif
+#ifdef __PARALLEL
+   endif ! me
+#endif
+   if (fatal_warning(__COMM)) return
+  else
+   call warning(whoami, 'Input file name not specified. Abort.',0)
+   return
+  endif
+!
+#ifdef __PARALLEL
+  if (me.eq.0) then 
+#endif
+!***************** ONLY ROOT READS, THEN BROADCASTS TO OTHER NODES, IF NEEDED ****
+  if (nz(1).gt.3) then ; q3d=.true. ; else ; q3d=.false.; endif;
+!************** header *******
+!
+  if (bin) then 
+   if (nblock.gt.1) read(fid) nb
+   if (nb.ne.nblock) &
+&    call warning(whoami, 'Mismatch in the number of grid blocks,',-1)
+   allocate(mx(nblock), my(nblock), mz(nblock))
+!
+   if (q3d) then 
+    read(fid) ( mx(m), my(m), mz(m), m = 1, nb )
+   else   
+    read(fid) ( mx(m), my(m), m = 1, nb )
+   endif ! q3d
+  else ! qbin
+   if (nb.gt.1) read(fid,*) nb
+   if (nb.ne.nblock) &
+&    call warning(whoami, 'Mismatch in the number of grid blocks.',-1)
+   allocate(mx(nblock), my(nblock), mz(nblock))
+   if (q3d) then 
+    read(fid,*) ( mx(m), my(m), mz(m), m = 1, nb )
+   else   
+    read(fid,*) ( mx(m), my(m), m = 1, nb )
+   endif ! q3d
+  endif
+!
+!********* read scalar *******
+  offset=0
+  do m=1, nblock
+   if (nx(m).ne.mx(m).or.ny(m).ne.my(m).or.nz(m).ne.mz(m)) then
+    call warning(whoami, 'Mismatch in the domain size. Abort', -1)
+    exit
+   endif
+   call readblock(fid,q(offset+1),nx(m),ny(m),nz(m),bin,q3d) ! trick fortran into redimensioning q
+   offset=offset+nx(m)*ny(m)*nz(m)
+  enddo
+!
+  call files_close(fid)
+!
+  if (allocated(mx)) deallocate(mx) 
+  if (allocated(my)) deallocate(my) 
+  if (allocated(mz)) deallocate(mz) 
+!
+#ifdef __PARALLEL
+  endif ! me.eq.0 (Root reads)
+#endif
+!
+  if (.not.fatal_warning(__COMM)) then 
+   if (bin) then ; call message(whoami, 'Binary scalar file "'//fname(1:flen)//'" read.')
+   else          ; call message(whoami,  'ASCII scalar file "'//fname(1:flen)//'" read.')
+   endif
+!
+#ifdef PARALLEL
+   call mpi_comm_size(communicator, ncpu, ierror)
+   if (ncpu.gt.1) call MPI_BCAST(q,offset,mpi_float,0,communicator,bug)
+#endif
+!
+  endif ! fatal_warning
+!
+  end subroutine plot3Dread_scalar
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+  subroutine plot3Dwrite_solution(filename,q1,q2,q3,q4,q5,nx,ny,nz,nblock,qbin &
+#ifdef __PARALLEL
+& , communicator &
+#endif
+&  )
+! write 4 or five scalar function at once, which represent the solution in the standard plot3D format
+#ifdef __PARALLEL
+  __DEP_MPI
+#endif
+  __DEP_OUTPUT
+  use files
+  __DEP_PARSER
+  __IMPNONE
+!
+  float, dimension(*) :: q1, q2, q3, q4, q5
+  int, dimension(*) :: nx, ny, nz         ! have dimensions of nblock[if present] or 1, whichever is greater
+!  int, optional :: nblock
+!  bool, optional :: qbin
+  int :: nblock
+  bool :: qbin
+#ifdef __PARALLEL
+  int4mpi :: communicator, me, ierror
+#endif
+  character(len=11) :: fmt
+  character(len=20) , parameter :: whoami='PLOT3DWRITE_SOLUTION'
+!
+  int :: nb, offset
+  bool :: bin
+  bool :: q3d
+! 
+  int :: i, j, k, m, ioff, joff, koff
+!
+  character(len=*) :: filename
+  character(len=len(filename)) :: fname
+  int :: flen, fid=-1
+!
+!  if ( present(qbin  ) ) then ; bin=qbin  ; else ; bin=.true. ; endif;
+  bin=qbin
+  if (bin) then; fmt='UNFORMATTED'; else ; fmt='FORMATTED'; endif
+!
+  fname=filename
+  call adjustleft(fname)
+  flen=len_trim(fname)
+  if (flen.gt.0) then
+#ifdef __PARALLEL
+   call mpi_comm_rank(communicator, me, ierror)
+   if (me.eq.0) then 
+#endif
+    call files_open(fid, name_=fname(1:flen), form_=fmt, action_='WRITE')
+    if (fid.lt.0) then
+     call warning(whoami, 'Cannot open output file. Abort.',-1)
+    endif
+#ifdef __PARALLEL
+   endif ! me
+#endif
+   if (fatal_warning(__COMM)) return
+  else
+   call warning(whoami, 'Output file name not specified. Abort.',0)
+   return
+  endif
+!
+#ifdef __PARALLEL
+  if (me.gt.0) return ! may change parallel behavior in the future
+#endif
+!
+!  if ( present(nblock) ) then ; nb=nblock ; else ; nb=1       ; endif;
+  nb=nblock
+  if (nz(1).gt.3) then ; q3d=.true. ; else ; q3d=.false.; endif;
+!************** header *******
+!
+  if (bin) then 
+   if (nb.gt.1) write(fid) nb
+   if (q3d) then 
+    write(fid) ( nx(m), ny(m), nz(m), m = 1, nb )
+   else   
+    write(fid) ( nx(m), ny(m), m = 1, nb )
+   endif ! q3d
+  else ! qbin
+   if (nb.gt.1) write(fid,*) nb
+   if (q3d) then 
+    write(fid,*) ( nx(m), ny(m), nz(m), m = 1, nb )
+   else   
+    write(fid,*) ( nx(m), ny(m), m = 1, nb )
+   endif ! q3d
+  endif
+!
+!********* write scalar *******
+  offset=0
+  do m=1, nblock
+   call writeblock5(fid,q1(offset+1),q2(offset+1),q3(offset+1),q4(offset+1),q5(offset+1),nx(m),ny(m),nz(m),bin,q3d) ! trick fortran into redimensioning q
+   offset=offset+nx(m)*ny(m)*nz(m)
+  enddo
+!
+  call files_close(fid)
+!
+  if (bin) then ; call message(whoami, 'Binary solution file "'//fname(1:flen)//'" written.')
+  else          ; call message(whoami,  'ASCII solution file "'//fname(1:flen)//'" written.')
+  endif
+!
+  end subroutine plot3Dwrite_solution
+!
+!end module plot3Dio

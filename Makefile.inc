@@ -137,8 +137,8 @@ dynamol:
 	$(MAKE) -C $(ROOT)/dynamol
 string:
 	$(MAKE) -C $(ROOT)/string
-chest:
-	$(MAKE) ches -C $(ROOT)/chest
+chest::
+	$(MAKE) -C $(ROOT)/continua/chest
 
 
 force_look:

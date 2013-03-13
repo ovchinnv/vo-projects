@@ -1,1 +1,1 @@
-/home/taly/projects/chest/objects/molecule/molecule.mod
+/home/taly/projects/continua/objects/molecule/molecule.mod

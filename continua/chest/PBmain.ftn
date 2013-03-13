@@ -1,0 +1,391 @@
+      module PBmain
+!
+!    include other modules
+      use datatypes
+      use state     ! main physical variables
+      __DEP_PARSER    ! parses input unit and stores input parameters
+      use SIZE      ! basic size information
+      use grid      ! grid module
+      __DEP_OUTPUT    ! runtime output
+      use object    ! objects that modify problem coefficients
+!      use plot3Dio ! output in plot3D (CFD) format; compile as a library, not as a module
+      use multigrid ! multigrid solver module
+!      use openDXio ! output in openDX format ; not implemented yet
+      __IMPNONE
+!**************************************************************************************
+!     routines:
+      public PB_init
+      public PB_done
+      public PB_solve
+      public PB_output
+!
+!     variables:
+!
+      bool :: PB_initialized=.false.
+      character(len=16), parameter :: pbctx=__PBCTX
+      type(varray3df), pointer :: p_, eps_, kappa_, rhs_
+!
+      contains
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+       subroutine PB_init( &
+#ifdef __PARALLEL
+     &  comm )
+       __DEP_MPI
+#else
+     &)
+#endif
+       use files
+       use fieldbcdef
+!
+#ifdef __PARALLEL
+       int4mpi, optional :: comm
+       int4mpi :: bug
+#endif
+       int4mpi :: numarg 
+       character(len=80) :: filename, fname, keyword
+       int :: flen
+       int :: fid=-1 
+       bool :: qcomm
+       int :: i
+!
+       character(len=7), parameter :: whoami='PB_INIT'
+!
+!       if (PB_initialized) call PB_done()
+!
+#ifdef __PARALLEL
+       qcomm=present(comm)
+       if (qcomm) call MPI_COMM_RANK(comm, me, bug)
+#else
+       qcomm=.false.
+#endif
+! process input file
+! *********************************************************************************************************
+       if (me.le.0) then 
+#ifdef __NEED_IARGC
+        numarg=iargc() ! number of arguments
+#else
+        numarg=command_argument_count() ! number of arguments
+#endif
+        if (numarg.ge.1) then 
+         call getarg(1, filename)
+         fname=filename
+         call adjustleft(fname)
+         flen=len_trim(fname)
+         call files_open(handle_=fid, name_=filename(1:flen), form_='FORMATTED', action_='READ')
+         if (fid.lt.0) call error(whoami,'Could not open file',-1)
+        else
+         fid=5 ! if file name missing, read from standard input
+        endif
+       endif ! me
+!    call parser
+!    only the root will receive a valid file handle (see above); all nodes still call parse_file
+       call parse_file(fid &
+#ifdef __PARALLEL
+&       ,comm &
+#endif
+&       )
+!
+       if (me.le.0.and.fid.ne.5) call files_close(fid)
+! *********************************************************************************************************
+! * INITIALIZATION
+! *
+!    1) size
+       if (qcomm) then 
+#ifdef __PARALLEL
+        if (existtag_nocase('NZ',pbctx)) then 
+         call size_initialize(atoi(getval_nocase('NX',pbctx)), atoi(getval_nocase('NY',pbctx)), atoi(getval_nocase('NZ',pbctx)), comm)
+        else ! 2D
+         i=0 ! to support i8 compilation
+         call size_initialize(atoi(getval_nocase('NX',pbctx)), atoi(getval_nocase('NY',pbctx)), i, comm)
+        endif
+#else
+/* nothing */
+#endif
+       else
+        if (existtag_nocase('NZ',pbctx)) then 
+         call size_initialize(atoi(getval_nocase('NX',pbctx)), atoi(getval_nocase('NY',pbctx)), atoi(getval_nocase('NZ',pbctx)))
+        else ! 2D
+         i=0 ! to support i8 compilation
+         call size_initialize(atoi(getval_nocase('NX',pbctx)), atoi(getval_nocase('NY',pbctx)), i)
+        endif
+       endif
+!
+!    prepare Cartesian grid and metrics
+       call message(whoami, 'Initializing grid variables.');
+       call grid_initialize()
+!    initialize state variables
+       call message(whoami, 'Initializing state variables.');
+!
+       call state_add3df('PHI'  ,'Electrostatic Potential' , pbctx, vptr=p_)
+       call state_add3df('EPS'  ,'Dielectric Constant'     , pbctx, vptr=eps_)
+       call state_add3df('KAPPA','Ionic Strength Parameter', pbctx, vptr=kappa_)
+       call state_add3df('RHS'  ,'Source Density Vector'   , pbctx, vptr=rhs_)
+! add more variables here as needed
+!
+!    initialize boundary conditions
+       call message(whoami, 'Initializing boundary condition variables.');
+!
+       call state_bc_add3df('PHI', pbctx, left )   ;   call state_bc_add3df('PHI', pbctx, right )
+       call state_bc_add3df('PHI', pbctx, bottom ) ;   call state_bc_add3df('PHI', pbctx, top )
+       if (.not.q2D) then
+        call state_bc_add3df('PHI', pbctx, front ) ;   call state_bc_add3df('PHI', pbctx, back )
+       endif
+!
+!    check whether object specified; if so, initialize
+       if     (existtag('OBJECT',pbctx) .or. existtag('object',pbctx)) then 
+!    check if the object has not yet been initialized (as could happen via grid module above); if not, initialize
+        if (.not. object_initialized) then 
+         call message(whoami, 'Initializing object.');
+         call object_init()
+        endif
+       endif
+!
+!      at present, there are no cases in which a solution does not involve an object
+!
+!    object dependent properties
+       if (object_initialized) then
+        call message(whoami, 'Reading object parameters.');
+        call object_read_parameters()
+        if (.not.size_initialized) then 
+         call warning(whoami, 'Size not initialized.',-1);
+        elseif (.not.grid_initialized) then 
+         call warning(whoami, 'Grid not initialized.',-1);
+        elseif (.not.state_initialized) then
+         call warning(whoami, 'State variables not initialized.',-1);
+        else
+         call message(whoami, 'Computing gridded parameters.');
+         call object_grid_objects( xcen, ycen, zcen, dxcor, dycor, dzcor, state_get3df('EPS'), state_get3df('KAPPA'), state_get3df('RHS'), nx, ny, nz )
+        endif
+!
+        if (qcomm) then 
+#ifdef __PARALLEL
+         if (fatal_warning(comm)) call terminate(whoami)
+#else
+/* nothing */
+#endif
+        else
+         if (fatal_warning()) call terminate(whoami)
+        endif
+       endif
+!
+       PB_initialized=.true.
+!
+       end subroutine PB_init
+!************************************************************************************
+       subroutine PB_solve()
+!
+       character(len=20) :: solver
+!
+!    initialize multigrid solver, if requested
+!
+       character(len=8), parameter :: whoami='PB_SOLVE'
+!
+!    the proper way to terminate run if error occurs on some processors (but not all)
+       if (.not. PB_initialized) call warning(whoami, 'POISSON_BOLTZMANN MODULE NOT INITIALIZED.',-1)
+       if (fatal_warning(__COMM)) call terminate(whoami)
+!
+       if     (existtag('SOLVER',pbctx)) then ; solver=getval('SOLVER',pbctx); call toupper(solver);
+       elseif (existtag('solver',pbctx)) then ; solver=getval('solver',pbctx); call toupper(solver); 
+       else ; ! no solver defined
+        call warning(whoami, 'No solver specified. Nothing done.',0);
+        return
+       endif
+!
+! special case: NONE - skip solution
+!
+       if (solver.eq.'NONE') return
+!
+! if still here, attempt to call solver
+!
+       select case(solver)
+!*********************************************************************************!
+#define __NM MULTIGRID
+#define __ARGS p_, eps_, kappa_, rhs_
+#include "PBmacro1.def"
+!*********************************************************************************!
+       case default;
+        call warning(whoami, 'Unknown solver '//solver(1:len_trim(solver))//' specified. Nothing done.',-1);
+       end select
+!
+       end subroutine PB_solve
+!*********************************************************************************!
+       subroutine PB_output()
+       use object, only : object_surface_pointer, object_initialized
+       use formats
+!
+       character(len=9), parameter :: whoami='PB_OUTPUT'
+       int :: ifmt=plot3d
+       bool :: qbin ! whether binary output is used
+       float, pointer, dimension(:,:,:) :: surf, eps, kappa, rhs, p
+       int :: i
+!
+       character(len=80) :: filename, output_format, output_mode
+!
+       p=>state_get3df('phi', pbctx)
+       eps=>state_get3df('eps', pbctx)
+       kappa=>state_get3df('kappa', pbctx)
+       rhs=>state_get3df('rhs', pbctx)
+!
+       if (existtag_nocase('output_format', pbctx)) then 
+        output_format=getval_nocase_upper('output_format', pbctx);
+        ifmt=-999
+        do i=1,num_fmt
+         if (output_format.eq.format_name(i)) then 
+          ifmt=i
+          exit
+         endif
+        enddo
+       endif
+!
+       if (ifmt.gt.0) then
+        call message(whoami,format_name(ifmt)(1:len_trim(format_name(ifmt)))//' format will be used for output');
+       else
+        call warning(whoami,'Format "'//output_format(1:len_trim(output_format))//'" is not recognized',0)
+        return
+       endif
+!
+       if (existtag_nocase('output_mode', pbctx)) then
+        output_mode=getval_nocase('output_mode', pbctx)
+        select case(output_mode);
+         case('BINARY', 'BIN', 'binary', 'bin'); 
+          call message(whoami,'Using binary mode');
+          qbin=.true.
+         case('ASCII', 'TEXT', 'ascii', 'text'); 
+          call message(whoami,'Using ASCII mode');
+          qbin=.false.
+         case default
+          call warning(whoami,'Unknown output mode "'//output_mode(1:len_trim(output_mode))//'". Will use ASCII',0);
+          qbin=.false.
+        end select
+       else
+        call message(whoami,'Using ASCII mode');
+        qbin=.false.
+       endif
+!
+       if (existtag_nocase('epsoutput', pbctx)) then
+        filename=getval_nocase('epsoutput', pbctx)
+        call message(whoami,'Writing dielectric to file "'//filename(1:len_trim(filename))//'"');
+        select case(ifmt)
+         case(plot3d); call plot3Dwrite_scalar(filename,eps,nx,ny,nz,1,qbin)
+        end select
+       endif
+!
+       if (existtag_nocase('kappaoutput', pbctx)) then
+        filename=getval_nocase('kappaoutput', pbctx)
+        call message(whoami,'Writing ionic strength to file "'//filename(1:len_trim(filename))//'"');
+        select case(ifmt)
+         case(plot3d); call plot3Dwrite_scalar(filename,kappa,nx,ny,nz,1,qbin)
+        end select
+       endif
+!
+       if (existtag_nocase('chargeoutput', pbctx)) then
+        filename=getval_nocase('chargeoutput', pbctx)
+        call message(whoami,'Writing source density to file "'//filename(1:len_trim(filename))//'"');
+        select case(ifmt)
+         case(plot3d); call plot3Dwrite_scalar(filename,rhs,nx,ny,nz,1,qbin)
+        end select
+       endif
+!
+       if (existtag_nocase('potoutput', pbctx)) then
+        filename=getval_nocase('potoutput', pbctx)
+        call message(whoami,'Writing potential to file "'//filename(1:len_trim(filename))//'"');
+        select case(ifmt)
+         case(plot3d); call plot3Dwrite_scalar(filename,p,nx,ny,nz,1,qbin)
+        end select
+       endif
+!
+!    check for surface output options
+!
+       if (existtag_nocase('surfoutput', pbctx).or.existtag_nocase('alloutput', pbctx)) then
+        nullify(surf)
+        if (object_initialized) then 
+         surf=>object_surface_pointer()
+         if (.not.associated(surf)) then
+          call warning(whoami, 'Object initialized but shape density is null. Will output zero.',0)
+          allocate(surf(nx,ny,nz)); surf=0d0
+         endif
+        else
+         call warning(whoami, 'Object not initialized. Shape density is everywhere zero.',0)
+         allocate(surf(nx,ny,nz)); surf=0d0
+        endif
+       endif
+!
+       if (existtag_nocase('surfoutput', pbctx)) then
+        filename=getval_nocase('surfoutput', pbctx)
+        call message(whoami,'Writing shape density to file "'//filename(1:len_trim(filename))//'"');
+        select case(ifmt)
+         case(plot3d); call plot3Dwrite_scalar(filename,surf,nx,ny,nz,1,qbin)
+        end select
+       endif
+!
+!    plot five (four in 2D)  variables that correspond to the plot3D "solution"
+       if (existtag_nocase('alloutput', pbctx)) then
+        filename=getval_nocase('alloutput', pbctx)
+        call message(whoami,'Writing data and solution [EPS(1),K(2),RHS(3),P(4),RHO(5)] to file "'&
+                                                        //filename(1:len_trim(filename))//'"')
+        select case(ifmt)
+         case(plot3d); 
+          call plot3Dwrite_solution(filename,eps,kappa,rhs,p,surf,nx,ny,nz,1,qbin)
+        end select
+       endif
+!
+!    destroy surf, if needed
+       if (existtag_nocase('surfoutput', pbctx).or.existtag_nocase('alloutput', pbctx)) then
+        if (.not.object_initialized) then ; deallocate(surf)
+        elseif (.not.associated(object_surface_pointer())) then ; deallocate(surf)
+        endif
+       endif
+!
+       if (existtag_nocase('gridoutput', pbctx)) then
+        filename=getval_nocase('gridoutput', pbctx)
+        call message(whoami,'Writing grid to file "'//filename(1:len_trim(filename))//'"');
+        select case(ifmt)
+         case(plot3d); call plot3Dwrite_grid(filename,xcen,ycen,zcen,nx,ny,nz,1,qbin)
+        end select
+       endif
+!
+       end subroutine PB_output
+!*********************************************************************************!
+       subroutine PB_done()
+       use files, only: files_done
+!
+       character(len=7), parameter :: whoami='PB_DONE'
+!
+       character(len=20) :: solver
+!
+       if (existtag('OBJECT', pbctx) .or. existtag('object', pbctx)) then 
+        if (object_initialized) then 
+         call object_done()
+        endif
+       endif
+!
+       call state_done()
+       call grid_done()
+!
+       if     (existtag('SOLVER', pbctx)) then ; solver=getval('SOLVER', pbctx); call toupper(solver);
+       elseif (existtag('solver', pbctx)) then ; solver=getval('solver', pbctx); call toupper(solver); 
+       else
+        PB_initialized=.false.
+        return
+       endif
+! special case: NONE -- do nothing
+       if (solver.eq.'NONE') then 
+        PB_initialized=.false.
+        return
+       endif
+!
+       select case(solver)
+!*********************************************************************************!
+#define __NM MULTIGRID
+#include "PBmacro2.def"
+!*********************************************************************************!
+       end select
+!
+       call files_done() ! close all units
+       call parser_done()
+!
+       PB_initialized=.false.
+!
+       end subroutine PB_done
+!*********************************************************************************!
+       end module PBmain
