@@ -7,4 +7,4 @@ DEPS=parser output files
 include $(ROOT)/Makefile.inc
 include $(COMMON)/Makefile.inc
 
-libs : libio.a
+#libs : libio.a

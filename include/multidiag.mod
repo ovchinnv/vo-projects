@@ -1,1 +1,1 @@
-/home/surgeon/projects/multidiag/multidiag.mod
+/home/taly/projects/multidiag/multidiag.mod

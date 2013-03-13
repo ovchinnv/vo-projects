@@ -1,19 +1,17 @@
 ROOT=..
 COMMON=.
+OBJS=
 NAME=continua
-SUBDIRS=common io objects chest # eddie
+SUBDIRS=io common objects chest # eddie
 DEPS=
 LOCALDEPS=
 
 include $(ROOT)/Makefile.inc
 include $(COMMON)/Makefile.inc
 
-default : all
-all : $(SUBDIRS)
-	for d in $(SUBDIRS); do (cd $$d; $(MAKE)); done
+$(ROOT)/$(NAME).stamp:: $(SUBDIRS)
 
-$(SUBDIRS) ::
-	(cd $@ ; $(MAKE))
+$(SUBDIRS) : $(addprefix $(NAME)/, $(addsuffix .stamp, $(SUBDIRS)))
 
 clean::
 	for d in $(SUBDIRS); do (cd $$d; $(MAKE) clean); done

@@ -30,7 +30,7 @@ LINKOBJS=output.o files.o parser.o constants.o timer.o\
 include $(ROOT)/Makefile.inc
 include $(COMMON)/Makefile.inc
 
-default : $(EXE)
+chest : $(EXE)
 
 ches.o: PBmain.o
 

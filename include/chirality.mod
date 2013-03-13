@@ -1,1 +1,1 @@
-/home/surgeon/projects/confcons/chirality.mod
+/home/taly/projects/confcons/chirality.mod

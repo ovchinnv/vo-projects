@@ -1,1 +1,1 @@
-/home/surgeon/projects/string/sm0k/sm0k.mod
+/home/taly/projects/string/sm0k/sm0k.mod

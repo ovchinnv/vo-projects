@@ -1,1 +1,1 @@
-/home/surgeon/projects/confcons/confcons.mod
+/home/taly/projects/confcons/confcons.mod

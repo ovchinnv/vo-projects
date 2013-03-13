@@ -104,8 +104,8 @@ $(ROOT)/$(NAME).stamp:: $(OBJS) $(DISTRIB)
 	done; 
 	echo -n > $@
 ####################### GENERIC STAMP RESULTS IN DIFFERENT BEHAVIOR : ####################################
-%.stamp:
-	DIR=$@ ; DIR=$(ROOT)/$${DIR%.*} ; if [ -d $$DIR ] ; then cd $$DIR; $(MAKE) ; fi
+%.stamp::
+	DIR=$@ ; DIR=$(ROOT)/$${DIR%.*} ; echo $$DIR ; if [ -d $$DIR ] ; then cd $$DIR; $(MAKE) ; fi
 
 ########################## SOURCE CODE #######################
 %.h:%.H $(LOCALDEPS) $(GLOBALDEPS)
@@ -137,8 +137,8 @@ dynamol:
 	$(MAKE) -C $(ROOT)/dynamol
 string:
 	$(MAKE) -C $(ROOT)/string
-chest::
-	$(MAKE) -C $(ROOT)/continua/chest
+continua:
+	$(MAKE) -C $(ROOT)/continua
 
 
 force_look:
