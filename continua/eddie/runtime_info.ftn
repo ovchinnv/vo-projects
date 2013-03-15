@@ -1,0 +1,121 @@
+
+module runtime_info
+
+!-----------------------------------------------------------------------
+!     screen and file information
+!-----------------------------------------------------------------------
+            write(6,*) '*********************************************'
+            write(6,*) '*...Iteration number= ',icycle
+            write(6,*) '*...Time Step       = ',dtm1
+            write(6,*) '*...Total Time      = ',tlevel
+            write(6,*) '*...CPU RHS         = ',cpurhs
+            write(6,*) '*...CPU PRED        = ',cpupredict
+            write(6,*) '*...CPU PRESS       = ',cpupres
+            write(6,*) '*...CPU CORR        = ',cpucorr
+            write(6,*) '*...CPU TURVIS      = ',cputurvis
+         ENDIF
+         CALL CALCDIV(uo,vo,wo,nx,ny,nz)
+         CALL CALCME(uo,vo,wo,xu,yv,zw,dtm1,nx,ny,nz)
+         CALL SCRUVWP(uo,vo,wo,p,nx,ny,nz)
+      ENDIF
+
+end module runtime_info
+
+
+
+      SUBROUTINE CALCDIV(u,v,w,nx,ny,nz)
+C
+C-----------------------------------------------------------------------
+C
+C     PURPOSE:    - calc. max. divergence
+C                                                                       
+C-----------------------------------------------------------------------
+C 
+      INCLUDE "mpif.h"
+      include 'headers/common.h'
+C
+      real u(nx,ny,nz), v(nx,ny,nz), w(nx,ny,nz)
+      REAL      divmax,amass,erm
+      INTEGER   nx, ny, nz
+      
+C
+      INTEGER   i, j, k,mytype1,mytype2
+      REAL      divm,in(2),out(2), divmed
+      integer im,jm,km,mrm1,iim,jjm,kkm,index, ier
+      
+C 
+C-----------------------------------------------------------------------
+C
+#ifdef SINGLE
+      mytype1=MPI_2REAL
+      mytype2=MPI_REAL
+#endif
+#ifdef DOUBLE
+      mytype1=MPI_2DOUBLE_PRECISION
+      mytype2=MPI_DOUBLE_PRECISION
+#endif
+
+      im=nx
+      jm=ny
+      km=nz
+      
+      iim=0
+      jjm=0
+      kkm=0
+
+      divmax = 0.
+      divmed = 0.
+C
+      DO 11 i=ix1+1,ix2
+        DO 11 j=jy1+1,jy2
+          DO 11 k=kz1+1,kz2
+            divm = ABS( ap(i)*(u(i,j,k)-u(i-1,j,k))/dx
+     &                + bp(j)*(v(i,j,k)-v(i,j-1,k))/dy
+     &                + cp(k)*(w(i,j,k)-w(i,j,k-1))/dz )
+            divmed = divmed + divm**2
+            if(divm .gt. divmax) then
+             divmax = divm
+             iim=i
+             jjm=j
+             kkm=k
+            endif
+ 11   CONTINUE
+C
+      in(1)=divmax
+      in(2)=iim-1+im*(jjm-1)+im*jm*(kkm-1)+im*jm*km*(myrank)
+      
+      CALL MPI_REDUCE(in,out,1,mytype1,MPI_MAXLOC,0,MPI_COMM_HYDRO,ier)
+
+      erm=out(1)
+      index=out(2)
+      
+      mrm1=index/(im*jm*km)
+      kkm=(index-(im*jm*km)*mrm1)/(im*jm)
+      jjm=(index-(im*jm*km)*mrm1-kkm*jm*im)/im
+      iim=(index-(im*jm*km)*mrm1-kkm*jm*im-jjm*im)
+      
+      jjm=jjm+1
+      iim=iim+1
+      kkm=kkm+1+mrm1*(km-2)
+
+
+
+      IF(MYRANK.EQ.0) then
+         write(6,100) erm,iim,jjm,kkm
+      endif
+
+      amass=divmed
+      CALL MPI_REDUCE(AMASS,ERM,1,MYTYPE2,MPI_SUM,0,MPI_COMM_HYDRO,ier)
+
+      IF(MYRANK.EQ.0) then
+         divmed = sqrt(erm/(ix2*jy2*kz2*mysize))
+         write(6,110) divmed
+      endif
+
+ 100  format(' *...max divergence  = ',1pe15.5,' (',3i4,')')
+ 110  format(' *...avg divergence  = ',1pe15.5)
+C
+      RETURN
+      END
+C
+

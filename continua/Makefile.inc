@@ -13,8 +13,8 @@ DEFS+=-DSIZE=gridsize \
 # ! note: the VEC routines are probably slower
 #     -D'__erf(__A)=erfsun(DBLE(__A))' # definition of Sun error function for single precision compilation
 
-LOCALMACROS+=-include $(COMMON)/source.defs -include $(COMMON)/message.def
-LOCALDEPS+=$(COMMON)/source.defs $(COMMON)/message.def 
+LOCALMACROS+=-include $(COMMON)/source.defs
+LOCALDEPS+=$(COMMON)/source.defs
 INCLUDES+=-I $(COMMON) -I $(COMMON)/common
 
 $(COMMON)/%.mod : $(COMMON)/%.o

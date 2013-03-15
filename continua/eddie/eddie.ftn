@@ -1,35 +1,31 @@
       module eddie
       private
 !
-!    include other modules
-      use parser    ! parses input unit and stores input parameters
-      use size      ! basic size information
-      use grid      ! grid module
-      use fout      ! runtime output
-      use IO        ! input/output module
+      use datatypes
+      use fieldbcdef
+      use state
+      __DEP_PARSER
+      use SIZE
+      use grid
+      __DEP_OUTPUT
+      use random
+      use statistics
+#ifdef __PARALLEL
+       __DEP_MPI
+#endif
+!
 !
 #ifdef __AB
       use ABintegrator    ! Adams-Bashforth integrator
 #endif
-#ifdef __RK3
-      use RK3integrator    ! Runge-Kutta 3 integrator (not implemented)
-#endif
 #ifdef central_fd2
-       use central_fd2    ! central finite difference, second order derivatives
+      use central_fd2     ! central finite difference, second order derivatives
 #endif
-!
-!
 #ifdef immbnd 
-      use immbnd      ! use immersed boundary approach to model internal surfaces
-#endif
-#ifdef two_pt_corr
-      use two_pt_corr ! compute two-point correlations on the fly
+      use immbnd          ! use immersed boundary approach to model internal surfaces
 #endif
 #ifdef rogallo
-      use rogallo ! rogallo-type turbulent inflow
-#endif
-#ifdef save_planes
-      use save_planes ! save planes of velocity and pressure
+      use rogallo         ! Rogallo-type turbulent inflow
 #endif
 #ifdef precursor_inflow
       use precursor_inflow ! save planes of velocity and pressure
@@ -38,108 +34,81 @@
       use precursor_output ! save planes of velocity and pressure
 #endif
 #ifdef LES
-      use LES ! routines/variables for Large-Eddy simulation
+      use LES             ! routines/variables for Large-Eddy simulation
 #endif
-#ifdef stat
-      use stat ! routines/variables for computing statistics (on-the-fly)
-#endif
-#ifdef probe
-      use probe ! routines/variables for saving time-traces of velocity and pressure
-#endif
+!
+      __IMPNONE
 !
 !     routines:
       public eddie_init
       public eddie_done
       public eddie
 !
-!     variables declaration section:
-!
       eddie_initialized=.false.
+!
       character(len=16), parameter :: edctx=__EDDIECTX
-      type(varray3df), pointer :: uo_, vo_, wo_, ustar_, vstar_, wstar_, pres_, deltap_, nu_, tnu_
+      type(varray3df), pointer :: u_, v_, w_, ustar_, vstar_, wstar_, pres_, deltap_, nu_
 !
-!.....uo, vo, wo:		inst. velocity field
-!.....ustar,vstar,wstar:	predicted velocities
-!.....p, dp, divergence:        pressure, correction, divergence
-!.....tv:                       turbulent viscosity
-!
-      float, allocatable, save, dimension(:,:,:) :: 
-     &  uo, vo, wo, ustar, vstar, wstar, p, dp, divergence, tv
+      float, pointer, dimension(:,:,:) :: u, v, w, ustar, vstar, wstar, p, dp, div, nu
 !
       contains
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-       subroutine eddie_init(comm)
-       implicit none
-!
-#ifdef PARALLEL
-       include 'mpif.h'
+       subroutine eddie_init( &
+#ifdef __PARALLEL
+ & comm )
+#else
+ &      )
 #endif
-       integer*4, optional :: comm
-       integer*4 :: numarg 
-       character*(80) :: filename, fname, keyword
+!
+
+#ifdef __PARALLEL
+       int4mpi :: comm, me, ncpu, ierror
+#endif
+!
+       int :: numarg 
+       character(len=80) :: filename, fname, keyword
        int :: flen
-       int :: fid=1 
-       logical :: qcomm
-       int :: bug
+       int :: fid=-1 
+       bool :: qcomm
 !
-       character*(10) :: whoami
-!
-       data whoami /'EDDIE_INIT'/
-!
-       if (eddie_initialized) call eddie_done()
+       character(len=10), parameter :: whoami = 'EDDIE_INIT'
 !
        qcomm=present(comm)
 !
 #ifdef PARALLEL
-       if (qcomm) call MPI_RANK(comm, me, bug)
+       call MPI_COMM_RANK(comm, me, ierror)
+       call MPI_COMM_SIZE(comm, ncpu, ierror)
 #endif
 !
-       if (me.le.0) then 
-        numarg=iargc() ! number of arguments
-        if (numarg.ge.1) then 
-         call getarg(1, filename)
-         fname=filename
-         call adjustleft(fname)
-         flen=len_trim(fname)
-         open(fid, file=filename(1:flen), status='OLD', form='FORMATTED')
-        else
-         fid=5 ! if file name missing, read from standard input
-        endif
-       endif ! me
-!    call parser
-       call parse_file(fid) ! parser will store commands internally -- we can now query parser for options using command()
+! NOTE : the input file is assumed to be parsed elsewhere; here we simply query it using getval and existtag
 !
-       if (me.le.0.and.fid.ne.5) close(fid)
-! *********************************************************************************************************
-! * INITIALIZATION
-! *
-!    1) size
-       if (qcomm) then 
-        call size_initialize( 
-     &   atoi(getval('NX')), atoi(getval('NY')), atoi(getval('NZ')), comm)
-       else
-        call size_initialize( 
-     &   atoi(getval('NX')), atoi(getval('NY')), atoi(getval('NZ')))
-       endif
+       if (.not. size_initialized) call size_initialize()   ! should not happen
+       if (.not. state_initialized) call state_initialize() ! should not happen
+!    declare variables and boundary conditions
 !
-       if (.not.size_initialized) then 
-        call error(whoami, ' SIZE NOT INITIALIZED. NOTHING DONE.',-1)
-        return
-       endif
-!    set boundary conditions
-       call boundary_initialize()
-!    prepare Cartesian grid and metrics
-       call grid_initialize()
-!    allocate basic arrays
-       allocate(
-     &  uo(nx,ny,nz),vo(nx,ny,nz),wo(nx,ny,nz),
-     &  ustar(nx,ny,nz),vstar(nx,ny,nz),wstar(nx,ny,nz),
-     &  p(nx,ny,nz),dp(nx,ny,nz),divergence(nx,ny,nz),
-     &  tv(nx,ny,nz)
-#ifdef AdamsBashforth
+!    prepare Cartesian grid and metrics (eddie - specific additiona to grid)
+       call message(whoami, 'Initializing grid variables.');
+       call eddie_grid_initialize()
+!    initialize state variables
+       call message(whoami, 'Initializing state variables.');
+!
+       call state_add3df('U'  ,'Streamwise velocity'      , edctx, vptr=u_)     ; u=>u_%v
+       call state_add3df('V'  ,'Spanwise velocity'        , edctx, vptr=v_)     ; v=>v_%v
+       call state_add3df('W'  ,'Wall-normal velocity'     , edctx, vptr=w_)     ; w=>w_%v
+       call state_add3df('P'  ,'Pressure field'           , edctx, vptr=pres_)  ; p=>pres_%v
+       call state_add3df('NU' ,'Viscosity (nonuniform)'   , edctx, vptr=nu_)    ; p=>pres_%v
+       call state_add3df('DP' ,'Pressure correction field', edctx, vptr=deltap_); dp=>deltap_%v ; div=>dp
+       call state_add3df('U*' ,'Predicted U-velocity'     , edctx, vptr=ustar_) ; ustar=>ustar_%v
+       call state_add3df('V*' ,'Predicted V-velocity'     , edctx, vptr=vstar_) ; vstar=>vstar_%v
+       call state_add3df('W*' ,'Predicted W-velocity'     , edctx, vptr=wstar_) ; wstar=>wstar_%v
+! add boundary conditions
+
+
+#ifdef ABintegrator
      &  uab1(nx,ny,nz),vab1(nx,ny,nz),wab1(nx,ny,nz),
      &  uab2(nx,ny,nz),vab2(nx,ny,nz),wab2(nx,ny,nz)
 #endif
+
 !    initialize LES
 #ifdef LES
        call LES_initialize()
@@ -151,60 +120,37 @@
 !    set initial condition
        call initial()
 !------------------------------------------------------------------------
-!     Check Divergence of Initial condition
+!     Check Divergence of field field
 !-----------------------------------------------------------------------
+       call divergence(u,v,w,div)
+       
        call CALCDIV(UO,VO,WO)
+
+
+!    RNG
+       if (.not. random_initialized) call random_init()
 !
-!   other initialization
-!    random number generator (might change to a better one!)
-       keyword=getval('ISEED')
-       if (.not.isempty(keyword)) then 
-        iseed=min(-atoi(keyword),atoi(keyword))
-       else
-        iseed=-1
-       endif
-       ran1(iseed) ! initialize RNG
-!
-      
-!...  set extra source terms (e.g. pressure gradient, or gravity)
-       if (existtag('DPDX')) then 
-        dpdx=atof(getval('DPDX'))
-       else
-        dpdx=0d0
-       endif
-!
-       if (existtag('DPDY')) then 
-        dpdy=atof(getval('DPDY'))
-       else
-        dpdy=0d0
-       endif
-!
-       if (existtag('DPDZ')) then 
-        dpdz=atof(getval('DPDZ'))
-       else
-        dpdz=0d0
-       endif
-!***************************************************************
+!    Extra source terms (e.g. pressure gradient, gravity)
+       if (existtag_nocase('DPDX',edctx)) then ; dpdx=atof(getval_nocase('DPDX')) ; else ; dpdx=zero ; endif
+       if (existtag_nocase('DPDY',edctx)) then ; dpdy=atof(getval_nocase('DPDY')) ; else ; dpdy=zero ; endif
+       if (existtag_nocase('DPDZ',edctx)) then ; dpdz=atof(getval_nocase('DPDZ')) ; else ; dpdz=zerp ; endif
+!================================================================
+#ifdef __PARALLEL
+      if (me.eq.0) then 
+#endif
        if (dpdx.ne.0) then 
-        if (me.eq.0) then 
-          if (bctype(west).ne.500.or.bctype(east).ne.500)
-     & call warning(whoami,' DPDX =/= 0 FOR NONPERIODIC X-BC',0)
-        endif
-       elseif (dpdx.ne.0) then
-        if (me.eq.0) then 
-          if (bctype(front).ne.500.or.bctype(back).ne.500)
-     & call warning(whoami,' DPDY =/= 0 FOR NONPERIODIC Y-BC',0)
-        endif
+        if (bctype(west).ne.periodic.or.bctype(east).ne.periodic) call warning(whoami,' DPDX =/= 0 FOR NONPERIODIC X-BC',0)
+       elseif (dpdy.ne.0) then
+        if (bctype(front).ne.periodic.or.bctype(back).ne.periodic) call warning(whoami,' DPDY =/= 0 FOR NONPERIODIC Y-BC',0)
        elseif (dpdz.ne.0) then
-        if (me.eq.0) then 
-          if (bctype(bottom).ne.500)
-     & call warning(whoami,' DPDZ =/= 0 FOR NONPERIODIC Z0-BC',0)
-        elseif (me.eq.ncpu-1) then
-          if (bctype(top).ne.500)
-     & call warning(whoami,' DPDZ =/= 0 FOR NONPERIODIC Z1-BC',0)
-        endif
+        if (bctype(bottom).ne.periodic) call warning(whoami,' DPDZ =/= 0 FOR NONPERIODIC Z0-BC',0)
+       elseif (me.eq.ncpu-1) then
+        if (bctype(top).ne.periodic) call warning(whoami,' DPDZ =/= 0 FOR NONPERIODIC Z1-BC',0)
        endif
-!*****************************************************************
+#ifdef __PARALLEL
+      endif
+#endif
+!=================================================================
 !
 #ifdef rogallo
        call rogallo_initialize() ! synthetic turbulence
@@ -218,12 +164,6 @@
 #ifdef stat
        call stat_initialize() 
 #endif
-#ifdef probe
-       call probe_initialize() ! set velocity/pressure 'probes'
-#endif
-#ifdef two_pt_corr
-       call two_pt_corr_initialize() 
-#endif
 ! other modules to be added here
 !
        eddie_initialized=.true.
@@ -231,7 +171,10 @@
        end subroutine eddie_init
 !******************************************************************8
 !
-      
+
+
+
+
        subroutine eddie()
        implicit none
 !
@@ -363,23 +306,11 @@
 !
 !     initiaize statistics variables (now in stats)
 !
-!     set up custom MPI types : will be distributed among modules that use these
-      call MPI_TYPE_CONTIGUOUS(nz-2,type,real1d,ierr)
-      call MPI_TYPE_CONTIGUOUS((nz-2)*nx,type,stat2d,ierr)
-      call MPI_TYPE_COMMIT(real1d,ierr)
-      call MPI_TYPE_COMMIT(stat2d,ierr)
-      call MPI_TYPE_VECTOR(nz,nx,ny*nx,type,real2d,ierr)
-      call MPI_TYPE_VECTOR(nz*ny,1,nx,type,cross2d,ierr)
-      call MPI_TYPE_COMMIT(cross2d,ierr)
-      
-      call MPI_TYPE_COMMIT(real2d,ierr)
-!     
-!
 
          write(*,*) 'starting time=',tlevel
          write(*,*) 'Initial field'
 
-       call eddie_info(uo,vo,wo,p,nx,ny,nz) ! initial info
+       call eddie_info(uo,vo,wo,p) ! initial info
       
 !     CALL CALCTKE(tke,uo,vo,wo,urun,vrun,wrun,zw,xu,nx,ny,nz)
 !-----------------------------------------------------------------------
@@ -480,11 +411,11 @@
 	if (dummy2.lt.dummy1) call reshuffle_old(jcounter,uh,vh,wh,count,is,seed)
        endif !myrank
 
-       call MPI_BCAST(uh(1),2*nmodes,type,0,communicator,ierr)		     	
-       call MPI_BCAST(vh(1),2*nmodes,type,0,communicator,ierr)		     	
-       call MPI_BCAST(wh(1),2*nmodes,type,0,communicator,ierr)		     	
-       call MPI_BCAST(ky(1),nmodes,type,0,communicator,ierr)		     	
-       call MPI_BCAST(kz(1),nmodes,type,0,communicator,ierr)		     	
+       call MPI_BCAST(uh(1),2*nmodes,type,0,communicator,ierr)
+       call MPI_BCAST(vh(1),2*nmodes,type,0,communicator,ierr)
+       call MPI_BCAST(wh(1),2*nmodes,type,0,communicator,ierr)
+       call MPI_BCAST(ky(1),nmodes,type,0,communicator,ierr)
+       call MPI_BCAST(kz(1),nmodes,type,0,communicator,ierr)
       endif !jdose/rogal
 #endif
 !
@@ -841,44 +772,31 @@
          endif
       endif
 !     
-!-----------------------------------------------------------------------
-!     write intermediate restart files
-!-----------------------------------------------------------------------
-!     
-      ICOUNT2 = MOD(ICYCLE,INFNUM)
-      IF((ICOUNT2.EQ.0)) THEN
-         IF(MYRANK.EQ.0) THEN
-!-----------------------------------------------------------------------
-!     screen and file information
-!-----------------------------------------------------------------------
-            write(6,*) '*********************************************'
-            write(6,*) '*...Iteration number= ',icycle
-            write(6,*) '*...Time Step       = ',dtm1
-            write(6,*) '*...Total Time      = ',tlevel
-            write(6,*) '*...CPU RHS         = ',cpurhs
-            write(6,*) '*...CPU PRED        = ',cpupredict
-            write(6,*) '*...CPU PRESS       = ',cpupres
-            write(6,*) '*...CPU CORR        = ',cpucorr
-            write(6,*) '*...CPU TURVIS      = ',cputurvis
-         ENDIF
-         CALL CALCDIV(uo,vo,wo,nx,ny,nz)
-         CALL CALCME(uo,vo,wo,xu,yv,zw,dtm1,nx,ny,nz)
-         CALL SCRUVWP(uo,vo,wo,p,nx,ny,nz)
-      ENDIF
-!     
-!-----------------------------------------------------------------------
-!     end main loop
-!-----------------------------------------------------------------------
-!     
-!.....check counters
-!
-  456 continue
-      if (CalcStat.and.(mod(icycle,ISTATS).eq.1)) then 
+!============================ runtime information =
+      if ( eddie_info_freq .gt. 0 ) then
+       if ( mod(iteration, eddie_info_freq).eq.0 ) then
+#ifdef __PARALLEL
+        if ( me.eq.0 ) then
+#endif
+         call eddie_info()
+#ifdef __PARALLEL
+        endif
+#endif
+       endif
+      endif
+!===================================================
+!============================ statistics ===========
+      if ( eddie_stat_freq .gt. 0 ) then
+       if ( mod(iteration, eddie_stat_freq).eq.0 ) call eddie_stat()
+      endif
+
+
          samples =samples+1      
          if (samples.gt.statsample) then ! write new stats files
            statnum=statnum+1
            samples=1
 	 endif  	  
+
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc	 
 !     compute uinfinity 
       if (myrank.eq.0) write(66+mod(icycle,5),*) myrank,': compute uinft,uact'
@@ -1006,10 +924,7 @@
 	 endif     
 !
        if (myrank.eq.0) write(66+mod(icycle,5),*) myrank,' done'
-      call MPI_TYPE_FREE(real1d,ierr)
-      call MPI_TYPE_FREE(real2d,ierr)
-      call MPI_TYPE_FREE(stat2d,ierr)
-      call MPI_TYPE_FREE(cross2d,ierr)
+! free mopi types (stats)
 !     
       if(myrank .eq. 0) then 
          close(67)

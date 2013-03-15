@@ -7,10 +7,8 @@ DEPS=output parser constants files timer multicom vectors continua/objects conti
 EXE=ches
 
 LOCALDEPS=PBmacro1.def PBmacro2.def
-#LOCALDEPS+=$(COMMON)/grid.mod $(COMMON)/gridsize.mod $(COMMON)/datatypes.mod $(COMMON)/fieldbcdef.mod
 
-
-# additional objects for linking ches executable
+# additional objects for linking executable
 
 LINKOBJS=output.o files.o parser.o constants.o timer.o\
      multicom.o multicom_aux.o parselist.o\
@@ -34,7 +32,6 @@ chest : $(EXE)
 
 ches.o: PBmain.o
 
-#multigrid.o PBmain.o: $(COMMON)/gridsize.mod $(COMMON)/fieldbcdef.mod $(COMMON)/datatypes.mod $(COMMON)/state.mod $(COMMON)/grid.mod
 PBmain.o :  multigrid.o
 PBmain.F90: PBmacro1.def PBmacro2.def
 multigrid.F90: mgutil/multigrid_bc.src mgutil/mg_macro1.src mgutil/mg_resout.src \
