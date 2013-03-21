@@ -500,6 +500,7 @@ __CHARMM_ONLY##IF STRINGM
        call ftsm_swap_bc(.true.)  ! update boundary replicas (with new COM-free structures)
 !      turn on string for dynamics
        ftsm_on=.true.
+       ftsm_ini_iteration=nint(__NAN) ! will be computed by ftsm_main
 !      call dynamics parser
        call dynopt(comlyn, comlen)
 !cccccc turn off string for regular dynamics ccccccc
@@ -1255,24 +1256,75 @@ __CHARMM_ONLY##IF STRINGM
  6774 format(A,' WILL SET RERERENCE VALUE FOR PARALLEL RESTRAINT ',     &
      &   'ON REPLICA ',I5,' TO ',F7.3,'.')
         ! DPAR
-!********************************************************************
-        elseif (__INDX(comlyn,comlen,'DPRP',4).gt.0) then ! distance perpendicular to vector between neighboring replicas at which this system is restrained
-          zval=__GET_RM_F(comlyn, comlen, 'DPRP', -1.0d0)
-!    check replica spec
-          irep=__GET_RM_I(comlyn, comlen, 'REP', -1)
-          if (irep.lt.0.or.irep.ge.nstring) then
-           if (qprint) then ; write(_MSGBUF, 6776) whoami, whoami, zval ; __PRINT(_MSGBUF) ; endif
-           dperp0=zval
+!******************************************************************************************
+        elseif (__INDX(comlyn,comlen,'DPRPF',5).gt.0) then ! final perpendicular distance at which the replicas are restrained
+
+          zval=__GET_RM_F(comlyn, comlen, 'DPRPF', __NAN)
+!
+          if (zval.eq.__NAN) then
+           __WRN(whoami,' FINAL OFFSET DISTANCE FOR PERPENDICULAR RESTRAINT NOT SPECIFIED.')
           else
-           if (qprint) then ; write(_MSGBUF,6775) whoami, irep, zval ; __PRINT(_MSGBUF) ; endif
-           if (mestring.eq.irep) dperp0=zval ! note: permitting any value
-          endif ! irep
- 6776 format(A,' REPLICA NUMBER INVALID OR UNSPECIFIED.',               &
+!    check replica spec
+           irep=__GET_RM_I(comlyn, comlen, 'REP', -1)
+           if (irep.lt.0.or.irep.ge.nstring) then
+            if (qprint) then ; write(_MSGBUF, 67761) whoami, whoami, zval ; __PRINT(_MSGBUF) ; endif
+            dperp0f=zval
+           else
+            if (qprint) then ; write(_MSGBUF,67762) whoami, irep, zval ; __PRINT(_MSGBUF) ; endif
+            if (mestring.eq.irep) dperp0f=zval ! note: permitting any value
+           endif ! irep
+67761 format(A,' REPLICA NUMBER INVALID OR UNSPECIFIED.',               &
+     &      /A,' WILL SET FINAL OFFSET DISTANCE FOR PERPENDICULAR RESTRAINT', &
+     &         ' TO ',E10.3,' ON ALL REPLICAS.')
+67762 format(A,' WILL SET FINAL OFFSET DISTANCE FOR PERPENDICULAR RESTRAINT ',&
+     &   'ON REPLICA ',I5,' TO ',E10.3,'.')
+          endif ! zval valid
+!******************************************************************************************
+        elseif (__INDX(comlyn,comlen,'DPRPITER',8).gt.0) then ! number of iterations to adjust to final perpendicular restraint value
+          i=__GET_RM_I(comlyn, comlen, 'DPRPITER', nint(__NAN))
+!
+          if (i.eq.nint(__NAN)) then
+           __WRN(whoami,' NUMBER OF ADJUSTMENT ITERATIONS FOR PERPENDICULAR RESTRAINT NOT SPECIFIED.')
+           dperp_adjust_iter=0
+          else
+!    check replica spec
+           irep=__GET_RM_I(comlyn, comlen, 'REP', -1)
+           if (irep.lt.0.or.irep.ge.nstring) then
+            if (qprint) then ; write(_MSGBUF, 67763) whoami, whoami, i ; __PRINT(_MSGBUF) ; endif
+            dperp_adjust_iter=i
+           else
+            if (qprint) then ; write(_MSGBUF,67764) whoami, irep, i ; __PRINT(_MSGBUF) ; endif
+            if (mestring.eq.irep) dperp_adjust_iter=i
+           endif ! irep
+67763 format(A,' REPLICA NUMBER INVALID OR UNSPECIFIED.',               &
+     &      /A,' WILL SET NUMBER OF ADJUSTMENT ITERATIONS FOR PERPENDICULAR RESTRAINT', &
+     &         ' TO ',I9,' ON ALL REPLICAS.')
+67764 format(A,' WILL SET NUMBER OF ADJUSTMENT ITERATIONS FOR PERPENDICULAR RESTRAINT ',&
+     &   'ON REPLICA ',I5,' TO ',I9,'.')
+          endif ! i valid
+!****************************************************************************************
+        elseif (__INDX(comlyn,comlen,'DPRP',4).gt.0) then ! (initial) distance perpendicular to vector between neighboring replicas 
+          zval=__GET_RM_F(comlyn, comlen, 'DPRP', __NAN)
+!
+          if (zval.eq.__NAN) then
+           __WRN(whoami,' OFFSET DISTANCE FOR PERPENDICULAR RESTRAINT NOT SPECIFIED.')
+          else
+!    check replica spec
+           irep=__GET_RM_I(comlyn, comlen, 'REP', -1)
+           if (irep.lt.0.or.irep.ge.nstring) then
+            if (qprint) then ; write(_MSGBUF, 67765) whoami, whoami, zval ; __PRINT(_MSGBUF) ; endif
+            dperp0=zval ; dperp0i=dperp0
+           else
+            if (qprint) then ; write(_MSGBUF,67766) whoami, irep, zval ; __PRINT(_MSGBUF) ; endif
+            if (mestring.eq.irep) then  ; dperp0=zval ; dperp0i=dperp0 ; endif ! note: permitting any value
+           endif ! irep
+67765 format(A,' REPLICA NUMBER INVALID OR UNSPECIFIED.',               &
      &      /A,' WILL SET OFFSET DISTANCE FOR PERPENDICULAR RESTRAINT', &
      &         ' TO ',E10.3,' ON ALL REPLICAS.')
- 6775 format(A,' WILL SET OFFSET DISTANCE FOR PERPENDICULAR RESTRAINT ',&
+67766 format(A,' WILL SET OFFSET DISTANCE FOR PERPENDICULAR RESTRAINT ',&
      &   'ON REPLICA ',I5,' TO ',E10.3,'.')
-!********************************************************************
+          endif ! zval valid
+!*****************************************************************************************
         elseif (__INDX(comlyn,comlen,'DRMS',4).gt.0) then ! RMS distance between simulation and reference structure
           zval=__GET_RM_F(comlyn, comlen, 'DRMS', -1.0d0)
 !    check replica spec
@@ -1309,6 +1361,7 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_PARSER 
       __DEP_MULTICOM       __CHARMM_ONLY !##MULTICOM
       __DEP_MPI 
+      __DEP_NUMBER
 !
       __IMPNONE
  __DECLARE_MSGBUF
@@ -1392,15 +1445,15 @@ __CHARMM_ONLY##IF STRINGM
 !    set default restraint positions
 !
       if (mestring.eq.0) then
-       dpar0=0d0
+       dpar0=zero
       elseif (mestring.eq.nstring-1) then
-       dpar0=1d0
+       dpar0=one
       else
-       dpar0=0.5d0
+       dpar0=half
       endif
 !
-      dperp0=0.5d0
-      drms0=0d0
+      dperp0=one ; dperp0i=dperp0 ; dperp0f=__NAN ; dperp_adjust_iter=0
+      drms0=zero
 !
       qorient=.false.
       qdiffrot=.false.
@@ -3474,15 +3527,27 @@ __CHARMM_ONLY##IF STRINGM
       type(imageDataStructure)   :: image_data
 #endif
 !     locals
-      float :: s
+      float :: s=zero
       character(len=11) :: whoami
       bool :: qgrp
       int :: i, bug, qfac
 !
       data whoami /' FTSM_MAIN>'/
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      if (ftsm_ini_iteration.eq.nint(__NAN)) ftsm_ini_iteration=iteration
+
       qgrp=(MPI_COMM_LOCAL.ne.MPI_COMM_NULL)                            &
      & .and.(SIZE_LOCAL.gt.1)
+!==========================================================================
+!     evolution of dperp, if requested
+      if (dperp_adjust_iter.gt.0) then
+       if (dperp0f.ne.__NAN) then
+        s=one*(iteration-ftsm_ini_iteration)/dperp_adjust_iter ; s=min(max(s,zero),one); ! limit s to range [0,1]
+        dperp0 = s * dperp0f + (one-s) * dperp0i
+       endif
+      endif
+! aa
+!       write(me_global+600,*) dperp0, dperp0i, dperp0f, dperp_adjust_iter
 !
       if (restrained_on) then ! impose restraints
         if (restrained_eq_steps.gt.0) then
