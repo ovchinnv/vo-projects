@@ -47,9 +47,10 @@
       eddie_initialized=.false.
 !
       character(len=16), parameter :: edctx=__EDDIECTX
-      type(varray3df), pointer :: u_, v_, w_, ustar_, vstar_, wstar_, pres_, deltap_, nu_
+      type(varray3df), pointer :: u_, v_, w_, ustar_, vstar_, wstar_, pres_, deltap_, div_, nu_
 !
       float, pointer, dimension(:,:,:) :: u, v, w, ustar, vstar, wstar, p, dp, div, nu
+      float :: numol ! molecular viscosity
 !
       contains
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -97,7 +98,7 @@
        call state_add3df('W'  ,'Wall-normal velocity'     , edctx, vptr=w_)     ; w=>w_%v
        call state_add3df('P'  ,'Pressure field'           , edctx, vptr=pres_)  ; p=>pres_%v
        call state_add3df('NU' ,'Viscosity (nonuniform)'   , edctx, vptr=nu_)    ; p=>pres_%v
-       call state_add3df('DP' ,'Pressure correction field', edctx, vptr=deltap_); dp=>deltap_%v ; div=>dp
+       call state_add3df('DP' ,'Pressure correction field', edctx, vptr=deltap_); dp=>deltap_%v ; div_=>deltap_ ; div=>dp
        call state_add3df('U*' ,'Predicted U-velocity'     , edctx, vptr=ustar_) ; ustar=>ustar_%v
        call state_add3df('V*' ,'Predicted V-velocity'     , edctx, vptr=vstar_) ; vstar=>vstar_%v
        call state_add3df('W*' ,'Predicted W-velocity'     , edctx, vptr=wstar_) ; wstar=>wstar_%v
@@ -118,17 +119,52 @@
        call immbnd_initialize()
 #endif
 !    set initial condition
+
+
        call initial()
+
+
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!     input data and setup
+!-----------------------------------------------------------------------
+!     
+!...  fill index array for various output purposes (now in strings)
+
+!     
+! Reynolds number : not sure how to handle this: should we keep a constant nu separately (as assumed by rhs ) ?
+       if (existtag_nocase('',edctx)) then ; 
+        reynolds=atof(getval_nocase('RE')) ; 
+        call message(whoami,' Reynolds number set to', reynolds
+       else
+        call warning(whoami, 'Reynolds number not specified',-1) ;
+       endif
+
+         call message(whoami,' Reynolds Number '=', ru1
+!     
+
+!
+!     initiaize statistics variables (now in stats)
+!
+
+         write(*,*) 'starting time=',tlevel
+         write(*,*) 'Initial field'
+
+       call eddie_info(uo,vo,wo,p) ! initial info
+
+
+
 !------------------------------------------------------------------------
 !     Check Divergence of field field
 !-----------------------------------------------------------------------
+       call message(whoami, 'Calculating divergence of the initial velocity field.')
        call divergence(u,v,w,div)
-       
-       call CALCDIV(UO,VO,WO)
-
-
+       call print_min_max_rms3d(div_)
+!
 !    RNG
-       if (.not. random_initialized) call random_init()
+       if (.not. random_initialized) then
+        call message(whoami, 'Initializing random number generator.')
+        call random_init()
+       endif
 !
 !    Extra source terms (e.g. pressure gradient, gravity)
        if (existtag_nocase('DPDX',edctx)) then ; dpdx=atof(getval_nocase('DPDX')) ; else ; dpdx=zero ; endif
@@ -176,18 +212,7 @@
 
 
        subroutine eddie()
-       implicit none
 !
-#ifdef PARALLEL
-       include 'mpif.h'
-#endif
-!
-
-!     headers will disappear
-      include 'headers/common.h'
-!
-!
-!    
 !.....arrays for the solver
 !    
 !.....dummy:                    dummy array for Poisson solver
@@ -291,26 +316,6 @@
       real umx,vmx,wmx
 !
 !
-!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-!     input data and setup
-!-----------------------------------------------------------------------
-!     
-!...  fill index array for various output purposes (now in strings)
-
-!     
-!...  input parameters (namelist-statements)
-         WRITE(6,*) '*..data read'
-         write(6,*) 'ru1=', ru1
-!     
-
-!
-!     initiaize statistics variables (now in stats)
-!
-
-         write(*,*) 'starting time=',tlevel
-         write(*,*) 'Initial field'
-
-       call eddie_info(uo,vo,wo,p) ! initial info
       
 !     CALL CALCTKE(tke,uo,vo,wo,urun,vrun,wrun,zw,xu,nx,ny,nz)
 !-----------------------------------------------------------------------
