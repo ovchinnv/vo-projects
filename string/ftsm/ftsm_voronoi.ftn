@@ -361,7 +361,7 @@ __CHARMM_ONLY##ENDIF
        float, intent(in), pointer :: rf(:,:), ro(:,:), rfall(:,:,:), roall(:,:,:)
 !     locals
        float, dimension(nforced,3) :: rf_rot, rfl_rot, rfr_rot ! for computing perpendicular projection
-       float, dimension(:,:), pointer :: rfl, rfr, rol, ror
+       float, dimension(:,:), pointer :: rfl, rfc, rfr, rol, roc, ror
        float :: msd(nstring) ! mean square distance
        float :: d, d1, rho, rho1
        int :: i, j, k, l, which(1), q(nstring)
@@ -406,52 +406,75 @@ __CHARMM_ONLY##ENDIF
 ! call best fitting routine (obtain RMSD from eigenvalues)
 !      when running in parallel, each slave node computes norms for string replicas mbeg -- mend (and the current coor. set)
        do i=mbeg, mend
+        rfc=>rfall(:,:,i)
         if (qorient) then
-         call RMSBestFit(ro,roall(:,:,i),orientWeights,u(:,:,i)) ; ! u fits ro onto roall (string)
-         rf_rot=matmul(rfall(:,:,i),u(:,:,i)) ; ! rotate rfall (string) to fit roall onto ro (taking u transpose) 
+         roc=>roall(:,:,i)
+         call RMSBestFit(ro,roc,orientWeights,u(:,:,i)) ; ! u fits ro onto roall (string)
+!
+         rf_rot=0d0
+         do l=1,3; do k=1,3
+          rf_rot(:,k) =rf_rot(:,k) + rfc(:,l)*u(l,k,i) ! rotate rfall (here rfc) to fit roall onto ro (taking u transpose)
+         enddo ; enddo
+!
         else
-         rf_rot=rfall(:,:,i)
+         rf_rot=rfc
         endif ! qorient
 !
         msd(i)=rmsd(rf_rot,rf,forcedWeights,.false.) ! rf_rot : rotated string atoms
        enddo
+! note: at the end of this loop, rf_rot does correspond to the string image closest to ro
+!       because the loop above is over _ALL_ string points (so always get the last point)
 !
-!    pool norms on root
+! pool norms (and rotation matrices) on local root
        if (qpara) then
         if (ME_LOCAL.eq.0) then
-         call MPI_GATHERV(MPI_IN_PLACE, send_count(me),                 &
-     &   mpifloat,                                                      &
-     &   msd, send_count, send_displ,                                   &
-     &   mpifloat, 0, MPI_COMM_LOCAL, ierror)
-        else
-         call MPI_GATHERV(msd(mbeg),send_count(me),                     &
-     &   mpifloat,                                                      &
-     &   msd, send_count, send_displ,                                   &
-     &   mpifloat, 0, MPI_COMM_LOCAL, ierror)
-        endif
-       endif
+         call MPI_GATHERV(MPI_IN_PLACE, send_count(me), &
+     & mpifloat, &
+     & msd, send_count, send_displ, &
+     & mpifloat, 0, MPI_COMM_LOCAL, ierror)
+! send orientation matrices if tube constraint used
+         if (qorient.and.ftsm_voronoi_cut.gt.zero) &
+     &  call MPI_GATHERV(MPI_IN_PLACE, 9*send_count(me), &
+     & mpifloat, &
+     & u, 9*send_count, 9*send_displ, &
+     & mpifloat, 0, MPI_COMM_LOCAL, ierror)
+!====================================================
+        else ! slaves
+         call MPI_GATHERV(msd(mbeg),send_count(me), &
+     & mpifloat, &
+     & msd, send_count, send_displ, &
+     & mpifloat, 0, MPI_COMM_LOCAL, ierror)
+! send orientation matrices if tube constraint used
+         if (qorient.and.ftsm_voronoi_cut.gt.zero) &
+     &  call MPI_GATHERV(u(1,1,mbeg), 9*send_count(me), &
+     & mpifloat, &
+     & u, 9*send_count, 9*send_displ, &
+     & mpifloat, 0, MPI_COMM_LOCAL, ierror)
+        endif ! me_local
+       endif ! qpara
 !
-!    root determines where theta(x) is
-        if (ME_LOCAL.eq.0.or..not.qpara) then
-         which=minloc(msd) ! minloc needs an int array;
+       if (ME_LOCAL.eq.0.or..not.qpara) then
+        which=minloc(msd) ! minloc needs an integer array;
 ! now that we know which cell the MD replica belongs to, compute the perpendicular distance to the string (project)
-         if (ftsm_voronoi_cut.gt.zero) then
+        if (ftsm_voronoi_cut.gt.zero) then
+! communicate alignment matrices (assuming this is cheaper than recomputing)
           i=max(1,which(1)-1)
           j=min(nstring,which(1)+1)
+          rfc=>rfall(:,:,which(1))
           rfl=>rfall(:,:,i)
           rfr=>rfall(:,:,j)
 !
           if (qorient) then
            rol=>roall(:,:,i)
            ror=>roall(:,:,j)
-           call RMSBestFit(ro,rol,orientWeights,u(:,:,i)) ! fit ro onto rol
-           call RMSBestFit(ro,ror,orientWeights,u(:,:,j)) ! fit ro onto ror
 !
-           rfr_rot=0d0;   rfl_rot=0d0;
+           rfr_rot=0d0; rfl_rot=0d0; rf_rot=0d0
            do l=1,3; do k=1,3
+            rf_rot(:,k) =rf_rot(:,k) +rfc(:,l)*u(l,k,which(1)) ! reorient center image
+!
             rfl_rot(:,k)=rfl_rot(:,k)+rfl(:,l)*u(l,k,i) ! eqv. u^t x rfl, which rotates rfl so that rol fits ro
             rfr_rot(:,k)=rfr_rot(:,k)+rfr(:,l)*u(l,k,j)
-           enddo;    enddo
+           enddo; enddo
 !
           else ! (not qorient)
            rfl_rot=rfl ; rfr_rot=rfr
@@ -459,21 +482,21 @@ __CHARMM_ONLY##ENDIF
 ! compute projection
           rho=zero ; rho1=zero
           do k=1,3 ; do j=1,nforced
-                    d = rf(j,k)     -rf_rot(j,k)   ! disp. vector to string point
+                    d = rf(j,k) -rf_rot(j,k) ! disp. vector to string point
                     d1= rfr_rot(j,k)-rfl_rot(j,k) ! disp. vector between neighboring string points
 !
-                    rho =rho  + d *d1 *forcedWeights(j)
+                    rho =rho + d *d1 *forcedWeights(j)
                     rho1=rho1 + d1*d1 *forcedWeights(j)
-          enddo ;    enddo
+          enddo ; enddo
 !
           if (rho1.le.__ERRTOL) then ; rho1=1d0 ; else ; rho1=1d0/rho1 ; endif ! a very unlikely event
 !
-!    check cutoff
+! check cutoff
 !
-         if ( ( msd(which(1)) - rho*rho*rho1 ).gt.ftsm_voronoi_cut**2)               &
-     &    which(1)=-which(1) ! outside of the allowed region (special code)
-         endif ! ME_LOCAL (root)
-        endif ! cutoff > zero
+         if ( ( msd(which(1)) - rho*rho*rho1 ).gt.ftsm_voronoi_cut**2) &
+     & which(1)=-which(1) ! outside of the allowed region (special code)
+        endif ! cutoff > 0
+       endif ! ME_LOCAL=0 / !qpara
 !
        if (qpara) then
 #ifdef __CHARMM
@@ -483,10 +506,14 @@ __CHARMM_ONLY##ENDIF
         __BROADCAST_LOCAL(which,1,mpiint)
 #endif
        endif
-!          write(600+ME_GLOBAL,*) q
-!           write(600+ME_GLOBAL,'(32G12.4)') msd
-!           write(600+ME_GLOBAL,*) rtemp
-!            stop
+!
+!aa
+!        if (ME_LOCAL.eq.0) then
+!         write(ME_STRNG+200,*) minloc(msd), rho, rho1, rho*rho*rho1, ftsm_voronoi_cut**2, which(1), qpara, mbeg, mend
+!         write(ME_STRNG+200,*) msd
+!         close(ME_STRNG+200)
+!        endif
+! aa
 !
        ftsm_voronoi_compute=which(1)
 !

@@ -500,7 +500,7 @@ __CHARMM_ONLY##IF STRINGM
        call ftsm_swap_bc(.true.)  ! update boundary replicas (with new COM-free structures)
 !      turn on string for dynamics
        ftsm_on=.true.
-       ftsm_ini_iteration=nint(__NAN) ! will be computed by ftsm_main
+       ftsm_ini_iteration = -ione ! will be computed by ftsm_main
 !      call dynamics parser
        call dynopt(comlyn, comlen)
 !cccccc turn off string for regular dynamics ccccccc
@@ -568,6 +568,8 @@ __CHARMM_ONLY##IF STRINGM
            else
             __WRN(whoami,'FILE NAME NOT SPECIFIED. NOTHING DONE.')
            endif ! flen
+        elseif (__INDX_RM(comlyn, comlen, 'CLEA').gt.0) then
+           if (associated(ftsm_voronoi_map)) ftsm_voronoi_map=-ione
         endif ! 'CALC'
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        elseif (__STRNCMP(keyword,'READ',4)) then
@@ -747,14 +749,14 @@ __CHARMM_ONLY##IF STRINGM
         keyword=__NEXTA(comlyn, comlen)
         select case(keyword)
            case('YES','ON','TRUE','T','yes','on','true','t')
-            keyword='ENABLED '; calc_bestfit_grad_para=.true.
+            keyword='ENABLED '; calc_bestfit_grad_para=.true. ; calc_voronoi_para=.true.
             if (qprint) then 
-             write(_MSGBUF,7009) whoami, 'FORCES', keyword ; __PRINT(_MSGBUF)
+             write(_MSGBUF,7009) whoami, 'FORCES AND VORONOI DISTANCES', keyword ; __PRINT(_MSGBUF)
             endif
            case('NO','OFF','FALSE','F','no','off','false','f')
-            keyword='DISABLED' ; calc_bestfit_grad_para=.false.
+            keyword='DISABLED' ; calc_bestfit_grad_para=.false. ; calc_voronoi_para=.false.
             if (qprint) then
-             write(_MSGBUF,7009) whoami, 'FORCES', keyword ; __PRINT(_MSGBUF)
+             write(_MSGBUF,7009) whoami, 'FORCES AND VORONOI DISTANCES', keyword ; __PRINT(_MSGBUF)
             endif
            case default
             __WRN(whoami,'UNKNOWN OPTION SPECIFIED')
@@ -1326,7 +1328,7 @@ __CHARMM_ONLY##IF STRINGM
           endif ! zval valid
 !*****************************************************************************************
         elseif (__INDX(comlyn,comlen,'DRMS',4).gt.0) then ! RMS distance between simulation and reference structure
-          zval=__GET_RM_F(comlyn, comlen, 'DRMS', -1.0d0)
+          zval=__GET_RM_F(comlyn, comlen, 'DRMS', -one)
 !    check replica spec
           irep=__GET_RM_I(comlyn, comlen, 'REP', -1)
           if (irep.lt.0.or.irep.ge.nstring) then
@@ -1341,6 +1343,26 @@ __CHARMM_ONLY##IF STRINGM
      &         '  TO ',F7.3,' ON ALL REPLICAS.')
  6778 format(A,' WILL SET REFERENCE VALUE FOR RMSD RESTRAINT ',         &
      &   'ON REPLICA ',I5,' TO ',F7.3,'.')
+!*****************************************************************************************
+        elseif (__INDX(comlyn,comlen,'VCUT',4).gt.0) then
+         voro_cut=__GET_RM_F(comlyn, comlen, 'VCUT', zero)
+! replica spec
+         irep=__GET_RM_I(comlyn, comlen, 'REP', -1)
+         if (voro_cut.le.zero) then
+          __WRN(whoami,'VCUT MUST BE POSITIVE. NOT SET.')
+         else
+          if (irep.lt.0.or.irep.ge.nstring) then
+           if (qprint) then ; write(_MSGBUF, 6779) whoami, whoami, voro_cut ; __PRINT(_MSGBUF) ; endif
+           call ftsm_voronoi_set_cutoff(voro_cut)
+          else
+           if (qprint) then ; write(_MSGBUF, 6780) whoami, irep, voro_cut ; __PRINT(_MSGBUF) ; endif
+           if (mestring.eq.irep) call ftsm_voronoi_set_cutoff(voro_cut)
+          endif ! irep
+ 6779 format(A,' REPLICA NUMBER INVALID OR UNSPECIFIED.',/A,' WILL SET VORONOI TUBE CUTOFF ', &
+     & '  TO ',F7.3,' ON ALL REPLICAS.')
+ 6780 format(A,' WILL SET VORONOI TUBE CUTOFF ON REPLICA ',I5,' TO ',F7.3,'.')
+         endif ! voro_cut > 0
+!
         endif
 !
 !      done with 'SET' parsing
@@ -3534,8 +3556,8 @@ __CHARMM_ONLY##IF STRINGM
 !
       data whoami /' FTSM_MAIN>'/
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-      if (ftsm_ini_iteration.eq.nint(__NAN)) ftsm_ini_iteration=iteration
-
+      if (ftsm_ini_iteration.lt.0) ftsm_ini_iteration=iteration
+!
       qgrp=(MPI_COMM_LOCAL.ne.MPI_COMM_NULL)                            &
      & .and.(SIZE_LOCAL.gt.1)
 !==========================================================================
