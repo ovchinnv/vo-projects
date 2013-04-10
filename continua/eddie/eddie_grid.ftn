@@ -1,6 +1,14 @@
  module eddie_grid
 ! contains specific metric definitions for eddie
-
+ __DEP_PARSER
+ __DEP_CONST
+ __DEP_OUTPUT
+ use SIZE
+#ifdef __PARALLEL
+ __DEP_MULTICOM
+ __DEP_MPI
+#endif
+!
  use grid, only : &
      &                                    xcor,xcen,& ! x-corner, x-center
      &                                    ycor,ycen,&
@@ -10,7 +18,159 @@
      &                                    dycor,dycen,odycor,odycen,&
      &                                    dzcor,dzcen,odzcor,odzcen,&
      &                                    grid_initialized
+!
+ __IMPNONE
+!
+! NOTE: for now, will live with the fact that in eddie y and z are the spanwise and w/n directions, respectively
+! this is in conflict with multigrid, which is standard; once eddie is working will swap y/z
+!
+      int, save :: nzg, nzl
+!
+      float, pointer, public, save, dimension(:) :: zcenl, zcorl, odzcorl, odzcenl, &
+! grids
+     &                                              xu,xv,xw,xp,xc,xcf,   &
+     &                                              yu,yv,yw,yp,yc,ycf,   &
+     &                                              zu,zv,zw,zp,zc,zcf,   &
+     &                                              zug,zvg,zwg,zpg,zcg,  &
+! metrics
+     &                                              app,ap,au,av,aw,      &
+     &                                              bpp,bp,bu,bv,bw,      &
+     &                                              cpp,cp,cu,cv,cw,      &
+     &                                              cppg,cpg,cug,cvg,cwg
+!
 
-
+!
+      character(len=16), parameter :: edctx=__EDDIECTX
+      bool :: eddie_parallel_split_z=.false.
+      bool :: eddie_grid_initialized=.false.
+      int, pointer, dimension(:) :: kblock_displ, kblock_counts
+!
+#ifdef __PARALLEL
+      int :: ierror
+#endif
+!     subroutines
+      contains
+!
+       subroutine eddie_grid_initialize()
+!
+       int :: i, j, k, l, ncpu
+!
+       character(len=100) :: keyword
+!
+       character(len=21) :: whoami
+       data whoami /'EDDIE_GRID_INITIALIZE'/
+!
+       if (eddie_grid_initialized) call eddie_grid_done()
+!
+       if (.not.grid_initialized) call grid_initialize()
+!
+! associate metrics from main grid module (note: in the future may reduce the number of identical pointers inherited from eddy)
+! recall that endpoint metrics are different in eddy
+       xu=>xcor ; xv=>xcen ; xw=>xcen ; xp=>xcen ; xcf=>xcen
+       au=>odxcen ; av=>odxcor ; aw=>odxcor ; ap=>odxcor ; app=>odxcor
+!
+       yu=>ycen ; yv=>ycor ; yw=>ycen ; yp=>ycen ; ycf=>ycen
+       bu=>odycor ; bv=>odycen ; bw=>odycor ; bp=>odycor ; bpp=>odycor
+!
+       zug=>zcen; zvg=>zcen; zwg=>zcor; zpg=>zcen; zcg=>zcen ; nzg=nz
+       cug=>odzcor ; cvg=>odzcor ; cwg=>odzcen ; cpg=>odzcor ; cppg=>odzcor
+!
+!
+#ifdef __PARALLEL
+!
+       allocate(kblock_displ(SIZE_EDDIE), kblock_counts(SIZE_EDDIE))
+       kblock_displ=-1 ; kblock_counts=-1
+!
+#define __BOOL
+#define __CTX edctx
+#define __VAR	eddie_parallel_split_z
+#define __TAG	parallel_split_z
+#define __NAME	parallel z-splitting flag
+#include "parser/parser_macro1.src"
+!
+       if (eddie_parallel_split_z) then
+! definition of local grids
+! assume that the eddie communicator is active, and use it to get the number of cpus
+        if (q2D.or.nz.eq.three) then
+         __WRN(whoami, '2D calculations (NZ=3) cannot be run in parallel. Switching to serial mode.')
+         eddie_parallel_split_z=.false.
+        elseif (nz.lt.three) then
+         call warning(whoami, 'NZ must be >= 3',-1)
+         eddie_parallel_split_z=.false.
+        elseif (nz-2.lt.SIZE_EDDIE) then ! subtract two ghost points
+         call warning(whoami, 'Number of Eddie processors ('//itoa(SIZE_EDDIE)//') cannot be greater than NZ ('//itoa(nx)//')',-1)
+         eddie_parallel_split_z=.false.
+        endif
+       endif
+!
+! check again
+!
+       if (eddie_parallel_split_z) then
+         nzl=(nz-2)/SIZE_EDDIE  ! need to add ghost points (see below)
+         if (ME_EDDIE.lt.mod(nz-2,SIZE_EDDIE)) nzl=nzl+1
+         call message(whoami, 'Number of local z-cells (including ghost) on Eddie rank '//itoa(ME_EDDIE)//' is '//itoa(nzl+2)//'.',10)
+!   counts exclude ghostpoints (these are counts of things to be sent)
+         call MPI_ALLGATHER(nzl, 1, mpiint, kblock_counts, 1, mpiint, MPI_COMM_EDDIE, ierror)
+!   displacements include ghostpoints (so that we can use actual arrays)
+         kblock_displ(1)=2
+         do i=2, SIZE_EDDIE ; kblock_displ(i)=kblock_displ(i-1)+kblock_counts(i) ; enddo
+! add ghostpoints
+         nzl=nzl+2
+!    create local grids & metrics
+         allocate(zcenl(nzl), zcorl(nzl), odzcorl(nzl), odzcenl(nzl))
+!
+         j=kblock_displ(ME_EDDIE+1)-1 ! starting from ghostpoint
+         do k=1,nzl
+          zcorl(k)=zcor(j) ; zcenl(k)=zcen(j) ; odzcorl(k)=odzcor(j) ; odzcenl(k)=odzcen(j) ; j=j+1
+         enddo
+!
+         zu=>zcenl; zv=>zcenl; zw=>zcorl; zp=>zcenl; zcf=>zcenl
+         cu=>odzcorl ; cv=>odzcorl ; cw=>odzcenl ; cp=>odzcorl ; cpp=>odzcorl
+! what about other directions ?
+! for now the parallelization works in z-only
+       else
+         nzl=nzg
+         zu=>zug ; zv=>zvg ; zw=>zwg ; zp=>zpg ; zcf=>zcg
+         cu=>cug ; cv=>cvg ; cw=>cwg ; cp=>cpg ; cpp=>cppg
+       endif !split_z
+!
+#else // __PARALLEL
+! local and global grids are the same
+       nzl=nzg
+       zu=>zug ; zv=>zvg ; zw=>zwg ; zp=>zpg ; zcf=>zcg
+       cu=>cug ; cv=>cvg ; cw=>cwg ; cp=>cpg ; cpp=>cppg
+#endif// __PARALLEL
+!
+       eddie_grid_initialized=.true.
+!
+       end subroutine eddie_grid_initialize
+!=======================================================================
+       subroutine eddie_grid_done()
+!
+       eddie_grid_initialized=.false.
+!
+       if (nzl.ne.nzg) then
+        if (associated(zcenl))   deallocate(zcenl)
+        if (associated(zcorl))   deallocate(zcorl)
+        if (associated(odzcenl)) deallocate(odzcenl)
+        if (associated(odzcorl)) deallocate(odzcorl)
+       else
+        nullify(zcenl, zcorl, odzcenl, odzcorl)
+       endif
+       nullify(                                     xu,xv,xw,xp,xc,xcf,   &
+     &                                              yu,yv,yw,yp,yc,ycf,   &
+     &                                              zu,zv,zw,zp,zc,zcf,   &
+     &                                              zug,zvg,zwg,zpg,zcg,  &
+! metrics
+     &                                              app,ap,au,av,aw,      &
+     &                                              bpp,bp,bu,bv,bw,      &
+     &                                              cpp,cp,cu,cv,cw,      &
+     &                                              cppg,cpg,cug,cvg,cwg  &
+     & )
+!
+       if (associated(kblock_displ)) deallocate(kblock_displ)
+       if (associated(kblock_counts)) deallocate(kblock_counts)
+!
+       end subroutine eddie_grid_done
 !
 end module eddie_grid

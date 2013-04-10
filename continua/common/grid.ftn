@@ -1,6 +1,7 @@
       module grid
       use SIZE
       __DEP_PARSER
+      __DEP_CONST
 !     contains all parameters for the computational grid
       private
 #ifdef PARALLEL
@@ -50,7 +51,7 @@
        bool :: q3d
 !    default parameters for automatic grid generation
 !
-       float, parameter :: dmin_default=0.5d0, stretch_default=1.05d0, buffer_default=30d0
+       float, parameter :: dmin_default=half, stretch_default=1.05d0, buffer_default=30d0
 !
        character(len=15), parameter :: whoami='GRID_INITIALIZE'
 !
@@ -68,7 +69,6 @@
 !    generate/read grids
 !
        if (me.le.0) then ! only root node does this, then broadcasts to the other nodes
-       allocate(xcor(nx), ycor(ny), zcor(nz))
 !
 ! x-grid
 !
@@ -354,20 +354,20 @@
 !    offset for staggered components
 !
        do i=2,nx
-         xcen(i)=(xcor(i)+xcor(i-1))*0.5d0
+         xcen(i)=(xcor(i)+xcor(i-1))*half
        enddo
-       xcen(1)=xcor(1)-0.5d0*(xcor(2)-xcor(1))
+       xcen(1)=xcor(1)-half*(xcor(2)-xcor(1))
 !
        do j=2,ny
-         ycen(j)=(ycor(j)+ycor(j-1))*0.5d0
+         ycen(j)=(ycor(j)+ycor(j-1))*half
        enddo
-       ycen(1)=ycor(1)-0.5d0*(ycor(2)-ycor(1))
+       ycen(1)=ycor(1)-half*(ycor(2)-ycor(1))
 !
        if (q3d) then
         do k=2,nz
-         zcen(k)=(zcor(k)+zcor(k-1))*0.5d0
+         zcen(k)=(zcor(k)+zcor(k-1))*half
         enddo
-        zcen(1)=zcor(1)-0.5d0*(zcor(2)-zcor(1))
+        zcen(1)=zcor(1)-half*(zcor(2)-zcor(1))
        endif
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 !    metrics
@@ -381,15 +381,15 @@
        if (q3d) then ; dzcen(1:nz-1)=zcen(2:nz)-zcen(1:nz-1); dzcen(nz)=dzcen(nz-1); endif
 !    note that the fluids code has a true 2nd order approximation to the ghost center-center metrics (probably unimportant)
 !    invert metrics
-       odxcor=1d0/dxcor;     odycor=1d0/dycor;      if (q3d) odzcor=1d0/dzcor;
-       odxcen=1d0/dxcen;     odycen=1d0/dycen;      if (q3d) odzcen=1d0/dzcen;
+       odxcor=one/dxcor;     odycor=one/dycor;      if (q3d) odzcor=one/dzcor;
+       odxcen=one/dxcen;     odycen=one/dycen;      if (q3d) odzcen=one/dzcen;
 !
 !    compute min and max cell size
 !
        dxmax=maxval(dxcor);       dxmin=minval(dxcor);
        dymax=maxval(dycor);       dymin=minval(dycor);
        if (q3d) then ;       dzmax=maxval(dzcor);       dzmin=minval(dzcor);
-       else ;                dzmax=-1d0; dzmin=-1d0
+       else ;                dzmax=-one; dzmin=-one
        endif
 !
        if (me.eq.0) then 
@@ -463,10 +463,10 @@
 !
 !
        l=b-a
-       if (ABS(z-1.0d0).lt.ERRTOL()) then 
+       if (ABS(z-one).lt.ERRTOL()) then
          delta=l/(n-1) 
        else 
-         delta=l*(1.0d0-z)/(1.0d0-(z**(n-1)))
+         delta=l*(one-z)/(one-(z**(n-1)))
        endif
 !
        allocate(grid_exponential(n+1))
@@ -531,12 +531,12 @@
 !    adjust n so it is suitable for constructing subgrids
 !
 !    for now, allow four possible factorizations : all 2s, one 3, one 5, one 7
-       b=1d0/log(2d0);
+       b=one/log(two);
 !
-       c=b*log(1d0*n)   ; ns(1) =       2d0 ** nint(c); ! just 2's
-       c=b*log(1d0*n/3) ; ns(2) = 3d0 * 2d0 ** nint(c); ! one 3
-       c=b*log(1d0*n/5) ; ns(3) = 5d0 * 2d0 ** nint(c); ! one 5
-       c=b*log(1d0*n/7) ; ns(4) = 7d0 * 2d0 ** nint(c); ! one 7
+       c=b*log(one*n)   ; ns(1) =         two ** nint(c); ! just 2s
+       c=b*log(one*n/3) ; ns(2) = three * two ** nint(c); ! one 3
+       c=b*log(one*n/5) ; ns(3) = five  * two ** nint(c); ! one 5
+       c=b*log(one*n/7) ; ns(4) = seven * two ** nint(c); ! one 7
 ! now choose the factorization that gives the closest number of points to n
 !        write(0,*) ns, n, 'AA'
        nnew=ns( minloc ( abs ( ns-n ) ) ) + 2 ! note that nnew must be an array of rank 1; add two points (for ghost cells)
@@ -560,19 +560,19 @@
        i=0
 !
        ys1=dx*(n1)-buffer         ! total length when s => 1; 
-       dyds1=0.5d0*dx*(n1)*(n1-1) ! approximate derivative when s => 1
+       dyds1=half * dx * (n1 ) * (n1-1) ! approximate derivative when s => 1
 !
        do ! until converged or max. iterations exceeded
         i=i+1
-        if ( abs(s-1d0).lt.TOL ) then 
+        if ( abs(s-one).lt.TOL ) then 
          ys=ys1
          dyds=dyds1;
         else
          sn=s**(n1-1);
-         oos=1d0/(1d0-s);
+         oos=one/(one-s);
 !
-         ys   = dxmin * ( 1d0-s*sn )*oos - buffer
-         dyds = dxmin * ( s*sn * (n1 - 1)  - sn * n1 + 1d0 )*oos**2
+         ys   = dxmin * ( one-s*sn )*oos - buffer
+         dyds = dxmin * ( s*sn * (n1 - 1)  - sn * n1 + one )*oos**2
         endif
 !
         if ( abs(ys).lt.TOL ) exit ! got solution
@@ -593,7 +593,7 @@
 !
        allocate(grid_around_object(nnew(1)))
        g=>grid_around_object ! shortcut handle
-       g=0d0                 ! initialize
+       g=zero                ! initialize
 !
        dx=dx0;
        i=n1+2; ! there are n1+1 buffer points, including ghost point

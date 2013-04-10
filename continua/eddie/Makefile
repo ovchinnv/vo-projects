@@ -8,6 +8,7 @@ include $(ROOT)/Makefile.inc
 include $(COMMON)/Makefile.inc
 
 eddie_grid.o :
+eddie_grid.F90: $(ROOT)/parser/parser_macro1.src
 
 test:: force_look
 	$(MAKE) -C test

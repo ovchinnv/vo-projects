@@ -34,7 +34,7 @@ ches.o: PBmain.o
 
 PBmain.o :  multigrid.o
 PBmain.F90: PBmacro1.def PBmacro2.def
-multigrid.F90: mgutil/multigrid_bc.src mgutil/mg_macro1.src mgutil/mg_resout.src \
+multigrid.F90: mgutil/multigrid_bc.src $(ROOT)/parser/parser_macro1.src mgutil/mg_resout.src \
                mgutil/GS.src mgutil/Jacobi.src mgutil/residual.src mgutil/coarsen.src mgutil/refine.src
 clean::
 	for d in $(SUBDIRS); do (cd $$d; $(MAKE) clean); done

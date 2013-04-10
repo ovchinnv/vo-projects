@@ -14,7 +14,8 @@ CFLAGS =-O3 -fno-math-errno -c
 FC=gfortran
 FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  #-fopenmp 
 #FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno #-fbounds-check -frange-check 
-MPI_HOME=/usr/local/mpich2-gnu
+#MPI_HOME=/usr/local/mpich2-gnu
+MPI_HOME=/usr/lib/openmpi
 #---PATHSCALE
 #FC=pathf95
 #FFLAGS=-Ofast -fno-math-errno -extend-source -INLINE -ipa -c
@@ -27,8 +28,8 @@ MPI_HOME=/usr/local/mpich2-gnu
 #
 # G95 reguires no space between "-D" and the name
 DEFS=-Dint=integer -Dfloat=real*8 -Dbool=logical -Dmpiint=MPI_INTEGER -Dmpifloat=MPI_REAL8 -Dmpichar=MPI_CHARACTER -Dmpiint4=MPI_INTEGER4\
-     -Dmpibool=MPI_LOGICAL -Dint1="integer(kind=KIND('a'))" -D__DMOL -D__RCOMP -D__DMOL -D__CHES -D__FC=$(FC) \
-     -Dint4mpi=integer #-Dint4mpi="integer(KIND=MPI_INTEGER_KIND)"  #-D__PARALLEL #-D__PATHSCALE
+     -Dmpibool=MPI_LOGICAL -Dint1="integer(kind=KIND('a'))" -D__DMOL -D__RCOMP -D__DMOL -D__CHES -D__EDDIE -D__FC=$(FC) \
+     -Dint4mpi=integer -D__PARALLEL #-D__PATHSCALE #-Dint4mpi="integer(KIND=MPI_INTEGER_KIND)" 
 
 # ! note: the VEC routines are probably slower
 
@@ -53,8 +54,8 @@ CHMSG=-include $(ROOT)/charmm.msg
 TESTMSG=-include $(ROOT)/test.msg
 GLOBALDEPS=$(ROOT)/source.defs $(ROOT)/source.msg
 
-MPI_INCLUDE=-I $(MPI_HOME)/include
-MPI_LIBS=-L $(MPI_HOME)/lib -lmpich -lmpl -lpthread
+MPI_INCLUDE=-I $(MPI_HOME)/include -I $(MPI_HOME)
+MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lmpich -lmpl -lpthread
 
 INCLUDES+=-I $(ROOT)/include
 LIBS+=-L $(ROOT)/lib
@@ -67,8 +68,8 @@ CHARMM_SOURCES=$(OBJS:%.o=%.src)
 
 VPATH=$(ROOT) #this is necessary to prevent recompilation under %.stamp rule
 
-FPP=cpp -P -nostdinc # -nostdinc : avoid including files automatically
-FPPFLAGS = -C -I $(ROOT)
+FPP=cpp -P 
+FPPFLAGS = -C -I $(ROOT) -nostdinc # -nostdinc : avoid including files automatically
 
 .SUFFIXES:
 .SUFFIXES: .o .F90 .a .H .h .c .f .F .stamp

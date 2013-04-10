@@ -2,7 +2,8 @@
 DEFS+=-DSIZE=gridsize \
       -D__TRUNCATESUMS  \
       -D__erf=erfo7 \
-      -D__TIMER
+      -D__TIMER \
+      -D__EDDIECTX=\'Eddie\'
 #      -D__VECCOPY
 #      -D__PVEC \
 #      -D__erf=erfsun \
