@@ -1,19 +1,18 @@
 module eddie_info
- use SIZE
- use datatypes
- use eddie_grid
+      use SIZE
+      use datatypes
+      use eddie_grid
 #if __PARALLEL
- __DEP_MULTICOM
- __DEP_MPI
+      __DEP_MULTICOM
+      __DEP_MPI
 #endif
 !
 !
- __IMPNONE
+      __IMPNONE
 !
       bool, private :: eddie_info_initialized=.false.
 !
 #if __PARALLEL
-#include "../../mpitype.def"
       int4mpi, save, private :: min_max_data_mpi
 !    custom type for sending rex data by MPI
       type min_max_datatype
@@ -23,7 +22,7 @@ module eddie_info
 #endif
 !
       interface print_min_max_rms3d
-       module procedure print_min_max_rmd3d_varray, print_min_max_rmd3d_array_name
+       module procedure print_min_max_rms3d_varray, print_min_max_rms3d_array_name
       end interface print_min_max_rms3d
 !
 
@@ -31,23 +30,23 @@ module eddie_info
 !-----------------------------------------------------------------------
 !     screen and file information
 !-----------------------------------------------------------------------
-            write(6,*) '*********************************************'
-            write(6,*) '*...Iteration number= ',icycle
-            write(6,*) '*...Time Step       = ',dtm1
-            write(6,*) '*...Total Time      = ',tlevel
-            write(6,*) '*...CPU RHS         = ',cpurhs
-            write(6,*) '*...CPU PRED        = ',cpupredict
-            write(6,*) '*...CPU PRESS       = ',cpupres
-            write(6,*) '*...CPU CORR        = ',cpucorr
-            write(6,*) '*...CPU TURVIS      = ',cputurvis
-         ENDIF
-         
-         call divergence()
-         call print_min_max_rms3d(
-
-         CALL CALCME(uo,vo,wo,xu,yv,zw,dtm1,nx,ny,nz)
-         CALL SCRUVWP(uo,vo,wo,p,nx,ny,nz)
-      ENDIF
+!            write(6,*) '*********************************************'
+!            write(6,*) '*...Iteration number= ',icycle
+!            write(6,*) '*...Time Step       = ',dtm1
+!            write(6,*) '*...Total Time      = ',tlevel
+!            write(6,*) '*...CPU RHS         = ',cpurhs
+!            write(6,*) '*...CPU PRED        = ',cpupredict
+!            write(6,*) '*...CPU PRESS       = ',cpupres
+!            write(6,*) '*...CPU CORR        = ',cpucorr
+!            write(6,*) '*...CPU TURVIS      = ',cputurvis
+!         ENDIF
+!         
+!         call divergence()
+!         call print_min_max_rms3d(
+!
+!         CALL CALCME(uo,vo,wo,xu,yv,zw,dtm1,nx,ny,nz)
+!         CALL SCRUVWP(uo,vo,wo,p,nx,ny,nz)
+!      ENDIF
 
 
       contains
@@ -68,8 +67,8 @@ module eddie_info
 !
         offsets(1)=offsets(0)+counts(0)*extent; oldtypes(1)=mpiint ; counts(1)=6
         call MPI_TYPE_GET_EXTENT(mpiint,lb,extent,ierr)
-        call MPI_TYPE_CREATE_STRUCT(2, counts, offsets, oldtypes, rex_string_data_mpi, ierr) 
-        call MPI_TYPE_COMMIT(rex_string_data_mpi, ierr) 
+        call MPI_TYPE_CREATE_STRUCT(2, counts, offsets, oldtypes, min_max_data_mpi, ierr) 
+        call MPI_TYPE_COMMIT(min_max_data_mpi, ierr) 
 !
        endif
 #endif
@@ -81,14 +80,16 @@ module eddie_info
 !
 #ifdef __PARALLEL
        int :: i
-       if (eddie_info_initialized) mpi_type_free(min_max_data_mpi,i)
+       if (eddie_info_initialized) call MPI_TYPE_FREE(min_max_data_mpi,i)
 #endif
        eddie_info_initialized=.false.
 !
-      end subroutine eddie_info_done()
+      end subroutine eddie_info_done
 !============================================================================================
       subroutine print_min_max_rms3d_array_name(r, rname)
        __DEP_OUTPUT
+       __DEP_PARSER
+!
        float, intent(in) :: r(:,:,:)
        character(len=*) :: rname
        int :: imax, jmax, kmax, imin, jmin, kmin
@@ -114,8 +115,7 @@ module eddie_info
       end subroutine print_min_max_rms3d_array_name
 !============================================================================================
       subroutine print_min_max_rms3d_varray(r_)
-       __DEP_OUTPUT
-       type(varray3d), pointer :: r_
+       type(varray3df), pointer :: r_
        float, pointer :: r(:,:,:)
        character(len=varnamelen) :: rname
 !
@@ -124,7 +124,7 @@ module eddie_info
 !
       end subroutine print_min_max_rms3d_varray
 !============================================================================================
-      subroutine get_min_max_ave3d(r,rmin,rmax,rrms,imin,jmin,kmin,imax,jmax,kmax)
+      subroutine get_min_max_ave3d(r,rmin,rmax,rrms,imin,jmin,kmin,imax,jmax,kmax,rankmin,rankmax)
 !
        int, intent(out) :: imin, jmin, kmin, imax, jmax, kmax
        float, intent(out) :: rmin, rmax, rrms
@@ -135,13 +135,14 @@ module eddie_info
 #ifdef __PARALLEL
        float :: rrmsg
        int :: ierror
-       type(min_max_datatype) :: rminmax_all(ncpu), rminmax
+       type(min_max_datatype) :: rminmax_all(SIZE_EDDIE), rminmax
+       int :: rankmax, rankmin
 #endif
 !
        if (.not. eddie_info_initialized) call eddie_info_init()
 !
        imin=ib; imax=ib; jmin=jb; jmax=jb; kmin=kb; kmax=kb 
-       rmin=r(imin,jmin,kmin) ; rmax=r(imax,jmax,kmax) ; rrms=zero ; 
+       rmin=r(imin,jmin,kmin) ; rmax=r(imax,jmax,kmax) ; rrms=zero ;
 !
        do k=kb,ke  ; do j=jb,je ; do i=ib,ie
 !
@@ -166,7 +167,7 @@ module eddie_info
        rminmax%jmax=jmax
        rminmax%kmax=kmax
 !
-       call MPI_GATHER(rminmax, 1, min_max_data_mpi, rminmax_all, 1, min_max_data_min, 0, MPI_COMM_EDDIE, ierror)
+       call MPI_GATHER(rminmax, 1, min_max_data_mpi, rminmax_all, 1, min_max_data_mpi, 0, MPI_COMM_EDDIE, ierror)
 ! find minimum and maximum
        rankmin=1; rankmax=1;
        rmin=rminmax_all(rankmin)%rmin
@@ -178,7 +179,7 @@ module eddie_info
        jmax=rminmax_all(rankmax)%jmax
        kmax=rminmax_all(rankmax)%kmax
 !
-       do i=2,ncpu
+       do i=2, SIZE_EDDIE
         if (rmin.gt.rminmax_all(i)%rmin) then
          rankmin=i
          rmin=rminmax_all(i)%rmin
