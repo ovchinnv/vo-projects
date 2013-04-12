@@ -1,0 +1,142 @@
+PROGRAM MUPHEN ! MUlti-PHysics-ENvironment
+!
+! 2013 Victor Ovchinnikov (ovchinnv_at_georgetown_dot_edu)
+!
+#ifdef __TIMER
+  use timer
+  __DEP_PARSER
+  __DEP_OUTPUT
+#endif
+!
+#ifdef __PARALLEL
+  use multicom
+#endif
+!
+  use files
+!
+  __IMPNONE
+!======================= variables
+  character(len=4) :: whoami='MPE Manager'
+  int :: i
+  int4mpi :: comm, me
+  int :: numarg 
+  character(len=80) :: filename, fname, keyword
+  int :: flen
+  int :: fid=-1 
+  bool :: qcomm
+!
+#ifdef __TIMER
+  int :: mpe_timer
+  float :: time(10)
+#endif
+!
+
+#ifdef __PARALLEL
+  __DECLARE_MSGBUF
+
+#ifdef __TIMER
+  call timer_init()
+  mpe_timer=timer_start()
+#endif
+!
+! initialize multicom; the first communicator is mpi_comm_world
+  call multicom_init()      ! basic initializtion of multicom before parsing input file(s)
+  _MSGBUF(1)='PARSE WORLD'  ! set parser communicator to global ;  this means that every node will have the same parser list
+  i=len_trim(_MSGBUF(1))
+  call multicom_main( _MSGBUF(1),i)
+  comm=MPI_COMM_PARSER
+  me=ME_PARSER
+!
+#ifdef __TIMER 
+ time(1)=timer_stamp(mpe_timer)
+#endif
+!
+#else
+  comm=-1
+  me=0
+#ifdef __TIMER 
+  time(1)=0
+#endif
+#endif
+!
+! parse input file
+! *********************************************************************************************************
+!
+  if (me.le.0) then 
+#ifdef __NEED_IARGC
+  numarg=iargc() ! number of arguments
+#else
+  numarg=command_argument_count() ! number of arguments
+#endif
+   if (numarg.ge.1) then 
+    call getarg(1, filename)
+    fname=filename
+   call adjustleft(fname)
+    flen=len_trim(fname)
+    call files_open(handle_=fid, name_=filename(1:flen), form_='FORMATTED', action_='READ')
+    if (fid.lt.0) call error(whoami,'Could not open file',-1)
+   else
+   fid=5 ! if file name missing, read from standard input
+   endif
+  endif ! me
+!    call parser
+!    only the root will receive a valid file handle (see above); all nodes still call parse_file
+  call parse_file(fid &
+#ifdef __PARALLEL
+&                 ,comm
+#endif
+&                )
+!
+  if (me.le.0) call files_close(fid)
+! *********************************************************************************************************
+#ifdef __TIMER 
+  time(2)=timer_stamp(mpe_timer) ! parsing time
+#endif
+!
+#ifdef __PARALLEL
+!======= now call multicom to set up various communicators before going further
+  call multicom_exec_ctx(__MCOMCTX)
+!
+#ifdef __TIMER
+  time(3)=timer_stamp(mpe_timer) ! multicom initialization time (2)
+#endif
+!
+#else
+  time(3)=0
+#endif
+!====== now initialize slave codes by scanning the context list
+  call muphen_init_codes()
+#ifdef __TIMER 
+  time(4)=timer_stamp(mpe_timer)
+#endif
+!====== launch codes
+  call muphen_launch_codes()
+#ifdef __TIMER
+  time(5)=timer_stamp(mpe_timer) ! multicom initialization time (2)
+#endif
+!====== cleanup
+  call muphen_cleanup_codes()
+#ifdef __TIMER
+  time(6)=timer_stamp(mpe_timer) ! multicom initialization time (2)
+#endif
+!====== stop timer
+#ifdef __TIMER
+  call timer_done()
+#endif
+!
+#ifdef __TIMER
+ call message(whoami,'============= TIMING INFORMATION ==============')
+#ifdef __PARALLEL
+ call message(whoami,' : '//ftoa(time(1)))
+#endif
+ call message(whoami,' : '//ftoa(time(2)))
+#ifdef __PARALLEL
+ call message(whoami,' : '//ftoa(time(3)))
+#endif
+ call message(whoami,' : '//ftoa(time(4)))
+ call message(whoami,' : '//ftoa(time(5)))
+ call message(whoami,' : '//ftoa(time(6)))
+ call message(whoami,'===============================================')
+#endif
+!
+end ! MUPHEN
