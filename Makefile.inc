@@ -55,7 +55,7 @@ TESTMSG=-include $(ROOT)/test.msg
 GLOBALDEPS=$(ROOT)/source.defs $(ROOT)/source.msg
 
 MPI_INCLUDE=-I $(MPI_HOME)/include -I $(MPI_HOME)
-MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lmpich -lmpl -lpthread
+MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lmpi -lmpi_f90 -lmpi_f77 -lpthread
 
 INCLUDES+=-I $(ROOT)/include
 LIBS+=-L $(ROOT)/lib
