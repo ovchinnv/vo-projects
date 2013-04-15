@@ -13,6 +13,8 @@ __CHARMM_ONLY##IF MULTICOM
       use ivector   ! container for vector of ints
        __DEP_OUTPUT
 !
+      __IMPNONE
+!
 !    encapsulated communicator type
 !
       type comm_type
@@ -32,15 +34,18 @@ __CHARMM_ONLY##IF MULTICOM
       bool, save, public :: multicom_initialized=.false.
       int, save,  private :: first_me=-1, first_size=0
 !
-!     parameters
-!
       int, parameter, private :: max_comm = 2048
 !
+#ifndef __CHARMM
+      character(len=10), private, parameter :: ctx=__MCOMCTX
+#endif
+!
 !     subroutines (parallel only)
-!
-#ifdef __PARALLEL
-!
-!     access qualifiers routines
+#if defined(__PARALLEL) || defined(__CHARMM)
+!     access qualifiers
+#ifndef __CHARMM
+      public  multicom_exec  ! execute command block
+#endif
       public  multicom_main  ! parser
       public  multicom_init  ! initialization
       private multicom_add   ! add communicator
@@ -51,7 +56,26 @@ __CHARMM_ONLY##IF MULTICOM
       private multicom_barrier ! call MPI_BARRIER on any of the known communicators
       public  multicom_permute_string_ranks
 !
+
+!
       contains
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+#ifndef __CHARMM
+       subroutine multicom_exec  ! execute command block
+       use parser
+       character(len=13), parameter :: whoami='MULTICOM_EXEC'
+       character(len=:), pointer :: command
+       int :: l
+!
+       do
+        command=>get_next_command(ctx)
+        if (.not.associated(command)) exit
+        l=len(command)
+        call multicom_main(command,l)
+       enddo
+!
+       end subroutine multicom_exec
+#endif
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine multicom_main(comlyn, comlen)
 !      multicom command parser
@@ -61,10 +85,8 @@ __CHARMM_ONLY##IF MULTICOM
        __DEP_PARSER
        __DEP_MPI
 !
-       implicit none
-!
-       CHARACTER*(*) COMLYN
-       int :: COMLEN
+       character*(*) comlyn
+       int :: comlen
 !
 ! local variables
        character(len=8) :: keyword
@@ -287,8 +309,10 @@ __CHARMM_ONLY##IF MULTICOM
         endif
 !
         if (first_me.eq.0.and.bug.eq.0) then
-         write(_MSGBUF, '(2A)') whoami,                                &
-     &    ' SETTING PARSER COMMUNICATOR TO "',keyword(1:klen),'".'; __PRINT(_MSGBUF)
+!         write(_MSGBUF, '(2A)') whoami,                                &
+!     &    ' SETTING PARSER COMMUNICATOR TO "',keyword(1:klen),'".'; __PRINT(_MSGBUF)
+!        endif
+         __MESG(whoami,'SETTING PARSER COMMUNICATOR TO "',keyword(1:klen),'".')
         endif
 !
 #endif
@@ -305,9 +329,6 @@ __CHARMM_ONLY##IF MULTICOM
 #ifdef __CHARMM
        __DEP_OUTPUT
 #endif
-!
-       implicit none
-!
        character(len=16) :: whoami
 !
        data whoami /'MULTICOM_PARINIT'/

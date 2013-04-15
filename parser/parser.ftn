@@ -1,60 +1,55 @@
       module parser
+!
+      use cmd
+      use prm
+!
       __IMPNONE
       private
 !     read, parse & store input file; 
 !
       int, parameter, public :: contextnamelen=200
-      int, parameter, public :: vartaglen=200
-      int, parameter, public :: maxlinelen=200
-!    define a derived type to store simulation parameters
-      type params
-       character(len=contextnamelen), dimension(:), pointer :: tag, val
-       int, dimension(:), pointer :: tlen, vlen
-       int :: length=0 ! length of the vector
-       int :: last ! index of last element
-       bool :: initialized=.false. ! has the vector been initialized
-      end type params
 !
-!     the current implementation (11/2012) does not allow for nested contexting because there is no apparent
-!     reason for this level of complexity
+!     the current implementation (11/2012) does not allow for nested contexting
 !
       type contexts ! for storing multiple parameter sets ('contexts') per single execution
        character(len=contextnamelen), pointer :: context_name(:)
        type (params), pointer :: context_params(:)
+       type (commands), pointer :: context_commands(:)
        int :: length=0
        int :: last=0
        int :: current=0
       end type contexts
 !
-       character(len=26), parameter  :: lower='abcdefghijklmnopqrstuvwxyz'
-       character(len=26), parameter  :: upper='ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-       character(len=10), parameter  :: digits='0123456789'
-       int :: i
-       character, parameter :: lower2(26)=(/ (lower(i:i),i=1,26)/)
-       character, parameter :: upper2(26)=(/ (upper(i:i),i=1,26)/)
-       character, parameter, public :: digits2(10)=(/ (digits(i:i),i=1,10)/)
-       character, parameter :: tilde='~'
-       character, parameter :: decimal='.'
-       character, parameter :: underscore='_'
-       character, parameter, public :: hyphen='-'
-       character, parameter :: slash='/'
-       character, parameter, public :: tab=char(9)
-       character, parameter, public :: space(4) = (/' ', tab, ',',';'/)
-       character, parameter :: comment(4) = (/'*','!','#','%'/)
-       character, parameter :: equals(1) = (/'='/)
-       character, parameter :: vector_open(2)=(/'(','['/)
-       character, parameter :: vector_close(2)=(/')',']'/)
-       character, parameter :: context_open(1)=(/'{'/)
-       character, parameter :: context_close(1)=(/'}'/)
-       character(len=200), parameter :: allowed=upper//lower//digits//decimal//underscore//hyphen//slash//tilde
+      character(len=26), parameter  :: lower='abcdefghijklmnopqrstuvwxyz'
+      character(len=26), parameter  :: upper='ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+      character(len=10), parameter  :: digits='0123456789'
+      int :: i
+      character, parameter :: lower2(26)=(/ (lower(i:i),i=1,26)/)
+      character, parameter :: upper2(26)=(/ (upper(i:i),i=1,26)/)
+      character, parameter, public :: digits2(10)=(/ (digits(i:i),i=1,10)/)
+      character, parameter :: tilde='~'
+      character, parameter :: decimal='.'
+      character, parameter :: underscore='_'
+      character, parameter, public :: hyphen='-'
+      character, parameter :: slash='/'
+      character, parameter, public :: tab=char(9)
+      character, parameter, public :: space(4) = (/' ', tab, ',',';'/)
+      character, parameter :: comment(4) = (/'*','!','#','%'/)
+      character, parameter :: equals(1) = (/'='/)
+      character, parameter :: vector_open(2)=(/'(','['/)
+      character, parameter :: vector_close(2)=(/')',']'/)
+      character, parameter :: context_open(1)=(/'{'/)
+      character, parameter :: context_close(1)=(/'}'/)
+      character(len=200), parameter :: allowed=upper//lower//digits//decimal//underscore//hyphen//slash//tilde
+      character(len=5), parameter :: command_start(1)=(/'exec:'/)
 !
-      int, parameter, private :: expand_incr=100
       int, parameter, private :: context_incr=1  ! expand increment for contexts
 !
       bool, save :: parser_initialized=.false. ! set to true after parse_file is called successfully; private
 !
-      type (contexts), save :: context            ! contexts
-      type (params), save, pointer :: parameters  ! pointer to a single context (e.g. main parameter set)
+      type (contexts), save :: context              ! contexts
+      type (params), save, pointer :: parameters    ! pointer to a single parameter set (e.g. main parameter set)
+      type (commands), save, pointer :: executables ! pointer to a single command set   (e.g. main command set)
 !
       public atoi     	! convert string to int 
       public atof	! convert string to double
@@ -62,16 +57,18 @@
       public atoiv     	! convert string to a vector of ints 
       public atofv	! convert string to a vector of double
 !      public atolv	! convert string to a vector of bool (not yet)
-      private params_getval	! return tag value
-      private params_getval_nocase	! return tag value (case insensitive version)
+      private params_getval
+      private params_getval_nocase
       public getval	        ! return tag value
       public getval_nocase	! return tag value (case insensitive version)
       public getval_nocase_upper! return tag value in uppercase (case insensitive version)
       public existtag	! return tag value
       public existtag_nocase	! return tag value (case insensitive version)
+      public get_next_command	! return command
       public parse_file ! read input file and store all parameters
       public parser_done
       public list_params ! list parameters
+      public list_commands ! list commands
       public adjustleft
       public adjustleft_1, adjustleft_2
       public numword
@@ -109,6 +106,7 @@
        call parser_done()
 !
        allocate(context%context_params(context_incr))
+       allocate(context%context_commands(context_incr))
        allocate(context%context_name(context_incr))
        context%length=context_incr
        context%last=1
@@ -116,7 +114,9 @@
        context%context_name(1)='MAIN'
 !    initialize main context
        parameters=>context%context_params(1)
+       executables=>context%context_commands(1)
        call params_init(parameters)
+       call commands_init(executables)
 !
        parser_initialized=.true.
        end subroutine parser_init
@@ -129,12 +129,19 @@
          do i=1,context%last ; call params_done(context%context_params(i)) ; enddo
          deallocate(context%context_params)
         endif
+!
+        if (associated(context%context_commands)) then
+         do i=1,context%last ; call commands_done(context%context_commands(i)) ; enddo
+         deallocate(context%context_commands)
+        endif
+!
         if (associated(context%context_name)) deallocate(context%context_name)
        endif
 !
        context%last=0 ; context%length=0
 !
        nullify(parameters)
+       nullify(executables)
        parser_initialized=.false.
 !
        end subroutine parser_done
@@ -183,7 +190,6 @@
 !********************************************************************************************
        function parser_context(cname)
 !    find the array index of a context specified by cname; if the context does exist, create it
-!    relevant to parsing input; will also be relevant to realtime execution when such is implemented
        character(len=*), intent(in) :: cname
        character(len=len(cname)) :: copyname
        int :: parser_context, j
@@ -202,89 +208,6 @@
 !
        end function parser_context
 !********************************************************************************************
-       subroutine params_init( v )
-       type (params) :: v
-!       if (associated(v%...)) deallocate(v%...) ! testing unassigned pointer is an error!
-       allocate(v%tag(expand_incr),v%val(expand_incr),v%tlen(expand_incr),v%vlen(expand_incr))
-!
-       v%tag=''; v%val=''; v%tlen=0; v%vlen=0
-       v%length=expand_incr
-       v%last=0
-       v%initialized=.true.
-       end subroutine params_init
-!ccccc
-       subroutine params_done( v )
-       type (params) :: v
-       if (associated(v%tag)) deallocate(v%tag)
-       if (associated(v%val)) deallocate(v%val)
-       if (associated(v%tlen)) deallocate(v%tlen)
-       if (associated(v%vlen)) deallocate(v%vlen)
-       v%length=0
-       v%last=0
-       v%initialized=.false.
-       end subroutine params_done
-!
-       subroutine params_expand( v )
-       type (params) :: v
-       int :: newlength
-       character(len=vartaglen), dimension(:), pointer :: ntag, nval
-       int, dimension(:), pointer :: ntlen, nvlen
-!
-       if (.not.v%initialized) then 
-        call params_init(v) 
-       else
-!    assume length is valid
-        newlength=v%length+expand_incr ! temporary storage space
-        allocate(ntag(newlength),nval(newlength),ntlen(newlength),nvlen(newlength)) ! copy old data
-        ntag(1:v%length)=v%tag; nval(1:v%length)=v%val; ntlen(1:v%length)=v%tlen; nvlen(1:v%length)=v%vlen ! deallocate old array
-        deallocate(v%tag,v%val,v%tlen,v%vlen) ! deallocate old data
-        v%tag=>ntag; v%val=>nval; v%tlen=>ntlen; v%vlen=>nvlen
-        v%length=newlength
-       endif 
-       end subroutine params_expand
-!ccccc
-       function params_add(v,newtag,newval,ltag,lval) ! add a new element to the list (not necessarily unique) 
-!                                       and return its index
-       use output
-       type (params) :: v
-       int :: params_add, ltag, lval
-       character(len=*) :: newtag, newval
-       int :: j
-!
-       if (.not.v%initialized) call params_init(v)
-!    add element to the list
-       if (v%last.eq.v%length) call params_expand(v)
-       j=v%last+1
-       v%tag(j)=newtag(1:ltag); v%tlen(j)=ltag
-       v%val(j)=newval(1:lval); v%vlen(j)=lval
-       v%last=j
-       params_add=j
-       end function params_add
-!ccccc
-       function params_uadd(v,newtag,newval,ltag,lval) ! add a UNIQUE new element to the list and return its index
-!                                                         if the element already exists, overwrite and warn       
-       use output, only: warning
-       type (params) :: v
-       int :: j, params_uadd, ltag, lval
-       character(len=*) :: newtag, newval
-!
-       if (.not.v%initialized) call params_init(v) 
-       do j=1,v%last
-        if (v%tag(j).eq.newtag(1:ltag)) then
-!       found element
-         params_uadd=j
-         call warning('PARAMS_UADD','Parameter "'//newtag(1:ltag)//'" is already present and has the value '&
-&                                     //v%val(j)(1:v%vlen(j))//&
-&                                    '. Will overwrite.',0)
-         v%val(j)=newval(1:lval); v%vlen(j)=lval
-         return
-        endif
-       enddo
-!    add element to the list: use regular routine
-       params_uadd=params_add(v,newtag,newval,ltag,lval)
-!
-       end function params_uadd
-!
        function params_getval( v,atag )
        type (params) :: v
        character(len=vartaglen) :: params_getval
@@ -306,7 +229,7 @@
        endif
 !
        end function params_getval
-!
+!********************************************************************************************
        function params_getval_nocase( v,atag )
        type (params) :: v
        character(len=vartaglen) :: params_getval_nocase, tag1, tag2
@@ -331,7 +254,7 @@
        endif
 !
        end function params_getval_nocase
-!****************************************** end of data routines **************************************
+!********************************************************************************************
        character(len=vartaglen) function getval(atag,ctx)
        use output, only: warning
        character(len=vartaglen) :: value
@@ -345,6 +268,30 @@
        getval=value
 !
        end function getval
+!********************************************************************************************
+       function get_next_command(ctx) ! returning command as an array of characters
+       use output, only: warning
+       character(len=:), pointer :: get_next_command
+       character(len=*), intent(in), optional :: ctx
+       type (commands) :: c
+       int :: ictx, i
+!
+       nullify(get_next_command)
+!
+       if (.not.parser_initialized) call parser_init()
+       ictx=1 ; if (present(ctx)) ictx=max(1,parser_find_context(ctx))
+!
+       c=context%context_commands(ictx)
+       if (.not.c%initialized) then 
+!
+       elseif (c%current.le.c%last) then
+        i=c%clen(c%current)
+        allocate(character(i) :: get_next_command)
+        get_next_command=c%command(c%current)(1:i)
+        c%current=c%current+1
+       endif
+!
+       end function get_next_command
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        character(len=vartaglen) function getval_nocase(atag,ctx)
        use output, only: warning
@@ -754,7 +701,7 @@
        endif
 !
        end subroutine parse_file
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!============================================================================================
        subroutine list_params(ctx &
 #ifdef __PARALLEL
        & , me &
@@ -788,7 +735,41 @@
        endif
 #endif
        end subroutine list_params
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!============================================================================================
+       subroutine list_commands(ctx &
+#ifdef __PARALLEL
+       & , me &
+#endif
+       & )
+! 
+       use output
+!
+       character(len=*), intent(in), optional :: ctx ; int :: ictx
+!
+       character(len=13), parameter :: whoami = 'LIST_COMMANDS'
+       int :: i
+#ifdef __PARALLEL
+       int4mpi :: me
+#endif
+!
+       if (.not.parser_initialized) call parser_init()
+!
+       ictx=1 ; if (present(ctx)) ictx=max(1,parser_find_context(ctx)) ; executables=>context%context_commands(ictx)
+!
+#ifdef __PARALLEL
+       if (me.le.0) then
+#endif
+        call message(whoami,'THE FOLLOWING COMMANDS ARE DEFINED IN CONTEXT "'//context%context_name(ictx)(1:len_trim(context%context_name(ictx)))//'":')
+        call message(whoami,'========================================================')
+        do i=1,executables%last
+         call message(whoami,tab//'"'//executables%command(i)(1:executables%clen(i))//'"')
+        enddo
+        call message(whoami,'========================================================')
+#ifdef __PARALLEL
+       endif
+#endif
+       end subroutine list_commands
+!============================================================================================
 ! auxiliary functions (they need not be part of this module)
        function atoi4(a, invalid)
 ! NOTE: no overflow check yet
