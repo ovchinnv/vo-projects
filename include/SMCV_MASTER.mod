@@ -1,1 +1,0 @@
-/home/taly/projects/string/smcv/SMCV_MASTER.mod

@@ -1,1 +1,0 @@
-/home/taly/projects/chest/objects/molecule/PDB.mod

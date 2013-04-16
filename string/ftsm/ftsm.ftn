@@ -429,7 +429,7 @@ __CHARMM_ONLY##IF STRINGM
      & ' (FE/MFPT CANNOT BE COMPUTED).' ; __PRINT(_MSGBUF)
          endif ! proj_on
         else
-         
+!
         endif !restrained
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
         if (stat_on) then
@@ -604,6 +604,27 @@ __CHARMM_ONLY##IF STRINGM
  6660 format(/A,' WILL DEFINE PATH FROM MAIN COORDINATES.')
         call ftsm_fill(__X,__Y,__Z)
        endif ! qcomp
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      elseif (__STRNCMP(keyword,'CALC',4)) then ! calculate parallel and perpendicular distances
+!
+       qcomp=(__INDX_RM(comlyn, comlen, 'COMP').gt.0)
+!
+       if (qcomp) then
+        if (qprint) then ; write(_MSGBUF,6658) whoami, 'COMPARISON' ; __PRINT(_MSGBUF) ; endif
+        if (qorient.and.any(__XXCOMP(iatom_o).eq.__NAN)) then
+         __WRN(whoami,'COMPARISON ORIENTATION X-SET HAS UNDEFINED VALUES. NOTHING DONE.')
+        else
+         call ftsm_calc(__XCOMP,__YCOMP,__ZCOMP,.false., t=one)
+        endif
+       else ! ~qcomp -- use main coordinates
+        if (qprint) then ; write(_MSGBUF,6670) whoami, 'MAIN' ; __PRINT(_MSGBUF) ; endif
+        if (qorient.and.any(__XX(iatom_o).eq.__NAN)) then
+         __WRN(whoami,'MAIN ORIENTATION X-SET HAS UNDEFINED VALUES. NOTHING DONE.')
+        else
+         call ftsm_calc(__X,__Y,__Z, .false., t=one)
+        endif
+       endif ! qcomp
+ 6670 format(/A,' WILL COMPUTE DISTANCE FROM STRING IMAGE USING ',A,' COORDINATES.')
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 !     the option below will be useful to perform usual charmm operations on the STRING (if desired)
       elseif (__STRNCMP(keyword,'LIFT',4)) then ! force string into current coordinates
@@ -2798,8 +2819,7 @@ __CHARMM_ONLY##IF STRINGM
       int :: rex_flen_old, oldiol, error
 !
       character(len=8) :: keyword
-      character(len=16) :: whoami
-      data whoami/' FTSM_STAT_INIT>'/
+      character(len=16), parameter :: whoami=' FTSM_STAT_INIT>'
 !
       bool :: qroot, qprint
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -2829,6 +2849,9 @@ __CHARMM_ONLY##IF STRINGM
 !
       s_fname=''
       output_arclength=.false.
+! distance to string (dpar & dperp, or drms, depending on proj_on)
+      dist_fname=''
+      output_dist=.false.
 !
       fe_fname=''
       output_fe=.false.
@@ -2870,7 +2893,7 @@ __CHARMM_ONLY##IF STRINGM
  661  format(A,' WILL WRITE STRING RMSD TO STDOUT.')
 !
       endif !! RMSD
-!!!!!!!!!!!!!! ARCLENGTH
+!======================= ARCLENGTH
       if (__INDX_RM(comlyn,comlen,'ARCL').gt.0) then
         output_arclength=.true.
         __GET_RM_A(COMLYN,COMLEN,'ANAM',4,s_fname,80,s_flen)
@@ -2896,7 +2919,7 @@ __CHARMM_ONLY##IF STRINGM
  653  format(A,' WILL WRITE STRING LENGTH TO STDOUT.')
 !
       endif ! ARCLENGTH
-!!!!!!!!!!!!!! CURVATURE
+!======================================= CURVATURE
       if (__INDX_RM(comlyn,comlen,'CURV').gt.0) then
         output_curvature=.true.
         __GET_RM_A(COMLYN,COMLEN,'CVNM',4,c_fname,80,c_flen)
@@ -2922,6 +2945,32 @@ __CHARMM_ONLY##IF STRINGM
  6531 format(A,' WILL WRITE CURVATURE TO STDOUT.')
 !
       endif ! CURVATURE
+!======================================= DISTANCE TO STRING IMAGES
+      if (__INDX_RM(comlyn,comlen,'DIST').gt.0) then
+        output_dist=.true.
+        __GET_RM_A(COMLYN,COMLEN,'DNAM',4,dist_fname,80,dist_flen)
+        if (dist_flen.eq.0) then
+         __WRN(whoami,'DISTANCE TO STRING FILE NAME NOT SPECIFIED. WILL WRITE TO STDOUT.')
+         dist_funit=__OSTREAM
+        else
+         if (__INDX_RM(comlyn,comlen,'DAPP').gt.0) then
+           distform='APPEND'
+         else
+           distform='WRITE'
+         endif
+        endif
+!ccccccccccc print summary
+        if (qprint) then
+         if (dist_flen.gt.0) then
+          write(_MSGBUF,6522) whoami, dist_fname(1:dist_flen) ; __PRINT(_MSGBUF)
+         else
+          write(_MSGBUF,6523) whoami ; __PRINT(_MSGBUF)
+         endif
+        endif
+ 6522 format(A,' WILL WRITE DISTANCE TO STRING TO FILE ',A)
+ 6523 format(A,' WILL WRITE DISTANCE TO STRING TO STDOUT.')
+!
+      endif ! DISTANCE TO STRING
 !!!!!!!!!!!!!! FREE ENERGY
       if (__INDX_RM(comlyn,comlen,'FREE').gt.0) then
         output_fe=.true.
@@ -3155,8 +3204,8 @@ __CHARMM_ONLY##IF STRINGM
 #include "../../mpitype.def"
 !
       character(len=80) :: fmt_real, fmt_int, fmt
-      float :: r_com(3)
-      float :: u (3,3)= RESHAPE( (/1,0,0,0,1,0,0,0,1/), (/3,3/) ) ! rotation matrix
+      float :: projdist(3) ! dpar, dperp, drms
+      float :: u (3,3)= RESHAPE( (/1.,0.,0.,0.,1.,0.,0.,0.,1./), (/3,3/) ) ! rotation matrix
       float :: rmsd0, rmsd0_all(nstring), fc_all(3,nstring)
 !
       int :: ierror
@@ -3164,16 +3213,6 @@ __CHARMM_ONLY##IF STRINGM
       data whoami/' FTSM_STAT>'/
 !
       bool :: qroot, qprint, qgrp
-!
-      interface
-       subroutine hypercube_allgatherv(message,count,displ,type,        &
-     &                                comm, ierror, rank, size)
-      __CHARMM_ONLY __DEP_KINDS
-       float :: message(*)
-       int :: ierror
-       int4mpi :: comm, rank, size, type, count(size), displ(size)
-       end subroutine hypercube_allgatherv
-      end interface
 !
       qroot=MPI_COMM_STRNG.ne.MPI_COMM_NULL
       qprint=qroot.and.ME_STRNG.eq.0
@@ -3261,7 +3300,7 @@ __CHARMM_ONLY##IF STRINGM
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       if (output_curvature) then
        if (qprint) then
-        if (repa_initialized) then ! proceed only if arclength defined
+        if (repa_initialized) then ! curvature computed by repa routines
 !
          if (c_funit.eq.__OSTREAM) then
           fmt='("CURV> '//fmt_int(1:5)//' ",'                           &
@@ -3284,6 +3323,42 @@ __CHARMM_ONLY##IF STRINGM
        endif
        cform='APPEND'
       endif ! output_curvature
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      if (output_dist) then ! projection distance variables
+!    gather on root processor
+       if (qroot) then
+        projdist(1)=dpar; projdist(2)=dperp; projdist(3)=drms
+!    reuse fc_all
+        call mpi_gather(projdist,3,mpifloat,                & ! heads communicate
+     &                 fc_all,3,mpifloat,0,                 &
+     &                 MPI_COMM_STRNG, ierror)
+!
+        fmt='('//fmt_real(1:fmt_len)//real_format//')'
+        if (qprint) then
+         if (dist_funit.eq.__OSTREAM) then
+          write(dist_funit,'("PROJECTION DISTANCE> ",I8)') stat_iteration_counter
+         else
+          dist_funit=-1
+          __OPEN_FILE(dist_funit, dist_fname,'FORMATTED',distform)
+          write(dist_funit,'("% ",I8)') stat_iteration_counter ! % is a MATLAB comment
+         endif
+!
+!    print
+         if (proj_on) then
+          write(dist_funit, fmt) fc_all(1,:) ! parallel distance component
+          write(dist_funit, fmt) fc_all(2,:) ! perpendicular distance component
+         else
+          write(dist_funit, fmt) fc_all(3,:) ! total distance
+         endif
+!
+!     flush unit: close and reopen later
+         if (dist_funit.ne.__OSTREAM)                                      &
+     &     __CLOSE_FILE(dist_funit, 'KEEP', ierror)
+        endif ! qprint
+        distform='APPEND'
+       endif ! qroot
+!
+      endif ! output_dist
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       if (output_fe) then
 !    compute free energy

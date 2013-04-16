@@ -1,1 +1,0 @@
-/home/taly/projects/multidiag/MULTIDIAG.mod

@@ -1,1 +1,0 @@
-/home/taly/projects/string/sm0k/SM0K.mod

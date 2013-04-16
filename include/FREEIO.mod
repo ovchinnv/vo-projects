@@ -1,1 +1,0 @@
-/home/taly/projects/dynamol/coor/FREEIO.mod

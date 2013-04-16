@@ -1,1 +1,0 @@
-/home/taly/projects/confcons/CONFCONS.mod

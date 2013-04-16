@@ -1,1 +1,0 @@
-/home/taly/projects/string/ftsm/FTSM_VAR.mod

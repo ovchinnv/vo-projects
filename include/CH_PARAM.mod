@@ -1,1 +1,0 @@
-/home/taly/projects/dynamol/param/CH_PARAM.mod

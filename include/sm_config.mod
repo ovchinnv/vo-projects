@@ -1,1 +1,1 @@
-/home/taly/projects/string/sm_config.mod
+/home/surgeon/projects/string/sm_config.mod

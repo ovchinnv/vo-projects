@@ -1,1 +1,0 @@
-/home/taly/projects/dynamol/struc/TLIST.mod

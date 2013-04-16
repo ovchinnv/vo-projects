@@ -1,1 +1,0 @@
-/home/taly/projects/string/smcv/CV_POSI_COM.mod
