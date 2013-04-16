@@ -41,7 +41,9 @@
       character, parameter :: context_open(1)=(/'{'/)
       character, parameter :: context_close(1)=(/'}'/)
       character(len=200), parameter :: allowed=upper//lower//digits//decimal//underscore//hyphen//slash//tilde
-      character(len=5), parameter :: command_start(1)=(/'exec:'/)
+      character(len=5), parameter :: exec_start='exec:'
+      character(len=4), parameter :: maincontext_name='MAIN'
+      int, parameter :: maincontext_namelen=4
 !
       int, parameter, private :: context_incr=1  ! expand increment for contexts
 !
@@ -111,7 +113,7 @@
        context%length=context_incr
        context%last=1
        context%current=1
-       context%context_name(1)='MAIN'
+       context%context_name(1)=maincontext_name
 !    initialize main context
        parameters=>context%context_params(1)
        executables=>context%context_commands(1)
@@ -149,18 +151,20 @@
        subroutine parser_context_expand()
 !    increase the size of contexts array
        int :: newlength
-       type (params), pointer :: newcontexts(:)
+       type (params), pointer :: newparams(:)
+       type (commands), pointer :: newcommands(:)
        character(len=contextnamelen), pointer :: newnames(:)
 !
        if ( .not. parser_initialized ) call parser_init()
        newlength=context%length+context_incr
-       allocate(newcontexts(newlength), newnames(newlength))
-       newcontexts(1:context%length)=context%context_params ! copy members of context_params (incl. pointers)
+       allocate(newparams(newlength), newcommands(newlength), newnames(newlength))
+       newparams(1:context%length)=context%context_params ! copy members of context_params (incl. pointers)
+       newcommands(1:context%length)=context%context_commands
        newnames(1:context%length)=context%context_name
-       deallocate(context%context_params, context%context_name)
-       context%context_params=>newcontexts ; context%context_name=>newnames ! point to new arrays
+       deallocate(context%context_params, context%context_commands, context%context_name)
+       context%context_params=>newparams ; context%context_commands=>newcommands ; context%context_name=>newnames ! point to new arrays
        context%length=newlength
-       nullify(newcontexts, newnames)
+       nullify(newparams, newcommands, newnames)
 !
        end subroutine parser_context_expand
 !********************************************************************************************
@@ -273,7 +277,7 @@
        use output, only: warning
        character(len=:), pointer :: get_next_command
        character(len=*), intent(in), optional :: ctx
-       type (commands) :: c
+       type (commands), pointer :: c
        int :: ictx, i
 !
        nullify(get_next_command)
@@ -281,7 +285,7 @@
        if (.not.parser_initialized) call parser_init()
        ictx=1 ; if (present(ctx)) ictx=max(1,parser_find_context(ctx))
 !
-       c=context%context_commands(ictx)
+       c=>context%context_commands(ictx)
        if (.not.c%initialized) then 
 !
        elseif (c%current.le.c%last) then
@@ -373,15 +377,16 @@
 !
        int :: allowed_len, lower_len, upper_len, digits_len
        character :: allowed2(200),c
-       bool :: qtag, qeq, qval, qerror
+       bool :: qtag, qeq, qval, qexec, qerror ! active : tag, equals, value, executable line, error flag
        bool :: qvector ! flag that is active when we are reading a vector (certain default behavior is overridden)
        bool :: qcontext ! flag that is active when any context other than the main context is active
 !
        integer :: ioerr
        int4mpi :: ierr
-       int :: l=0, ltag=0, lval=0
+       int :: l=0, ltag=0, lval=0, lexec=0
        character(len=400) :: cmdline
-       character(len=vartaglen) :: tag, val
+       character(len=vartaglen) :: tag, val, exec
+       character(len=contextnamelen), pointer :: contextname
 !
        allowed_len=len_trim(allowed)
        do i=1,allowed_len
@@ -396,6 +401,7 @@
        qcontext=.false.
        qvector=.false.
        qerror=.false.
+       qexec=.false.
        if (.not. parser_initialized) call parser_init()
        call message(whoami, 'Reading input file.')
        do while (.true.)
@@ -408,7 +414,7 @@
 !
         if (ioerr.eq.0) then
 #ifdef __PARALLEL
-        if (communicator.ne.MPI_COMM_NULL) call MPI_BCAST(cmdline,len(cmdline),MPI_BYTE,0,communicator,ierr) ! broadcast to all CPUs
+         if (communicator.ne.MPI_COMM_NULL) call MPI_BCAST(cmdline,len(cmdline),MPI_BYTE,0,communicator,ierr) ! broadcast to all CPUs
 #endif
 !   write(0,*) cmdline
 ! read from the line
@@ -419,12 +425,13 @@
          if (l.lt.maxlinelen) l=l+1
          cmdline(l:l)='*'
          if (any(comment.eq.cmdline(1:1))) l=1 ! skip lines that are comments
-
+!
          i=0
          qtag=.true. ; ltag=0 ! each line is required to begin with a tag
          qval=.false.; lval=0
          qeq=.false.
-         qvector=.false.      ! this implies that a vector entry cannot span multiple lines
+         qvector=.false.      ! this implies that a vector entry currently cannot span multiple lines
+         qexec=.false.        ! this implies that an executable command currently cannot span multiple lines
 !
          do while (l.gt.1)
            i=i+1
@@ -438,16 +445,30 @@
              if (lval.eq.0) then
               call warning(whoami, 'Missing value for parameter "'//tag(1:ltag)//'". Skipping line',0)
               qerror=.true.; exit 
-            elseif (qvector) then
+             elseif (qvector) then
               call warning(whoami, 'Missing closing bracket for vector parameter "'//tag(1:ltag)//'". Skipping line',0)
               qerror=.true.; exit 
              else ! store tag and val
               call message(whoami, tag(1:ltag)//' <= '//val(1:lval))
               j=params_uadd(parameters,tag,val,ltag,lval)
               ltag=0; lval=0
+              qtag=.true. ! no need because we are at the eol, but included here for clarity
               exit
              endif
-            else
+            elseif (qexec) then
+             if (lexec.eq.0) then
+              contextname=>context%context_name(context%current)
+              call warning(whoami, 'Empty command line in context "'//contextname(1:len_trim(contextname))//'". Skipping line',0)
+              qerror=.true.; exit 
+             else ! store command
+              call message(whoami, 'Execution stack += "'//exec(1:lexec)//'"')
+              j=commands_add(executables, exec, lexec)
+              qexec=.false.; qtag=.true.
+              lexec=0
+              exit
+             endif
+!
+            else ! qtag
              exit
             endif ! qtag
 !
@@ -480,6 +501,8 @@
               endif ! lval
               ltag=0
              endif ! qvector
+            elseif (qexec) then ! space is a valid exec character
+             lexec=lexec+1; exec(lexec:lexec)=c
             endif ! qtag
 !
            elseif (any(equals.eq.c)) then ! completed a tag
@@ -524,6 +547,9 @@
              endif ! lval
              qtag=.true. ; ltag=0
              qval=.false.
+!
+            elseif (qexec) then ! this is a valid command character
+             lexec=lexec+1; exec(lexec:lexec)=c
             endif ! qtag
 !
 !************************************** CONTEXTS **************************************
@@ -537,16 +563,24 @@
             elseif (qtag.or.qeq) then
              if (ltag.gt.0) then
               call toupper(tag)
-              call message(whoami, 'Switching to context "'//tag(1:ltag)//'".')
-              parameters=>context%context_params(parser_context(tag(1:ltag)))
-              qcontext=.true.
-              qtag=.true.
-              qeq=.false.
-              ltag=0
-              cmdline=cmdline(i+1:l) ! remove open brace from string
-              call adjustleft(cmdline)
-              l=len_trim(cmdline)
-              i=0
+! check to make sure the new context name is not the default name
+              if (tag(1:ltag).ne.maincontext_name(1:maincontext_namelen)) then
+               call message(whoami, 'Switching to context "'//tag(1:ltag)//'".')
+               parameters =>context%context_params  (parser_context(tag(1:ltag)))
+               executables=>context%context_commands(context%current)
+!
+               qcontext=.true.
+               qtag=.true.
+               qeq=.false.
+               ltag=0
+               cmdline=cmdline(i+1:l) ! remove open brace from string
+               call adjustleft(cmdline)
+               l=len_trim(cmdline)
+               i=0
+              else ! context name not allowed
+               call warning(whoami, 'Context name "'//tag(1:ltag)//'" is not allowed. Skipping line.',0)
+               qerror=.true.; exit 
+              endif ! tag .ne. maincontext_name
              else
               call warning(whoami, 'Missing context name. Skipping line.',0)
               qerror=.true.; exit 
@@ -563,7 +597,10 @@
              qerror=.true.; exit
             elseif (qtag.and.ltag.eq.0) then   ! if expecting a new tag
              call message(whoami, 'Returning to main context.')
-             parameters=>context%context_params(parser_context('main')) ! switch to default context
+!
+             parameters =>context%context_params  (parser_context(maincontext_name)) ! switch to default context
+             executables=>context%context_commands(context%current)
+!
              qcontext=.false.
              cmdline=cmdline(i+1:l) ! remove close bracket
              call adjustleft(cmdline) 
@@ -580,11 +617,33 @@
              call adjustleft(cmdline)
              l=len_trim(cmdline)
              i=0
-             ltag=0
 !    now return to then main context
              call message(whoami, 'Returning to main context.')
-             parameters=>context%context_params(parser_context('main')) ! switch to default context
+!
+             parameters =>context%context_params  (parser_context(maincontext_name)) ! switch to default context
+             executables=>context%context_commands(context%current)
+!
              qcontext=.false.
+            elseif (qexec) then
+             if (lexec.le.0) then
+              contextname=>context%context_name(context%current)
+              call warning(whoami, 'Unexpected close brace while reading command in context "'//contextname(1:len_trim(contextname))//'". Skipping line',0)
+              qerror=.true.; exit 
+             else ! store command
+              call message(whoami, exec_start//' '//exec(1:lexec))
+              j=commands_add(executables, exec, lexec)
+              lexec=0
+              qexec=.false.
+              qtag=.true.
+              cmdline=cmdline(i+1:l) ! remove command from string and also the close bracket
+              call adjustleft(cmdline)
+              l=len_trim(cmdline)
+              i=0
+              call message(whoami, 'Returning to main context.')
+              parameters =>context%context_params  (parser_context(maincontext_name)) ! switch to default context
+              executables=>context%context_commands(context%current)
+             endif
+!
             else
              call warning(whoami, 'Unexpected close brace while processing parameter "'//tag(1:ltag)//'". Skipping line.',0)
              qerror=.true.; exit
@@ -599,12 +658,16 @@
              qerror=.true.; exit 
             elseif (qval) then
              if (qvector) then ! already read one bracket 
-             call warning(whoami, & 
-                           'Unexpected opening bracket when processing vector parameter "'//tag(1:ltag)//'". Skipping line.',0)
+              call warning(whoami, & 
+&                          'Unexpected opening bracket when processing vector parameter "'//tag(1:ltag)//'". Skipping line.',0)
              qerror=.true.; exit
              else
               qvector=.true. ! the only legitimate occurrence
              endif
+!
+            elseif (qexec) then ! this is a valid command character
+             lexec=lexec+1; exec(lexec:lexec)=c
+!
             endif
 !
            elseif (any(vector_close.eq.c)) then ! encountered a closing vector bracket
@@ -647,13 +710,37 @@
               qtag=.true. ; ltag=0
               qval=.false.
              endif ! (i.lt.l)
-            else ! no input mode (qtag/qeq/qval) : this should never happen
+!
+            elseif (qexec) then ! this is a valid command character
+             lexec=lexec+1; exec(lexec:lexec)=c
+!
+            else ! no input mode (qtag/qeq/qval/qexec) : this should never happen
              call warning(whoami, 'Misplaced closing bracket in input. Skipping line.',0)
              qerror=.true.; exit
             endif 
 !
            elseif (any(allowed2(1:allowed_len).eq.c)) then ! check that the characters are allowed
 !
+            if (qtag) then ! reading a tag
+             if (ltag.eq.0) then 
+! test for executable line; if executable tag found, switch off qtag, switch on qexec
+              j=len_trim(exec_start)
+!              write(0,*) cmdline(i:l)
+              if ( i + j - 1 .lt. l) then ! recall that cmdline(l:l) is a comment
+               qexec=cmdline(i : i + j - 1).eq.exec_start(1:j)
+               if (qexec) then
+                cmdline=cmdline(i+j:l)
+                call adjustleft(cmdline) 
+                l=len_trim(cmdline)
+                i=0
+                qtag=.false.
+                lexec=0
+                cycle !    <==== will bail if starting a command line
+               endif ! qexec
+              endif ! i+j-1 < l
+             endif ! ltag
+            endif ! qtag
+! try again
             if (qtag) then ! reading a tag
              if (all(lower2(1:26).ne.c).and.all(upper2(1:26).ne.c)) then
               if (ltag.eq.0) then 
@@ -665,16 +752,22 @@
               endif
              endif
              ltag=ltag+1; tag(ltag:ltag)=c
+!
             elseif (qeq) then
              call warning(whoami, 'Missing value for parameter "'//tag(1:ltag)//'". Skipping line.',0)
              qerror=.true.; exit 
+!
             elseif (qval) then
              lval=lval+1; val(lval:lval)=c
+!
+            elseif (qexec) then ! append to command
+             lexec=lexec+1; exec(lexec:lexec)=c
+!
             else
-             call warning(whoami, 'Unknown error. Skipping line',0)
+             call warning(whoami, 'Internal input error. Skipping line',0)
              qerror=.true.; exit 
             endif
-!      
+!
            else
              call warning(whoami, 'Unrecognized character "'//c//'". Skipping line.',0)
              exit 
@@ -689,13 +782,16 @@
        if (qcontext) then 
         call warning(whoami, 'File ended while inside a context. Your input may be incomplete.',0)
         qerror=.true.
+        call message(whoami, 'Returning to main context.') ; 
+        parameters =>context%context_params  (parser_context(maincontext_name)) ! switch to default context
+        executables=>context%context_commands(context%current)
        endif
 !
 #ifdef __PARALLEL
        call MPI_BCAST(qerror,mpibool,1,0,communicator,ioerr)
 #endif
        if (qerror) then
-         call warning(whoami, 'ERROR(S) FOUND IN INPUT.',0)
+         call warning(whoami, 'Error(s) found in input.',0)
        else
          call message(whoami, 'Input file read.')
        endif
