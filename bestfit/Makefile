@@ -27,4 +27,4 @@ bestfit_c.o:bestfit_c.F90 bestfit.o
 	$(FC) $(FFLAGS) $(DEFS) $(INCLUDES)  $< -o $@
 
 clean::
-	rm -f *.mod $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(ROOT)/$(NAME).stamp bestfit_c.F90 bestfit_c.o cbindtest.o fort.666
+	rm -f *.mod $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(ROOT)/$(NAME).stamp bestfit_c.F90 bestfit_c.o cbindtest.o fort.666 ctest
