@@ -10,7 +10,7 @@ LOCALDEPS=PBmacro1.def PBmacro2.def
 
 # additional objects for linking executable
 
-LINKOBJS=output.o files.o parser.o constants.o timer.o\
+LINKOBJS=output.o files.o parser.o prm.o cmd.o constants.o timer.o\
      multicom.o multicom_aux.o parselist.o\
      plot3Dio.o chest.o util.o formats.o\
      gridsize.o state.o grid.o datatypes.o fieldbcdef.o\
@@ -33,7 +33,6 @@ chest : $(EXE)
 ches.o: PBmain.o
 
 PBmain.o :  multigrid.o
-PBmain.F90: PBmacro1.def PBmacro2.def
 multigrid.F90: mgutil/multigrid_bc.src $(ROOT)/parser/parser_macro1.src mgutil/mg_resout.src \
                mgutil/GS.src mgutil/Jacobi.src mgutil/residual.src mgutil/coarsen.src mgutil/refine.src
 clean::

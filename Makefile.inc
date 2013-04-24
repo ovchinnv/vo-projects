@@ -1,7 +1,7 @@
 SHELL=/bin/sh
 #
 CC=gcc
-CFLAGS =-O3 -fno-math-errno -c
+CFLAGS =-O3 -fno-math-errno -g -c
 #---INTEL
 #FC=ifort
 #FFLAGS=-O2 -c
@@ -45,10 +45,10 @@ AR=xiar
 AFLAGS=rv
 
 LD=$(FC)
-LDFLAGS=#-static -Bstatic -ipo
+LDFLAGS=-g #-static -Bstatic -ipo
 #LDFLAGS=-static -ipa
 
-GLOBALMACROS=-include $(ROOT)/source.defs 
+GLOBALMACROS=-include $(ROOT)/source.defs
 MSG=-include $(ROOT)/source.msg
 CHMSG=-include $(ROOT)/charmm.msg
 TESTMSG=-include $(ROOT)/test.msg
@@ -68,8 +68,8 @@ CHARMM_SOURCES=$(OBJS:%.o=%.src)
 
 VPATH=$(ROOT) #this is necessary to prevent recompilation under %.stamp rule
 
-FPP=cpp -P 
-FPPFLAGS = -C -I $(ROOT) -nostdinc # -nostdinc : avoid including files automatically
+FPP=cpp
+FPPFLAGS = -P -C -I $(ROOT) -nostdinc # -nostdinc : avoid including files automatically
 
 .SUFFIXES:
 .SUFFIXES: .o .F90 .a .H .h .c .f .F .stamp
@@ -153,7 +153,7 @@ linklibs:
 libs : libraries
 libraries: $(ROOT)/$(NAME).stamp linklibs
 	for d in $(DIRS); do (cd $$d; $(MAKE) libraries); done
-.SILENT : %.stamp clean $(DISTRIB) test
+.SILENT : %.stamp clean $(DISTRIB) test force_look
 clean::
 	rm -f *.mod *.a $(ROOT)/$(NAME).stamp $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(EXE) test.F90 test.dat test.out test.o 
 	if [ -f test ] ; then rm -f test ; fi
