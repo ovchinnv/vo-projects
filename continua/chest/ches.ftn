@@ -1,3 +1,13 @@
+#ifdef __PARALLEL
+#define __COMM __CONCAT(MPI_COMM_,__CHESCOMM )
+#define __ME   __CONCAT(ME_,__CHESCOMM )
+#define __NCPU __CONCAT(SIZE_,__CHESCOMM )
+#else
+#define __COMM
+#define __ME 0
+#endif
+#define __QPRINT qprint=(__ME.eq.0)
+!
       module ches ! (Cartesian Helmholtz Equation Solver)
 ! 2010-2012 Victor Ovchinnikov (ovchinnv_at_georgetown_dot_edu)
 ! Free for academic use
@@ -16,51 +26,42 @@
 !      use plot3Dio ! output in plot3D (CFD) format; compile as a library, not as a module
       use multigrid ! multigrid solver module
 !      use openDXio ! output in openDX format ; not implemented yet
+#ifdef __PARALLEL
+      __DEP_MULTICOM
+#endif
       __IMPNONE
 !**************************************************************************************
 !     routines:
+      public ches_exec
       public ches_init
       public ches_done
-      public ches_solve
-      public ches_output
+      private ches_solve
+      private ches_output
 !
 !     variables:
 !
       bool :: ches_initialized=.false.
       character(len=16), parameter, private :: ctx=__CHESCTX
-      type(varray3df), pointer :: p_, eps_, kappa_, rhs_
+      type(varray3df), pointer, save :: p_, eps_, kappa_, rhs_
 !
       contains
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-       subroutine ches_init( &
-#ifdef __PARALLEL
-     &  comm )
-       __DEP_MPI
-#else
-     &)
-#endif
-       use files
+       subroutine ches_init()
        use fieldbcdef
+       character(len=:), parameter :: whoami='CHES_INIT'
 !
-#ifdef __PARALLEL
-       int4mpi, optional :: comm
-       int4mpi :: bug
+! if running in parallel pass communicator when adding variables (quick and dirty)
+#ifdef __CTX
+#undef __CTX
 #endif
-       int :: numarg 
-       character(len=80) :: filename, fname, keyword
-       int :: flen
-       int :: fid=-1 
-       bool :: qcomm
-       int :: i
-!
-       character(len=9), parameter :: whoami='CHES_INIT'
-!
 #ifdef __PARALLEL
-       qcomm=present(comm)
-       if (qcomm) call MPI_COMM_RANK(comm, me, bug)
+#define __CTX __COMM, ctx
 #else
-       qcomm=.false.
+#define __CTX ctx
 #endif
+! crude way to make sure only root prints
+ __QPRINT
+!
 ! *********************************************************************************************************
 ! * INITIALIZATION
 ! *
@@ -76,19 +77,21 @@
 !    initialize state variables
        call message(whoami, 'Initializing state variables.');
 !
-       call state_add3df('PHI'  ,'Electrostatic Potential' , ctx, vptr=p_)
-       call state_add3df('EPS'  ,'Dielectric Constant'     , ctx, vptr=eps_)
-       call state_add3df('KAPPA','Ionic Strength Parameter', ctx, vptr=kappa_)
-       call state_add3df('RHS'  ,'Source Density Vector'   , ctx, vptr=rhs_)
+       nullify(p_, eps_, kappa_, rhs_)
+!
+       call state_add3df('PHI'  ,'Electrostatic Potential' , __CTX, vptr=p_)
+       call state_add3df('EPS'  ,'Dielectric Constant'     , __CTX, vptr=eps_)
+       call state_add3df('KAPPA','Ionic Strength Parameter', __CTX, vptr=kappa_)
+       call state_add3df('RHS'  ,'Source Density Vector'   , __CTX, vptr=rhs_)
 ! add more variables here as needed
 !
 !    initialize boundary conditions
        call message(whoami, 'Initializing boundary condition variables.');
 !
-       call state_bc_add3df('PHI', ctx, left )   ;   call state_bc_add3df('PHI', ctx, right )
-       call state_bc_add3df('PHI', ctx, bottom ) ;   call state_bc_add3df('PHI', ctx, top )
+       call state_bc_add3df('PHI', __CTX, left )   ;   call state_bc_add3df('PHI', __CTX, right )
+       call state_bc_add3df('PHI', __CTX, bottom ) ;   call state_bc_add3df('PHI', __CTX, top )
        if (.not.q2D) then
-        call state_bc_add3df('PHI', ctx, front ) ;   call state_bc_add3df('PHI', ctx, back )
+        call state_bc_add3df('PHI', __CTX, front ) ;   call state_bc_add3df('PHI', __CTX, back )
        endif
 !
 !    check whether object specified; if so, initialize
@@ -114,21 +117,12 @@
          call warning(whoami, 'State variables not initialized.',-1);
         else
          call message(whoami, 'Computing gridded parameters.');
-         call object_grid_objects( xcen, ycen, zcen, dxcor, dycor, dzcor, state_get3df('EPS'), state_get3df('KAPPA'), state_get3df('RHS'), nx, ny, nz )
+         call object_grid_objects( xcen, ycen, zcen, dxcor, dycor, dzcor, eps_%v, kappa_%v, rhs_%v, nx, ny, nz )
         endif
 !
-        if (qcomm) then 
-#ifdef __PARALLEL
-         if (fatal_warning(comm)) call terminate(whoami)
-#else
-/* nothing */
-#endif
-        else
-         if (fatal_warning()) call terminate(whoami)
-        endif
        endif
 !
-       ches_initialized=.true.
+       if (.not.fatal_warning(__COMM)) ches_initialized=.true.
 !
        end subroutine ches_init
 !************************************************************************************
@@ -138,8 +132,9 @@
 !
 !    initialize multigrid solver, if requested
 !
-       character(len=8), parameter :: whoami='ches_SOLVE'
+       character(len=:), parameter :: whoami='CHES_SOLVE'
 !
+__QPRINT
 !    the proper way to terminate run if error occurs on some processors (but not all)
        if (.not. ches_initialized) call warning(whoami, 'POISSON_BOLTZMANN MODULE NOT INITIALIZED.',-1)
        if (fatal_warning(__COMM)) call terminate(whoami)
@@ -164,7 +159,7 @@
 #include "macro1.def"
 !*********************************************************************************!
        case default;
-        call warning(whoami, 'Unknown solver '//solver(1:len_trim(solver))//' specified. Nothing done.',-1);
+        call warning(whoami, 'Unknown solver '//trim(solver)//' specified. Nothing done.',-1);
        end select
 !
        end subroutine ches_solve
@@ -173,13 +168,21 @@
        use object, only : object_surface_pointer, object_initialized
        use formats
 !
-       character(len=9), parameter :: whoami='CHES_OUTPUT'
+       character(len=:), parameter :: whoami='CHES_OUTPUT'
        int :: ifmt=plot3d
        bool :: qbin ! whether binary output is used
        float, pointer, dimension(:,:,:) :: surf, eps, kappa, rhs, p
        int :: i
 !
        character(len=80) :: filename, output_format, output_mode
+!
+ __QPRINT
+! macro to add communicator to calls to output routine
+#if __PARALLEL
+#define _COMMA ,
+#else
+#define _COMMA
+#endif
 !
        p=>state_get3df('phi', ctx)
        eps=>state_get3df('eps', ctx)
@@ -198,9 +201,9 @@
        endif
 !
        if (ifmt.gt.0) then
-        call message(whoami,format_name(ifmt)(1:len_trim(format_name(ifmt)))//' format will be used for output');
+        call message(whoami,trim(format_name(ifmt))//' format will be used for output');
        else
-        call warning(whoami,'Format "'//output_format(1:len_trim(output_format))//'" is not recognized',0)
+        call warning(whoami,'Format "'//trim(output_format)//'" is not recognized',0)
         return
        endif
 !
@@ -214,7 +217,7 @@
           call message(whoami,'Using ASCII mode');
           qbin=.false.
          case default
-          call warning(whoami,'Unknown output mode "'//output_mode(1:len_trim(output_mode))//'". Will use ASCII',0);
+          call warning(whoami,'Unknown output mode "'//trim(output_mode)//'". Will use ASCII',0);
           qbin=.false.
         end select
        else
@@ -224,33 +227,33 @@
 !
        if (existtag_nocase('epsoutput', ctx)) then
         filename=getval_nocase('epsoutput', ctx)
-        call message(whoami,'Writing dielectric to file "'//filename(1:len_trim(filename))//'"');
+        call message(whoami,'Writing dielectric to file "'//trim(filename)//'"');
         select case(ifmt)
-         case(plot3d); call plot3Dwrite_scalar(filename,eps,nx,ny,nz,1,qbin)
+         case(plot3d); call plot3Dwrite_scalar(filename,eps,nx,ny,nz,1,qbin _COMMA __COMM)
         end select
        endif
 !
        if (existtag_nocase('kappaoutput', ctx)) then
         filename=getval_nocase('kappaoutput', ctx)
-        call message(whoami,'Writing ionic strength to file "'//filename(1:len_trim(filename))//'"');
+        call message(whoami,'Writing ionic strength to file "'//trim(filename)//'"');
         select case(ifmt)
-         case(plot3d); call plot3Dwrite_scalar(filename,kappa,nx,ny,nz,1,qbin)
+         case(plot3d); call plot3Dwrite_scalar(filename,kappa,nx,ny,nz,1,qbin _COMMA __COMM)
         end select
        endif
 !
        if (existtag_nocase('chargeoutput', ctx)) then
         filename=getval_nocase('chargeoutput', ctx)
-        call message(whoami,'Writing source density to file "'//filename(1:len_trim(filename))//'"');
+        call message(whoami,'Writing source density to file "'//trim(filename)//'"');
         select case(ifmt)
-         case(plot3d); call plot3Dwrite_scalar(filename,rhs,nx,ny,nz,1,qbin)
+         case(plot3d); call plot3Dwrite_scalar(filename,rhs,nx,ny,nz,1,qbin _COMMA __COMM)
         end select
        endif
 !
        if (existtag_nocase('potoutput', ctx)) then
         filename=getval_nocase('potoutput', ctx)
-        call message(whoami,'Writing potential to file "'//filename(1:len_trim(filename))//'"');
+        call message(whoami,'Writing potential to file "'//trim(filename)//'"');
         select case(ifmt)
-         case(plot3d); call plot3Dwrite_scalar(filename,p,nx,ny,nz,1,qbin)
+         case(plot3d); call plot3Dwrite_scalar(filename,p,nx,ny,nz,1,qbin _COMMA __COMM)
         end select
        endif
 !
@@ -274,7 +277,7 @@
         filename=getval_nocase('surfoutput', ctx)
         call message(whoami,'Writing shape density to file "'//filename(1:len_trim(filename))//'"');
         select case(ifmt)
-         case(plot3d); call plot3Dwrite_scalar(filename,surf,nx,ny,nz,1,qbin)
+         case(plot3d); call plot3Dwrite_scalar(filename,surf,nx,ny,nz,1,qbin _COMMA __COMM)
         end select
        endif
 !
@@ -285,7 +288,7 @@
 &                                                       //filename(1:len_trim(filename))//'"')
         select case(ifmt)
          case(plot3d); 
-          call plot3Dwrite_solution(filename,eps,kappa,rhs,p,surf,nx,ny,nz,1,qbin)
+          call plot3Dwrite_solution(filename,eps,kappa,rhs,p,surf,nx,ny,nz,1,qbin _COMMA __COMM)
         end select
        endif
 !
@@ -300,7 +303,7 @@
         filename=getval_nocase('gridoutput', ctx)
         call message(whoami,'Writing grid to file "'//filename(1:len_trim(filename))//'"');
         select case(ifmt)
-         case(plot3d); call plot3Dwrite_grid(filename,xcen,ycen,zcen,nx,ny,nz,1,qbin)
+         case(plot3d); call plot3Dwrite_grid(filename,xcen,ycen,zcen,nx,ny,nz,1,qbin _COMMA __COMM)
         end select
        endif
 !
@@ -308,7 +311,7 @@
 !*********************************************************************************!
        subroutine ches_done()
 !
-       character(len=7), parameter :: whoami='CHES_DONE'
+       character(len=:), parameter :: whoami='CHES_DONE'
        character(len=20) :: solver
 !
        if (existtag('OBJECT', ctx) .or. existtag('object', ctx)) then 
@@ -340,4 +343,35 @@
 !
        end subroutine ches_done
 !*********************************************************************************!
-       end module chesmain
+       subroutine ches_exec()  ! execute command block
+       character(len=:), parameter :: whoami='CHES_EXEC'
+       character(len=:), pointer :: command
+       int :: l
+!
+       if (noexec(ctx)) return
+!
+__QPRINT
+       call message(whoami,'Executing commands within context "'//trim(ctx)//'"')
+!
+       do
+        command=>get_next_command(ctx)
+        if (.not.associated(command)) exit
+        call toupper(command)
+        l=len_trim(command)
+!
+        call message(whoami, 'Executing "'//command(1:l)//'"');
+!
+        select case(command(1:l))
+         case('INIT','INITIALIZE') ; call ches_init()
+         case('SOLVE','RUN','EXEC') ; call ches_solve()
+         case('OUTPUT') ; call ches_output()
+         case('DONE','STOP','END') ; call ches_done()
+         case default; call warning(whoami, 'Unknown command. Skipping.',-1)
+        end select
+!
+        deallocate(command)
+       enddo
+!
+       end subroutine ches_exec
+!*********************************************************************************!
+       end module ches

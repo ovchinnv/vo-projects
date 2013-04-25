@@ -7,7 +7,7 @@ EXE=muphen
 # take all object found in object directory
 ALLOBJS=$(notdir $(wildcard $(ROOT)/obj/*.o) )
 #exclude those that has unresolved functions or that have their own main functions
-EXCOBJS=ches.o molsim.o $(OBJS)
+EXCOBJS=molsim.o $(OBJS)
 LINKOBJS=$(filter-out $(EXCOBJS),$(ALLOBJS))
 
 LOCALMACROS=-include codes.def
