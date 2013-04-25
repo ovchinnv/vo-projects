@@ -1,17 +1,23 @@
       module grid
+!     contains all parameters for the computational grid
       use SIZE
       __DEP_PARSER
       __DEP_CONST
-!     contains all parameters for the computational grid
-      private
-#ifdef PARALLEL
+#ifdef __PARALLEL
       __DEP_MPI
+      __DEP_MULTICOM
+#define __COMM MPI_COMM_GLOBAL
+#define __NCPU SIZE_GLOBAL
+#define __ME ME_GLOBAL
 #endif
+      __IMPNONE
+!
+      private
 !
       public grid_initialize
       public grid_done
       private grid_exponential   ! generate exponential grid
-      private grid_from_object   ! generate a grid automatically based on shape (and other) information
+      private grid_around_object   ! generate a grid automatically based on shape (and other) information
 !
 !      private grid_hyperbolictan ! generate hyperbolic tan grid
 !      private grid_htan ! generate hyperbolic tan grid
@@ -28,6 +34,7 @@
 !
       bool, public, save :: grid_initialized=.false.
 !
+      int :: warnlev=0
 !
       contains
        subroutine grid_initialize()
@@ -53,12 +60,14 @@
 !
        float, parameter :: dmin_default=half, stretch_default=1.05d0, buffer_default=30d0
 !
-       character(len=15), parameter :: whoami='GRID_INITIALIZE'
+       character(len=:), parameter :: whoami='GRID_INITIALIZE'
+!
+       __SETWARNLEV
 !
        if (grid_initialized) call grid_done() ! clean up memory if needed
 !
        if (.not.size_initialized) then 
-        call warning(whoami, 'Size not initialized. Nothing done.', -1)
+        call warning(whoami, 'Size not initialized. Nothing done.', warnlev-1)
         return
        endif
 !
@@ -68,7 +77,7 @@
 !
 !    generate/read grids
 !
-       if (me.le.0) then ! only root node does this, then broadcasts to the other nodes
+       if (__ME.le.0) then ! only root node does this, then broadcasts to the other nodes
 !
 ! x-grid
 !
@@ -287,7 +296,7 @@
 ! 
        if (associated(dimens)) deallocate(dimens)
 !****** end of automatic grid generation
-       endif ! me.eq.0
+       endif ! __ME.eq.0
 !
 !  reduce warnings and terminate if they are fatal
        if (fatal_warning(__COMM)) then
@@ -298,34 +307,34 @@
        endif
 !
 !****** additional parallel code for automatic grid generation
-#if PARALLEL
-       if (ncpu.gt.1) then 
-        call MPI_BCAST(qxgridobject,1,mpi_bool,0,communicator,bug)
-        call MPI_BCAST(qygridobject,1,mpi_bool,0,communicator,bug)
-        call MPI_BCAST(qzgridobject,1,mpi_bool,0,communicator,bug)
+#if __PARALLEL
+       if (__NCPU.gt.1) then 
+        call MPI_BCAST(qxgridobject,1,mpibool,0,__COMM,bug)
+        call MPI_BCAST(qygridobject,1,mpibool,0,__COMM,bug)
+        call MPI_BCAST(qzgridobject,1,mpibool,0,__COMM,bug)
        endif
 #endif
 !**********************************************
        if (qxgridobject) then 
-#if PARALLEL
-        if (ncpu.gt.1) call MPI_BCAST(nnx,1,mpi_int,0,communicator,bug)
-#endif       
+#if __PARALLEL
+        if (__NCPU.gt.1) call MPI_BCAST(nnx,1,mpiint,0,__COMM,bug)
+#endif
 ! hack into SIZE module: note that if state has been initialized, need to reinitialize; do not do this at home
         nx=nnx
        endif
 !**********************************************
        if (qygridobject) then 
-#if PARALLEL
-       if (ncpu.gt.1) call MPI_BCAST(nny,1,mpi_int,0,communicator,bug)
+#if __PARALLEL
+       if (__NCPU.gt.1) call MPI_BCAST(nny,1,mpiint,0,__COMM,bug)
 #endif       
 ! hack into SIZE module
         ny=nny
        endif
 !**********************************************
        if (qzgridobject) then
-#if PARALLEL
-       if (ncpu.gt.1) call MPI_BCAST(nnz,1,mpi_int,0,communicator,bug)
-#endif       
+#if __PARALLEL
+       if (__NCPU.gt.1) call MPI_BCAST(nnz,1,mpiint,0,__COMM,bug)
+#endif
 ! hack into SIZE module
         nz=nnz
        endif
@@ -335,13 +344,13 @@
        endif
 !
 ! allocate arrays on other nodes
-       if (me.gt.0) allocate(xcor(nx), ycor(ny), zcor(nz))
+       if (__ME.gt.0) allocate(xcor(nx), ycor(ny), zcor(nz))
 !
-#if PARALLEL
-       if (ncpu.gt.1) then 
-        call MPI_BCAST(xcor,nx,mpi_float,0,communicator,bug)
-        call MPI_BCAST(ycor,ny,mpi_float,0,communicator,bug)
-        if (q3d) call MPI_BCAST(zcor,nz,mpi_float,0,communicator,bug)
+#if __PARALLEL
+       if (__NCPU.gt.1) then 
+        call MPI_BCAST(xcor,nx,mpi_float,0,__COMM,bug)
+        call MPI_BCAST(ycor,ny,mpi_float,0,__COMM,bug)
+        if (q3d) call MPI_BCAST(zcor,nz,mpi_float,0,__COMM,bug)
        endif
 #endif
 !
@@ -392,7 +401,7 @@
        else ;                dzmax=-one; dzmin=-one
        endif
 !
-       if (me.eq.0) then 
+       if (__ME.eq.0) then 
         __MSG('(A)',        '============== GRID INITIALIZED ==============')
       __MSG('(A,3I5," ( ",I9,A," ) ")','Global domain size: ',nx,ny,nz,(nx-2)*(ny-2)*(nz-2),' DOF')
         fmt='(A,'//realfmt//')'
@@ -426,7 +435,6 @@
        end subroutine grid_initialize 
 !*******************************************************************************************
        subroutine grid_done
-       __IMPNONE
        deallocate(xcor,xcen,ycor,ycen,zcor,zcen,&
      &            dxcor,dxcen,dycor,dycen,dzcor,dzcen,&
      &            odxcor,odxcen,odycor,odycen,odzcor,odzcen)
@@ -439,7 +447,6 @@
        function grid_exponential(a,b,n,z)
        __DEP_CONST
        __DEP_OUTPUT
-       __IMPNONE
 ! create a stretched grid of length b-a, discretized into nx points with x(1)=a and x(nx)=b;
 !   a: low value; 
 !   b: high value; 
@@ -450,17 +457,16 @@
        int :: n, i
        float, pointer, dimension(:) :: grid_exponential, x
 !
-       character(len=16), parameter :: whoami='GRID_EXPONENTIAL'
+       character(len=:), parameter :: whoami='GRID_EXPONENTIAL'
 !
        float :: l
        float :: delta
 !
        if (n.le.2) then
-        call warning(whoami,'Number of grid points must be at least two. Nothing done.',1);
+        call warning(whoami,'Number of grid points must be at least two. Nothing done.',warnlev-1);
         nullify(grid_exponential)
         return
        endif
-!
 !
        l=b-a
        if (ABS(z-one).lt.ERRTOL()) then
@@ -483,7 +489,6 @@
        __DEP_CONST
        __DEP_OUTPUT
 !
-       __IMPNONE
        float :: xmin, xmax, dxmin, stretch, buffer
        bool :: stretchfix
        float, pointer, dimension(:) :: grid_around_object
@@ -493,7 +498,7 @@
        float :: x, dx0, dx
        float :: TOL
        float :: b, c, s, ys, dyds, ys1, dyds1, oos, sn
-       character(len=18) :: whoami = 'GRID_AROUND_OBJECT'
+       character(len=:), parameter :: whoami = 'GRID_AROUND_OBJECT'
        int, parameter :: maxit=500
        int :: i, j
 !
@@ -502,17 +507,17 @@
        nullify(grid_around_object)
 !
        if (buffer.lt.0) then 
-        call warning(whoami, 'Grid buffer cannot be negative. Abort.',-1);
+        call warning(whoami, 'Grid buffer cannot be negative. Abort.',warnlev-1);
         return
        endif
 !
        if (stretch.le.0) then 
-        call warning(whoami, 'Grid stretching cannot be zero or less. Abort.',-1);
+        call warning(whoami, 'Grid stretching cannot be zero or less. Abort.',warnlev-1);
         return
        endif
 !
        if (xmax.le.xmin) then 
-        call warning(whoami, 'Maximum value less than minimum. Abort.',-1);
+        call warning(whoami, 'Maximum value less than minimum. Abort.',warnlev-1);
         return
        endif
 !
@@ -577,7 +582,7 @@
 !
         if ( abs(ys).lt.TOL ) exit ! got solution
         if (i.gt.maxit) then
-         call warning(whoami,'Maximum number of iterations exceeded. Grid not generated.',-1)
+         call warning(whoami,'Maximum number of iterations exceeded. Grid not generated.',warnlev-1)
          return
          exit
         endif
@@ -626,4 +631,3 @@
        end function grid_around_object
 !
       end module grid
-

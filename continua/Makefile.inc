@@ -3,7 +3,6 @@ DEFS+=-DSIZE=gridsize \
       -D__TRUNCATESUMS  \
       -D__erf=erfo7 \
       -D__TIMER \
-      -D__EDDIECTX=\'Eddie\'
 #      -D__VECCOPY
 #      -D__PVEC \
 #      -D__erf=erfsun \
@@ -16,7 +15,7 @@ DEFS+=-DSIZE=gridsize \
 
 LOCALMACROS+=-include $(COMMON)/source.defs
 LOCALDEPS+=$(COMMON)/source.defs
-INCLUDES+=-I $(COMMON) -I $(COMMON)/common
+INCLUDES+=-I $(COMMON)/common
 
 $(COMMON)/%.mod : $(COMMON)/%.o
 	file=$(notdir $@) ; \
