@@ -7,8 +7,8 @@ DEPS=output parser constants files timer multicom vectors continua/objects conti
 
 LOCALDEPS=macro1.def macro2.def
 
-include $(ROOT)/Makefile.inc
 include $(COMMON)/Makefile.inc
+include $(ROOT)/Makefile.inc
 
 chest : $(EXE)
 

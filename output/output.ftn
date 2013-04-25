@@ -98,16 +98,27 @@ module output
 !
  end subroutine error8
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
- subroutine terminate(whoami)
-  character(len=*) :: whoami
+ subroutine terminate( whoami )
+#ifdef __PARALLEL
+ __DEP_MPI
+#endif
 !
-  if (.not.output_initialized) call output_init()
+ character(len=*) :: whoami
+ int :: i
+ bool :: mpiinit
 !
-  if (qprint) then
-   write(fout,'(5A)') ' TERMINATION INVOKED FROM (',whoami,').'
-  endif
+ if (.not.output_initialized) call output_init()
 !
-  stop
+ if (qprint) then
+  write(fout,'(5A)') ' TERMINATION INVOKED FROM : (',whoami,').'
+ endif
+!
+#ifdef __PARALLEL
+ call mpi_initialized(mpiinit,i)
+ if (mpiinit) call mpi_finalize(i)
+#endif
+!
+ stop
 !
  end subroutine terminate
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -159,7 +170,6 @@ module output
 #endif
  &                          )
 !
-!
 #ifdef __PARALLEL
  __DEP_MPI
  int4mpi, optional :: communicator
@@ -167,15 +177,14 @@ module output
 #endif
  int :: level, bug
  bool :: fatal_warning
-! compute the maximum value of errorcodes across all nodes; then decice whether to terminate
+! reduce to the minimum value of errorcodes across all nodes
 !
 #ifdef __PARALLEL
  if (present(communicator)) then ; comm=communicator ; else ; comm=MPI_COMM_WORLD ; endif
- call mpi_allreduce(warnlev, level, 1, mpiint, MPI_MAX, comm, bug)
+ call mpi_allreduce(warnlev, level, 1, mpiint, MPI_MIN, comm, bug)
 #else
  level=warnlev ! current value of the error level
 #endif
-!
 !
  fatal_warning=(level.lt.minwarnlev)
 !

@@ -1,7 +1,7 @@
 ROOT=..
 OBJS=driver.o
 NAME=driver
-DEPS=parser multicom output parser files timer
+DEPS=parser multicom output parser files timer continua
 EXE=muphen
 
 # take all object found in object directory
@@ -12,6 +12,7 @@ LINKOBJS=$(filter-out $(EXCOBJS),$(ALLOBJS))
 
 LOCALMACROS=-include codes.def
 LOCALDEPS=codes.def
+LOCALDEFS+=-DSIZE=gridsize
 
 include $(ROOT)/Makefile.inc
 

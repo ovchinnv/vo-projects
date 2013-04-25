@@ -1,3 +1,13 @@
+#ifdef __PARALLEL
+#define __COMM __CONCAT(MPI_COMM_,__GRIDCOMM )
+#define __ME   __CONCAT(ME_,__GRIDCOMM )
+#define __NCPU __CONCAT(SIZE_,__GRIDCOMM )
+#else
+#define __COMM
+#define __ME 0
+#defein __NCPU 1
+#endif
+!
       module grid
 !     contains all parameters for the computational grid
       use SIZE
@@ -6,12 +16,6 @@
 #ifdef __PARALLEL
       __DEP_MPI
       __DEP_MULTICOM
-#define __COMM __CONCAT(MPI_COMM_,__GRIDCOMM )
-#define __ME   __CONCAT(ME_,__GRIDCOMM )
-#define __NCPU __CONCAT(SIZE_,__GRIDCOMM )
-#else
-#define __COMM
-#define __ME 0
 #endif
       __IMPNONE
 !
@@ -336,7 +340,7 @@
 !**********************************************
        if (qzgridobject) then
 #if __PARALLEL
-       if (__NCPU.gt.1) call MPI_BCAST(nnz,1,mpiint,0,__COMM,bug)
+        if (__NCPU.gt.1) call MPI_BCAST(nnz,1,mpiint,0,__COMM,bug)
 #endif
 ! hack into SIZE module
         nz=nnz
@@ -346,6 +350,15 @@
         if (state_initialized) call state_initialize() ! will reinitialize main arrays if nx,ny,nz change; should be a _very_ rare situation
        endif
 !
+!  reduce warnings and terminate if they are fatal (otherwise bcasts will fail below)
+!
+ write(0,*) __ME, fatal_warning(__COMM),'!'
+       if (fatal_warning(__COMM)) then
+        if (associated(xcor)) deallocate(xcor)
+        if (associated(ycor)) deallocate(ycor)
+        if (associated(zcor)) deallocate(zcor)
+        return
+       endif
 ! allocate arrays on other nodes
        if (__ME.gt.0) allocate(xcor(nx), ycor(ny), zcor(nz))
 !
@@ -356,7 +369,6 @@
         if (q3d) call MPI_BCAST(zcor,nz,mpi_float,0,__COMM,bug)
        endif
 #endif
-!
 !
 !    allocate other grid arrays
        allocate(xcen(nx), dxcor(nx), dxcen(nx), odxcor(nx), odxcen(nx))

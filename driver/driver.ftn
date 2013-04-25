@@ -1,3 +1,18 @@
+#ifdef __PARALLEL
+#define __MAINCOMM PARSER
+#//
+#define __COMM __CONCAT(MPI_COMM_,__MAINCOMM )
+#define __ME   __CONCAT(ME_,__MAINCOMM )
+#define __NCPU __CONCAT(SIZE_,__MAINCOMM )
+#define _COMMA ,
+#else
+#define __COMM
+#define __ME 0
+#define _COMMA
+#endif
+#define __QPRINT qprint=(__ME.eq.0)
+!
+!
 PROGRAM MUPHEN ! MUlti-PHysics-ENvironment
 !
 ! 2013 Victor Ovchinnikov (ovchinnv_at_georgetown_dot_edu)
@@ -18,12 +33,14 @@ PROGRAM MUPHEN ! MUlti-PHysics-ENvironment
 #endif
 !
   use files
+  use SIZE
+  use grid
+  use state
 !
   __IMPNONE
 !======================= variables
-  character(len=4) :: whoami='MPE Manager'
+  character(len=11) :: whoami='MPE Manager'
   int :: i
-  int4mpi :: comm, me
   int :: numarg 
   character(len=80) :: filename, fname, keyword
   int :: flen
@@ -44,30 +61,30 @@ PROGRAM MUPHEN ! MUlti-PHysics-ENvironment
   mpe_timer=timer_start()
 #endif
 !
+  call mpi_initialized(mpiinit,i)
+  if (.not.mpiinit) call mpi_init(i)
+!
 ! initialize multicom; the first communicator is mpi_comm_world
   call multicom_init()      ! basic initializtion of multicom before parsing input file(s)
   _MSGBUF(1)='PARSE WORLD'  ! set parser communicator to global ;  this means that every node will have the same parser list
   i=len_trim(_MSGBUF(1))
   call multicom_main( _MSGBUF(1),i)
-  comm=MPI_COMM_PARSER
-  me=ME_PARSER
 !
 #ifdef __TIMER 
- time(1)=timer_stamp(mpe_timer)
+  time(1)=timer_stamp(mpe_timer)
 #endif
 !
 #else
-  comm=-1
-  me=0
 #ifdef __TIMER 
   time(1)=0
 #endif
 #endif
-!
+! qprint must be execute after the communicator is known (so that __ME is defined)
+ __QPRINT
 ! parse input file
 ! *********************************************************************************************************
 !
-  if (me.le.0) then 
+  if (__ME.le.0) then 
 #ifdef __NEED_IARGC
   numarg=iargc() ! number of arguments
 #else
@@ -84,20 +101,14 @@ PROGRAM MUPHEN ! MUlti-PHysics-ENvironment
    fid=5 ! if file name missing, read from standard input
    endif
   endif ! me
-!    call parser
-!    only the root will receive a valid file handle (see above); all nodes still call parse_file
-  call parse_file(fid &
-#ifdef __PARALLEL
-&               ,comm &
-#endif
-&                )
+!    call parser (only the root will receive a valid file handle (see above); all nodes still call parse_file)
+  call parse_file(fid _COMMA __COMM)
 !
-  if (me.le.0) call files_close(fid)
+  if (__ME.le.0) call files_close(fid)
 ! *********************************************************************************************************
 #ifdef __TIMER 
   time(2)=timer_stamp(mpe_timer) ! parsing time
 #endif
-!
 #ifdef __PARALLEL
 !======= now call multicom to set up various communicators before going further
   call multicom_exec()
@@ -109,6 +120,12 @@ PROGRAM MUPHEN ! MUlti-PHysics-ENvironment
 #else
   time(3)=0
 #endif
+! misc. initialization
+!
+ __INIT(size)
+ __INIT(grid)
+ __INIT(state)
+!
 !====== now initialize slave codes by scanning the context list
 !  call muphen_init_codes()
 #ifdef __TIMER 
@@ -176,4 +193,3 @@ PROGRAM MUPHEN ! MUlti-PHysics-ENvironment
 #endif
 !
 end ! MUPHEN
-

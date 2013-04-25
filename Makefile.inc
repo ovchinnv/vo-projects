@@ -12,7 +12,7 @@ CFLAGS =-O3 -fno-math-errno -g -c
 #MPI_HOME=/usr/local/mpich2-intel
 #---GNU
 FC=gfortran
-FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  #-fopenmp 
+FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  #-fopenmp 
 #FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno #-fbounds-check -frange-check 
 #MPI_HOME=/usr/local/mpich2-gnu
 MPI_HOME=/usr/lib/openmpi
@@ -27,7 +27,7 @@ MPI_HOME=/usr/lib/openmpi
 #MPI_HOME=/usr/local/mpich2-g95
 #
 # G95 reguires no space between "-D" and the name
-DEFS=-Dint=integer -Dfloat=real*8 -Dbool=logical -Dmpiint=MPI_INTEGER -Dmpifloat=MPI_REAL8 -Dmpichar=MPI_CHARACTER -Dmpiint4=MPI_INTEGER4\
+DEFS+=-Dint=integer -Dfloat=real*8 -Dbool=logical -Dmpiint=MPI_INTEGER -Dmpifloat=MPI_REAL8 -Dmpichar=MPI_CHARACTER -Dmpiint4=MPI_INTEGER4\
      -Dmpibool=MPI_LOGICAL -Dint1="integer(kind=KIND('a'))" -D__DMOL -D__RCOMP -D__DMOL -D__CHES -D__EDDIE -D__FC=$(FC) \
      -Dint4mpi=integer -D__PARALLEL #-D__PATHSCALE #-Dint4mpi="integer(KIND=MPI_INTEGER_KIND)" 
 
