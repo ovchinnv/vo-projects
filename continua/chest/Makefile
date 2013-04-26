@@ -5,7 +5,7 @@ NAME=continua/chest
 SUBDIRS=
 DEPS=output parser constants files timer multicom vectors continua/objects continua/io continua/common
 
-LOCALDEPS=macro1.def macro2.def
+LOCALDEPS=macro1.def macro2.def setcomm.def
 
 include $(COMMON)/Makefile.inc
 include $(ROOT)/Makefile.inc

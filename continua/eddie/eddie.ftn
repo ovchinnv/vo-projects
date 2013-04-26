@@ -1,3 +1,14 @@
+#ifdef __PARALLEL
+#define __COMM __CONCAT(MPI_COMM_,__EDDIECOMM )
+#define __ME   __CONCAT(ME_,__EDDIECOMM )
+#define __NCPU __CONCAT(SIZE_,__EDDIECOMM )
+#else
+#define __COMM
+#define __ME 0
+#endif
+#define __QPRINT qprint=(__ME.eq.0)
+!
+!
       module eddie
       private
 !
@@ -15,7 +26,6 @@
       __DEP_MULTICOM
       __DEP_MPI
 #endif
-!
 !
 #ifdef __AB
       use ABintegrator    ! Adams-Bashforth integrator
@@ -42,54 +52,78 @@
       __IMPNONE
 !
 !     routines:
-      public eddie_init
+      private eddie_init
       public eddie_done
-      public eddie
+      public eddie_solve
+      public eddie_exec
 !
+      character(len=:), parameter, private :: ctx=__EDDIECTX
       eddie_initialized=.false.
 !
-      type(varray3df), pointer :: u_, v_, w_, ustar_, vstar_, wstar_, pres_, deltap_, div_, nu_
+      type(varray3df), save, pointer :: u_, v_, w_, ustar_, vstar_, wstar_, pres_, deltap_, div_, nu_
 !
-      float, pointer, dimension(:,:,:) :: u, v, w, ustar, vstar, wstar, p, dp, div, nu
+      float, pointer, save, dimension(:,:,:) :: u, v, w, ustar, vstar, wstar, p, dp, div, nu
       float :: nu_m ! molecular viscosity
 !
 #ifdef __PARALLEL
-       int4mpi :: comm, me, ncpu, ierror
+      ierror
 #endif
 !
       contains
 !======================================================================================
        subroutine eddie_init()
-!
-       character(len=:), parameter :: whoami = 'EDDIE_INIT'
-!
-#ifdef PARALLEL
-       comm=MPI_COMM_EDDIE ; me=ME_EDDIE ; ncpu=SIZE_EDDIE
+       __IAM(EDDIE_INIT)
+! if running in parallel pass communicator when adding variables (quick and dirty)
+#ifdef __CTX
+#undef __CTX
+#endif
+#ifdef __PARALLEL
+#define __CTX __COMM, ctx
+#else
+#define __CTX ctx
 #endif
 !
-       if (comm.eq.MPI_COMM_NULL) return
+ __NULL_COMM_STOP
+ __QPRINT
 !
-! NOTE : the input file is assumed to be parsed elsewhere; here we simply query it using getval and existtag
+!    check that the size module is initialized
+       if (.not. size_initialized) then
+        call warning(whoami, 'Size not initialized. Nothing done.',-1)
+        return
+       endif
+!    check that Cartesian grid and metrics are initialized
+       if (.not. grid_initialized) then
+        call warning(whoami, 'Grid not initialized. Nothing done.',-1)
+        return
+       endif
+!    check that the state module is initialized
+       if (.not. state_initialized) then
+        call warning(whoami, 'State module not initialized. Nothing done.',-1)
+        return
+       endif
+!    initialize state variables
+       call message(whoami, 'Initializing state variables.');
 !
-       if (.not. size_initialized) call size_initialize()   ! should not happen
-       if (.not. state_initialized) call state_initialize() ! should not happen
+       nullify(u_, v_, w_, pres_, nu_, pres_, deltap_, ustar_, vstar_, wstar_, div_)
+       nullify(u,v,w,p,nu,dp,div,ustar,vstar,wstar)
+!
 !    declare variables and boundary conditions
-!
 !    prepare Cartesian grid and metrics (eddie - specific additions to grid)
+!
        call message(whoami, 'Initializing grid variables.');
        call eddie_grid_initialize()
 !    initialize state variables
        call message(whoami, 'Initializing state variables.');
 !
-       call state_add3df('U'  ,'Streamwise velocity'      , edctx, vptr=u_)     ; u=>u_%v
-       call state_add3df('V'  ,'Spanwise velocity'        , edctx, vptr=v_)     ; v=>v_%v
-       call state_add3df('W'  ,'Wall-normal velocity'     , edctx, vptr=w_)     ; w=>w_%v
-       call state_add3df('P'  ,'Pressure field'           , edctx, vptr=pres_)  ; p=>pres_%v
-       call state_add3df('NU' ,'Viscosity (nonuniform)'   , edctx, vptr=nu_)    ; p=>pres_%v
-       call state_add3df('DP' ,'Pressure correction field', edctx, vptr=deltap_); dp=>deltap_%v ; div_=>deltap_ ; div=>dp
-       call state_add3df('U*' ,'Predicted U-velocity'     , edctx, vptr=ustar_) ; ustar=>ustar_%v
-       call state_add3df('V*' ,'Predicted V-velocity'     , edctx, vptr=vstar_) ; vstar=>vstar_%v
-       call state_add3df('W*' ,'Predicted W-velocity'     , edctx, vptr=wstar_) ; wstar=>wstar_%v
+       call state_add3df('U'  ,'Streamwise velocity'      , __CTX, vptr=u_)     ; u=>u_%v
+       call state_add3df('V'  ,'Spanwise velocity'        , __CTX, vptr=v_)     ; v=>v_%v
+       call state_add3df('W'  ,'Wall-normal velocity'     , __CTX, vptr=w_)     ; w=>w_%v
+       call state_add3df('P'  ,'Pressure field'           , __CTX, vptr=pres_)  ; p=>pres_%v
+       call state_add3df('NU' ,'Viscosity (nonuniform)'   , __CTX, vptr=nu_)    ; nu=>nu_%v
+       call state_add3df('DP' ,'Pressure correction field', __CTX, vptr=deltap_); dp=>deltap_%v ; div_=>deltap_ ; div=>dp
+       call state_add3df('U*' ,'Predicted U-velocity'     , __CTX, vptr=ustar_) ; ustar=>ustar_%v
+       call state_add3df('V*' ,'Predicted V-velocity'     , __CTX, vptr=vstar_) ; vstar=>vstar_%v
+       call state_add3df('W*' ,'Predicted W-velocity'     , __CTX, vptr=wstar_) ; wstar=>wstar_%v
 ! add boundary conditions
 
 
@@ -119,7 +153,7 @@
 !
 #define __MINUSERR
 #define __WARNIFMISSING
-#define __CTX edctx
+#define __CTX ctx
 #define __VAR	nu_m
 #define __TAG	molecular_viscosity
 #define __NAME	molecular viscosity
@@ -149,9 +183,9 @@
        endif
 !
 !    Extra source terms (e.g. pressure gradient, gravity)
-       if (existtag_nocase('DPDX',edctx)) then ; dpdx=atof(getval_nocase('DPDX')) ; else ; dpdx=zero ; endif
-       if (existtag_nocase('DPDY',edctx)) then ; dpdy=atof(getval_nocase('DPDY')) ; else ; dpdy=zero ; endif
-       if (existtag_nocase('DPDZ',edctx)) then ; dpdz=atof(getval_nocase('DPDZ')) ; else ; dpdz=zerp ; endif
+       if (existtag_nocase('DPDX',ctx)) then ; dpdx=atof(getval_nocase('DPDX')) ; else ; dpdx=zero ; endif
+       if (existtag_nocase('DPDY',ctx)) then ; dpdy=atof(getval_nocase('DPDY')) ; else ; dpdy=zero ; endif
+       if (existtag_nocase('DPDZ',ctx)) then ; dpdz=atof(getval_nocase('DPDZ')) ; else ; dpdz=zerp ; endif
 !================================================================
 #ifdef __PARALLEL
       if (me.eq.0) then 
@@ -925,3 +959,41 @@
       return
       end
 !-----------------------------------------------------------------------
+
+
+!==============================================================================
+       subroutine eddie_exec()  ! execute command block
+       __IAM(EDDIE_EXEC)
+       character(len=:), pointer :: command
+       int :: l
+!
+__NULL_COMM_STOP
+       if (noexec(ctx)) return
+!
+__QPRINT
+       call message(whoami,'Executing commands within context "'//trim(ctx)//'"')
+!
+       do
+        command=>get_next_command(ctx)
+        if (.not.associated(command)) exit
+        call toupper(command)
+        l=len_trim(command)
+!
+        call message(whoami, ' =====> "'//command(1:l)//'"');
+!
+        select case(command(1:l))
+         case('INIT','INITIALIZE') ; call eddie_init()
+         case('SOLVE','RUN','EXEC') ; call eddie_solve()
+         case('OUTPUT') ; call ches_output()
+         case('DONE','STOP','END') ; call eddie_done()
+         case default; call warning(whoami, 'Unknown command. Skipping.',-1)
+        end select
+!
+        if (fatal_warning(__COMM)) return
+!
+        deallocate(command)
+       enddo
+!
+       end subroutine eddie_exec
+!==============================================================================
+end module eddie

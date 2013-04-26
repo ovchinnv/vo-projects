@@ -1,11 +1,5 @@
-#ifdef __PARALLEL
-#define __COMM __CONCAT(MPI_COMM_,__CHESCOMM )
-#define __ME   __CONCAT(ME_,__CHESCOMM )
-#define __NCPU __CONCAT(SIZE_,__CHESCOMM )
-#else
-#define __COMM
-#define __ME 0
-#endif
+#define __COMMUNICATOR __CHESCOMM
+#include "setcomm.def"
 #define __QPRINT qprint=(__ME.eq.0)
 !
       module ches ! (Cartesian Helmholtz Equation Solver)
@@ -41,14 +35,14 @@
 !     variables:
 !
       bool :: ches_initialized=.false.
-      character(len=16), parameter, private :: ctx=__CHESCTX
+      character(len=:), parameter, private :: ctx=__CHESCTX
       type(varray3df), pointer, save :: p_, eps_, kappa_, rhs_
 !
       contains
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        subroutine ches_init()
        use fieldbcdef
-       character(len=:), parameter :: whoami='CHES_INIT'
+       __IAM(CHES_INIT)
 !
 ! if running in parallel pass communicator when adding variables (quick and dirty)
 #ifdef __CTX
@@ -59,6 +53,9 @@
 #else
 #define __CTX ctx
 #endif
+!
+       __NULL_COMM_STOP
+!
 ! crude way to make sure only root prints
  __QPRINT
 !
@@ -140,6 +137,7 @@
 !
        character(len=:), parameter :: whoami='CHES_SOLVE'
 !
+__NULL_COMM_STOP
 __QPRINT
 !    the proper way to terminate run if error occurs on some processors (but not all)
        if (.not. ches_initialized) call warning(whoami, 'POISSON_BOLTZMANN MODULE NOT INITIALIZED.',-1)
@@ -182,14 +180,9 @@ __QPRINT
 !
        character(len=80) :: filename, output_format, output_mode
 !
+ __NULL_COMM_STOP
  __QPRINT
 ! macro to add communicator to calls to output routine
-#if __PARALLEL
-#define _COMMA ,
-#else
-#define _COMMA
-#endif
-!
        p=>state_get3df('phi', ctx)
        eps=>state_get3df('eps', ctx)
        kappa=>state_get3df('kappa', ctx)
@@ -316,8 +309,7 @@ __QPRINT
        end subroutine ches_output
 !*********************************************************************************!
        subroutine ches_done()
-!
-       character(len=:), parameter :: whoami='CHES_DONE'
+       __IAM(CHES_DONE)
        character(len=20) :: solver
 !
        if (existtag('OBJECT', ctx) .or. existtag('object', ctx)) then 
@@ -350,12 +342,13 @@ __QPRINT
        end subroutine ches_done
 !*********************************************************************************!
        subroutine ches_exec()  ! execute command block
-       character(len=:), parameter :: whoami='CHES_EXEC'
+       __IAM(CHES_EXEC)
        character(len=:), pointer :: command
        int :: l
 !
        if (noexec(ctx)) return
 !
+__NULL_COMM_STOP
 __QPRINT
        call message(whoami,'Executing commands within context "'//trim(ctx)//'"')
 !

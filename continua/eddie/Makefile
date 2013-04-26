@@ -5,8 +5,8 @@ NAME=continua/eddie
 DEPS=output parser constants continua/common
 
 
-include $(ROOT)/Makefile.inc
 include $(COMMON)/Makefile.inc
+include $(ROOT)/Makefile.inc
 #include $(COMMON)/eddie/Makefile.inc
 
 
