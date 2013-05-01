@@ -1,57 +1,55 @@
       module parser
+!
+      use cmd
+      use prm
+!
       __IMPNONE
       private
 !     read, parse & store input file; 
 !
-!    define a derived type to store simulation parameters
-      type params
-       character(len=200), dimension(:), pointer :: tag, val
-       int, dimension(:), pointer :: tlen, vlen
-       int :: length=0 ! length of the vector
-       int :: last ! index of last element
-       bool :: initialized=.false. ! has the vector been initialized
-      end type params
+      int, parameter, public :: contextnamelen=200
 !
-!     the current implementation (11/2012) does not allow for nested contexting because there is no apparent
-!     reason for this level of complexity
+!     the current implementation (11/2012) does not allow for nested contexting
 !
       type contexts ! for storing multiple parameter sets ('contexts') per single execution
-       character(len=200), pointer :: context_name(:)
+       character(len=contextnamelen), pointer :: context_name(:)
        type (params), pointer :: context_params(:)
+       type (commands), pointer :: context_commands(:)
        int :: length=0
        int :: last=0
        int :: current=0
       end type contexts
 !
-       character(len=26), parameter  :: lower='abcdefghijklmnopqrstuvwxyz'
-       character(len=26), parameter  :: upper='ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-       character(len=10), parameter  :: digits='0123456789'
-       int :: i
-       character, parameter :: lower2(26)=(/ (lower(i:i),i=1,26)/)
-       character, parameter :: upper2(26)=(/ (upper(i:i),i=1,26)/)
-       character, parameter, public :: digits2(10)=(/ (digits(i:i),i=1,10)/)
-       character, parameter :: tilde='~'
-       character, parameter :: decimal='.'
-       character, parameter :: underscore='_'
-       character, parameter, public :: hyphen='-'
-       character, parameter :: slash='/'
-       character, parameter, public :: tab=char(9)
-       character, parameter, public :: space(4) = (/' ', tab, ',',';'/)
-       character, parameter :: comment(4) = (/'*','!','#','%'/)
-       character, parameter :: equals(1) = (/'='/)
-       character, parameter :: vector_open(2)=(/'(','['/)
-       character, parameter :: vector_close(2)=(/')',']'/)
-       character, parameter :: context_open(1)=(/'{'/)
-       character, parameter :: context_close(1)=(/'}'/)
-       character(len=200), parameter :: allowed=upper//lower//digits//decimal//underscore//hyphen//slash//tilde
+      character(len=26), parameter  :: lower='abcdefghijklmnopqrstuvwxyz'
+      character(len=26), parameter  :: upper='ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+      character(len=10), parameter  :: digits='0123456789'
+      int :: i
+      character, parameter :: lower2(26)=(/ (lower(i:i),i=1,26)/)
+      character, parameter :: upper2(26)=(/ (upper(i:i),i=1,26)/)
+      character, parameter, public :: digits2(10)=(/ (digits(i:i),i=1,10)/)
+      character, parameter :: tilde='~'
+      character, parameter :: decimal='.'
+      character, parameter :: underscore='_'
+      character, parameter, public :: hyphen='-'
+      character, parameter :: slash='/'
+      character, parameter, public :: tab=char(9)
+      character, parameter, public :: space(4) = (/' ', tab, ',',';'/)
+      character, parameter :: comment(4) = (/'*','!','#','%'/)
+      character, parameter :: equals(1) = (/'='/)
+      character, parameter :: vector_open(2)=(/'(','['/)
+      character, parameter :: vector_close(2)=(/')',']'/)
+      character, parameter :: context_open(1)=(/'{'/)
+      character, parameter :: context_close(1)=(/'}'/)
+      character(len=200), parameter :: allowed=upper//lower//digits//decimal//underscore//hyphen//slash//tilde
+      character(len=5), parameter :: command_start(1)=(/'exec:'/)
 !
-      int, parameter, private :: expand_incr=100
       int, parameter, private :: context_incr=1  ! expand increment for contexts
 !
       bool, save :: parser_initialized=.false. ! set to true after parse_file is called successfully; private
 !
-      type (contexts), save :: context            ! contexts
-      type (params), save, pointer :: parameters  ! pointer to a single context (e.g. main parameter set)
+      type (contexts), save :: context              ! contexts
+      type (params), save, pointer :: parameters    ! pointer to a single parameter set (e.g. main parameter set)
+      type (commands), save, pointer :: executables ! pointer to a single command set   (e.g. main command set)
 !
       public atoi     	! convert string to int 
       public atof	! convert string to double
@@ -59,16 +57,18 @@
       public atoiv     	! convert string to a vector of ints 
       public atofv	! convert string to a vector of double
 !      public atolv	! convert string to a vector of bool (not yet)
-      private params_getval	! return tag value
-      private params_getval_nocase	! return tag value (case insensitive version)
+      private params_getval
+      private params_getval_nocase
       public getval	        ! return tag value
       public getval_nocase	! return tag value (case insensitive version)
       public getval_nocase_upper! return tag value in uppercase (case insensitive version)
       public existtag	! return tag value
       public existtag_nocase	! return tag value (case insensitive version)
+      public get_next_command	! return command
       public parse_file ! read input file and store all parameters
       public parser_done
       public list_params ! list parameters
+      public list_commands ! list commands
       public adjustleft
       public adjustleft_1, adjustleft_2
       public numword
@@ -85,7 +85,19 @@
 !
       interface adjustleft
        module procedure adjustleft_1, adjustleft_2
-      end interface
+      end interface adjustleft
+!
+      interface itoa
+       module procedure itoa4, itoa8
+      end interface itoa
+!
+      interface atoi
+       module procedure atoi4, atoi8, atoi_
+      end interface atoi
+!
+      interface atofv
+       module procedure atofv4, atofv8
+      end interface atofv
 !
       contains
 !********************************************************************************************
@@ -94,6 +106,7 @@
        call parser_done()
 !
        allocate(context%context_params(context_incr))
+       allocate(context%context_commands(context_incr))
        allocate(context%context_name(context_incr))
        context%length=context_incr
        context%last=1
@@ -101,7 +114,9 @@
        context%context_name(1)='MAIN'
 !    initialize main context
        parameters=>context%context_params(1)
+       executables=>context%context_commands(1)
        call params_init(parameters)
+       call commands_init(executables)
 !
        parser_initialized=.true.
        end subroutine parser_init
@@ -114,12 +129,19 @@
          do i=1,context%last ; call params_done(context%context_params(i)) ; enddo
          deallocate(context%context_params)
         endif
+!
+        if (associated(context%context_commands)) then
+         do i=1,context%last ; call commands_done(context%context_commands(i)) ; enddo
+         deallocate(context%context_commands)
+        endif
+!
         if (associated(context%context_name)) deallocate(context%context_name)
        endif
 !
        context%last=0 ; context%length=0
 !
        nullify(parameters)
+       nullify(executables)
        parser_initialized=.false.
 !
        end subroutine parser_done
@@ -128,7 +150,7 @@
 !    increase the size of contexts array
        int :: newlength
        type (params), pointer :: newcontexts(:)
-       character(len=200), pointer :: newnames(:)
+       character(len=contextnamelen), pointer :: newnames(:)
 !
        if ( .not. parser_initialized ) call parser_init()
        newlength=context%length+context_incr
@@ -168,7 +190,6 @@
 !********************************************************************************************
        function parser_context(cname)
 !    find the array index of a context specified by cname; if the context does exist, create it
-!    relevant to parsing input; will also be relevant to realtime execution when such is implemented
        character(len=*), intent(in) :: cname
        character(len=len(cname)) :: copyname
        int :: parser_context, j
@@ -187,92 +208,9 @@
 !
        end function parser_context
 !********************************************************************************************
-       subroutine params_init( v )
-       type (params) :: v
-!       if (associated(v%...)) deallocate(v%...) ! testing unassigned pointer is an error!
-       allocate(v%tag(expand_incr),v%val(expand_incr),v%tlen(expand_incr),v%vlen(expand_incr))
-!
-       v%tag=''; v%val=''; v%tlen=0; v%vlen=0
-       v%length=expand_incr
-       v%last=0
-       v%initialized=.true.
-       end subroutine params_init
-!ccccc
-       subroutine params_done( v )
-       type (params) :: v
-       if (associated(v%tag)) deallocate(v%tag)
-       if (associated(v%val)) deallocate(v%val)
-       if (associated(v%tlen)) deallocate(v%tlen)
-       if (associated(v%vlen)) deallocate(v%vlen)
-       v%length=0
-       v%last=0
-       v%initialized=.false.
-       end subroutine params_done
-!
-       subroutine params_expand( v )
-       type (params) :: v
-       int :: newlength
-       character(len=200), dimension(:), pointer :: ntag, nval
-       int, dimension(:), pointer :: ntlen, nvlen
-!
-       if (.not.v%initialized) then 
-        call params_init(v) 
-       else
-!    assume length is valid
-        newlength=v%length+expand_incr ! temporary storage space
-        allocate(ntag(newlength),nval(newlength),ntlen(newlength),nvlen(newlength)) ! copy old data
-        ntag(1:v%length)=v%tag; nval(1:v%length)=v%val; ntlen(1:v%length)=v%tlen; nvlen(1:v%length)=v%vlen ! deallocate old array
-        deallocate(v%tag,v%val,v%tlen,v%vlen) ! deallocate old data
-        v%tag=>ntag; v%val=>nval; v%tlen=>ntlen; v%vlen=>nvlen
-        v%length=newlength
-       endif 
-       end subroutine params_expand
-!ccccc
-       function params_add(v,newtag,newval,ltag,lval) ! add a new element to the list (not necessarily unique) 
-!                                       and return its index
-       use output
-       type (params) :: v
-       int :: params_add, ltag, lval
-       character(len=*) :: newtag, newval
-       int :: j
-!
-       if (.not.v%initialized) call params_init(v)
-!    add element to the list
-       if (v%last.eq.v%length) call params_expand(v)
-       j=v%last+1
-       v%tag(j)=newtag(1:ltag); v%tlen(j)=ltag
-       v%val(j)=newval(1:lval); v%vlen(j)=lval
-       v%last=j
-       params_add=j
-       end function params_add
-!ccccc
-       function params_uadd(v,newtag,newval,ltag,lval) ! add a UNIQUE new element to the list and return its index
-!                                                         if the element already exists, overwrite and warn       
-       use output, only: warning
-       type (params) :: v
-       int :: j, params_uadd, ltag, lval
-       character(len=*) :: newtag, newval
-!
-       if (.not.v%initialized) call params_init(v) 
-       do j=1,v%last
-        if (v%tag(j).eq.newtag(1:ltag)) then
-!       found element
-         params_uadd=j
-         call warning('PARAMS_UADD','Parameter "'//newtag(1:ltag)//'" is already present and has the value '&
-&                                     //v%val(j)(1:v%vlen(j))//&
-&                                    '. Will overwrite.',0)
-         v%val(j)=newval(1:lval); v%vlen(j)=lval
-         return
-        endif
-       enddo
-!    add element to the list: use regular routine
-       params_uadd=params_add(v,newtag,newval,ltag,lval)
-!
-       end function params_uadd
-!
        function params_getval( v,atag )
        type (params) :: v
-       character(len=200) :: params_getval
+       character(len=vartaglen) :: params_getval
        character(len=*) :: atag
        int :: j
 !
@@ -291,10 +229,10 @@
        endif
 !
        end function params_getval
-!
+!********************************************************************************************
        function params_getval_nocase( v,atag )
        type (params) :: v
-       character(len=200) :: params_getval_nocase, tag1, tag2
+       character(len=vartaglen) :: params_getval_nocase, tag1, tag2
        character(len=*) :: atag
        int :: j
 !
@@ -316,10 +254,10 @@
        endif
 !
        end function params_getval_nocase
-!****************************************** end of data routines **************************************
-       character(len=200) function getval(atag,ctx)
+!********************************************************************************************
+       character(len=vartaglen) function getval(atag,ctx)
        use output, only: warning
-       character(len=200) :: value
+       character(len=vartaglen) :: value
        character(len=*), intent(in) :: atag
        character(len=*), intent(in), optional :: ctx
        int :: ictx
@@ -330,10 +268,34 @@
        getval=value
 !
        end function getval
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-       character(len=200) function getval_nocase(atag,ctx)
+!********************************************************************************************
+       function get_next_command(ctx) ! returning command as an array of characters
        use output, only: warning
-       character(len=200) :: value
+       character(len=:), pointer :: get_next_command
+       character(len=*), intent(in), optional :: ctx
+       type (commands) :: c
+       int :: ictx, i
+!
+       nullify(get_next_command)
+!
+       if (.not.parser_initialized) call parser_init()
+       ictx=1 ; if (present(ctx)) ictx=max(1,parser_find_context(ctx))
+!
+       c=context%context_commands(ictx)
+       if (.not.c%initialized) then 
+!
+       elseif (c%current.le.c%last) then
+        i=c%clen(c%current)
+        allocate(character(i) :: get_next_command)
+        get_next_command=c%command(c%current)(1:i)
+        c%current=c%current+1
+       endif
+!
+       end function get_next_command
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+       character(len=vartaglen) function getval_nocase(atag,ctx)
+       use output, only: warning
+       character(len=vartaglen) :: value
        character(len=*), intent(in) :: atag
        character(len=*), intent(in), optional :: ctx ; int :: ictx
        ictx=1 ; if (present(ctx)) ictx=max(1,parser_find_context(ctx))
@@ -344,9 +306,9 @@
 !
        end function getval_nocase
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-       character(len=200) function getval_nocase_upper(atag,ctx)
+       character(len=vartaglen) function getval_nocase_upper(atag,ctx)
        use output, only: warning
-       character(len=200) :: value
+       character(len=vartaglen) :: value
        character(len=*), intent(in) :: atag
        character(len=*), intent(in), optional :: ctx ; int :: ictx
        ictx=1 ; if (present(ctx)) ictx=max(1,parser_find_context(ctx))
@@ -361,7 +323,7 @@
        function existtag(atag,ctx)
        use output, only: error
        bool :: existtag
-       character(len=200) :: value
+       character(len=vartaglen) :: value
        character(len=*), intent(in) :: atag
        character(len=*), intent(in), optional :: ctx ; int :: ictx
        ictx=1 ; if (present(ctx)) ictx=max(1,parser_find_context(ctx))
@@ -375,7 +337,7 @@
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        function existtag_nocase(atag,ctx)
        bool :: existtag_nocase
-       character(len=200) :: value
+       character(len=vartaglen) :: value
        character(len=*), intent(in) :: atag
        character(len=*), intent(in), optional :: ctx ; int :: ictx
        ictx=1 ; if (present(ctx)) ictx=max(1,parser_find_context(ctx))
@@ -411,14 +373,15 @@
 !
        int :: allowed_len, lower_len, upper_len, digits_len
        character :: allowed2(200),c
-       bool :: qtag, qeq, qval, qerror
+       bool :: qtag, qeq, qval, qerror, qcommand
        bool :: qvector ! flag that is active when we are reading a vector (certain default behavior is overridden)
        bool :: qcontext ! flag that is active when any context other than the main context is active
 !
-       int :: ioerr, ierr
+       integer :: ioerr
+       int4mpi :: ierr
        int :: l=0, ltag=0, lval=0
        character(len=400) :: cmdline
-       character(len=200) :: tag, val
+       character(len=vartaglen) :: tag, val
 !
        allowed_len=len_trim(allowed)
        do i=1,allowed_len
@@ -433,6 +396,7 @@
        qcontext=.false.
        qvector=.false.
        qerror=.false.
+       qcommand=.false.
        if (.not. parser_initialized) call parser_init()
        call message(whoami, 'Reading input file.')
        do while (.true.)
@@ -453,7 +417,7 @@
          l=len_trim(cmdline)
 !   write(0,*) cmdline(1:l)
 ! add comment character to know when to stop below
-         if (l.lt.200) l=l+1
+         if (l.lt.maxlinelen) l=l+1
          cmdline(l:l)='*'
          if (any(comment.eq.cmdline(1:1))) l=1 ! skip lines that are comments
 
@@ -461,7 +425,8 @@
          qtag=.true. ; ltag=0 ! each line is required to begin with a tag
          qval=.false.; lval=0
          qeq=.false.
-         qvector=.false.      ! this implies that a vector entry cannot span multiple lines
+         qvector=.false.      ! this implies that a vector entry currently cannot span multiple lines
+         qcommand=.false.     ! this implies that a command currently cannot span multiple lines
 !
          do while (l.gt.1)
            i=i+1
@@ -549,7 +514,7 @@
              elseif (qvector) then
               call warning(whoami, 'Missing closing bracket for vector parameter "'//tag(1:ltag)//'". Skipping line',0)
               qerror=.true.; exit 
-             else ! store tag and val (despite the misplaced `=' sign ; leave that for next cycle)
+             else ! store tag and val (despite the misplaced '=' sign ; leave that for next cycle)
               call adjustleft(val(1:lval)); lval=len_trim(val(1:lval));
               call message(whoami, tag(1:ltag)//' <= '//val(1:lval))
               j=params_uadd(parameters,tag,val,ltag,lval)
@@ -738,7 +703,7 @@
        endif
 !
        end subroutine parse_file
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!============================================================================================
        subroutine list_params(ctx &
 #ifdef __PARALLEL
        & , me &
@@ -772,19 +737,53 @@
        endif
 #endif
        end subroutine list_params
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!============================================================================================
+       subroutine list_commands(ctx &
+#ifdef __PARALLEL
+       & , me &
+#endif
+       & )
+! 
+       use output
+!
+       character(len=*), intent(in), optional :: ctx ; int :: ictx
+!
+       character(len=13), parameter :: whoami = 'LIST_COMMANDS'
+       int :: i
+#ifdef __PARALLEL
+       int4mpi :: me
+#endif
+!
+       if (.not.parser_initialized) call parser_init()
+!
+       ictx=1 ; if (present(ctx)) ictx=max(1,parser_find_context(ctx)) ; executables=>context%context_commands(ictx)
+!
+#ifdef __PARALLEL
+       if (me.le.0) then
+#endif
+        call message(whoami,'THE FOLLOWING COMMANDS ARE DEFINED IN CONTEXT "'//context%context_name(ictx)(1:len_trim(context%context_name(ictx)))//'":')
+        call message(whoami,'========================================================')
+        do i=1,executables%last
+         call message(whoami,tab//'"'//executables%command(i)(1:executables%clen(i))//'"')
+        enddo
+        call message(whoami,'========================================================')
+#ifdef __PARALLEL
+       endif
+#endif
+       end subroutine list_commands
+!============================================================================================
 ! auxiliary functions (they need not be part of this module)
-       function atoi(a, invalid)
+       function atoi4(a, invalid)
 ! NOTE: no overflow check yet
        use output, only: warning
-       int, optional, intent(in) :: invalid
-       int :: atoi, i, l, j, k, sgn, base, missing
+       integer*4, intent(in) :: invalid
+       int :: atoi4, i, l, j, k, sgn, base, missing
        character(len=*), intent(in) :: a
        character(len=len(a)) :: b
        character(len=4), parameter :: whoami = 'ATOI'
        int :: flag(10)
 ! convert string to int
-       if (present(invalid)) then ; missing=invalid ; else ; missing=-999 ; endif
+       missing=invalid
        i=0
 !
        b=a
@@ -814,14 +813,97 @@
          base=base*10
         endif
        enddo
-       atoi=i*sgn
-       end function atoi
+       atoi4=i*sgn
+       end function atoi4
+       function atoi8(a, invalid)
+! NOTE: no overflow check yet
+       use output, only: warning
+       integer*8, intent(in) :: invalid
+       int :: atoi8, i, l, j, k, sgn, base, missing
+       character(len=*), intent(in) :: a
+       character(len=len(a)) :: b
+       character(len=4), parameter :: whoami = 'ATOI'
+       int :: flag(10)
+! convert string to int
+       missing=invalid
+       i=0
+!
+       b=a
+       call adjustleft(b)
+       l=len_trim(b)
+       if (l.ge.1) then
+        if (b(1:1).eq.hyphen) then
+         sgn=-1
+         b(1:l-1)=b(2:l); l=l-1; 
+         if (l.eq.0) i = -missing ; ! only a hyphen present : will multiply by -1 and quit
+        else
+         sgn=1
+        endif
+       else
+        i=missing; sgn=1
+       endif ! l.ge.1
+!
+       base=1
+       do j=l,1,-1
+        where(digits2.eq.b(j:j)); flag=1 ; elsewhere; flag=0 ; endwhere; k=sum(maxloc(flag))-1
+        if (all(flag.eq.0)) then 
+         call warning(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO INTEGER.',-1)
+         i=missing; sgn=1;
+         exit
+        else
+         i=i+base*k
+         base=base*10
+        endif
+       enddo
+       atoi8=i*sgn
+       end function atoi8
+       function atoi_(a)
+! NOTE: no overflow check yet
+       use output, only: warning
+       int :: atoi_, i, l, j, k, sgn, base, missing
+       character(len=*), intent(in) :: a
+       character(len=len(a)) :: b
+       character(len=4), parameter :: whoami = 'ATOI'
+       int :: flag(10)
+! convert string to int
+       missing=-999
+       i=0
+!
+       b=a
+       call adjustleft(b)
+       l=len_trim(b)
+       if (l.ge.1) then
+        if (b(1:1).eq.hyphen) then
+         sgn=-1
+         b(1:l-1)=b(2:l); l=l-1; 
+         if (l.eq.0) i = -missing ; ! only a hyphen present : will multiply by -1 and quit
+        else
+         sgn=1
+        endif
+       else
+        i=missing; sgn=1
+       endif ! l.ge.1
+!
+       base=1
+       do j=l,1,-1
+        where(digits2.eq.b(j:j)); flag=1 ; elsewhere; flag=0 ; endwhere; k=sum(maxloc(flag))-1
+        if (all(flag.eq.0)) then 
+         call warning(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO INTEGER.',-1)
+         i=missing; sgn=1;
+         exit
+        else
+         i=i+base*k
+         base=base*10
+        endif
+       enddo
+       atoi_=i*sgn
+       end function atoi_
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        function atoiv(a,n)
        use output, only: warning
        use constants, only: unknowni
        character(len=*) :: a
-       character(len=200), allocatable :: b(:)
+       character(len=maxlinelen), allocatable :: b(:)
        character(len=5), parameter :: whoami = 'ATOIV'
        int :: n, i, j
        int, dimension(n) :: atoiv
@@ -904,14 +986,15 @@
        atof=f*sgn
        end function atof
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-       function atofv(a,n)
+       function atofv4(a,n)
        use output, only: warning
        use constants, only: unknownf
        character(len=*) :: a
-       character(len=200), allocatable :: b(:)
+       character(len=maxlinelen), allocatable :: b(:)
        character(len=5), parameter :: whoami = 'ATOFV'
-       int :: n, i, j
-       float, dimension(n) :: atofv
+       integer*4 :: n
+       int :: i, j
+       float, dimension(n) :: atofv4
 !
        i=numword(a)
        if (n.le.0) then
@@ -921,21 +1004,49 @@
         call warning(whoami,' Vector dimension mismatch',-1)
        endif
        i=min(i,n)
-       atofv=unknownf
+       atofv4=unknownf
        allocate(b(i))
        read(a,*) b
        do j=1,i
-        atofv(j)=atof(b(j))
+        atofv4(j)=atof(b(j))
        enddo
        deallocate(b)
 !
-       end function atofv
+       end function atofv4
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+       function atofv8(a,n)
+       use output, only: warning
+       use constants, only: unknownf
+       character(len=*) :: a
+       character(len=maxlinelen), allocatable :: b(:)
+       character(len=5), parameter :: whoami = 'ATOFV'
+       integer*8 :: n
+       int :: i, j
+       float, dimension(n) :: atofv8
+!
+       i=numword(a)
+       if (n.le.0) then
+        call warning(whoami,' Vector has nonpositive dimension',-1)
+        return
+       elseif (i.ne.n) then 
+        call warning(whoami,' Vector dimension mismatch',-1)
+       endif
+       i=min(i,n)
+       atofv8=unknownf
+       allocate(b(i))
+       read(a,*) b
+       do j=1,i
+        atofv8(j)=atof(b(j))
+       enddo
+       deallocate(b)
+!
+       end function atofv8
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        function atol(a)
        use output, only: error
        bool :: atol
        character(len=*) :: a
-       character(len=200) :: b
+       character(len=maxlinelen) :: b
        character(len=4), parameter :: whoami = 'ATOL'
        int :: l
 !
@@ -955,16 +1066,31 @@
 !
        end function atol
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-   function itoa(i)
+   function itoa4(i)
    use constants, only : one
-   int :: i
+   integer*4 :: i
+   integer*4, parameter :: ione=1, itwo=2
 !   character(len=((ceiling(log10(one*abs(i)+1.)))+1)) :: itoa
-   character(len=((ceiling(log10(one*abs(i)+1.)))+count((/i.lt.0/)) )) :: itoa ! sexy way to cast bool to int ?
+!   character(len=((ceiling(log10(one*abs(i)+1.)))+count((/i.lt.0/)) )) :: itoa4 ! sexy way to cast bool to int ? does not work with Pathscale
+   character(len=((ceiling(log10(one*abs(i)+1.)))+ (ione-sign(ione,i))/itwo )) :: itoa4
    character(len=80) :: b 
    write(b,*) i
    b=adjustl(b)
-   itoa=b(1:len_trim(b))
-   end function itoa
+   itoa4=b(1:len_trim(b))
+   end function itoa4
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+   function itoa8(i)
+   use constants, only : one
+   integer*8 :: i
+   integer*8, parameter :: ione=1, itwo=2
+!   character(len=((ceiling(log10(one*abs(i)+1.)))+1)) :: itoa
+!   character(len=((ceiling(log10(one*abs(i)+1.)))+count((/i.lt.0/)) )) :: itoa8 ! sexy way to cast bool to int ?
+   character(len=((ceiling(log10(one*abs(i)+1.)))+ (ione-sign(ione,i))/itwo )) :: itoa8
+   character(len=80) :: b 
+   write(b,*) i
+   b=adjustl(b)
+   itoa8=b(1:len_trim(b))
+   end function itoa8
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
    function ftoa(f)
    float :: f

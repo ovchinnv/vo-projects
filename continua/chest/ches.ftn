@@ -1,0 +1,378 @@
+#define __COMMUNICATOR __CHESCOMM
+#include "setcomm.def"
+#define __QPRINT qprint=(__ME.eq.0)
+!
+      module ches ! (Cartesian Helmholtz Equation Solver)
+! 2010-2012 Victor Ovchinnikov (ovchinnv_at_georgetown_dot_edu)
+! Free for academic use
+! Most of the source code is distributed 
+! under the GNU General Public License
+! certain parts of the code are under restricted license
+!
+!    include other modules
+      use datatypes
+      use state     ! main physical variables
+      __DEP_PARSER    ! parses input unit and stores input parameters
+      use SIZE      ! basic size information
+      use grid      ! grid module
+      __DEP_OUTPUT    ! runtime output
+      use object    ! objects that modify problem coefficients
+!      use plot3Dio ! output in plot3D (CFD) format; compile as a library, not as a module
+      use multigrid ! multigrid solver module
+!      use openDXio ! output in openDX format ; not implemented yet
+#ifdef __PARALLEL
+      __DEP_MULTICOM
+#endif
+      __IMPNONE
+!**************************************************************************************
+!     routines:
+      public ches_exec
+      public ches_init
+      public ches_done
+      private ches_solve
+      private ches_output
+!
+!     variables:
+!
+      bool :: ches_initialized=.false.
+      character(len=:), parameter, private :: ctx=__CHESCTX
+      type(varray3df), pointer, save :: p_, eps_, kappa_, rhs_
+!
+      contains
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+       subroutine ches_init()
+       use fieldbcdef
+       __IAM(CHES_INIT)
+!
+! if running in parallel pass communicator when adding variables (quick and dirty)
+#ifdef __CTX
+#undef __CTX
+#endif
+#ifdef __PARALLEL
+#define __CTX __COMM, ctx
+#else
+#define __CTX ctx
+#endif
+!
+       __NULL_COMM_STOP
+!
+! crude way to make sure only root prints
+ __QPRINT
+!
+! *********************************************************************************************************
+! * INITIALIZATION
+! *
+!    check that the size module is initialized
+       if (.not. size_initialized) then
+        call warning(whoami, 'Size not initialized. Nothing done.',-1)
+        return
+       endif
+!    check that Cartesian grid and metrics are initialized
+       if (.not. grid_initialized) then
+        call warning(whoami, 'Grid not initialized. Nothing done.',-1)
+        return
+       endif
+!    check that the state module is initialized
+       if (.not. state_initialized) then
+        call warning(whoami, 'State module not initialized. Nothing done.',-1)
+        return
+       endif
+!    initialize state variables
+       call message(whoami, 'Initializing state variables.');
+!
+       nullify(p_, eps_, kappa_, rhs_)
+!
+       call state_add3df('PHI'  ,'Electrostatic Potential' , __CTX, vptr=p_)
+       call state_add3df('EPS'  ,'Dielectric Constant'     , __CTX, vptr=eps_)
+       call state_add3df('KAPPA','Ionic Strength Parameter', __CTX, vptr=kappa_)
+       call state_add3df('RHS'  ,'Source Density Vector'   , __CTX, vptr=rhs_)
+! add more variables here as needed
+!
+!    initialize boundary conditions
+       call message(whoami, 'Initializing boundary condition variables.');
+!
+       call state_bc_add3df('PHI', __CTX, left )   ;   call state_bc_add3df('PHI', __CTX, right )
+       call state_bc_add3df('PHI', __CTX, bottom ) ;   call state_bc_add3df('PHI', __CTX, top )
+       if (.not.q2D) then
+        call state_bc_add3df('PHI', __CTX, front ) ;   call state_bc_add3df('PHI', __CTX, back )
+       endif
+!
+!    check whether object specified; if so, initialize
+       if     (existtag('OBJECT',ctx) .or. existtag('object',ctx)) then 
+!    check if the object has not yet been initialized (as could happen via grid module above); if not, initialize
+        if (.not. object_initialized) then 
+         call message(whoami, 'Initializing object.');
+         call object_init()
+        endif
+       endif
+!
+!      at present, there are no cases in which a solution does not involve an object
+!
+!    object dependent properties
+       if (object_initialized) then
+        call message(whoami, 'Reading object parameters.');
+        call object_read_parameters()
+        if (.not.size_initialized) then 
+         call warning(whoami, 'Size not initialized.',-1);
+        elseif (.not.grid_initialized) then 
+         call warning(whoami, 'Grid not initialized.',-1);
+        elseif (.not.state_initialized) then
+         call warning(whoami, 'State variables not initialized.',-1);
+        else
+         call message(whoami, 'Computing gridded parameters.');
+         call object_grid_objects( xcen, ycen, zcen, dxcor, dycor, dzcor, eps_%v, kappa_%v, rhs_%v, nx, ny, nz )
+        endif
+!
+       endif
+!
+       if (.not.fatal_warning(__COMM)) ches_initialized=.true.
+!
+       end subroutine ches_init
+!************************************************************************************
+       subroutine ches_solve()
+!
+       character(len=20) :: solver
+!
+!    initialize multigrid solver, if requested
+!
+       character(len=:), parameter :: whoami='CHES_SOLVE'
+!
+__NULL_COMM_STOP
+__QPRINT
+!    the proper way to terminate run if error occurs on some processors (but not all)
+       if (.not. ches_initialized) call warning(whoami, 'POISSON_BOLTZMANN MODULE NOT INITIALIZED.',-1)
+       if (fatal_warning(__COMM)) call terminate(whoami)
+!
+       if     (existtag('SOLVER',ctx)) then ; solver=getval('SOLVER',ctx); call toupper(solver);
+       elseif (existtag('solver',ctx)) then ; solver=getval('solver',ctx); call toupper(solver); 
+       else ; ! no solver defined
+        call warning(whoami, 'No solver specified. Nothing done.',0);
+        return
+       endif
+!
+! special case: NONE - skip solution
+!
+       if (solver.eq.'NONE') return
+!
+! if still here, attempt to call solver
+!
+       select case(solver)
+!*********************************************************************************!
+#define __NM MULTIGRID
+#define __ARGS p_, eps_, kappa_, rhs_
+#include "macro1.def"
+!*********************************************************************************!
+       case default;
+        call warning(whoami, 'Unknown solver '//trim(solver)//' specified. Nothing done.',-1);
+       end select
+!
+       end subroutine ches_solve
+!*********************************************************************************!
+       subroutine ches_output()
+       use object, only : object_surface_pointer, object_initialized
+       use formats
+!
+       character(len=:), parameter :: whoami='CHES_OUTPUT'
+       int :: ifmt=plot3d
+       bool :: qbin ! whether binary output is used
+       float, pointer, dimension(:,:,:) :: surf, eps, kappa, rhs, p
+       int :: i
+!
+       character(len=80) :: filename, output_format, output_mode
+!
+ __NULL_COMM_STOP
+ __QPRINT
+! macro to add communicator to calls to output routine
+       p=>state_get3df('phi', ctx)
+       eps=>state_get3df('eps', ctx)
+       kappa=>state_get3df('kappa', ctx)
+       rhs=>state_get3df('rhs', ctx)
+!
+       if (existtag_nocase('output_format', ctx)) then 
+        output_format=getval_nocase_upper('output_format', ctx);
+        ifmt=-999
+        do i=1,num_fmt
+         if (output_format.eq.format_name(i)) then 
+          ifmt=i
+          exit
+         endif
+        enddo
+       endif
+!
+       if (ifmt.gt.0) then
+        call message(whoami,trim(format_name(ifmt))//' format will be used for output');
+       else
+        call warning(whoami,'Format "'//trim(output_format)//'" is not recognized',0)
+        return
+       endif
+!
+       if (existtag_nocase('output_mode', ctx)) then
+        output_mode=getval_nocase('output_mode', ctx)
+        select case(output_mode);
+         case('BINARY', 'BIN', 'binary', 'bin'); 
+          call message(whoami,'Using binary mode');
+          qbin=.true.
+         case('ASCII', 'TEXT', 'ascii', 'text'); 
+          call message(whoami,'Using ASCII mode');
+          qbin=.false.
+         case default
+          call warning(whoami,'Unknown output mode "'//trim(output_mode)//'". Will use ASCII',0);
+          qbin=.false.
+        end select
+       else
+        call message(whoami,'Using ASCII mode');
+        qbin=.false.
+       endif
+!
+       if (existtag_nocase('epsoutput', ctx)) then
+        filename=getval_nocase('epsoutput', ctx)
+        call message(whoami,'Writing dielectric to file "'//trim(filename)//'"');
+        select case(ifmt)
+         case(plot3d); call plot3Dwrite_scalar(filename,eps,nx,ny,nz,1,qbin _COMMA __COMM)
+        end select
+       endif
+!
+       if (existtag_nocase('kappaoutput', ctx)) then
+        filename=getval_nocase('kappaoutput', ctx)
+        call message(whoami,'Writing ionic strength to file "'//trim(filename)//'"');
+        select case(ifmt)
+         case(plot3d); call plot3Dwrite_scalar(filename,kappa,nx,ny,nz,1,qbin _COMMA __COMM)
+        end select
+       endif
+!
+       if (existtag_nocase('chargeoutput', ctx)) then
+        filename=getval_nocase('chargeoutput', ctx)
+        call message(whoami,'Writing source density to file "'//trim(filename)//'"');
+        select case(ifmt)
+         case(plot3d); call plot3Dwrite_scalar(filename,rhs,nx,ny,nz,1,qbin _COMMA __COMM)
+        end select
+       endif
+!
+       if (existtag_nocase('potoutput', ctx)) then
+        filename=getval_nocase('potoutput', ctx)
+        call message(whoami,'Writing potential to file "'//trim(filename)//'"');
+        select case(ifmt)
+         case(plot3d); call plot3Dwrite_scalar(filename,p,nx,ny,nz,1,qbin _COMMA __COMM)
+        end select
+       endif
+!
+!    check for surface output options
+!
+       if (existtag_nocase('surfoutput', ctx).or.existtag_nocase('alloutput', ctx)) then
+        nullify(surf)
+        if (object_initialized) then 
+         surf=>object_surface_pointer()
+         if (.not.associated(surf)) then
+          call warning(whoami, 'Object initialized but shape density is null. Will output zero.',0)
+          allocate(surf(nx,ny,nz)); surf=0d0
+         endif
+        else
+         call warning(whoami, 'Object not initialized. Shape density is everywhere zero.',0)
+         allocate(surf(nx,ny,nz)); surf=0d0
+        endif
+       endif
+!
+       if (existtag_nocase('surfoutput', ctx)) then
+        filename=getval_nocase('surfoutput', ctx)
+        call message(whoami,'Writing shape density to file "'//filename(1:len_trim(filename))//'"');
+        select case(ifmt)
+         case(plot3d); call plot3Dwrite_scalar(filename,surf,nx,ny,nz,1,qbin _COMMA __COMM)
+        end select
+       endif
+!
+!    plot five (four in 2D)  variables that correspond to the plot3D "solution"
+       if (existtag_nocase('alloutput', ctx)) then
+        filename=getval_nocase('alloutput', ctx)
+        call message(whoami,'Writing data and solution [EPS(1),K(2),RHS(3),P(4),RHO(5)] to file "'&
+&                                                       //filename(1:len_trim(filename))//'"')
+        select case(ifmt)
+         case(plot3d); 
+          call plot3Dwrite_solution(filename,eps,kappa,rhs,p,surf,nx,ny,nz,1,qbin _COMMA __COMM)
+        end select
+       endif
+!
+!    destroy surf, if needed
+       if (existtag_nocase('surfoutput', ctx).or.existtag_nocase('alloutput', ctx)) then
+        if (.not.object_initialized) then ; deallocate(surf)
+        elseif (.not.associated(object_surface_pointer())) then ; deallocate(surf)
+        endif
+       endif
+!
+       if (existtag_nocase('gridoutput', ctx)) then
+        filename=getval_nocase('gridoutput', ctx)
+        call message(whoami,'Writing grid to file "'//filename(1:len_trim(filename))//'"');
+        select case(ifmt)
+         case(plot3d); call plot3Dwrite_grid(filename,xcen,ycen,zcen,nx,ny,nz,1,qbin _COMMA __COMM)
+        end select
+       endif
+!
+       end subroutine ches_output
+!*********************************************************************************!
+       subroutine ches_done()
+       __IAM(CHES_DONE)
+       character(len=20) :: solver
+!
+       if (existtag('OBJECT', ctx) .or. existtag('object', ctx)) then 
+        if (object_initialized) then 
+         call object_done()
+        endif
+       endif
+!
+       if     (existtag('SOLVER', ctx)) then ; solver=getval('SOLVER', ctx); call toupper(solver);
+       elseif (existtag('solver', ctx)) then ; solver=getval('solver', ctx); call toupper(solver); 
+       else
+        ches_initialized=.false.
+        return
+       endif
+! special case: NONE -- do nothing
+       if (solver.eq.'NONE') then 
+        ches_initialized=.false.
+        return
+       endif
+!
+       select case(solver)
+!*********************************************************************************!
+#define __NM MULTIGRID
+#include "macro2.def"
+!*********************************************************************************!
+       end select
+!
+       ches_initialized=.false.
+!
+       end subroutine ches_done
+!*********************************************************************************!
+       subroutine ches_exec()  ! execute command block
+       __IAM(CHES_EXEC)
+       character(len=:), pointer :: command
+       int :: l
+!
+       if (noexec(ctx)) return
+!
+__NULL_COMM_STOP
+__QPRINT
+       call message(whoami,'Executing commands within context "'//trim(ctx)//'"')
+!
+       do
+        command=>get_next_command(ctx)
+        if (.not.associated(command)) exit
+        call toupper(command)
+        l=len_trim(command)
+!
+        call message(whoami, ' =====> "'//command(1:l)//'"');
+!
+        select case(command(1:l))
+         case('INIT','INITIALIZE') ; call ches_init()
+         case('SOLVE','RUN','EXEC') ; call ches_solve()
+         case('OUTPUT') ; call ches_output()
+         case('DONE','STOP','END') ; call ches_done()
+         case default; call warning(whoami, 'Unknown command. Skipping.',-1)
+        end select
+!
+        if (fatal_warning(__COMM)) return
+!
+        deallocate(command)
+       enddo
+!
+       end subroutine ches_exec
+!*********************************************************************************!
+       end module ches

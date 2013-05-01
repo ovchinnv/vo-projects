@@ -1,7 +1,7 @@
 SHELL=/bin/sh
 #
 CC=gcc
-CFLAGS =-O3 -fno-math-errno -c
+CFLAGS =-O3 -fno-math-errno -g -c
 #---INTEL
 #FC=ifort
 #FFLAGS=-O2 -c
@@ -12,9 +12,10 @@ CFLAGS =-O3 -fno-math-errno -c
 #MPI_HOME=/usr/local/mpich2-intel
 #---GNU
 FC=gfortran
-#FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  #-fopenmp 
-FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno #-fbounds-check -frange-check 
-MPI_HOME=/usr/local/mpich2-gnu
+FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  #-fopenmp 
+#FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno #-fbounds-check -frange-check 
+#MPI_HOME=/usr/local/mpich2-gnu
+MPI_HOME=/usr/lib/openmpi
 #---PATHSCALE
 #FC=pathf95
 #FFLAGS=-Ofast -fno-math-errno -extend-source -INLINE -ipa -c
@@ -26,9 +27,9 @@ MPI_HOME=/usr/local/mpich2-gnu
 #MPI_HOME=/usr/local/mpich2-g95
 #
 # G95 reguires no space between "-D" and the name
-DEFS=-Dint=integer -Dfloat=real*8 -Dbool=logical -Dmpiint=MPI_INTEGER -Dmpifloat=MPI_REAL8 -Dmpichar=MPI_CHARACTER -Dmpiint4=MPI_INTEGER4\
-     -Dmpibool=MPI_LOGICAL -Dint1="integer(kind=KIND('a'))" -D__DMOL -D__RCOMP -D__PARALLEL -D__DMOL -D__CHES -D__FC=$(FC) \
-     -Dint4mpi=integer #-Dint4mpi="integer(KIND=MPI_INTEGER_KIND)"   #-D__PATHSCALE
+DEFS+=-Dint=integer -Dfloat=real*8 -Dbool=logical -Dmpiint=MPI_INTEGER -Dmpifloat=MPI_REAL8 -Dmpichar=MPI_CHARACTER -Dmpiint4=MPI_INTEGER4\
+     -Dmpibool=MPI_LOGICAL -Dint1="integer(kind=KIND('a'))" -D__DMOL -D__RCOMP -D__DMOL -D__CHES -D__EDDIE -D__FC=$(FC) \
+     -Dint4mpi=integer -D__PARALLEL #-D__PATHSCALE #-Dint4mpi="integer(KIND=MPI_INTEGER_KIND)" 
 
 # ! note: the VEC routines are probably slower
 
@@ -44,17 +45,17 @@ AR=xiar
 AFLAGS=rv
 
 LD=$(FC)
-LDFLAGS=#-static -Bstatic -ipo
-LDFLAGS=-static -ipa
+LDFLAGS=-g #-static -Bstatic -ipo
+#LDFLAGS=-static -ipa
 
-GLOBALMACROS=-include $(ROOT)/source.defs 
+GLOBALMACROS=-include $(ROOT)/source.defs
 MSG=-include $(ROOT)/source.msg
 CHMSG=-include $(ROOT)/charmm.msg
 TESTMSG=-include $(ROOT)/test.msg
 GLOBALDEPS=$(ROOT)/source.defs $(ROOT)/source.msg
 
-MPI_INCLUDE=-I $(MPI_HOME)/include
-MPI_LIBS=-L $(MPI_HOME)/lib -lmpich -lmpl -lpthread
+MPI_INCLUDE=-I $(MPI_HOME)/include -I $(MPI_HOME)
+MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lmpi -lmpi_f90 -lmpi_f77 -lpthread
 
 INCLUDES+=-I $(ROOT)/include
 LIBS+=-L $(ROOT)/lib
@@ -67,8 +68,8 @@ CHARMM_SOURCES=$(OBJS:%.o=%.src)
 
 VPATH=$(ROOT) #this is necessary to prevent recompilation under %.stamp rule
 
-FPP=cpp -P
-FPPFLAGS = -C -I $(ROOT)
+FPP=cpp
+FPPFLAGS = -P -C -I $(ROOT) -nostdinc # -nostdinc : avoid including files automatically
 
 .SUFFIXES:
 .SUFFIXES: .o .F90 .a .H .h .c .f .F .stamp
@@ -104,8 +105,8 @@ $(ROOT)/$(NAME).stamp:: $(OBJS) $(DISTRIB)
 	done; 
 	echo -n > $@
 ####################### GENERIC STAMP RESULTS IN DIFFERENT BEHAVIOR : ####################################
-%.stamp:
-	DIR=$@ ; DIR=$(ROOT)/$${DIR%.*} ; if [ -d $$DIR ] ; then cd $$DIR; $(MAKE) ; fi
+%.stamp::
+	DIR=$@ ; DIR=$(ROOT)/$${DIR%.*} ; echo $$DIR ; if [ -d $$DIR ] ; then cd $$DIR; $(MAKE) ; fi
 
 ########################## SOURCE CODE #######################
 %.h:%.H $(LOCALDEPS) $(GLOBALDEPS)
@@ -137,8 +138,8 @@ dynamol:
 	$(MAKE) -C $(ROOT)/dynamol
 string:
 	$(MAKE) -C $(ROOT)/string
-chest:
-	$(MAKE) ches -C $(ROOT)/chest
+continua:
+	$(MAKE) -C $(ROOT)/continua
 
 
 force_look:
@@ -152,7 +153,7 @@ linklibs:
 libs : libraries
 libraries: $(ROOT)/$(NAME).stamp linklibs
 	for d in $(DIRS); do (cd $$d; $(MAKE) libraries); done
-.SILENT : %.stamp clean $(DISTRIB) test
+.SILENT : %.stamp clean $(DISTRIB) test force_look
 clean::
 	rm -f *.mod *.a $(ROOT)/$(NAME).stamp $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(EXE) test.F90 test.dat test.out test.o 
 	if [ -f test ] ; then rm -f test ; fi

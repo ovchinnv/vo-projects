@@ -1,0 +1,81 @@
+!***********************************************************************************
+! utility subroutine to apply boundary conditions (cannot be inside module b/c of shape casting in multigrid_solve)
+! handles dirichlet, neumann and periodic b/c
+      subroutine apply_bc_dnp(u,g,nnx,nny,nnz,boundary,bctype,wgt)
+      use fieldbcdef
+      use SIZE, only : q2D
+      __IMPNONE
+      float, intent(in) :: wgt ! bc value is determined by extrapolation using wgt, which reflects the location of the boundary
+      float :: wgt_
+! g is assumed size recast to 1D shape because of conflict of dimension between u(3D) and g(2D) (see below)
+      int :: nnx,nny,nnz
+      int :: boundary
+      int :: bctype
+      float :: u(nnx,nny,nnz), g(*) ! the boundary array g is assumed to have ONLY inner points, but the main array u has ghost points
+!
+      int :: ib, ie, jb, je, kb, ke
+      int :: di, dj, dk, ip, jp, kp
+      int :: i, j, k, ind, dir
+!
+!    preset indices:
+!
+      ib=2; ie=nnx-1; ! limiting indices of inner points 
+      jb=2; je=nny-1;
+      kb=2; ke=nnz-1;
+!
+      select case(boundary)
+        case(left);
+         ib=ib-1; ie=ib; di=+1; dj=0; dk=0; dir=di
+        case(right);
+         ie=ie+1; ib=ie; di=-1; dj=0; dk=0; dir=di
+        case(bottom);
+         jb=jb-1; je=jb; dj=+1; di=0; dk=0; dir=dj
+        case(top);
+         je=je+1; jb=je; dj=-1; di=0; dk=0; dir=dj
+        case(front);
+         kb=kb-1; ke=kb; dk=+1; di=0; dj=0; dir=dk
+         if (q2D) ke=0; ! for two dimensions do nothing for z-boundaries
+        case(back);
+         ke=ke+1; kb=ke; dk=-1; di=0; dj=0; dir=dk
+         if (q2D) ke=0
+        case default;
+         ke=0 ! set ivalid indices so that no loops are executed; better than early return
+      end select ! which boundary
+!************************************
+      ind=1
+      select case(bctype)
+!***************************
+        case(dirichlet, dirichletg); ! note that array layout is crucial here: we are assuming the standard fortran organization
+         do k=kb,ke;         kp=k+dk;
+          do j=jb,je;        jp=j+dj;
+           do i=ib,ie;       ip=i+di;
+!
+            u(i,j,k) = u(ip,jp,kp) + wgt * ( g(ind) - u(ip,jp,kp) ); ! wgt: d btw gp and 1st / d btw bdry and first
+!
+            ind=ind+1;                             enddo; enddo; enddo
+!***************************
+        case(neumann, neumanng);
+         wgt_ = wgt*(-dir)
+         do k=kb,ke;         kp=k+dk;
+          do j=jb,je;        jp=j+dj;
+           do i=ib,ie;       ip=i+di;
+!
+            u(i,j,k) = u(ip,jp,kp) +  wgt_ * g(ind); ! IMPORTANT: in this case wgt is the appropriate metric 
+!
+            ind=ind+1;                             enddo; enddo; enddo
+!***************************
+        case(periodic); 
+!
+         dk=(nnz-2)*dk;     dj=(nny-2)*dj;    di=(nnx-2)*di; ! wrap around
+!
+         do k=kb,ke;         kp=k+dk;
+          do j=jb,je;        jp=j+dj;
+           do i=ib,ie;       ip=i+di;
+!
+            u(i,j,k) = u(ip,jp,kp);          ! g or wgt not needed at all
+!***************************
+                                                   enddo; enddo; enddo
+      end select ! bctype
+!
+      end subroutine apply_bc_dnp
+!***********************************************************************************

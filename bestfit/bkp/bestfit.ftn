@@ -11,6 +11,14 @@
 !!DEC$ ATTRIBUTES FORCEINLINE :: norm3
 !!DEC$ ATTRIBUTES FORCEINLINE :: veccross3
 !!DEC$ ATTRIBUTES FORCEINLINE :: unit3
+!!DEC$ ATTRIBUTES FORCEINLINE :: com
+!!DEC$ ATTRIBUTES FORCEINLINE :: rmsd
+!
+#define __DECL_QDIMSWAP\
+ bool, optional, intent(in) :: qdimswap_;\
+ bool :: qdimswap;\
+ if (present(qdimswap_)) then ; qdimswap=qdimswap_ ; else ; qdimswap=.false. ; endif
+!
 !
 __CHARMM_ONLY##IF NEWBESTFIT
 !
@@ -23,6 +31,7 @@ __CHARMM_ONLY##IF NEWBESTFIT
        bool, private :: qdebug=__DEBUG
        bool, private :: qcheckdet=__CHKDET
        bool, private :: qdetfailtrace=__DETFAILTRACE
+       bool, private :: qiter_refine=__REFINE ! iterative refinement
       !
       !parameters
        float, parameter :: zero=0d0
@@ -87,33 +96,47 @@ __CHARMM_ONLY##IF NEWBESTFIT
      &             v1(1)*v2(2)-v1(2)*v2(1)/)
        end function veccross3
       !###############################################################
-       function com(x,w)
+       function com(x,w,qdimswap_)
        __IMPNONE
       ! note: assuming sum(w)=1
        float :: x(:,:), w(:), com(3)
-!       com=matmul(transpose(x),w) ! quick and dirty
-       com(1)=dot_product(x(:,1),w)
-       com(2)=dot_product(x(:,2),w)
-       com(3)=dot_product(x(:,3),w)
+       __DECL_QDIMSWAP
+       if (qdimswap) then
+        com=matmul(x,w)
+       else
+        com(1)=dot_product(x(:,1),w); com(2)=dot_product(x(:,2),w); com(3)=dot_product(x(:,3),w)
+       endif
 !
        end function com
       !###############################################################
-       function rmsd(x,y,w)
+       function rmsd(x,y,w,qroot_,qdimswap_)
        __IMPNONE
       ! note: assuming sum(w)=1
-       float :: x(:,:), y(:,:), w(:), rmsd, rmsd2!, wsum
+       float :: x(:,:), y(:,:), w(:), rmsd ! , wsum
        int :: n, m, i, j
-       n=size(x,1); m=size(x,2); rmsd2=zero; ! wsum=zero
-       do i=1,n
-        do j=1,m
-         rmsd2=rmsd2+( ( x(i,j)-y(i,j) )**2 * w(i) )
-        enddo
+       bool, optional, intent(in) :: qroot_ ! whether or not to take the (expensive) square root
+       bool :: qroot
+       __DECL_QDIMSWAP
+       if (present(qroot_)) then ; qroot = qroot_ ; else ; qroot=.true. ; endif
+       n=size(x,1); m=size(x,2); rmsd=zero ! wsum=zero
+       if (qdimswap) then
+        do i=1,m
+         do j=1,n
+          rmsd=rmsd+( ( x(j,i)-y(j,i) )**2 * w(i) )
+         enddo; 
 !        wsum=wsum+w(i)
-       enddo
+        enddo
+       else
+        do i=1,n
+         do j=1,m
+          rmsd=rmsd+( ( x(i,j)-y(i,j) )**2 * w(i) )
+         enddo; 
+!        wsum=wsum+w(i)
+        enddo
+       endif
 !       if (wsum.lt.__ERRTOL) wsum=1d0
-!       rmsd=sqrt(rmsd2/w2sum)
-       rmsd=sqrt(rmsd2)
-!       write(6,*) '*******RMSD: ',rmsd
+!       rmsd=rmsd/wsum
+       if (qroot) rmsd=sqrt(rmsd)
        end function rmsd
       !################################################################
        subroutine eig3s(M, eval, evec) 
@@ -193,19 +216,21 @@ __DBGCOMM        __DEBUG_OUT(*, ' Det(M) [must be >=0] : ', dummy)
 !        eval(3)=two*rootQ*(a*cos_4pi_o3-b*sin_4pi_o3)-a2*oo3
        endif
 ! ad hoc : try to refine eigenvalues using Newton-Raphson
-! turns out that the correction is already machine precision, so no improvement is possible
+! for most cases, turns out that the correction is already machine precision, so no improvement is possible
 !      __DBGCOMM write(0,*) 'EVAL:', eval
-!       do j=2,2
-!        do k=1,5
-!        d=eval(j)
-!        a=(d**3+a2*d**2+a1*d+a0)/(three*d**2+two*a2*d+a1)
-!        if (abs(a).lt.errtol_) a=0.5*sign(errtol_,a) ! make sure we take a finite step
-!        __DBGCOMM write(0,*) 'CHARACTERISTIC DETERMINANT:',d,a
-!        d=d-a
-!        eval(j)=d
-!        enddo
+       if (qiter_refine) then
+        do j=1,3
+         d=eval(j)
+         do k=1,2
+          a=(d**3+a2*d**2+a1*d+a0)/(three*d**2+two*a2*d+a1) ! * half ! slow down deliberately
+!         if (abs(a).lt.errtol_) a=0.9*sign(errtol_,a) ! make sure we take a finite step
+         __DBGCOMM write(0,*) 'CHARACTERISTIC DETERMINANT:',d,a
+          d=d-a
+         enddo
+         eval(j)=d
 !        stop
-!       enddo
+        enddo
+       endif
 !
       __DBGCOMM write(0,*) 'EVAL:', eval
       __DBGCOMM Dd=Rr/rootQ3
@@ -214,12 +239,12 @@ __DBGCOMM        __DEBUG_OUT(*, ' Det(M) [must be >=0] : ', dummy)
        if (abs(eval(1)) .lt. errtol_) eval(1)=zero
        if (abs(eval(2)) .lt. errtol_) eval(2)=zero
        if (abs(eval(3)) .lt. errtol_) eval(3)=zero
-      ! sort eigen-values in DECREASING order
-       if (eval(1).lt.eval(2)) then;
+      ! sort eigen-values in the order of DECREASING MAGNITUDE
+       if (abs(eval(1)).lt.abs(eval(2))) then;
         dummy=eval(1); eval(1)=eval(2); eval(2)=dummy; endif
-       if (eval(1).lt.eval(3)) then;
+       if (abs(eval(1)).lt.abs(eval(3))) then;
         dummy=eval(1); eval(1)=eval(3); eval(3)=dummy; endif
-       if (eval(2).lt.eval(3)) then;
+       if (abs(eval(2)).lt.abs(eval(3))) then;
         dummy=eval(2); eval(2)=eval(3); eval(3)=dummy; endif
       !######################### now compute eigenvectors ############
       !
@@ -238,7 +263,7 @@ __DBGCOMM        __DEBUG_OUT(*, ' Det(M) [must be >=0] : ', dummy)
         elseif (norm3(r).lt.errtol_) then; v=(/zero, zero, one /)          __DBGCOMM ;write(0,*) 200, r
         elseif (abs(abs(dot_product(p,q)) - pn*qn) .gt. errtol_) then ! P || Q
       ! set z=1
-      ! use Cramer's rule
+      ! use Cramer`s rule
          det12=a*e-b*d
          det13=a*h-b*g
       !
@@ -299,10 +324,37 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
          evec(:,1)=veccross3(evec(:,2),evec(:,3))
         endif
        endif
+!
+! optional power iterations to improve pesky eigenvectors
+       if (qiter_refine) then
+! first eigenvalue/vector pair
+        if (abs(eval(1)).gt.errtol_) then
+         a=evec(1,1); b=evec(2,1); c=evec(3,1)
+         dummy=one/eval(1)
+         do j=1,2
+          d = a11*a + a12*b + a13*c; e = a21*a + a22*b + a23*c; f = a31*a + a32*b + a33*c; a=d*dummy ; b=e*dummy ; c=f*dummy
+         enddo
+         v=unit3((/a,b,c/)) ; evec(:,1)=v ;
+! second eigenvalue/vector pair
+         if (abs(eval(2)).gt.errtol_) then
+          a=evec(1,1); b=evec(2,1); c=evec(3,1)
+          d=evec(1,2); e=evec(2,2); f=evec(3,2)
+          theta=one/eval(2)
+          do j=1,3
+           dummy=a*d+b*e+c*f;
+           d=d-dummy*a ; e=e-dummy*b ; f=f-dummy*c
+           g = a11*d + a12*e + a13*f; h = a21*d + a22*e + a23*f; i = a31*d + a32*e + a33*f; d=g*theta ; e=h*theta ; f=i*theta
+          enddo ; r=unit3((/d,e,f/)) ; evec(:,2)=r ;
+         endif
+! obtain third vector using a cross product
+         evec(:,3)=veccross3(evec(:,1),evec(:,2))
+        endif
+       endif ! qiter_refine
+!
       !
        end subroutine eig3s
       !#########################################################
-       subroutine RMSBestFit(x0,y0,w,u,ibeg,iend,gradu,eigval)
+       subroutine RMSBestFit(x0,y0,w,u,ibeg_,iend_,gradu,eigval,qdimswap_)
        __IMPNONE
       ! fit structure in x0 onto y0 in the sense of least RMSD
       ! implementation of the algorithm by Kabsch 1976 (plus reflection modification)
@@ -316,25 +368,31 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
       !***************************************************************
       ! x0 -- orientation structure
       ! y0 -- template structure
-      ! weights -- fitting weights, e.g. for mass weighting
-      ! x -- output structure
-      ! q -- translation vector (points from COM of x0 to COM of y0
+      ! w -- fitting weights, e.g. mass weighting
+      ! (note: not requiring that sum(w)=1, but this is HIGHLY recommended for FP precision)
       ! u -- rotation matrix [ such that x = u . x0 ]
+      ! ibeg -- index of first atom with respect to whose coords the gradients are to be computed
+      ! iend -- index of last atom with respect to whose coords the gradients are to be computed
+      ! gradu -- gradient array
+      ! eigval -- square root of eigenvalues of the correlation matrix
+      ! qdimswap -- if false, the shapes of coordinate arrays are (1:natom,1:3); if true, (1:3,1:natom)
 !
-      ! note: not requiring that sum(w)=1, but this is HIGHLY recommended for FP precision
-       float :: x0(:,:), y0(:,:), w(:)
-       float :: u(3,3)
-       int, optional :: ibeg, iend
+       float, intent(in) :: x0(:,:), y0(:,:), w(:)
+       float, intent(out) :: u(3,3)
+       int, optional, intent(in) :: ibeg_, iend_
        float, optional :: gradu(:,:,:,:) ! gradient of rotation matrix wrt x0
        float, optional, intent(out) :: eigval(3) ! eigenvalues
+!
        float, dimension(size(x0,1)) :: x1, x2, x3, y1, y2, y3
+!
        float :: xcom(3),ycom(3),r11,r12,r13,r21,r22,r23,r31,r32,r33,   &
      &     detr,reflect_flag, x1w, x2w, x3w
        float :: r(3,3),rr(3,3),a(3,3),b(3,3),b0(3,3),mu(3),oomu(2),    &
      &           rmu(3), roomu(2)
        int :: i, j, k, l, n
+       int :: ibeg, iend
        character(len=10) :: whoami='RMSBestFit'
- __DECLARE_MSGBUF
+       __DECLARE_MSGBUF
 ! for derivatives:
        bool :: qgrad
        float :: invA(3,3),detA,e,v(3),c(3),dvdrr(3,3,3,3),dmudrr(3,3,3)
@@ -346,54 +404,61 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
        float :: x, y, z, wgt, mu1, mu2, errtol_
        float :: G(3,3,3)
 !
+       __DECL_QDIMSWAP
+!
        errtol_=__ERRTOL
 !
        if (qdebug) then ; __DEBUG_OUT(*, whoami, 'ERRTOL:= ', errtol_) ; endif
 !
-       qgrad=(present(gradu).and.present(ibeg).and.present(iend))
+       qgrad=(present(gradu).and.present(ibeg_).and.present(iend_))
+       if (present(qdimswap_)) then ; qdimswap=qdimswap ; else ; qdimswap=.false. ; endif
 !
+       xcom=com(x0,w,qdimswap) ;  ycom=com(y0,w,qdimswap)
 !
-       n=size(x0, 1)
-!
-       if (qgrad) then
-        ibeg=max(1,ibeg)
-        iend=min(n,iend)
-       endif
-!
-       xcom=com(x0,w)
-       ycom=com(y0,w)
-!
-       x1=x0(:,1)-xcom(1) !x
-       x2=x0(:,2)-xcom(2) !y
-       x3=x0(:,3)-xcom(3) !z
-!
-       y1=y0(:,1)-ycom(1)
-       y2=y0(:,2)-ycom(2)
-       y3=y0(:,3)-ycom(3)
 ! initialize
        r11=zero; r12=zero; r13=zero 
        r21=zero; r22=zero; r23=zero
        r31=zero; r32=zero; r33=zero
-      ! build correlation matrix
-       do i=1,n
-        x1w=x1(i)*w(i)
-        x2w=x2(i)*w(i)
-        x3w=x3(i)*w(i)
+!
+       if (qdimswap) then
+        n=size(x0, 2)
+        do i=1,n
+
+
+
+       else
+        n=size(x0, 1)
+        x1=x0(:,1)-xcom(1) !x
+        x2=x0(:,2)-xcom(2) !y
+        x3=x0(:,3)-xcom(3) !z
+!
+        y1=y0(:,1)-ycom(1)
+        y2=y0(:,2)-ycom(2)
+        y3=y0(:,3)-ycom(3)
+! build correlation matrix
+        do i=1,n
+         x1=x0(i,1)-xcom(1)
+
+         x1w=x1(i)*w(i)
+         x2w=x2(i)*w(i)
+         x3w=x3(i)*w(i)
       !
-        r11=r11+y1(i)*x1w
-        r12=r12+y1(i)*x2w
-        r13=r13+y1(i)*x3w
+         r11=r11+y1(i)*x1w
+         r12=r12+y1(i)*x2w
+         r13=r13+y1(i)*x3w
       !
-        r21=r21+y2(i)*x1w
-        r22=r22+y2(i)*x2w
-        r23=r23+y2(i)*x3w
+         r21=r21+y2(i)*x1w
+         r22=r22+y2(i)*x2w
+         r23=r23+y2(i)*x3w
       !
-        r31=r31+y3(i)*x1w
-        r32=r32+y3(i)*x2w
-        r33=r33+y3(i)*x3w
-       enddo
+         r31=r31+y3(i)*x1w
+         r32=r32+y3(i)*x2w
+         r33=r33+y3(i)*x3w
+        enddo
+       endif ! qdimswap
+!
        r=RESHAPE( (/r11,r21,r31,r12,r22,r32,r13,r23,r33/),(/3,3/))
-       rr=matmul(transpose(r),r) ! r'r
+       rr=matmul(transpose(r),r) ! r`r
       ! diagonalize rr
        call eig3s(rr, mu, a) ! mu -- evalues a -- evectors
 !
@@ -499,6 +564,8 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
        endif
 !    compute gradient
        if (qgrad) then
+        ibeg = max(1,ibeg_)
+        iend = min(n,iend_)
 !    1) compute derivative of A w.r.t. RR (and Mu w.r.t RR)
 !    2) compute derivative of RR w.r.t. atom coordinates
 !    3) combine 1 and 2 to produce the derivative of u w.r.t coordinates
@@ -780,7 +847,7 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
         r33=r33+y3(i)*x3w
        enddo
        r=RESHAPE( (/r11,r21,r31,r12,r22,r32,r13,r23,r33/),(/3,3/))
-       rr=matmul(transpose(r),r) ! r'r
+       rr=matmul(transpose(r),r) ! r`r
       ! determinant of r
 !      detr=
 !     &  r(1,1)*r(2,2)*r(3,3)+r(1,2)*r(2,3)*r(3,1)+r(1,3)*r(2,1)*r(3,2)

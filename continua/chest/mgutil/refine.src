@@ -1,0 +1,266 @@
+ subroutine refine(f,c,nx,ny,nz,i2d)
+! used to interpolate solution at coarse level
+! note that both arrays are dimensioned to include boundary points
+ use constants, only: three, nine, twentyseven
+ implicit none
+ int :: nx, ny, nz
+ int1 :: i2d
+ float :: f(nx+2,ny+2,nz+2), c(nx/2+2,ny/2+2,nz/(2-i2d)+2)
+ int :: nnx, nny, nnz, nxp, nyp, nzp, nnxp, nnyp, nnzp, nnxp2, nnyp2, nnzp2
+ float :: coef
+ float, parameter :: cb=2d0/3d0
+!
+#ifndef __PVEC
+ int :: i,j,k,jp,kp,ii,jj,kk
+ float :: cwsf, cesf, cwnf, cenf, cwsb, cesb, cwnb, cenb
+#endif
+!
+ coef=1d0/(4**(3-i2d)) ! 1/64 in 3D; 1/16 in 2D
+!
+ nnx=nx/2; nny=ny/2; nnz=nz/(2-i2d);
+ nxp=nx+1; nyp=ny+1; nzp=nz+1;
+ nnxp=nnx+1; nnyp=nny+1; nnzp=nnz+1;
+ nnxp2=nnxp+1; nnyp2=nnyp+1; nnzp2=nnzp+1;
+! note: both nnx and nx correspond to the number of inner points; thus, they have different meaning from those in the coarsening routines
+! assign corner points to coarse array (this is ad hoc but is needed for the interpolation below)
+#define __I 2:nnxp
+#define __J 2:nnyp
+#define __K 2:nnzp
+! *************** corner lines (12)
+#define __COARSEBC 
+#ifdef __COARSEBC
+! k-
+! k-direction is first, because the commands hold in 3D and 2D
+ c(1    ,1    ,__K)=c(1    ,2    ,__K)+c(2   ,1    ,__K)-c(2   ,2   ,__K)
+ c(nnxp2,1    ,__K)=c(nnxp2,2    ,__K)+c(nnxp,1    ,__K)-c(nnxp,2   ,__K)
+ c(nnxp2,nnyp2,__K)=c(nnxp2,nnyp ,__K)+c(nnxp,nnyp2,__K)-c(nnxp,nnyp,__K)
+ c(1    ,nnyp2,__K)=c(2    ,nnyp2,__K)+c(1   ,nnyp ,__K)-c(2   ,nnyp,__K)
+!
+ if (i2d.eq.0) then ! additional boundary points in 3D 
+! i-
+ c(__I,1    ,1)    =c(__I,1    ,2)    +c(__I,2   ,1)    -c(__I,2   ,2   )
+ c(__I,nnyp2,1)    =c(__I,nnyp2,2)    +c(__I,nnyp,1)    -c(__I,nnyp,2   )
+ c(__I,nnyp2,nnzp2)=c(__I,nnyp2,nnzp) +c(__I,nnyp,nnzp2)-c(__I,nnyp,nnzp)
+ c(__I,1    ,nnzp2)=c(__I,2    ,nnzp2)+c(__I,1,nnzp)    -c(__I,2,   nnzp)
+! j-
+ c(1    ,__J,1    )=c(2    ,__J,1    )+c(1    ,__J,2   )-c(2   ,__J,2   )
+ c(1    ,__J,nnzp2)=c(2    ,__J,nnzp2)+c(1    ,__J,nnzp)-c(2   ,__J,nnzp)
+ c(nnxp2,__J,nnzp2)=c(nnxp ,__J,nnzp2)+c(nnxp2,__J,nnzp)-c(nnxp,__J,nnzp)
+ c(nnxp2,__J,1    )=c(nnxp ,__J,1    )+c(nnxp2,__J,2   )-c(nnxp,__J,2  )
+! ************** corner points (8)
+ c(1    ,1,1)=cb * ( c(2   ,1,1) + c(1,    2,1) + c(1    ,1,2) ) - c(2   ,2,2)
+!
+ c(nnxp2,1,1)=cb * ( c(nnxp,1,1) + c(nnxp2,2,1) + c(nnxp2,1,2) ) - c(nnxp,2,2)
+ c(1,nnyp2,1)=cb * ( c(1,nnyp,1) + c(1,nnyp2,2) + c(2,nnyp2,1) ) - c(2,nnyp,2)
+ c(1,1,nnzp2)=cb * ( c(1,1,nnzp) + c(2,1,nnzp2) + c(1,2,nnzp2) ) - c(2,2,nnzp)
+!
+ c(nnxp2,nnyp2,1    )=cb*(c(nnxp ,nnyp2,1)    +c(nnxp2,nnyp,1)     +c(nnxp2,nnyp2,2    ))-c(nnxp,nnyp,2)
+ c(1    ,nnyp2,nnzp2)=cb*(c(1    ,nnyp ,nnzp2)+c(1    ,nnyp2,nnzp )+c(2    ,nnyp2,nnzp2))-c(2   ,nnyp,nnzp)
+ c(nnxp2,1    ,nnzp2)=cb*(c(nnxp2,1    ,nnzp )+c(nnxp ,1    ,nnzp2)+c(nnxp2,2    ,nnzp2))-c(nnxp,2   ,nnzp)
+!
+ c(nnxp2,nnyp2,nnzp2)=cb*(c(nnxp ,nnyp2,nnzp2)+c(nnxp2,nnyp,nnzp2) +c(nnxp2,nnyp2,nnzp ))-c(nnxp,nnyp,nnzp)
+!
+!
+#else
+ if (i2d.eq.0) then ! 3D
+#endif // ! compute BC on the c arrays before interpolation
+!
+! calculate internal points (note that we make use of all points, including the corner points)
+#ifndef __PVEC
+ do k=1,nnz+1
+  kk=k*2; kp=k+1
+  do j=1,nny+1
+   jj=j*2 ; jp=j+1 ; cwsf=coef*c(1,j,k) ; cwnf=coef*c(1,jp,k); cwsb=coef*c(1,j,kp) ; cwnb=coef*c(1,jp,kp); 
+!   jj=j*2 ; jp=j+1 ; cwsf=c(1,j,k) ; cwnf=c(1,jp,k); cwsb=c(1,j,kp) ; cwnb=c(1,jp,kp); 
+   do i=1,nnx+1 ; ii=i*2
+    cesf=coef*c(i+1,j,k) ; cenf=coef*c(i+1,jp,k) ; cesb=coef*c(i+1,j,kp) ; cenb=coef*c(i+1,jp,kp); 
+!    cesf=c(i+1,j,k) ; cenf=c(i+1,jp,k) ; cesb=c(i+1,j,kp) ; cenb=c(i+1,jp,kp); 
+!
+    f(ii,jj,kk)    =f(ii,jj,kk)    + (cwsf + (cesf + cwnf + cwsb)*three + (cenf + cesb + cwnb)*nine + cenb*twentyseven)!*coef
+    f(ii-1,jj,kk)  =f(ii-1,jj,kk)  + (cesf + (cwsf + cenf + cesb)*three + (cwnf + cwsb + cenb)*nine + cwnb*twentyseven)!*coef
+    f(ii,jj-1,kk)  =f(ii,jj-1,kk)  + (cwnf + (cenf + cwsf + cwnb)*three + (cesf + cenb + cwsb)*nine + cesb*twentyseven)!*coef
+    f(ii-1,jj-1,kk)=f(ii-1,jj-1,kk)+ (cenf + (cwnf + cesf + cenb)*three + (cwsf + cwnb + cesb)*nine + cwsb*twentyseven)!*coef
+!
+    f(ii,jj,kk-1)    =f(ii,jj,kk-1)    + (cwsb + (cesb + cwnb + cwsf)*three + (cenb + cesf + cwnf)*nine + cenf*twentyseven)!*coef
+    f(ii-1,jj,kk-1)  =f(ii-1,jj,kk-1)  + (cesb + (cwsb + cenb + cesf)*three + (cwnb + cwsf + cenf)*nine + cwnf*twentyseven)!*coef
+    f(ii,jj-1,kk-1)  =f(ii,jj-1,kk-1)  + (cwnb + (cenb + cwsb + cwnf)*three + (cesb + cenf + cwsf)*nine + cesf*twentyseven)!*coef
+    f(ii-1,jj-1,kk-1)=f(ii-1,jj-1,kk-1)+ (cenb + (cwnb + cesb + cenf)*three + (cwsb + cwnf + cesf)*nine + cwsf*twentyseven)!*coef
+!   
+    cwsf=cesf ; cwnf=cenf;   cwsb=cesb ; cwnb=cenb;
+   enddo ! i
+  enddo ! j
+ enddo ! k
+#else
+ f(2:nxp:2,2:nyp:2,2:nzp:2) = f(2:nxp:2,2:nyp:2,2:nzp:2)+&
+                               coef*( c(1:nnx,1:nny,1:nnz)   +&
+                                3d0*( c(2:nnx+1,1:nny,1:nnz) +& 
+                                      c(1:nnx,2:nny+1,1:nnz) +&
+                                      c(1:nnx,1:nny,2:nnz+1) +&
+                                3d0*( c(2:nnx+1,2:nny+1,1:nnz) +& 
+                                      c(2:nnx+1,1:nny,2:nnz+1) +&
+                                      c(1:nnx,2:nny+1,2:nnz+1) +&
+                                3d0*  c(2:nnx+1,2:nny+1,2:nnz+1))))
+!
+ f(3:nxp:2,2:nyp:2,2:nzp:2) = f(3:nxp:2,2:nyp:2,2:nzp:2)+&
+                               coef*( c(3:nnx+2,1:nny,1:nnz)   +&
+                                3d0*( c(2:nnx+1,1:nny,1:nnz)   +& 
+                                      c(3:nnx+2,2:nny+1,1:nnz) +&
+                                      c(3:nnx+2,1:nny,2:nnz+1) +&
+                                3d0*( c(2:nnx+1,2:nny+1,1:nnz) +& 
+                                      c(2:nnx+1,1:nny,2:nnz+1) +&
+                                      c(3:nnx+2,2:nny+1,2:nnz+1) +&
+                                3d0*  c(2:nnx+1,2:nny+1,2:nnz+1))))
+!
+ f(2:nxp:2,3:nyp:2,2:nzp:2) = f(2:nxp:2,3:nyp:2,2:nzp:2)+&
+                               coef*( c(1:nnx,3:nny+2,1:nnz)   +&
+                                3d0*( c(2:nnx+1,3:nny+2,1:nnz) +& 
+                                      c(1:nnx,2:nny+1,1:nnz) +&
+                                      c(1:nnx,3:nny+2,2:nnz+1) +&
+                                3d0*( c(2:nnx+1,2:nny+1,1:nnz) +& 
+                                      c(2:nnx+1,3:nny+2,2:nnz+1) +&
+                                      c(1:nnx,2:nny+1,2:nnz+1) +&
+                                3d0*  c(2:nnx+1,2:nny+1,2:nnz+1))))
+!
+ f(2:nxp:2,2:nyp:2,3:nzp:2) = f(2:nxp:2,2:nyp:2,3:nzp:2)+&
+                               coef*( c(1:nnx,1:nny,3:nnz+2)   +&
+                                3d0*( c(2:nnx+1,1:nny,3:nnz+2) +& 
+                                      c(1:nnx,2:nny+1,3:nnz+2) +&
+                                      c(1:nnx,1:nny,2:nnz+1) +&
+                                3d0*( c(2:nnx+1,2:nny+1,3:nnz+2) +& 
+                                      c(2:nnx+1,1:nny,2:nnz+1) +&
+                                      c(1:nnx,2:nny+1,2:nnz+1) +&
+                                3d0*  c(2:nnx+1,2:nny+1,2:nnz+1))))
+!
+ f(3:nxp:2,3:nyp:2,2:nzp:2) =  f(3:nxp:2,3:nyp:2,2:nzp:2)+&
+                               coef*( c(3:nnx+2,3:nny+2,1:nnz)   +&
+                                3d0*( c(2:nnx+1,3:nny+2,1:nnz)   +& 
+                                      c(3:nnx+2,2:nny+1,1:nnz) +&
+                                      c(3:nnx+2,3:nny+2,2:nnz+1) +&
+                                3d0*( c(2:nnx+1,2:nny+1,1:nnz) +& 
+                                      c(2:nnx+1,3:nny+2,2:nnz+1) +&
+                                      c(3:nnx+2,2:nny+1,2:nnz+1) +&
+                                3d0*  c(2:nnx+1,2:nny+1,2:nnz+1))))
+!
+ f(3:nxp:2,2:nyp:2,3:nzp:2) = f(3:nxp:2,2:nyp:2,3:nzp:2)+&
+                               coef*( c(3:nnx+2,1:nny,3:nnz+2)   +&
+                                3d0*( c(2:nnx+1,1:nny,3:nnz+2) +& 
+                                      c(3:nnx+2,2:nny+1,3:nnz+2) +&
+                                      c(3:nnx+2,1:nny,2:nnz+1) +&
+                                3d0*( c(2:nnx+1,2:nny+1,3:nnz+2) +& 
+                                      c(2:nnx+1,1:nny,2:nnz+1) +&
+                                      c(3:nnx+2,2:nny+1,2:nnz+1) +&
+                                3d0*  c(2:nnx+1,2:nny+1,2:nnz+1))))
+!
+ f(2:nxp:2,3:nyp:2,3:nzp:2) = f(2:nxp:2,3:nyp:2,3:nzp:2)+&
+                               coef*( c(1:nnx,3:nny+2,3:nnz+2)   +&
+                                3d0*( c(2:nnx+1,3:nny+2,3:nnz+2) +& 
+                                      c(1:nnx,2:nny+1,3:nnz+2) +&
+                                      c(1:nnx,3:nny+2,2:nnz+1) +&
+                                3d0*( c(2:nnx+1,2:nny+1,3:nnz+2) +& 
+                                      c(2:nnx+1,3:nny+2,2:nnz+1) +&
+                                      c(1:nnx,2:nny+1,2:nnz+1) +&
+                                3d0*  c(2:nnx+1,2:nny+1,2:nnz+1))))
+!
+ f(3:nxp:2,3:nyp:2,3:nzp:2) = f(3:nxp:2,3:nyp:2,3:nzp:2)+&
+                               coef*( c(3:nnx+2,3:nny+2,3:nnz+2) +&
+                                3d0*( c(2:nnx+1,3:nny+2,3:nnz+2) +& 
+                                      c(3:nnx+2,2:nny+1,3:nnz+2) +&
+                                      c(3:nnx+2,3:nny+2,2:nnz+1) +&
+                                3d0*( c(2:nnx+1,2:nny+1,3:nnz+2) +& 
+                                      c(2:nnx+1,3:nny+2,2:nnz+1) +&
+                                      c(3:nnx+2,2:nny+1,2:nnz+1) +&
+                                3d0*  c(2:nnx+1,2:nny+1,2:nnz+1))))
+!
+#endif
+ else  ! i2d = 1
+#ifndef __PVEC
+ do j=1,nny+1
+  jj=j*2 ; jp=j+1 ; cwsf=coef*c(1,j,2) ; cwnf=coef*c(1,jp,2);
+  do i=1,nnx+1 ; ii=i*2
+   cesf=coef*c(i+1,j,2) ; cenf=coef*c(i+1,jp,2); 
+!
+   f(ii,jj,2)    =f(ii,jj,2)     + cwsf + (cesf + cwnf)*three + cenf*nine
+   f(ii-1,jj-1,2)=f(ii-1,jj-1,2) + cenf + (cesf + cwnf)*three + cwsf*nine
+   f(ii,jj-1,2)  =f(ii,jj-1,2)   + cwnf + (cenf + cwsf)*three + cesf*nine
+   f(ii-1,jj,2)  =f(ii-1,jj,2)   + cesf + (cenf + cwsf)*three + cwnf*nine
+!   
+   cwsf=cesf ; cwnf=cenf
+  enddo
+ enddo
+
+#else
+ f(2:nxp:2,2:nyp:2,2:nzp:2) = f(2:nxp:2,2:nyp:2,2:nzp:2)       +&
+                               coef*( c(1:nnx,1:nny,2:nnz+1)    +&
+                                3d0*( c(2:nnx+1,1:nny,2:nnz+1)  +&
+                                      c(1:nnx,2:nny+1,2:nnz+1)  +&
+                                3d0*  c(2:nnx+1,2:nny+1,2:nnz+1)))
+!
+ f(3:nxp:2,2:nyp:2,2:nzp:2) = f(3:nxp:2,2:nyp:2,2:nzp:2)       +&
+                               coef*( c(3:nnx+2,1:nny,2:nnz+1)  +&
+                                3d0*( c(2:nnx+1,1:nny,2:nnz+1)  +&
+                                      c(3:nnx+2,2:nny+1,2:nnz+1)+&
+                                3d0*  c(2:nnx+1,2:nny+1,2:nnz+1)))
+!
+ f(2:nxp:2,3:nyp:2,2:nzp:2) = f(2:nxp:2,3:nyp:2,2:nzp:2)       +&
+                               coef*( c(1:nnx,3:nny+2,2:nnz+1)  +&
+                                3d0*( c(2:nnx+1,3:nny+2,2:nnz+1)+&
+                                      c(1:nnx,2:nny+1,2:nnz+1)  +&
+                                3d0*  c(2:nnx+1,2:nny+1,2:nnz+1)))
+!
+ f(3:nxp:2,3:nyp:2,2:nzp:2) =  f(3:nxp:2,3:nyp:2,2:nzp:2)      +&
+                               coef*( c(3:nnx+2,3:nny+2,2:nnz+1)+&
+                                3d0*( c(2:nnx+1,3:nny+2,2:nnz+1)+&
+                                      c(3:nnx+2,2:nny+1,2:nnz+1)+&
+                                3d0*  c(2:nnx+1,2:nny+1,2:nnz+1)))
+!
+#endif
+!
+ endif ! i2d
+!
+!
+ end subroutine refine
+!*****************************************************************************************!
+ subroutine refine2d_vec(f,c,nx,ny)
+! used to interpolate solution at coarse level
+! note that both arrays are dimensioned to include boundary points
+ implicit none
+ int :: nx, ny
+ float :: f(nx+2,ny+2), c(nx/2+2,ny/2+2)
+ int :: nnx, nny, nxp, nyp
+ float :: coef=0.0625d0 ! 1/16
+ nnx=nx/2; nny=ny/2
+ nxp=nx+1; nyp=ny+1
+! note: both nnx and nx correspond to the number of inner points; thus, they have different meaning from those in the coarsening routines
+! assign corner points to coarse array (ad hoc and not really needed, but see comments below)
+! c(1,1)        =0.5d0*(c(1,2)         +c(2,1))
+! c(nnx+2,1)    =0.5d0*(c(nnx+1,2)     +c(nnx+2,2))
+! c(1,nny+2)    =0.5d0*(c(2,nny+2)     +c(1,nny+1))
+! c(nnx+2,nny+2)=0.5d0*(c(nnx+1,nny+2) +c(nnx+2,nny+1))
+!
+! calculate internal points (note that we make use of all points, even the corner points, so make sure they are not undefined or inf/NaN)
+ f(2:nxp:2,2:nyp:2) = f(2:nxp:2,2:nyp:2)         &
+                      +coef*( c(1:nnx,1:nny)     &
+                      + 3d0*( c(2:nnx+1,1:nny)    &
+                      +       c(1:nnx,2:nny+1)    &
+                      + 3d0*  c(2:nnx+1,2:nny+1)));
+!
+ f(3:nxp:2,2:nyp:2) = f(3:nxp:2,2:nyp:2)         &
+                      +coef*( c(3:nnx+2,1:nny)    &
+                      + 3d0*( c(2:nnx+1,1:nny)    &
+                      +       c(3:nnx+2,2:nny+1)  &
+                      + 3d0*  c(2:nnx+1,2:nny+1)));
+!
+ f(2:nxp:2,3:nyp:2) = f(2:nxp:2,3:nyp:2)         &
+                      +coef*( c(1:nnx,3:nny+2)    &
+                      + 3d0*( c(1:nnx,2:nny+1)    &
+                      +       c(2:nnx+1,3:nny+2)  & 
+                      + 3d0*  c(2:nnx+1,2:nny+1)));
+!
+ f(3:nxp:2,3:nyp:2) =  f(3:nxp:2,3:nyp:2)        &
+                      +coef*( c(3:nnx+2,3:nny+2)   &
+                      + 3d0*( c(3:nnx+2,2:nny+1)  &
+                      +       c(2:nnx+1,3:nny+2)  &
+                      + 3d0*  c(2:nnx+1,2:nny+1)));
+! note: it may be more efficient (albeit less clear) to rewrite as a series of nested loops
+!
+ end subroutine refine2d_vec

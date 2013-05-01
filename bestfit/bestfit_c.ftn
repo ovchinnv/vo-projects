@@ -1,0 +1,154 @@
+! 2013 Victor Ovchinnikov; Harvard
+! C interfaces to module bestfit
+! Currently there is no portable interoperability involving optional parameters, so I am declaring
+! different c bindings for each optional argument to RMSBestFit
+! ============================================================================
+subroutine RMSBestFit_c(x0_,y0_,w_,n,u_,qdimswap_) bind(c,NAME='RMSBestFit') ! will return the rotation matrix u to align structure x0 onto y0 using weights w 
+ use, intrinsic :: iso_c_binding
+ use bestfit, only : RMSBestFit
+ implicit none
+!
+ integer(__FCINT), value :: n ! number of atoms
+ type (c_ptr), value, intent(in) :: y0_, x0_
+ real (__FCFLOAT), dimension(n), intent(in) :: w_
+ real (__FCFLOAT), dimension(9), intent(out) :: u_
+ logical(__FCBOOL), value :: qdimswap_
+!
+ real (__FCFLOAT), pointer, dimension(:,:) :: xptr, yptr
+ float, allocatable, dimension(:,:) :: x0, y0
+ float, dimension(n)   :: w
+ float, dimension(3,3) :: u
+ bool :: qdimswap
+!
+ qdimswap=qdimswap_;
+ if (qdimswap) then
+  call c_f_pointer(x0_,xptr,(/3,n/));  call c_f_pointer(y0_,yptr,(/3,n/))
+  allocate(x0(3,n), y0(3,n))
+ else
+  call c_f_pointer(x0_,xptr,(/n,3/));  call c_f_pointer(y0_,yptr,(/n,3/))
+  allocate(x0(n,3), y0(n,3))
+ endif
+ x0=xptr ; y0=yptr; w=w_
+ call RMSBestFit(x0,y0,w,u,QDIMSWAP_=qdimswap)
+ u_=reshape(u, (/9/) )
+ deallocate(x0,y0)
+!
+end subroutine RMSBestFit_c
+!================================================================================
+subroutine RMSBestFitEv_c(x0_,y0_,w_,n,u_,eigval_,qdimswap_) bind(c,NAME='RMSBestFitEval') ! will return the rotation matrix u to align structure x0 onto y0 using weights w 
+ use, intrinsic :: iso_c_binding
+ use bestfit, only : RMSBestFit
+ implicit none
+!
+ integer(__FCINT), value :: n ! number of atoms
+ type (c_ptr), value, intent(in) :: y0_, x0_
+ real (__FCFLOAT), dimension(n), intent(in) :: w_
+ real (__FCFLOAT), dimension(9), intent(out) :: u_
+ real (__FCFLOAT), dimension(3), intent(out) :: eigval_
+ logical(__FCBOOL), value :: qdimswap_
+!
+ real (__FCFLOAT), pointer, dimension(:,:) :: xptr, yptr
+ float, allocatable, dimension(:,:) :: x0, y0
+ float, dimension(n)   :: w
+ float, dimension(3,3) :: u
+ float, dimension(3)  :: eigval
+ bool :: qdimswap
+!
+ qdimswap=qdimswap_;
+ if (qdimswap) then
+  call c_f_pointer(x0_,xptr,(/3,n/));  call c_f_pointer(y0_,yptr,(/3,n/))
+  allocate(x0(3,n), y0(3,n))
+ else
+  call c_f_pointer(x0_,xptr,(/n,3/));  call c_f_pointer(y0_,yptr,(/n,3/))
+  allocate(x0(n,3), y0(n,3))
+ endif
+ x0=xptr ; y0=yptr; w=w_
+ call RMSBestFit(x0,y0,w,u,EIGVAL=eigval, QDIMSWAP_=qdimswap)
+ u_=reshape(u, (/9/) ) ; eigval_=eigval
+ deallocate(x0,y0)
+!
+end subroutine RMSBestFitEv_c
+!
+!================================================================================
+ type(c_ptr) function com_c(x_,w_,n,qdimswap_) bind(c,NAME='com')
+ use, intrinsic :: iso_c_binding
+ use bestfit, only : com
+ implicit none
+!
+ integer(__FCINT), value :: n ! number of atoms
+ type(c_ptr), value, intent(in) :: x_ ! treating as an address
+ real(__FCFLOAT), dimension(n), intent(in) :: w_
+ logical(__FCBOOL), value :: qdimswap_
+ bool :: qdimswap
+!
+ float, dimension(n)   :: w
+ real(__FCFLOAT), pointer :: com_(:)
+ real(__FCFLOAT), pointer :: xptr(:,:)
+ float, allocatable :: x(:,:)
+!
+ qdimswap=qdimswap_
+ allocate(com_(3))
+ if (qdimswap) then
+  call c_f_pointer(x_,xptr,(/3,n/));
+  allocate(x(3,n))
+ else
+  call c_f_pointer(x_,xptr,(/n,3/));
+  allocate(x(n,3))
+ endif
+ x=xptr ; w=w_
+ com_=com(x,w,QDIMSWAP_=qdimswap)
+ com_c=c_loc(com_(1))
+ deallocate(x)
+!
+end function com_c
+!================================================================================
+type(c_ptr) function matmul_c(a_, b_, m, n, p) bind(c,NAME='matmul')
+ use, intrinsic :: iso_c_binding
+ implicit none
+!
+ integer(__FCINT), value, intent(in) :: m,n,p
+ real (__FCFLOAT), dimension(m,n), intent(in) :: a_
+ real (__FCFLOAT), dimension(n,p), intent(in) :: b_
+!
+ float, dimension(3,n) :: x0
+ float, dimension(n)   :: w
+ real(__FCFLOAT), pointer :: matmul_(:,:)
+!
+ allocate(matmul_(m,p));
+ matmul_=matmul(a_,b_);
+ matmul_c=c_loc(matmul_(1,1))
+!
+end function matmul_c
+!
+!================================================================================
+real(__FCFLOAT) function rmsd_c(x_, y_, w_, n, qdimswap_) bind(c,NAME='rmsd')
+ use, intrinsic :: iso_c_binding
+ use bestfit, only : rmsd
+ implicit none
+!
+ integer(__FCINT), value :: n ! number of atoms
+ type(c_ptr), intent(in), value :: x_, y_ ! passing actual address by value
+ real (__FCFLOAT), dimension(n), intent(in) :: w_
+ logical(__FCBOOL), value :: qdimswap_
+!
+ real (__FCFLOAT), pointer, dimension(:,:) :: xptr, yptr
+!
+ float, allocatable, dimension(:,:) :: x, y
+ float, dimension(n)   :: w
+ bool :: qdimswap
+!
+ qdimswap=qdimswap_;
+ if (qdimswap) then
+  call c_f_pointer(x_,xptr,(/3,n/));  call c_f_pointer(y_,yptr,(/3,n/))
+  allocate(x(3,n), y(3,n))
+ else
+  call c_f_pointer(x_,xptr,(/n,3/));  call c_f_pointer(y_,yptr,(/n,3/))
+  allocate(x(n,3), y(n,3))
+ endif
+ x=xptr ; y=yptr; w=w_
+ rmsd_c=rmsd(x,y,w,QDIMSWAP_=qdimswap)
+ deallocate(x,y)
+!
+end function rmsd_c
+!
+!================================================================================

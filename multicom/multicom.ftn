@@ -13,6 +13,8 @@ __CHARMM_ONLY##IF MULTICOM
       use ivector   ! container for vector of ints
        __DEP_OUTPUT
 !
+      __IMPNONE
+!
 !    encapsulated communicator type
 !
       type comm_type
@@ -25,7 +27,25 @@ __CHARMM_ONLY##IF MULTICOM
        int4mpi :: parent_id ! ID of the parent communicator ( N/A to first entry )
       end type comm_type
 !
-!     routines
+!     variables
+!
+      type (comm_type), allocatable, private, save :: communicators(:) ! array of communicators
+      int, save,  private :: ncomm=0 ! number of defined communicators
+      bool, save, public :: multicom_initialized=.false.
+      int, save,  private :: first_me=-1, first_size=0
+!
+      int, parameter, private :: max_comm = 2048
+!
+#ifndef __CHARMM
+      character(len=:), private, parameter :: ctx=__MCOMCTX
+#endif
+!
+!     subroutines (parallel only)
+#if defined(__PARALLEL) || defined(__CHARMM)
+!     access qualifiers
+#ifndef __CHARMM
+      public  multicom_exec  ! execute command block
+#endif
       public  multicom_main  ! parser
       public  multicom_init  ! initialization
       private multicom_add   ! add communicator
@@ -36,19 +56,38 @@ __CHARMM_ONLY##IF MULTICOM
       private multicom_barrier ! call MPI_BARRIER on any of the known communicators
       public  multicom_permute_string_ranks
 !
-!     variables
-!
-      type (comm_type), allocatable, private, save :: communicators(:) ! array of communicators
-      int, save,  private :: ncomm=0 ! number of defined communicators
-      bool, save, public :: multicom_initialized=.false.
-      int, save,  private :: first_me=-1, first_size=0
-!
-!     parameters
-!
-      int, parameter, private :: max_comm = 2048
-!
-!     subroutines
       contains
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+#ifndef __CHARMM
+       subroutine multicom_exec()  ! execute command block
+       use parser
+       character(len=:), parameter :: whoami='MULTICOM_EXEC'
+       character(len=:), pointer :: command
+       int :: l
+ __DECLARE_MSGBUF
+!
+       if (.not.multicom_initialized) call multicom_init()
+!
+       if (noexec(ctx)) return
+!
+       if (communicators(1)%me.le.0) then ; 
+        __MESG(whoami,'EXECUTING COMMANDS WITHIN CONTEXT "',trim(ctx),'"')
+       endif
+!
+       do
+        command=>get_next_command(ctx)
+        if (.not.associated(command)) exit
+        call toupper(command)
+        l=len(command)
+!
+        if (communicators(1)%me.le.0) call message(whoami, ' =====> "'//command(1:l)//'"')
+!
+        call multicom_main(command,l)
+        deallocate(command)
+       enddo
+!
+       end subroutine multicom_exec
+#endif
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine multicom_main(comlyn, comlen)
 !      multicom command parser
@@ -58,14 +97,12 @@ __CHARMM_ONLY##IF MULTICOM
        __DEP_PARSER
        __DEP_MPI
 !
-       implicit none
-!
-       CHARACTER*(*) COMLYN
-       int :: COMLEN
+       character*(*), intent(inout) :: comlyn
+       int, intent(inout) :: comlen
 !
 ! local variables
        character(len=8) :: keyword
-       character(len=13) :: whoami
+       character(len=13), parameter :: whoami='MULTICOM_MAIN'
        int4mpi :: ncpu, me, bug
        int :: newcomm
        int :: kstep, i, j, k, ind, klen
@@ -73,8 +110,6 @@ __CHARMM_ONLY##IF MULTICOM
        bool :: qens, qstr
        type (int_vector) :: list
        __DECLARE_MSGBUF
-!
-       data whoami /'MULTICOM_MAIN'/
 !
        call MPI_COMM_SIZE(MPI_COMM_WORLD, ncpu, bug)
        call MPI_COMM_RANK(MPI_COMM_WORLD, me, bug)
@@ -230,7 +265,7 @@ __CHARMM_ONLY##IF MULTICOM
           if (qstr) call multicom_set('STRNG', (/ nrep+2/) )
 !
           call multicom_parinit()
-!    warn about `unused' processors
+!    warn about 'unused' processors
           if (first_me.eq.0) then
            if (first_size.gt.nlocal*nrep) then
             write(_MSGBUF,444) whoami,first_size-nlocal*nrep, keyword
@@ -284,8 +319,10 @@ __CHARMM_ONLY##IF MULTICOM
         endif
 !
         if (first_me.eq.0.and.bug.eq.0) then
-         write(_MSGBUF, '(2A)') whoami,                                &
-     &    ' SETTING PARSER COMMUNICATOR TO "',keyword(1:klen),'".'; __PRINT(_MSGBUF)
+!         write(_MSGBUF, '(2A)') whoami,                                &
+!     &    ' SETTING PARSER COMMUNICATOR TO "',keyword(1:klen),'".'; __PRINT(_MSGBUF)
+!        endif
+         __MESG(whoami,'SETTING PARSER COMMUNICATOR TO "',keyword(1:klen),'".')
         endif
 !
 #endif
@@ -302,9 +339,6 @@ __CHARMM_ONLY##IF MULTICOM
 #ifdef __CHARMM
        __DEP_OUTPUT
 #endif
-!
-       implicit none
-!
        character(len=16) :: whoami
 !
        data whoami /'MULTICOM_PARINIT'/
@@ -337,10 +371,14 @@ __CHARMM_ONLY##IF MULTICOM
        int :: i, j
        int4mpi :: ii, jj
        int4mpi :: bug=0
-       character(len=13) :: whoami
+       character(len=:), parameter :: whoami='MULTICOM_INIT'
        bool :: found=.false., mpiinit
 !
-       data whoami /'MULTICOM_INIT'/
+#ifdef __BASIC
+#ifndef __CHARMM
+      __DECLARE_MSGBUF
+#endif
+#endif
 !
        if (multicom_initialized) then
         call multicom_cleanup()
@@ -384,14 +422,23 @@ __CHARMM_ONLY##IF MULTICOM
         j=int_vector_uadd(communicators(ncomm)%nodes, i)
        enddo
 !
-       multicom_initialized=.true.
+       multicom_initialized=.true. ! must be set before calling set below
+!
+#ifdef __BASIC
+#ifndef __CHARMM
+      _MSGBUF(1)='SET GLOBAL 1'
+       i=len_trim(_MSGBUF(1))
+       call multicom_main(_MSGBUF(1), i)
+#endif
+#endif
+!
        end subroutine multicom_init
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        function multicom_add(nodes,comm)
 !      define a new communicator & return pointer into communicator array
 !      all communicators are defined from the absolute one defined in multicom_init
 !      it is currently MPI_COMM_WORLD; for a communicator parent_id=n means that the
-!      _values_ in the nodes array correspond to _indices_ into the parent's nodes array,
+!      _values_ in the nodes array correspond to _indices_ into the parent`s nodes array,
 !      except when n=0, in thich case the _values_ in the nodes array are actual ranks in the
 !      absolute communicator; these ranks are also group ranks, which can be used to create
 !      additional groups and communicators; in the current implementation, parent_id is 0
@@ -524,7 +571,7 @@ __CHARMM_ONLY##IF MULTICOM
 !     reset communicators 
 #ifdef __CHARMM
        call parcomm_reset() ! MPI_COMMs correct, but numnod is not updated
-#endif __CHARMM
+#endif // __CHARMM
        call multicom_parinit()
 !
        multicom_initialized=.false.
@@ -540,10 +587,9 @@ __CHARMM_ONLY##IF MULTICOM
 !
        int :: i, bug
        int4mpi :: j,k ! aardvark
-       character(len=13) :: whoami
- __DECLARE_MSGBUF
+       character(len=13), parameter :: whoami='MULTICOM_LIST'
 !
-       data whoami /'MULTICOM_LIST'/
+ __DECLARE_MSGBUF
 !
        if (.not.multicom_initialized) then
         __WRN(whoami,' COMMUNICATOR MODULE NOT INITIALIZED.')
@@ -564,7 +610,7 @@ __CHARMM_ONLY##IF MULTICOM
          enddo
        endif
  111  FORMAT (/A,' THE FOLLOWING COMMUNICATORS ARE DEFINED:')
- 112  FORMAT (A, ' #', I5, ' NODE LIST (RELATIVE TO #',I5,'):')
+ 112  FORMAT (' ',A, ' #', I5, ' NODE LIST (RELATIVE TO COMMUNICATOR #',I5,'):')
 !
 ! aardvaark
 
@@ -628,6 +674,20 @@ __CHARMM_ONLY##IF MULTICOM
        elseif (comm_name(1:5).eq.'STRNG') then                         !__CHARMM_ONLY##STRINGM
         c=MPI_COMM_STRNG; s=SIZE_STRNG; m=ME_STRNG;                    !__CHARMM_ONLY##STRINGM
 #endif
+#ifdef __CHES
+       elseif (comm_name(1:4).eq.'CHES') then
+        c=MPI_COMM_CHES; s=SIZE_CHES; m=ME_CHES;
+        l=4
+#endif
+#ifdef __DMOL
+       elseif (comm_name(1:4).eq.'DMOL') then
+        c=MPI_COMM_DMOL; s=SIZE_DMOL; m=ME_DMOL;
+        l=4
+#endif
+#ifdef __EDDIE
+       elseif (comm_name(1:4).eq.'EDDIE') then
+        c=MPI_COMM_EDDIE; s=SIZE_EDDIE; m=ME_EDDIE;
+#endif
        elseif (comm_name(1:6).eq.'PARSER') then
         c=MPI_COMM_PARSER; s=SIZE_PARSER; m=ME_PARSER;
         l=6
@@ -662,15 +722,13 @@ __CHARMM_ONLY##IF MULTICOM
 !    local vars
        int :: llist
        int :: comm_id, node_id, parent_id
-       character(len=12) :: whoami
+       character(len=:), parameter :: whoami='MULTICOM_SET'
        int :: numnodes, c, m, s
        int :: itype, bug, lcomm, i, j
        bool :: found=.false., foundg=.false.
 !
        int :: flag(0:first_size-1), flagg(0:first_size-1)
  __DECLARE_MSGBUF
-!
-       data whoami /'MULTICOM_SET'/
 !
        if (.not.multicom_initialized) then
         __WRN(whoami,' COMMUNICATOR MODULE NOT INITIALIZED. NOTHING DONE.')
@@ -739,6 +797,10 @@ __CHARMM_ONLY##IF MULTICOM
             MPI_COMM_LOCAL=c; SIZE_LOCAL=s; ME_LOCAL=m;
            elseif (comm_name(1:5).eq.'GROUP') then     ! for backward compatibility
             MPI_COMM_LOCAL=c; SIZE_LOCAL=s; ME_LOCAL=m;
+#ifndef __CHARMM
+           elseif (comm_name(1:6).eq.'GLOBAL') then
+            MPI_COMM_GLOBAL=c; SIZE_GLOBAL=s; ME_GLOBAL=m;
+#endif
 !
 #ifdef __ENSEMBLE
            elseif (comm_name(1:5).eq.'ENSBL') then                         !__CHARMM_ONLY##ENSEMBLE
@@ -748,6 +810,21 @@ __CHARMM_ONLY##IF MULTICOM
 #ifdef __STRING
            elseif (comm_name(1:5).eq.'STRNG') then                         !__CHARMM_ONLY##STRINGM
             MPI_COMM_STRNG=c; SIZE_STRNG=s; ME_STRNG=m                     !__CHARMM_ONLY##STRINGM
+#endif
+!
+#ifdef __CHES
+           elseif (comm_name(1:4).eq.'CHES') then
+            MPI_COMM_CHES=c; SIZE_CHES=s; ME_CHES=m
+#endif
+!
+#ifdef __DMOL
+           elseif (comm_name(1:4).eq.'DMOL') then
+            MPI_COMM_DMOL=c; SIZE_DMOL=s; ME_DMOL=m
+#endif
+!
+#ifdef __EDDIE
+           elseif (comm_name(1:5).eq.'EDDIE') then
+            MPI_COMM_EDDIE=c; SIZE_EDDIE=s; ME_EDDIE=m
 #endif
 !
            elseif (comm_name(1:6).eq.'PARSER') then
@@ -787,6 +864,10 @@ __CHARMM_ONLY##IF MULTICOM
           MPI_COMM_LOCAL=c; SIZE_LOCAL=s; ME_LOCAL=m;
          elseif (comm_name(1:5).eq.'GROUP') then         ! for compatibility with older scripts
           MPI_COMM_LOCAL=c; SIZE_LOCAL=s; ME_LOCAL=m;
+#ifndef __CHARMM
+         elseif (comm_name(1:6).eq.'GLOBAL') then
+          MPI_COMM_GLOBAL=c; SIZE_GLOBAL=s; ME_GLOBAL=m;
+#endif
 !
 #ifdef __ENSEMBLE
          elseif (comm_name(1:5).eq.'ENSBL') then                         !__CHARMM_ONLY##ENSEMBLE
@@ -797,6 +878,22 @@ __CHARMM_ONLY##IF MULTICOM
          elseif (comm_name(1:5).eq.'STRNG') then                         !__CHARMM_ONLY##STRINGM
           MPI_COMM_STRNG=c; SIZE_STRNG=s; ME_STRNG=m                     !__CHARMM_ONLY##STRINGM
 #endif
+!
+#ifdef __CHES
+         elseif (comm_name(1:4).eq.'CHES') then
+          MPI_COMM_CHES=c; SIZE_CHES=s; ME_CHES=m
+#endif
+!
+#ifdef __DMOL
+         elseif (comm_name(1:4).eq.'DMOL') then
+          MPI_COMM_DMOL=c; SIZE_DMOL=s; ME_DMOL=m
+#endif
+!
+#ifdef __EDDIE
+         elseif (comm_name(1:5).eq.'EDDIE') then
+          MPI_COMM_EDDIE=c; SIZE_EDDIE=s; ME_EDDIE=m
+#endif
+!
          elseif (comm_name(1:6).eq.'PARSER') then
           MPI_COMM_PARSER=c; SIZE_PARSER=s; ME_PARSER=m
          endif
@@ -809,10 +906,7 @@ __CHARMM_ONLY##IF MULTICOM
         __WARN(whoami,comm_name,' IS NOT IN USE ON REQUESTED NODES.')
        else
         if (first_me.eq.0) then
-         write(_MSGBUF, '(2A)') whoami,                                 &
-     &    ' ASSIGNED "'//comm_name(1:5)//                               &
-     &    '" COMMUNICATOR ON THE FOLLOWING NODES:'
-         __PRINT(_MSGBUF)
+         __MESG(whoami,'ASSIGNED "',trim(comm_name),'" COMMUNICATOR ON THE FOLLOWING NODES:')
 ! VO: 10.2012: if the number of nodes is very large, the node list
 ! can overrun the _MSGBUF array; therefore, print in sections (instead of single line below)
 !         write(_MSGBUF, '(" MULTICOM_SET> ",20I5)')                     &
@@ -827,8 +921,8 @@ __CHARMM_ONLY##IF MULTICOM
          enddo
 !
          if (llist.lt.first_size)                                       & ! warn that on some nodes, communicator is still unassigned
-     &    write(_MSGBUF, '(2A,I5,A)') whoami,                           &
-     &   ' COMMUNICATOR "'//comm_name(1:5)//'" UNASSIGNED ON ',         &
+     &    write(_MSGBUF, '(" ",2A,I5,A)') whoami,                           &
+     &   ' COMMUNICATOR "'//trim(comm_name)//'" UNASSIGNED ON ',         &
      &   first_size-llist, ' NODES.' ; __PRINT(_MSGBUF)
         endif ! first_me
        endif ! .not.found
@@ -906,8 +1000,8 @@ __CHARMM_ONLY##IF STRINGM
 !     assing MPI_COMM_STRNG to new communicator
        do i=1, communicators(j)%nodes%last
 !
-         node_id  =communicators(j)%nodes%i(i) ! node_id in j's parent
-         parent_id=communicators(j)%parent_id  ! j's parent
+         node_id  =communicators(j)%nodes%i(i) ! node_id in j`s parent
+         parent_id=communicators(j)%parent_id  ! j`s parent
 !
          do while (parent_id.ne.0) ! want to get node index relative to the global communicator (WORLD)
           node_id  =communicators(parent_id)%nodes%i(node_id) ! node id in parent of parent
@@ -950,6 +1044,7 @@ __CHARMM_ONLY##IF STRINGM
 __CHARMM_ONLY##ENDIF
 #endif
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+#endif
       end module multicom
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 __CHARMM_ONLY##ENDIF

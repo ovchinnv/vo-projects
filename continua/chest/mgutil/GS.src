@@ -1,0 +1,709 @@
+ subroutine GaussSeidel(p,rhs,w,e,s,n,f,b,nx,ny,nz,dt,q2d)
+! note that nx,ny,nz include ghost points
+! note that rhs passed into this routine is normalized by o (see below)
+ implicit none
+ int :: nx, ny, nz
+ float :: dt
+ float, dimension(nx,ny,nz) :: p 
+ float, dimension(nx-2,ny-2,nz-2) :: rhs,w,e,s,n,f,b ! note that the metrics e--b are variable (because they include eps & kappa; oo=1/o)
+ int :: nnx, nny, nnz
+ int :: nxp, nyp, nzp
+ int :: i, j, k, m, im, jm, km
+ bool :: q2d
+ float :: pw, pe, po
+! 
+ nnx=nx-2; nny=ny-2; nnz=nz-2;
+ nxp=nnx+1; nyp=nny+1; nzp=nnz+1;
+!
+ if (q2d) then 
+!
+#define __SAVEP
+#ifdef __SAVEP
+!##################################################################################
+  k=2;          km=k-1;
+  do j=2,nyp;   jm=j-1;        po=p(2,j,k); pw=p(1,j,k);
+   do i=2,nxp;  im=i-1;
+    pe=p(i+1,j,k)
+    po=po - dt * (             w(im,jm,km)*pw        + e(im,jm,km)*pe +& 
+                               s(im,jm,km)*p(i,jm,k) + n(im,jm,km)*p(i,j+1,k) +&
+                               po - rhs(im,jm,km) ) 
+    p(i,j,k)=po;
+    pw=po; po=pe;
+
+   enddo ; enddo ;
+#else
+!###################################################################################
+ do k=2,nzp;    km=k-1;
+  do j=2,nyp;   jm=j-1;
+   do i=2,nxp;  im=i-1;
+    p(i,j,k)=p(i,j,k) - dt * ( w(im,jm,km)*p(im,j,k) + e(im,jm,km)*p(i+1,j,k) +& 
+                               s(im,jm,km)*p(i,jm,k) + n(im,jm,km)*p(i,j+1,k) +&
+                               p(i,j,k) - rhs(im,jm,km) ) 
+ enddo ; enddo ; enddo ! k
+!###################################################################################
+#endif
+!
+ else ! q2d
+!
+#ifdef __SAVEP
+!##################################################################################
+ do k=2,nzp;      km=k-1;
+  do j=2,nyp;     jm=j-1;      po=p(2,j,k); pw=p(1,j,k);
+   do i=2,nxp;    im=i-1;
+    pe=p(i+1,j,k)
+    po=po - dt * (             w(im,jm,km)*pw + e(im,jm,km)*pe +& 
+                               s(im,jm,km)*p(i,jm,k) + n(im,jm,km)*p(i,j+1,k) +&
+                               f(im,jm,km)*p(i,j,km) + b(im,jm,km)*p(i,j,k+1) +&
+                               po - rhs(im,jm,km) ) 
+    p(i,j,k)=po;
+    pw=po; po=pe;
+   enddo 
+  enddo
+ enddo ! k
+#else
+!##################################################################################
+ do k=2,nzp;     km=k-1;
+  do j=2,nyp;    jm=j-1;
+   do i=2,nxp;   im=i-1;
+    p(i,j,k)=p(i,j,k) - dt * ( w(im,jm,km)*p(im,j,k) + e(im,jm,km)*p(i+1,j,k) +& 
+                               s(im,jm,km)*p(i,jm,k) + n(im,jm,km)*p(i,j+1,k) +&
+                               f(im,jm,km)*p(i,j,km) + b(im,jm,km)*p(i,j,k+1) +&
+                               p(i,j,k) - rhs(im,jm,km) ) 
+ enddo ; enddo ; enddo ! k
+#endif
+!
+ endif
+! may be better off unrolling, or reusing solution values already fetched from memory (e.g. pcen=p(i,j,k); pright=p(i+1,j,k) ... pleft=pcen, pcen=pright)
+ end subroutine GaussSeidel
+!*****************************************************************************************!
+ subroutine GaussSeidelReverse(p,rhs,w,e,s,n,f,b,nx,ny,nz,dt,q2d)
+! note that nx,ny,nz include ghost points
+! note that rhs passed into this routine is normalized by o (see below)
+ implicit none
+ int :: nx, ny, nz
+ float :: dt
+ float, dimension(nx,ny,nz) :: p 
+ float, dimension(nx-2,ny-2,nz-2) :: rhs,w,e,s,n,f,b ! note that the metrics e--b are variable (because they include eps & kappa; oo=1/o)
+ int :: nnx, nny, nnz
+ int :: nxp, nyp, nzp
+ int :: i, j, k, m, im, jm, km
+ bool :: q2d
+ float :: pw, pe, po
+! 
+ nnx=nx-2; nny=ny-2; nnz=nz-2;
+ nxp=nnx+1; nyp=nny+1; nzp=nnz+1;
+!
+ if (q2d) then 
+!
+#define __SAVEP
+#ifdef __SAVEP
+!##################################################################################
+  k=2;             km=k-1;
+  do j=nyp,2,-1;   jm=j-1;     po=p(nxp,j,k); pe=p(nxp+1,j,k);
+   do i=nxp,2,-1;  im=i-1;
+    pw=p(im,j,k)
+    po=po - dt * (             w(im,jm,km)*pw        + e(im,jm,km)*pe +& 
+                               s(im,jm,km)*p(i,jm,k) + n(im,jm,km)*p(i,j+1,k) +&
+                               po - rhs(im,jm,km) ) 
+    p(i,j,k)=po;
+    pe=po; po=pw;
+
+   enddo ; enddo ;
+#else
+!###################################################################################
+ do k=nzp,2,-1;    km=k-1;
+  do j=nyp,2,-1;   jm=j-1;
+   do i=nxp,2,-1;  im=i-1;
+    p(i,j,k)=p(i,j,k) - dt * ( w(im,jm,km)*p(im,j,k) + e(im,jm,km)*p(i+1,j,k) +& 
+                               s(im,jm,km)*p(i,jm,k) + n(im,jm,km)*p(i,j+1,k) +&
+                               p(i,j,k) - rhs(im,jm,km) ) 
+ enddo ; enddo ; enddo ! k
+!###################################################################################
+#endif
+!
+ else ! q2d
+!
+#ifdef __SAVEP
+!##################################################################################
+ do k=nzp,2,-1;      km=k-1;
+  do j=nyp,2,-1;     jm=j-1;   po=p(nxp,j,k); pe=p(nxp+1,j,k);
+   do i=nxp,2,-1;    im=i-1;
+    pw=p(im,j,k)
+    po=po - dt * (             w(im,jm,km)*pw + e(im,jm,km)*pe +& 
+                               s(im,jm,km)*p(i,jm,k) + n(im,jm,km)*p(i,j+1,k) +&
+                               f(im,jm,km)*p(i,j,km) + b(im,jm,km)*p(i,j,k+1) +&
+                               po - rhs(im,jm,km) ) 
+    p(i,j,k)=po;
+    pe=po; po=pw;
+   enddo 
+  enddo
+ enddo ! k
+#else
+!##################################################################################
+ do k=nzp,2,-1;     km=k-1;
+  do j=nyp,2,-1;    jm=j-1;
+   do i=nxp,2,-1;   im=i-1;
+    p(i,j,k)=p(i,j,k) - dt * ( w(im,jm,km)*p(im,j,k) + e(im,jm,km)*p(i+1,j,k) +& 
+                               s(im,jm,km)*p(i,jm,k) + n(im,jm,km)*p(i,j+1,k) +&
+                               f(im,jm,km)*p(i,j,km) + b(im,jm,km)*p(i,j,k+1) +&
+                               p(i,j,k) - rhs(im,jm,km) ) 
+ enddo ; enddo ; enddo ! k
+#endif
+!
+ endif
+! may be better off unrolling, or reusing solution values already fetched from memory (e.g. pcen=p(i,j,k); pright=p(i+1,j,k) ... pleft=pcen, pcen=pright)
+ end subroutine GaussSeidelReverse
+!*****************************************************************************************!
+ subroutine GaussSeidelRB(p,rhs,w,e,s,n,f,b,nx,ny,nz,dt,q2d)
+#define __SIMPLE
+! note that nx,ny,nz include ghost points
+! note that rhs passed into this routine is normalized by o (see below)
+ use constants, only : itwo
+ implicit none
+ int :: nx, ny, nz
+ float :: dt
+ float, dimension(nx,ny,nz) :: p 
+ float, dimension(nx-2,ny-2,nz-2) :: rhs,w,e,s,n,f,b ! note that the metrics e--b are variable 
+!                                                    ! (because they include eps & kappa; oo=1/o)
+ int :: nnx, nny, nnz
+ int :: nxp, nyp, nzp
+ int :: i, j, k, m, im, jm, km
+ bool :: q2d
+ float :: pw, pe
+ int :: offset
+#ifdef  __OPENMP
+ int :: OMP_GET_NUM_THREADS, NTHREAD, BLOCKSIZE
+#endif
+!
+ nnx=nx-2; nny=ny-2; nnz=nz-2;
+ nxp=nnx+1; nyp=nny+1; nzp=nnz+1;
+!
+ if (q2d) then 
+!
+! red: sum of incides is odd; black: sum of indices is even
+#ifdef __SIMPLE
+! simplest code: perform two sequential loops
+! black:
+  k=2;                      km=k-1;
+#ifdef __OPENMP
+!$omp parallel default(shared), private(pw,pe,jm,im,i,j,offset)
+  NTHREAD = OMP_GET_NUM_THREADS()
+  BLOCKSIZE = (nyp-1) / NTHREAD + NTHREAD - 1 
+!$omp do schedule(dynamic,blocksize)
+#endif
+!
+  do j=2,nyp;               jm=j-1; offset=mod(j,itwo);   pw=p(1+offset,j,k);
+   do i=2+offset,nxp,2;     im=i-1;
+    pe=p(i+1,j,k);
+    p(i,j,k)=p(i,j,k) - dt * ( w(im,jm,km)*pw        + e(im,jm,km)*pe         +&
+                               s(im,jm,km)*p(i,jm,k) + n(im,jm,km)*p(i,j+1,k) +&
+                               p(i,j,k) - rhs(im,jm,km) )
+    pw=pe
+  enddo ; enddo ;
+!
+#ifdef __OPENMP
+!$omp end do
+!$omp do schedule(dynamic,blocksize)
+#endif
+! red:
+  do j=2,nyp;               jm=j-1; offset=mod(j,itwo);   pw=p(2-offset,j,k);
+   do i=3-offset,nxp,2;     im=i-1;
+    pe=p(i+1,j,k);
+    p(i,j,k)=p(i,j,k) - dt * ( w(im,jm,km)*pw        + e(im,jm,km)*pe         +&
+                               s(im,jm,km)*p(i,jm,k) + n(im,jm,km)*p(i,j+1,k) +&
+                               p(i,j,k) - rhs(im,jm,km) )
+    pw=pe
+  enddo ; enddo ;
+!
+#ifdef __OPENMP
+!$omp end do
+!$omp end parallel
+#endif // __OPENMP
+#endif // __SIMPLE
+!
+!
+ else ! q2d
+!
+ do k=2,nzp;     km=k-1;
+  do j=2,nyp;    jm=j-1;
+   do i=2,nxp;   im=i-1;
+    p(i,j,k)=p(i,j,k) - dt * ( w(im,jm,km)*p(im,j,k)  + e(im,jm,km)*p(i+1,j,k) +&
+                               s(im,jm,km)*p(i,jm,k)  + n(im,jm,km)*p(i,j+1,k) +&
+                               f(im,jm,km)*p(i,j,km)  + b(im,jm,km)*p(i,j,k+1) +&
+                               p(i,j,k) - rhs(im,jm,km) )
+   enddo ; enddo ; enddo ! k
+!
+ endif
+!
+ end subroutine GaussSeidelRB
+!*****************************************************************************************!
+ subroutine GaussSeidelRBTiled(p,rhs,w,e,s,n,f,b,nx,ny,nz,dt,tilesize,q2d)
+! first conceptual GPU template
+ use constants, only : itwo
+ implicit none
+ int :: nx, ny, nz
+ float :: dt
+ float, dimension(nx,ny,nz) :: p 
+ float, dimension(nx-2,ny-2,nz-2) :: rhs,w,e,s,n,f,b ! note that the metrics e--b are variable 
+!                                                    ! (because they include eps & kappa; oo=1/o)
+ int :: nnx, nny, nnz, ntot
+ int :: nxp, nyp, nzp
+ int :: i, j, k, m, im, jm, km, ii, jj, kk
+ bool :: q2d
+ int :: offset
+!
+ int :: tilesize                   ! conceptually, might be related to CPU cache size
+ int :: tilex, tx, ty, tz, ntx, nty, ntz, remainder  ! sizes do not include ghost cells
+ float, allocatable, dimension(:,:,:) :: e1, w1, s1, n1, f1, b1, p1, rhs1
+!
+ nnx=nx-2; nny=ny-2; nnz=nz-2;
+ nxp=nnx+1; nyp=nny+1; nzp=nnz+1;
+!
+ ntot=nnx*nny*nnz
+!
+ tilesize=min(max(tilesize,4),ntot) ! tile should not be larger than number of points
+!
+ if (q2d) then 
+! determine tile dimensions (reuse some variables)
+  tilex=INT(sqrt(1.0*tilesize));
+  offset=NOT(ISHFTC(1,-1))         ! upper bound -- largest representable int : all ones except 1st bit 
+! vary tile sizes a little to get a better cover (heuristic)
+  do i=0,1;  im = tilex + i;          ntx = (nnx/im) + min(1,mod(nnx,im)); ! number of tiles in x-direction
+   do j=0,2; jm = tilesize / im + j ; nty = (nny/jm) + min(1,mod(nny,jm)); ! number of tiles in y-direction
+    remainder = ntx*nty*im*jm - ntot  ! number of elements by which the size of the cover exceeds grid size
+!aa
+! write(0,*) im, jm, ntx, nty, remainder, ntot
+ 
+    if (offset.gt.remainder) then
+     tx=im; ty=jm;
+     offset=remainder
+    endif
+  enddo; enddo ! i, j
+! aa
+! write(0,*) tx, ty, tx*ty, (nnx/im) + min(1,mod(nnx,im)), (nny/jm) + min(1,mod(nny,jm))
+! allocate data, now that tile size is known
+  allocate(w1(tx,ty,1),e1(tx,ty,1),s1(tx,ty,1),n1(tx,ty,1),rhs1(tx,ty,1),p1(tx+2,ty+2,1))
+! slide tile over all points and perform RB relaxation within each tile
+  k=2 ! 2D
+  km=k-1
+  jj=1;
+  do while (jj.le.nny)  ; nty=min(ty,nny-jj+1); ii=1
+   do while (ii.le.nnx) ; ntx=min(tx,nnx-ii+1); ! number of elements to read
+!aa
+! write(0,*) ii, jj
+! populate tile
+    jm=jj; 
+    do j=1,nty; im=ii; do i=1,ntx
+     w1(i,j,1)=w(im,jm,km); e1(i,j,1)=e(im,jm,km); s1(i,j,1)=s(im,jm,km); n1(i,j,1)=n(im,jm,km); rhs1(i,j,1)=rhs(im,jm,km); 
+     p1(i,j,1)=p(im,jm,k)
+     im=im+1;          enddo ; ! i
+!
+     p1(ntx+1,j,1)=p(im,jm,k); im=im+1     ! remaining boundary points
+     p1(ntx+2,j,1)=p(im,jm,k)
+     jm=jm+1;
+    enddo ! j
+! remaining boundary points
+    do j=nty+1,nty+2; im=ii;         do i=1,ntx+2
+     p1(i,j,1)=p(im,jm,k); im=im+1;  enddo ;       jm=jm+1; 
+    enddo
+!************************************************************************************************
+! smooth within tile
+!************************************************************************************************
+! red: sum of indices is odd; black: sum of indices is even
+! black:
+    do j=2,nty+1;               jm=j-1; offset=mod(j,itwo)
+     do i=2+offset,ntx+1,2;     im=i-1;
+      p1(i,j,1)=p1(i,j,1) - dt * (w1(im,jm,1)*p1(im,j,1) + e1(im,jm,1)*p1(i+1,j,1) +&
+                                  s1(im,jm,1)*p1(i,jm,1) + n1(im,jm,1)*p1(i,j+1,1) +&
+                                  p1(i,j,1) - rhs1(im,jm,1) )
+    enddo ; enddo ;
+! red:
+    do j=2,nty+1;               jm=j-1; offset=mod(j,itwo)
+     do i=3-offset,ntx+1,2;     im=i-1;
+      p1(i,j,1)=p1(i,j,1) - dt * (w1(im,jm,1)*p1(im,j,1) + e1(im,jm,1)*p1(i+1,j,1) +&
+                                  s1(im,jm,1)*p1(i,jm,1) + n1(im,jm,1)*p1(i,j+1,1) +&
+                                  p1(i,j,1) - rhs1(im,jm,1) )
+    enddo ; enddo ;
+!
+!************************************************************************************************
+! put solution back into global array (inner points only)
+    jm=jj+1
+    do j=2,nty+1; im=ii+1;          do i=2,ntx+1
+     p(im,jm,k)=p1(i,j,1);   im=im+1; enddo ;      jm=jm+1; 
+    enddo
+! shift tile
+    ii=ii+tx
+   enddo    ! ii
+   jj=jj+ty
+  enddo     ! jj
+! free tile memory
+  deallocate(w1, e1, s1, n1, rhs1, p1)
+
+ else ! q2d
+! 3D case not done yet
+ endif
+!
+ end subroutine GaussSeidelRBTiled
+!**********************************************************************************************************************!
+ subroutine GaussSeidelRBTiledLoMem(p,rhs,eps,kappa,odxcen,odxcor,odycen,odycor,odzcen,odzcor,nx,ny,nz,dt,tilesize,i2d)
+! conceptual GPU template 
+! compute metrics 'on the fly'
+ use constants, only : one, itwo
+ implicit none
+ int :: nx, ny, nz
+ int1 :: i2d
+ float :: dt
+ float :: odxcen(nx-1), odxcor(nx-2)
+ float :: odycen(ny-1), odycor(ny-2)
+ float :: odzcen(nz-1-i2d-i2d), odzcor(nz-2-i2d) ! 3D/2D
+ float, dimension(nx,ny,nz) :: p, eps
+ float, dimension(nx-2,ny-2,nz-2) :: rhs, kappa
+ float :: w, e, s, n, f, b, o
+
+ int :: nnx, nny, nnz, ntot
+ int :: nxp, nyp, nzp
+ int :: i, j, k, m, im, jm, km, ii, jj, kk, jeps
+ int :: offset
+!
+ int :: tilesize                                     ! conceptually, might be related to CPU cache size
+ int :: tilex, tx, ty, tz, ntx, nty, ntz, remainder  ! sizes do not include ghost cells
+ float, allocatable, dimension(:,:,:) :: p1, rhs1, eps1, kappa1
+ float, allocatable, dimension(:) :: odxcen1, odxcor1, odycen1, odycor1, odzcen1, odzcor1 ! local metrics
+!
+ nnx=nx-2; nny=ny-2; nnz=nz-2;
+ nxp=nnx+1; nyp=nny+1; nzp=nnz+1;
+!
+ ntot=nnx*nny*nnz
+!
+ tilesize=min(max(tilesize,4),ntot) ! tile should not be larger than number of points
+!
+ if (i2d.eq.1) then 
+! determine tile dimensions (reuse some variables)
+  tilex=INT(sqrt(1.0*tilesize));
+  offset=NOT(ISHFTC(1,-1))         ! upper bound -- largest representable int : all ones except 1st bit 
+! vary tile sizes a little to get a better cover (heuristic)
+  do i=0,1;  im = tilex + i;          ntx = (nnx/im) + min(1,mod(nnx,im)); ! number of tiles in x-direction
+   do j=0,2; jm = tilesize / im + j ; nty = (nny/jm) + min(1,mod(nny,jm)); ! number of tiles in y-direction
+    remainder = ntx*nty*im*jm - ntot  ! number of elements by which the size of the cover exceeds grid size
+!aa
+! write(0,*) im, jm, ntx, nty, remainder, ntot
+ 
+    if (offset.gt.remainder) then
+     tx=im; ty=jm;
+     offset=remainder
+    endif
+  enddo; enddo ! i, j
+!
+! allocate data, now that tile size is known (pad epsilon for easy corner interpolation)
+  allocate(rhs1(tx,ty,1),eps1(0:tx+1,0:ty+1,1),kappa1(tx,ty,1),p1(tx+2,ty+2,1))
+  allocate(odxcen1(tx+1),odxcor1(tx),odycen1(ty+1),odycor1(ty))
+! slide tile over all points and perform RB relaxation within each tile
+  k=2 ! 2D
+  km=k-1
+  jj=1;
+  do while (jj.le.nny)  ; nty=min(ty,nny-jj+1); ii=1
+! local y-metrics
+   odycen1(1:nty+1)=odycen(jj:jj+nty);   odycor1(1:nty)=odycor(jj:jj+nty-1); ! center-to-center metric has extra element
+   do while (ii.le.nnx) ; ntx=min(tx,nnx-ii+1); ! number of elements to read
+! local x-metrics
+    odxcen1(1:ntx+1)=odxcen(ii:ii+ntx);   odxcor1(1:ntx)=odxcor(ii:ii+ntx-1);
+!
+! populate tile
+!
+! epsilon: top ghost row (j=0)
+    jm=jj-1; jeps=max(jm,1)
+    j=0; im=ii;
+    do i=1,ntx+1; eps1(i,j,1)=eps(min(im,nnx),jeps,km); im=im+1;  enddo ; ! ignore left corner ghost cell
+    jm=jm+1;
+! inner point j-loop
+    do j=1,nty; im=ii-1;
+! epsilon: left ghost point
+     eps1(0,j,1)=eps(max(1,im),jm,km); im=im+1;
+! inner point i-loop
+     do i=1,ntx
+      rhs1(i,j,1)=rhs(im,jm,km);   eps1(i,j,1)=eps(im,jm,km);   kappa1(i,j,1)=kappa(im,jm,km);   p1(i,j,1)=p(im,jm,k)
+      im=im+1;
+     enddo ; ! i
+! epsilon: right ghost point
+     eps1(ntx+1,j,1)=eps(min(im,nnx),jm,km) !
+! p: last inner point and right ghost point
+     p1(ntx+1,j,1)=p(im,jm,k); im=im+1      ! remaining boundary points
+     p1(ntx+2,j,1)=p(im,jm,k)               !
+     jm=jm+1;
+    enddo ! j
+! p: bottom inner points
+! epsilon: bottom ghost points
+    j=nty+1; im=ii;
+    jeps=min(jm,nny);
+    do i=1,ntx+1
+     eps1(i,j,1)=eps(min(im,nnx),jeps,km); ! epsilon : neumann BC
+     p1(i,j,1)=p(im,jm,k); im=im+1;
+    enddo ;
+    p1(ntx+2,j,1)=p(im,jm,k);
+    jm=jm+1;
+! p: bottom ghost points
+    j=nty+2; im=ii;
+    do i=1,ntx+1                                   ! ignore corner ghost point
+     p1(i,j,1)=p(im,jm,k); im=im+1;
+    enddo ;
+!************************************************************************************************
+! smooth within tile (iteration involves local data only)
+!************************************************************************************************
+! red: sum of indices is odd; black: sum of indices is even
+! black:
+    do j=2,nty+1;               jm=j-1; offset=mod(j,itwo)
+     do i=2+offset,ntx+1,2;     im=i-1;
+! compute metrics
+      w = odxcor1(im)*odxcen1(im)*(eps1(im,jm,1)+eps1(im-1,jm,1)) ! 0.5 included using o normalization
+      e = odxcor1(im)*odxcen1(i )*(eps1(im,jm,1)+eps1(i   ,jm,1))
+      s = odycor1(jm)*odycen1(jm)*(eps1(im,jm,1)+eps1(im,jm-1,1))
+      n = odycor1(jm)*odycen1(j )*(eps1(im,jm,1)+eps1(im  ,j ,1))
+      o = -(w+e+s+n) + kappa(im,jm,1) ; o=one/o 
+!
+      p1(i,j,1)=p1(i,j,1) - dt * ( p1(i,j,1) &
+&                                  + o*( w*p1(im,j,1) + e*p1(i+1,j,1) + s*p1(i,jm,1) + n*p1(i,j+1,1) ) &
+&                                  - rhs1(im,jm,1) )
+!  NOTE: rhs above has been divided by o, which means that o is already known; 
+!  this routine is _just a test of computing metrics on-the-fly vs. memory access_
+    enddo ; enddo ;
+! red:
+    do j=2,nty+1;               jm=j-1; offset=mod(j,itwo)
+     do i=3-offset,ntx+1,2;     im=i-1;
+! compute metrics
+      w = odxcor1(im)*odxcen1(im)*(eps1(im,jm,1)+eps1(im-1,jm,1)) ! 0.5 included using o normalization
+      e = odxcor1(im)*odxcen1(i )*(eps1(im,jm,1)+eps1(i   ,jm,1))
+      s = odycor1(jm)*odycen1(jm)*(eps1(im,jm,1)+eps1(im,jm-1,1))
+      n = odycor1(jm)*odycen1(j )*(eps1(im,jm,1)+eps1(im  ,j ,1))
+      o = -(w+e+s+n) + kappa(im,jm,1) ; o=one/o 
+!
+      p1(i,j,1)=p1(i,j,1) - dt * ( p1(i,j,1) &
+&                                  + o*( w*p1(im,j,1) + e*p1(i+1,j,1) + s*p1(i,jm,1) + n*p1(i,j+1,1) ) &
+&                                  - rhs1(im,jm,1) )
+    enddo ; enddo ;
+!
+!************************************************************************************************
+! put solution back into global array (inner points only)
+    jm=jj+1
+    do j=2,nty+1; im=ii+1;            do i=2,ntx+1
+     p(im,jm,k)=p1(i,j,1);   im=im+1; enddo ;      jm=jm+1; 
+    enddo
+! shift tile
+    ii=ii+tx
+   enddo    ! ii
+   jj=jj+ty
+  enddo     ! jj
+! free tile memory
+  deallocate(eps1, kappa1, rhs1, p1)
+  deallocate(odxcen1, odxcor1, odycen1, odycor1)
+!
+ else ! i2d
+! 3D case not done yet
+ endif
+!
+ end subroutine GaussSeidelRBTiledLoMem
+!*****************************************************************************************!
+ subroutine GSInner(p,rhs,w,e,s,n,f,b,nx,ny,nz,dt,q2d,iter)
+! note that nx,ny,nz include ghost points
+! note that rhs passed into this routine is normalized by o (see below)
+! combine more than one GS iteration in one subroutine call
+! loop over grid points in blocks to maximize cache reuse
+! default GS behavior recovered using 1 block and no unrolling
+ implicit none
+ int :: nx, ny, nz, iter
+ float :: dt
+ float, dimension(nx,ny,nz) :: p 
+ float, dimension(nx-2,ny-2,nz-2) :: rhs,w,e,s,n,f,b ! note that the metrics e--b are variable 
+!                                                    ! (because they include eps & kappa; oo=1/o)
+ int :: nnx, nny, nnz
+ int :: nxp, nyp, nzp
+ int :: i, j, k, m, im, jm, km, idir, jdir, kdir, imid
+ bool :: q2d
+ float :: pw, pe, po
+! 
+ nnx=nx-2; nny=ny-2; nnz=nz-2;
+ nxp=nnx+1; nyp=nny+1; nzp=nnz+1;
+!
+ if (q2d) then 
+!
+!###################################################################################
+ do m=0,iter-1 ! inner iteration counter
+! note that, if m is larger than half the grid, no iterations will take place
+!
+! start in the middle of the domain and proceed toward the edges
+! imid=ishft(nx,-1) ! nx/2
+  k=2; km=1;
+! do kdir=0,1; do k = ishft(nz,-1) + kdir, (2+m)*(1-kdir) + (nzp-m) * kdir , ishft(kdir,1)-1  ; km=k-1
+  do jdir=0,1; 
+   do j = ny/2 + jdir, (2+m)*(1-jdir) + (nyp-m)*jdir , 2*jdir-1  ; jm=j-1
+!   do idir=0,1;do i = ishft(nx,-1) + idir, (2+m)*(1-idir) + (nxp-m) * idir , ishft(idir,1)-1  ; im=i-1
+!
+!    p(i,j,k)=p(i,j,k) - dt * ( w(im,jm,km)*p(im,j,k)  + e(im,jm,km)*p(i+1,j,k) +& 
+!                               s(im,jm,km)*p(i,j-1,k) + n(im,jm,km)*p(i,j+1,k) +&
+!                               p(i,j,k) - rhs(im,jm,km) )
+!
+! write out i-loops explicitly
+!
+!  imid=ishft(nx,-1) 
+   imid=nx/2; po=p(imid,j,k); pe=p(imid+1,j,k);
+   do i = imid, 2+m,-1; im=i-1
+    pw=p(im,j,k)
+    po=po - dt * (             w(im,jm,km)*pw         + e(im,jm,km)*pe         +&
+                               s(im,jm,km)*p(i,j-1,k) + n(im,jm,km)*p(i,j+1,k) +&
+                               po - rhs(im,jm,km) ) 
+    p(i,j,k)=po;
+    pe=po;
+    po=pw;
+   enddo
+!
+                           pw=p(imid,j,k); po=p(imid+1,j,k); im=imid
+   do i = imid+1, nxp-m, 1
+    pe=p(i+1,j,k)
+    po=po - dt * (             w(im,jm,km)*pw         + e(im,jm,km)*pe         +&
+                               s(im,jm,km)*p(i,j-1,k) + n(im,jm,km)*p(i,j+1,k) +&
+                               po - rhs(im,jm,km) ) 
+    p(i,j,k)=po;
+    pw=po;
+    po=pe;
+    im=i
+! enddo; enddo; 
+ enddo; enddo ; enddo ; ! enddo
+!
+ enddo ! m-loop
+!###################################################################################
+!
+ else ! q2d
+!
+ do k=2,nzp;     km=k-1;
+  do j=2,nyp;    jm=j-1;
+   do i=2,nxp;   im=i-1;
+    p(i,j,k)=p(i,j,k) - dt * ( w(im,jm,km)*p(im,j,k)  + e(im,jm,km)*p(i+1,j,k) +&
+                               s(im,jm,km)*p(i,j-1,k) + n(im,jm,km)*p(i,j+1,k) +&
+                               f(im,jm,km)*p(i,j,km)  + b(im,jm,km)*p(i,j,k+1) +&
+                               p(i,j,k) - rhs(im,jm,km) )
+   enddo ; enddo ; enddo ! k
+!
+ endif
+!
+ end subroutine GSInner
+!*****************************************************************************************!
+ subroutine GSOuter(p,rhs,w,e,s,n,f,b,nx,ny,nz,dt,q2d,iter)
+! complement to GSInner: update points near the boundary
+! NOTE: the unrolling "acrobatics" make only a little difference
+ implicit none
+ int :: nx, ny, nz, iter
+ float :: dt
+ float, dimension(nx,ny,nz) :: p 
+ float, dimension(nx-2,ny-2,nz-2) :: rhs,w,e,s,n,f,b ! note that the metrics e--b are variable (because they include eps & kappa; oo=1/o)
+ int :: nnx, nny, nnz
+ int :: nxp, nyp, nzp
+ int :: i, j, k, m, im, jm, km, idir, jdir, kdir, imid, jmid, il, ir, jstep
+ bool :: q2d
+ float :: pw, pe, po, por
+! 
+ nnx=nx-2; nny=ny-2; nnz=nz-2;
+ nxp=nnx+1; nyp=nny+1; nzp=nnz+1;
+!
+ if (q2d) then 
+!
+!##########################################################################################################
+! start at the edges and proceed toward the middle, filling in missing iterations at different levels
+  k=2  ; km=k-1
+!
+  do m=0, iter-1
+   il=2+m; ir=nxp-m;
+   do jdir=0,1; jmid=ny/2 + jdir; jstep=2*jdir-1 ; po=p(il,jmid,k); por=p(ir,jmid,k)
+!
+    do j = jmid, (3+m)*(1-jdir) + (nyp-m-1)*jdir, jstep  ; jm=j-1 ! i-constant sides
+!
+     i=il; im=i-1;
+     po=po - dt * ( w(im,jm,km)*p(im,j,k)  + e(im,jm,km)*p(i+1,j,k) +& 
+                    s(im,jm,km)*p(i,j-1,k) + n(im,jm,km)*p(i,j+1,k) +&
+                    po - rhs(im,jm,km) )
+     p(i,j,k)=po
+     po=p(i,j+jstep,k)
+!
+     i=ir; im=i-1;
+     por=por - dt * ( w(im,jm,km)*p(im,j,k)  + e(im,jm,km)*p(i+1,j,k) +& 
+                      s(im,jm,km)*p(i,j-1,k) + n(im,jm,km)*p(i,j+1,k) +&
+                      por - rhs(im,jm,km) )
+     p(i,j,k)=por
+     por=p(i,j+jstep,k)
+    enddo ! i-constant sides
+!
+    j=(2+m)*(1-jdir) + (nyp-m)*jdir; jm=j-1; ! j-constant sides
+!
+! write out i-loops explicitly
+!
+    imid=nx/2; po=p(imid,j,k); pe=p(imid+1,j,k);
+    do i = imid, 2+m,-1; im=i-1
+     pw=p(im,j,k)
+     po=po - dt * (             w(im,jm,km)*pw         + e(im,jm,km)*pe         +&
+                                s(im,jm,km)*p(i,j-1,k) + n(im,jm,km)*p(i,j+1,k) +&
+                                po - rhs(im,jm,km) ) 
+     p(i,j,k)=po;
+     pe=po;
+     po=pw;
+    enddo
+!
+                            pw=p(imid,j,k); po=p(imid+1,j,k); im=imid
+    do i = imid+1, nxp-m, 1
+     pe=p(i+1,j,k)
+     po=po - dt * (             w(im,jm,km)*pw         + e(im,jm,km)*pe         +&
+                                s(im,jm,km)*p(i,j-1,k) + n(im,jm,km)*p(i,j+1,k) +&
+                                po - rhs(im,jm,km) ) 
+     p(i,j,k)=po;
+     pw=po;
+     po=pe;
+     im=i
+    enddo;
+
+! i-loop over two directions
+!    do idir=0,1;
+!     do i = nx/2 + idir, (2+m)*(1-idir) + (nxp-m) * idir, 2*idir-1  ; im=i-1
+!
+!      p(i,j,k)=p(i,j,k) - dt * ( w(im,jm,km)*p(im,j,k)  + e(im,jm,km)*p(i+1,j,k) +&
+!                                 s(im,jm,km)*p(i,j-1,k) + n(im,jm,km)*p(i,j+1,k) +&
+!                                 p(i,j,k) - rhs(im,jm,km) )
+!     enddo ! i
+!    enddo ! i-dir
+!
+   enddo ! j-dir
+  enddo ! m
+!###################################################################################
+!
+ else ! q2d
+! 3D case not treated yet
+ endif
+!
+ end subroutine GSOuter
+!*****************************************************************************************!
+ subroutine GaussSeidel2d(p,rhs,w,e,s,n,nx,ny,dt,iter)
+! note that nx,ny,nz include ghost points
+! note that rhs passed into this routine is normalized by o (see below)
+ implicit none
+ int :: nx, ny, iter
+ float :: dt
+ float, dimension(nx,ny) :: p 
+ float, dimension(nx-2,ny-2) :: rhs,w,e,s,n ! note that the metrics e--o are variable (because they include eps & kappa; 
+ int :: nnx, nny                            ! the metrics and rhs are normalized by o
+ int :: nxp, nyp
+ int :: i, j, m, im, jm
+! 
+ nnx=nx-2; nny=ny-2;
+ nxp=nnx+1; nyp=nny+1;
+!
+ do m=1,iter
+!
+  do j=2,nyp; 
+   jm=j-1;
+   do i=2,nxp
+    im=i-1;
+    p(i,j)=p(i,j)-dt * ( w(im,jm)*p(im,j)  + e(im,jm)*p(i+1,j) +&
+                         s(im,jm)*p(i,j-1) + n(im,jm)*p(i,j+1) +&
+                                  p(i,j)   - rhs(im,jm) )
+   enddo ! i
+  enddo ! j
+ enddo ! m
+! may be better off unrolling, or reusing solution values already fetched from memory (e.g. pcen=p(i,j,k); pright=p(i+1,j,k) ... pleft=pcen, pcen=pright)
+ end subroutine GaussSeidel2d
+!
