@@ -14,8 +14,8 @@ CFLAGS =-O3 -fno-math-errno -g -c
 FC=gfortran
 FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  #-fopenmp 
 #FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno #-fbounds-check -frange-check 
-#MPI_HOME=/usr/local/mpich2-gnu
-MPI_HOME=/usr/lib/openmpi
+MPI_HOME=/usr/local/mpich2-gnu
+#MPI_HOME=/usr/lib/openmpi
 #---PATHSCALE
 #FC=pathf95
 #FFLAGS=-Ofast -fno-math-errno -extend-source -INLINE -ipa -c
@@ -55,7 +55,7 @@ TESTMSG=-include $(ROOT)/test.msg
 GLOBALDEPS=$(ROOT)/source.defs $(ROOT)/source.msg
 
 MPI_INCLUDE=-I $(MPI_HOME)/include -I $(MPI_HOME)
-MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lmpi -lmpi_f90 -lmpi_f77 -lpthread
+MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lpthread -lmpich -lmpichf90 -lmpl # -lmpi -lmpi_f90 -lmpi_f77
 
 INCLUDES+=-I $(ROOT)/include
 LIBS+=-L $(ROOT)/lib
