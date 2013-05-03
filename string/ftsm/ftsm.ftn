@@ -1111,10 +1111,13 @@ __CHARMM_ONLY##IF STRINGM
           else              ; nullify(r_f) ; nullify(iatom_f)
           endif
           if (associated(forcedWeights)) deallocate(forcedWeights)
+          if (associated(Mtensor)) deallocate(Mtensor)
 !
           allocate(iatom_f(nforced)); iatom_f=0
           allocate(forcedWeights(nforced));
           forcedWeights=1d0/nforced ! default behavior
+          allocate(Mtensor(3,3,nforced,nforced,2)); Mtensor=zero ; do j=1,3; do i=1, nforced ; Mtensor(j,j,i,i,:)=one ; enddo ; enddo! allocate & set to I
+!
 !    build index array
           nforced=0
 !
@@ -1468,8 +1471,8 @@ __CHARMM_ONLY##IF STRINGM
       fe=0d0; feav=0d0; avforce=0d0; ds=0d0; curv=0d0
 !
       num_evolve_samples=0
-      num_fe_samples=0
       num_force_samples=0
+      num_M_samples=0
 !    set default restraint positions
 !
       if (mestring.eq.0) then
@@ -1486,7 +1489,7 @@ __CHARMM_ONLY##IF STRINGM
       qorient=.false.
       qdiffrot=.false.
 !
-      nullify(rall_o, rall_new_o, rall_f, rall_new_o, rcom_all)
+      nullify(rall_o, rall_new_o, rall_f, rall_new_o, rcom_all, Mtensor)
 !
       ftsm_initialized=.true.
 !
@@ -1501,11 +1504,9 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_MULTICOM       __CHARMM_ONLY !##MULTICOM
       __DEP_MPI 
 !
+      character(len=:), parameter :: whoami=' FTSM_DONE>'
+!
  __DECLARE_MSGBUF
-!
-      character(len=11) :: whoami
-!
-      data whoami /' FTSM_DONE>'/
 !
       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.ME_STRNG.eq.0) then 
        write(_MSGBUF,'(2A,I5, A)') whoami, ' CLEANING UP.' ; __PRINT(_MSGBUF)
@@ -1529,6 +1530,7 @@ __CHARMM_ONLY##IF STRINGM
       if (associated(forcedWeights)) deallocate(forcedWeights)
       if (associated(rall_f)) deallocate(rall_f)
       if (associated(rall_new_f)) deallocate(rall_new_f)
+      if (associated(Mtensor)) deallocate(Mtensor)
 !
       if (qdiffrot) then
        if (associated(r_o)) deallocate(r_o);
@@ -1554,8 +1556,8 @@ __CHARMM_ONLY##IF STRINGM
       if (allocated(feav)) deallocate(feav)
 !
       num_evolve_samples=0
-      num_fe_samples=0
       num_force_samples=0
+      num_M_samples=0
 !
       qdiffrot=.false.
       qorient=.false.
@@ -1584,10 +1586,8 @@ __CHARMM_ONLY##IF STRINGM
 !
       CHARACTER(LEN=*) :: COMLYN
       int :: COMLEN
-      character(len=16) :: whoami
+      character(len=:), parameter :: whoami=' FTSM_REPA_INIT>'
       bool :: qprint, qroot
-!
-      data whoami /' FTSM_REPA_INIT>'/
 !
       qroot=MPI_COMM_STRNG.ne.MPI_COMM_NULL
       qprint=qroot.and.ME_STRNG.eq.0
@@ -1965,7 +1965,7 @@ __CHARMM_ONLY##IF STRINGM
       allocate(temp(2,max(nforced, norient)))
       do while (i.le.nforced .and. j.le.norient)
 !
-       do while (  j.lt.norient .and. ( iatom_f(i) .gt. iatom_o(j) ) )
+       do while (  j.lt.norient .and. ( iatom_f(i) .gt. iatom_o(j) ) ) ! N.B.: looks like indices assumed to be ordered here
         j=j+1
        enddo
        if (iatom_f(i).eq.iatom_o(j)) then
@@ -2866,6 +2866,9 @@ __CHARMM_ONLY##IF STRINGM
       output_rex_log=.false.
       output_rex_map=.false.
 !
+      M_fname=''
+      output_M=.false.
+!
 !ccccccccccccccccc first process the RMSD-related commands
 !!!!!!!!!!!!!! RMSD from static structure in comp (zts/fts)
       if (__INDX_RM(comlyn,comlen,'RMSD').gt.0) then ! request for RMSD
@@ -3175,6 +3178,18 @@ __CHARMM_ONLY##IF STRINGM
         endif
  6625 format(A,' WILL WRITE AVERAGE FORCE TO FILE ',A,'.')
       endif ! forces
+!ccccccccccccccccc process M matrix output options ccccccccccccccccc
+      if (__INDX_RM(comlyn, comlen, 'MMAT').gt.0) then
+!
+        __GET_RM_A(COMLYN,COMLEN,'MNAM',4,M_fname,80,M_flen)
+        if (M_flen.gt.0) then
+         output_M=.true.
+         if (qprint) then ; write(_MSGBUF,6626) whoami,M_fname(1:M_flen) ; __PRINT(_MSGBUF) ; endif
+        else
+         __WRN(whoami,'NO FILE NAME GIVEN. WILL NOT WRITE M TENSOR.')
+        endif
+ 6626 format(A,' WILL WRITE TENSOR M TO FILE ',A,'.')
+      endif
 !
 #ifdef __CHARMM
       if (qprint) iolev=oldiol
@@ -3195,7 +3210,7 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_NUMBER
 !
       __IMPNONE
-      int :: i, fmt_len, ifile
+      int :: i, j, fmt_len, ifile
 !
 #ifdef __CHARMM
       int :: oldiol
@@ -3207,10 +3222,10 @@ __CHARMM_ONLY##IF STRINGM
       float :: projdist(3) ! dpar, dperp, drms
       float :: u (3,3)= RESHAPE( (/1.,0.,0.,0.,1.,0.,0.,0.,1./), (/3,3/) ) ! rotation matrix
       float :: rmsd0, rmsd0_all(nstring), fc_all(3,nstring)
+      float, pointer :: M_all(:,:,:,:,:) ! Mtensor combined from all images
 !
       int :: ierror
-      character(len=11) :: whoami
-      data whoami/' FTSM_STAT>'/
+      character(len=:), parameter :: whoami=' FTSM_STAT>'
 !
       bool :: qroot, qprint, qgrp
 !
@@ -3537,7 +3552,39 @@ __CHARMM_ONLY##IF STRINGM
          endif ! qroot
         endif
       endif
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      if (output_M) then
+!    if running in parallel, combine partial M entries
+       if (qroot) then
+        if (M_flen.eq.0) then
+         __WRN(whoami,'NO FILE NAME SPECIFIED. WILL NOT WRITE M TENSOR.')
+        else
+         ifile=-1
+         __OPEN_FILE(ifile, M_fname(1:M_flen), 'FORMATTED', 'WRITE')
+!  essentially duplicated code from cv_common
+         i=nforced*nforced
+         allocate(M_all(nforced, nforced, nstring))
 !
+         if (SIZE_STRNG.gt.1) then
+          call MPI_GATHER(Mtensor(1,1,1,1,2),i,mpifloat,         & ! gather all tensors on root for output
+     &                    M_all,         i,mpifloat,         &
+     &                    0,MPI_COMM_STRNG,ierror)
+         else
+          M_all(:,:,:,:,1)=Mtensor(:,:,:,:,2);
+         endif
+!
+         write(fmt,*) 3*nforced
+         if (ME_STRNG.eq.0) then ! root writes
+          do j=1,nstring
+           write(ifile,'("% ",I5)') j
+           write(ifile,'('//fmt//real_format//')') M_all(:,:,:,:,j)
+          enddo
+         endif ! ME
+         deallocate(M_all)
+         __CLOSE_FILE(ifile,'KEEP',ierror)
+        endif ! M_flen
+       endif ! qroot
+      endif ! output_M
 !
 #ifdef __CHARMM
 !     ad hoc fix for REX
@@ -3582,7 +3629,7 @@ __CHARMM_ONLY##IF STRINGM
       end function ftsm_check
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 ! VO 1/2013 modifying function call to include string minimization option
-      subroutine ftsm_main(x,y,z,xcomp,ycomp,zcomp,fx,fy,fz,iteration           & ! include comparison set for voronoi calculations
+      subroutine ftsm_main(x,y,z,xcomp,ycomp,zcomp,fx,fy,fz,mass,iteration           & ! include comparison set for voronoi calculations
 #ifdef __CHARMM
      &                    , wmain, nbond_data, image_data     & ! to be passed on to ftsm_mini
 #endif
@@ -3599,7 +3646,7 @@ __CHARMM_ONLY##IF STRINGM
 !
       __DECLARE_MSGBUF
 !
-      float, dimension(:) :: x, y, z, xcomp, ycomp, zcomp, fx, fy, fz
+      float, dimension(:) :: x, y, z, xcomp, ycomp, zcomp, fx, fy, fz, mass
       int :: iteration ! MD iteration
 !
 #ifdef __CHARMM
@@ -3609,7 +3656,7 @@ __CHARMM_ONLY##IF STRINGM
       type(imageDataStructure)   :: image_data
 #endif
 !     locals
-      float :: s=zero
+      float :: s=zero, t, omt
       character(len=11) :: whoami
       bool :: qgrp
       int :: i, bug, qfac
@@ -3646,17 +3693,27 @@ __CHARMM_ONLY##IF STRINGM
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 !     the following only gets executed if iteration > olditeration;
 !     this is because CHARMM executes frequent 'restarts' at the least frequency
-!     that is common to all output counters; a restart will require two calls to smcv_master;
+!     that is common to all output counters; a restart will require two calls to this routine;
 !     to avoid duplicating statistics + evolution etc (since the step # is the same!) I keep track
 !     of the iteration counter, and proceed only if the iteration counter has increased.
       if (iteration.gt.olditeration) then
        if (evolve_ftsm_on.and.evolve_freq.gt.0) then
 !
         if ( mod(iteration,evolve_freq).eq.0 .and.                      &
-     &       (iteration-restrained_eq0.gt.evolve_nskip))                &
-     &       call ftsm_evolve(x,y,z)
-       endif
-!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+     &       (iteration-restrained_eq0.gt.evolve_nskip)) then
+         call ftsm_evolve(x,y,z) ;
+!------------------------------------------------------------------------
+! compute M tensor : NB, currently computed as a statistic only; no functional role
+         if (output_M) then
+!          call ftsm_calc_M(x, y, z, mass, s) ! computes instantaneous M (Mtensor(:,:,:,:,1))
+          num_M_samples=num_M_samples+1
+          omt=one/num_M_samples
+          t=one-omt
+          Mtensor(:,:,:,:,2) = t * Mtensor(:,:,:,:,2) + omt * Mtensor(:,:,:,:,1) ! add to running average
+         endif ! output_M
+        endif ! evolve_freq
+       endif ! evolve
+!------------------------------------------------------------------------
        if (update_on.and.update_freq.gt.0) then
         if (mod(iteration,update_freq).eq.0) then
          if (.not.string_noprint) then 
@@ -3753,7 +3810,323 @@ __CHARMM_ONLY##IF STRINGM
       olditeration=iteration
 !
       end subroutine ftsm_main
-!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!===========================================================================
+      subroutine ftsm_calc_M(x,y,z,mass,t)
+!
+      __DEP_NUMBER 
+      __DEP_MULTICOM       __CHARMM_ONLY !##MULTICOM
+      __DEP_MPI 
+      __IMPNONE
+!
+      float, dimension(:), intent(in) :: x, y, z, mass
+      float, intent(in), optional :: t
+!    local vars
+      float :: s, oms ! this value indicates how much of the old reference set to take
+      float :: tol ! small number tolerance
+      float :: u(3,3), ug2(3,3), ug3(3,3,3), ug3i(3,3,3), ugrad_ave(3,3), ugrad_dyad_ave(3,3,3,4) ! for rotations (with extra space)
+      float, dimension(:,:), pointer :: roi, rfi, rfi_rot, roc
+      float, dimension(:,:,:,:), pointer :: ugrad
+      float, pointer :: ow(:)
+      float, pointer :: r_com(:)
+      bool :: qgrp, qcombine
+      int :: i, a, b, c, d, e, j, k ! indices used in the derivation
+      float :: rj(3), rk(3)         ! used in the analytical derivation
+      int4mpi, allocatable :: send_count(:), send_displ(:) ! if declared as int*8 parallelization will break
+      int :: obeg, oend, fbeg, fend, indo, indf
+      float :: Mtemp(3,3,nforced,nforced) ! scratch matrix
+      float :: oom(nforced)
+
+      tol=__ERRTOL
+!
+      if (present(t)) then ; s=min(max(t,zero),one); else ; s=one ; endif
+      qcombine=s.lt.one
+!
+      qgrp=( SIZE_LOCAL.gt.1.and.MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.calc_bestfit_grad_para)
+! shorthand
+      ow=>orientWeights
+      r_com=>rcom(:,instant)
+      roi=>r_o(:,:,instant);
+      rfi=>r_f(:,:,instant);
+      rfi_rot=>r_f(:,:,center_rot);
+!
+      if (qcombine.and.qorient) then ! straight average
+       r_o(:,:,center_cur) = s * r_o(:,:,center)  +  oms * r_o(:,:,center_old)
+       roc=>r_o(:,:,center_cur)
+      else
+       roc=>r_o(:,:,center);
+      endif
+
+!--------------------------------------------------------------------------------------
+!      load coordinates
+      if (.not. restrained_on) then ! if restraints are on coordinates already loaded
+       do k=1,nforced
+        indf=iatom_f(k);  rfi(k,1)=x(indf);  rfi(k,2)=y(indf);  rfi(k,3)=z(indf)
+       enddo
+!
+       if (qorient) then
+        if (qdiffrot) then
+         do k=1,norient ! when qorient false, norient zero
+          indo=iatom_o(k);  roi(k,1)=x(indo);  roi(k,2)=y(indo);  roi(k,3)=z(indo)
+         enddo
+        endif ! qdiffrot (otherwise rfi and roi point to the same thing)
+!
+!       translate forced atoms to centroid
+        r_com(:)=zero;
+        do j=1,3 ; do k=1, norient;
+           r_com(j) = r_com(j)+ow(k)*roi(k,j)
+        enddo ;    enddo
+!
+        rfi(:,1)=rfi(:,1)-r_com(1);     rfi(:,2)=rfi(:,2)-r_com(2);       rfi(:,3)=rfi(:,3)-r_com(3)
+!
+        if (qdiffrot) then ! also use orientation atoms (otherwise, they are the same -- see above!)
+         roi(:,1)=roi(:,1)-r_com(1);     roi(:,2)=roi(:,2)-r_com(2);       roi(:,3)=roi(:,3)-r_com(3)
+        endif ! qdiffrot
+!
+       endif ! qorient
+      endif ! (.not. restrained_on)
+!
+!    load masses
+      do i=1,nforced
+       oom(i) = mass(iatom_f(i)) ; if (oom(i).gt.tol) then ; oom(i)=one/oom(i) ; else ; oom(i) = one ; endif
+      enddo
+!
+      if (qorient) then
+!     compute rotation matrix gradient
+!--------------------- indices for parallelization
+        if (qgrp) then
+         j=ceiling(one*norient/SIZE_LOCAL)
+         obeg=min(j*ME_LOCAL,norient-1) + 1
+         oend=obeg - 1 + max(0,min(j,norient-j*ME_LOCAL ))
+        else ! not qgrp
+         obeg=1; oend=norient
+        endif ! qgrp
+! allocate memory
+        allocate(ugrad(3,3,3,norient))
+!    need to calculate the matrix to fit roi onto roc and its derivatives
+        call RMSBestFit(roc,roi,ow,u,obeg,oend,ugrad) ! fitting roc onto roi, and computing derivatives w.r.t. roi; 
+!    to get the right matrix and derivative take TRANSPOSE (which corresponds to an opposite rotation)
+!
+        Mtemp=zero
+!    compute entries in M that require only one derivative
+!    this loop gooes over atoms that are both orientation and forcing atoms
+        if (qdiffrot) then
+         do i=1, nboth ! overlapping atoms
+          indo=iatom_both(2,i) ! orientation index
+          if ( (indo.ge.obeg).and.(indo.le.oend) ) then ! have the corresponding derivative
+           ug3=ugrad(:,:,:,indo) ! prefetch
+!    precompute matrix derivative term A . grad A (3 components)
+           ug3i=zero
+           do c=1,3 ! dot product variable
+            do b=1,3 ; do a=1,3 ; do e=1,3
+             ug3i(e,a,b) = ug3i(e,a,b) + u(c,a)*ug3(e,b,c) ! note transposition
+            enddo ;    enddo ;    enddo
+           enddo ! c
+!    now compute sum over all forcing atoms
+           j=iatom_both(1,i) ! forcing index
+           do k=1, nforced
+            rk = oom(j) * rfi(k,:)
+            do a=1,3 ; do b=1,3
+             s = dot_product(ug3i(:,a,b),rk)
+             Mtemp(a,b,j,k) = Mtemp(a,b,j,k) + s
+             Mtemp(b,a,k,j) = Mtemp(b,a,k,j) + s
+            enddo ;    enddo
+           enddo ! k
+          endif ! orientation index in range
+         enddo ! i -- overlapping atoms
+!------------------------------------------------------------------
+        else ! .not. qdiffrot : orientation indices/coordinates the same and can be used interchangeably
+         do i=obeg, oend
+           ug3=ugrad(:,:,:,i)
+!    precompute matrix derivative term A . grad A (3 components)
+           ug3i=zero
+           do c=1,3 ! dot product variable
+            do b=1,3 ; do a=1,3 ; do e=1,3
+             ug3i(e,a,b) = ug3i(e,a,b) + u(c,a)*ug3(e,b,c) ! note transposition
+            enddo ;    enddo ;    enddo
+           enddo ! c
+!    now compute sum over all forcing atoms
+           j=i ! forcing and orientation indices the same
+           do k=1, nforced
+            rk = oom(j)*rfi(k,:)
+            do a=1,3 ; do b=1,3
+             s = dot_product(ug3i(:,a,b),rk)
+             Mtemp(a,b,j,k) = Mtemp(a,b,j,k) + s
+             Mtemp(b,a,k,j) = Mtemp(b,a,k,j) + s
+            enddo ;    enddo
+           enddo ! k
+         enddo ! i -- orientation atoms
+        endif ! qdiffrot
+!
+!     compute terms that involve sums of matrix derivatives
+!
+        ugrad_dyad_ave=zero
+        ug3=zero
+!
+        do i=obeg, oend
+         do c=1,3
+          ug2=ugrad(:,:,c,i) ! prefetch
+!
+          do a=1,3 ; do b=1,3 ; do d=1,3 ; 
+           ug3(d,b,a) = ug3(d,b,a) - oom(i) * ow(i) * u(c,b)*ug2(d,a) ! note the transposition
+           do e=1,3
+! dyadic product
+           ugrad_dyad_ave(e,d,b,a) = ugrad_dyad_ave(e,d,b,a) + oom(i) * ug2(d,a)*ug2(e,b) ! note the transposition
+           enddo
+          enddo;     enddo;     enddo
+!
+         enddo ! c component of orientation atom
+        enddo ! orientation index
+!
+!    now need to reduce matrix sums on all slaves
+!
+        if (qgrp) then
+         ugrad_dyad_ave(:,:,:,4)=ug3
+         i=3**3 * 4 ! number of elements
+         call MPI_ALLREDUCE(MPI_IN_PLACE, ugrad_dyad_ave, i, mpifloat, MPI_SUM, MPI_COMM_LOCAL, j)
+         ug3=ugrad_dyad_ave(:,:,:,4)
+! also combine partial tensor Mtemp on the root processor
+         i=(3*nforced)**2
+         if (ME_LOCAL.eq.0) then ! use the same array on root
+          call MPI_REDUCE(MPI_IN_PLACE, Mtemp,  i, mpifloat, MPI_SUM, 0, MPI_COMM_LOCAL, j)
+         else
+          call MPI_REDUCE(Mtemp, MPI_UNDEFINED, i, mpifloat, MPI_SUM, 0, MPI_COMM_LOCAL, j)
+         endif ! root
+! now can compute the other terms
+! (1) recompute send indices
+         j=ceiling(one*nforced/SIZE_LOCAL)
+         allocate(send_displ(SIZE_LOCAL), send_count(SIZE_LOCAL))
+         do i=1,SIZE_LOCAL
+          send_displ(i)=9*nforced*min((i-1)*j,nforced-1)
+          send_count(i)=9*nforced*max(0,min(j,nforced-j*(i-1)))
+         enddo
+!
+         fbeg=send_displ(ME_LOCAL+1) + 1
+         fend=fbeg - 1 + send_count(ME_LOCAL+1)
+!
+! (2) compute quadratics
+         do k=fbeg, fend
+          rk=rfi(k,:)
+! precompute
+          do d=1,3
+           ug2=ug3(d,:,:)*rk(d)
+          enddo
+!
+          do j=1, nforced
+           rj=rfi(j,:)
+           do a=1,3 ; do b=1,3
+!
+             s=zero
+             do d=1,3 ; do e=1,3
+              s=s+rj(d)*rk(e)*ugrad_dyad_ave(e,d,b,a)
+             enddo ;    enddo
+! last contribution from rotations
+!             oms=zero
+             do d=1,3
+!              oms = oms + ug3(d,b,a)*rj(d) + ug2(a,b) ! last term precomputed before j-loop
+              s = s + ug3(d,b,a)*rj(d) + ug2(a,b) ! last term precomputed before j-loop
+             enddo
+             Mtemp(a,b,j,k) = s ! + oms
+           enddo ;    enddo ! a and b
+          enddo ; ! j
+         enddo ; ! k
+! (3) gather partial M-matrices
+         if (ME_LOCAL.eq.0) then
+          call MPI_GATHERV(MPI_IN_PLACE,                       &
+     &         send_count(ME_LOCAL+1),mpifloat,                &
+     &         Mtemp, send_count, send_displ, mpifloat,        &
+     &         0, MPI_COMM_LOCAL, i)
+         else
+          call MPI_GATHERV(Mtemp(1,1,1,fbeg),                  &
+     &         send_count(ME_LOCAL+1),mpifloat,                &
+     &         MPI_UNDEFINED, send_count, send_displ, mpifloat,&
+     &         0, MPI_COMM_LOCAL, i)
+         endif
+!
+        else ! not qgrp
+         do k=1, nforced
+          rk=rfi(k,:)
+          do j=1, k-1
+           rj=rfi(j,:)
+           do a=1,3 ; do b=1,3
+             s=zero
+             do d=1,3 ; do e=1,3
+              s=s+rj(d)*rk(e)*ugrad_dyad_ave(e,d,b,a)
+             enddo ;    enddo
+             Mtemp(a,b,j,k) = s
+             Mtemp(b,a,k,j) = s
+           enddo ;    enddo ! a and b
+          enddo ; ! j
+! ---------- diagonal atom submatrices (there is still a little bit of duplication left (a<->b))
+          do a=1,3 ; do b=1,3
+             s=zero
+             do d=1,3 ; do e=1,3
+              s=s+rk(d)*rk(e)*ugrad_dyad_ave(e,d,b,a)
+             enddo ;    enddo
+             Mtemp(a,b,k,k) = s
+          enddo ;    enddo ! a and b
+! --------
+         enddo ; ! k
+!
+! (3) compute remaining contribution from rotation derivatives
+         do j=1, nforced
+          rj = rfi(j,:)
+          do a=1,3 ; do b=1,3
+           s = dot_product(ug3(:,b,a),rj)
+! all forcing atoms have a contribution
+           do k=1,nforced
+            Mtemp(a,b,j,k) = Mtemp(a,b,j,k) + s
+            Mtemp(b,a,k,j) = Mtemp(b,a,k,j) + s
+           enddo ! k
+!
+          enddo ;    enddo
+         enddo ! j
+!
+         deallocate(send_count, send_displ)
+!
+        endif ! qgrp
+!
+        if (qdiffrot) then
+         do i=1, nboth ! overlapping atoms
+          indo=iatom_both(2,i) ! orientation index
+          k=iatom_both(1,i) ! forcing index
+!
+          s=ow(indo)*oom(k)
+          do a=1,3
+           Mtemp(a,a,:,k) = Mtemp(a,a,:,k) - s
+           Mtemp(a,a,k,:) = Mtemp(a,a,k,:) - s
+          enddo
+         enddo
+!
+        else ! not qdiffrot
+!
+         do k=1, nforced
+          s=ow(k)*oom(k)
+          do a=1,3
+           Mtemp(a,a,:,k) = Mtemp(a,a,:,k) - s
+           Mtemp(a,a,k,:) = Mtemp(a,a,k,:) - s
+          enddo
+         enddo
+!
+        endif ! qdiffrot
+! sum w_n^2 /m_n :
+        s=zero
+!
+        do i=1, norient ; s=s+ow(i)*ow(i)*oom(i) ; enddo
+        do a=1,3 ; Mtemp(a,a,:,:)=Mtemp(a,a,:,:)-s ; enddo
+!
+        if (associated(ugrad)) deallocate(ugrad)
+!
+      endif ! qorient
+!
+! remaining term : d_ab x d_jk / m
+!
+      do a=1,3 ; do j=1,nforced
+        Mtemp(a,a,j,j) = Mtemp(a,a,j,j) - oom(j)
+      enddo    ; enddo
+!
+      end subroutine ftsm_calc_M
+!
+!======================================================================
       subroutine ftsm_calc(x,y,z,deriv,t)
 !
       __DEP_NUMBER 
@@ -3762,9 +4135,9 @@ __CHARMM_ONLY##IF STRINGM
 !
       __IMPNONE
 !
-      float :: x(:), y(:), z(:)
+      float, intent(in) :: x(:), y(:), z(:)
       bool :: deriv, qgrp, qcombine
-      float, optional :: t
+      float, intent(in), optional :: t
       float :: s, oms ! this value indicates how much of the old reference set to take
 !
       int :: ind, i, j, k, obeg, oend, p, q, ierror
@@ -3947,7 +4320,7 @@ __CHARMM_ONLY##IF STRINGM
         else ! not qorient
 !
          do j=1,3
-           rfc_cur(:,j)=rfc_cur(:,j) + s*rfc(:,j)+oms*rfc_old(:,j)
+           rfc_cur(:,j)=s*rfc(:,j)+oms*rfc_old(:,j)
          enddo;
 !
         endif ! qorient
@@ -4140,7 +4513,7 @@ __CHARMM_ONLY##IF STRINGM
      &              u(1,2)*b13 + u(2,2)*b23 + u(3,2)*b33
              M(3,3)=a13*u1(1,3) + a23*u1(2,3) + a33*u1(3,3) +           &
      &              u(1,3)*b13 + u(2,3)*b23 + u(3,3)*b33
-! aa: this is what we are doing above:
+! aa: this is what we are doing above: At'B + AtB' = (AtB)'
 !            ugrad2(:,:,j,k)=matmul(transpose(ugrad(:,:,j,k)),u1)+
 !     &                      matmul(transpose(u),ugrad1(:,:,j,k))
            enddo ! j
@@ -4218,7 +4591,7 @@ __CHARMM_ONLY##IF STRINGM
      &              u(1,2)*b13 + u(2,2)*b23 + u(3,2)*b33
              M(3,3)=a13*u1(1,3) + a23*u1(2,3) + a33*u1(3,3) +           &
      &              u(1,3)*b13 + u(2,3)*b23 + u(3,3)*b33
-! aa: this is what we are doing above:
+! aa: this is what we are doing above: At'B + AtB' = (AtB)'
 !            ugrad2(:,:,j,k)=matmul(transpose(ugrad(:,:,j,k)),u1)+
 !     &                      matmul(transpose(u),ugrad1(:,:,j,k))
            enddo ! j
