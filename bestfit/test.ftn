@@ -14,6 +14,11 @@
  float, allocatable :: r(:,:,:), r_rot(:,:,:), rave(:,:), rave_new(:,:)
  character(len=100) :: line
  float, allocatable :: u(:,:,:)
+ float, allocatable :: ugrad(:,:,:,:), ugrad_fd(:,:,:,:)
+ float :: uplus(3,3), uminus(3,3) ! for FD test
+!
+ float :: h
+!
  float :: Kd(3,3) = RESHAPE( (/one,zero,zero,zero,one,zero,zero,zero,one/), (/3,3/) ) ! Kronecker delta
  float, allocatable :: w(:)
  float :: eigval(3)
@@ -101,8 +106,9 @@
 !*******random matrix tests*******
 ! these are an approximation to what actually goes on in a code
 !
-! do n=1,1000000
- do n=1,10000000
+! do n=1,1000
+ do n=1,1000000
+! do n=1,10000000
 !do n=1,0
   call random_number(M)
   M=100d0*(M+transpose(M)-1d0)
@@ -176,6 +182,51 @@
  write(0,*) ' Present vs. CHARMM: ', maxval(abs(rmsd_(1:31) - rmsd_charmm))
  write(0,*) ' Present vs. VMD   : ',maxval(abs(rmsd_(1:31) - rmsd_vmd))  
  write(0,*) ' CHARMM  vs. VMD   : ',maxval(abs(rmsd_charmm - rmsd_vmd))  
+!
+! compute gradients of rotation analytically and compare to finite-differences
+ write(0,*) '  ------------------------------------- '
+ write(0,*) ' Comparing analytical and finite-difference gradients from RMSBestFit ...'
+ write(0,*) '  max|u - ( u(x+h) - u(x-h) )/2h|'
+ write(0,*) '  (NOTE: 2nd order FD should exhibit a quadratic reduction in max. error [for h not too small!])'
+ write(0,*)
+ write(0,*) '  FD interval, Max. grad. error (all structures): '
+ write(0,*) '  ----------------------------------------------- '
+! write(0,*) '  Coordinate set    Max. gradient error: '
+ allocate( ugrad(3,3,3,natom), ugrad_fd(3,3,3,natom) )
+!
+ h=10d0;
+
+ do
+
+  maxerr=0;
+  rave=r(:,:,1) ! first coordintate set
+
+  do n=1,nrep ! over all coordinates
+   call RMSBestFit(r(:,:,n),rave,w,uminus,1,natom,ugrad) ! compute matrix and gradients
+!
+   do j=1,natom ! over all atoms
+    do i=1,3 ! over all components
+     rave(j,i)=rave(j,i)+h ! fd perturbation
+     call RMSBestFit(r(:,:,n),rave,w,uplus);
+     rave(j,i)=rave(j,i)-h*2 ! fd perturbation
+     call RMSBestFit(r(:,:,n),rave,w,uminus);
+     ugrad_fd(:,:,i,j)=(uplus-uminus)*0.5d0/h ! second - order
+!     ugrad_fd(:,:,i,j)=(uplus-uminus)/h ! first - order
+     rave(j,i)=r(j,i,1) ! restore coordinate
+    enddo
+   enddo
+! compare analytical and
+   err=maxval(abs(ugrad_fd-ugrad))
+   maxerr=max(err,maxerr)
+!  write(0,*) n, err
+  enddo ! n
+  write(0,'("  ",ES20.13,A,ES20.13)')    h,',',maxerr
+  h=h*0.1d0
+  if (h.lt.TOL) exit
+
+ enddo
+!
+ write(0,*) '  --------------------------------- '
 !
 !stop
 ! performance test (about 0.18 ms / calculation with AD)
