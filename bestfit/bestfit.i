@@ -1,7 +1,3 @@
-#include "source.defs"
-#undef __CPLUSPLUS
-#define __SWIG
-// prototype
 %module bestfit
 %{
 #include "bestfit.h"

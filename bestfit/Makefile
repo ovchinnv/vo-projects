@@ -14,6 +14,8 @@ LOCALDEPS=source.defs
 # additional objects for linking test.o executable
 
 LINKOBJS=constants.o output.o
+PYTHONH=-I /usr/include/python2.7/
+LPYTHON=-lpython2.7
 
 include $(ROOT)/Makefile.inc
 
@@ -25,7 +27,7 @@ charmm: $(CHARMM_SOURCES)
 %_.F90:%.ftn $(LOCALDEPS) $(GLOBALDEPS) $(ROOT)/source.msg
 	$(FPP) $(FPPFLAGS) $(DEFS) -D__BINDC $(GLOBALMACROS) $(LOCALMACROS) -P $< > $@
 
-libraries : cbind tcl
+libraries : cbind tcl python
 cbind : bestfit.h static shared
 shared : dynamic
 dynamic : libbestfit.so
@@ -39,7 +41,14 @@ tcl : libbestfit_tcl.so
 libbestfit_tcl.so : bestfit.i $(DBINDOBJS)
 	$(SWIGC) -D__BINDC $(SFLAGS) -tcl bestfit.i
 	$(CC) -fPIC $(CFLAGS) -D__BINDC $(LOCALMACROS) bestfit_wrap.c
-	$(CC) -shared bestfit_wrap.o $(DBINDOBJS) $(FLIBS) -o libbestfit_tcl.so
+	$(CC) -shared bestfit_wrap.o $(DBINDOBJS) $(FLIBS) -o $@
+
+python : _bestfit.so
+_bestfit.so : bestfit.i $(DBINDOBJS)
+	$(SWIGC) -D__BINDC $(SFLAGS) -python bestfit.i
+	$(CC) -fPIC $(CFLAGS) -D__BINDC $(LOCALMACROS) $(PYTHONH) bestfit_wrap.c
+	$(CC) -shared bestfit_wrap.o $(DBINDOBJS) $(FLIBS) $(LPYTHON) -o $@
+
 bestfit.i : bestfit.h
 bestfit.h : bestfit.H $(LOCALDEPS) $(GLOBALDEPS)
 	$(FPP) $(FPPFLAGS) -D__BINDC -U__CHARMM $(GLOBALMACROS) $(LOCALMACROS) -P $< > $@
@@ -57,5 +66,6 @@ ctest.o : ctest.c bestfit.h $(LOCALDEPS)
 
 clean::
 	rm -f *.mod $(CHARMM_SOURCES) $(SOURCES) $(BINDSOURCES) $(OBJS) $(CBINDOBJ) $(SBINDOBJS) $(DBINDOBJS) $(ROOT)/$(NAME).stamp \
-bestfit_c.F90 ctest.o fort.* ctest *_wrap* bestfit.h
+bestfit_c.F90 ctest.o fort.* ctest *_wrap* bestfit.h bestfit.py bestfit.pyc
+
 
