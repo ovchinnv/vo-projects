@@ -152,8 +152,8 @@ int main()
   maxerr=0.;
   for (n=0;n<nrep;n++) { // over all structures
    int dr=3*natom*n ; int du=9*n;
-//   RMSBestFitGrad(r+dr,rtemp,w,natom,u+du,ugrad,1,natom, qswapdim); // compute matrix and gradients
-   RMSBestFitGradEval(r+dr,rtemp,w,natom,u+du,ugrad,1,natom, eigval, qswapdim); // compute matrix and gradients; also, eigenvalues
+   RMSBestFitGrad(r+dr,rtemp,w,natom,u+du,ugrad,1,natom, qswapdim); // compute matrix and gradients
+//   RMSBestFitGradEval(r+dr,rtemp,w,natom,u+du,ugrad,1,natom, eigval, qswapdim); // compute matrix and gradients; also, eigenvalues
 //
    for (i=0;i<3*natom;i++) { // over all atoms
      rtemp[i]=rtemp[i]+h; // fd perturbation

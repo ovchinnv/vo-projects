@@ -29,7 +29,7 @@ MPI_HOME=/usr/lib/openmpi
 # G95 reguires no space between "-D" and the name
 DEFS+=-Dint=integer -Dfloat=real*8 -Dbool=logical -Dmpiint=MPI_INTEGER -Dmpifloat=MPI_REAL8 -Dmpichar=MPI_CHARACTER -Dmpiint4=MPI_INTEGER4\
      -Dmpibool=MPI_LOGICAL -Dint1="integer(kind=KIND('a'))" -D__DMOL -D__RCOMP -D__DMOL -D__CHES -D__EDDIE -D__FC=$(FC) \
-     -Dint4mpi=integer -D__PARALLEL #-D__PATHSCALE #-Dint4mpi="integer(KIND=MPI_INTEGER_KIND)" 
+     -Dint4mpi=integer #-D__PARALLEL #-D__PATHSCALE #-Dint4mpi="integer(KIND=MPI_INTEGER_KIND)" 
 
 # ! note: the VEC routines are probably slower
 
@@ -40,14 +40,17 @@ DEFS+=-Dint=integer -Dfloat=real*8 -Dbool=logical -Dmpiint=MPI_INTEGER -Dmpifloa
 # preprocess with C++ style preprocessor
 # -C flag preserves comments
 
-AR=xiar
-#AR=ar
-AFLAGS=rv
+#AR=xiar
+AR=ar
+AFLAGS=rvcs
 
 LD=$(FC)
 LDFLAGS=-g #-static -Bstatic -ipo
 #LDFLAGS=-static -ipa
 
+FLIBS+=-lgfortran
+
+PIC=-fPIC
 GLOBALMACROS=-include $(ROOT)/source.defs
 MSG=-include $(ROOT)/source.msg
 CHMSG=-include $(ROOT)/charmm.msg
@@ -57,6 +60,7 @@ GLOBALDEPS=$(ROOT)/source.defs $(ROOT)/source.msg
 MPI_INCLUDE=-I $(MPI_HOME)/include -I $(MPI_HOME)
 #MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lpthread -lmpich -lmpichf90 -lmpl # -lmpi -lmpi_f90 -lmpi_f77 # mpich
 MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lpthread -lmpi -lmpi_f90 -lmpi_f77 # openmpi
+MPI_LIBS=
 
 INCLUDES+=-I $(ROOT)/include
 LIBS+=-L $(ROOT)/lib
@@ -84,6 +88,8 @@ all : default
 	$(CC) $(CFLAGS) $< -o $@
 %.o:%.F90 $(LIBDEPS)
 	$(FC) $(FFLAGS) $(DEFS) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $< -o $@
+%__.o:%_.F90 $(LIBDEPS)
+	$(FC) $(FFLAGS) $(DEFS) $(PIC) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $< -o $@
 %.o:%.F $(LIBDEPS)
 	$(FC) $(FFLAGS) $(DEFS) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $< -o $@
 %.a:
@@ -111,7 +117,7 @@ $(ROOT)/$(NAME).stamp:: $(OBJS) $(DISTRIB)
 
 ########################## SOURCE CODE #######################
 %.h:%.H $(LOCALDEPS) $(GLOBALDEPS)
-	$(FPP) $(FPPFLAGS) $(DEFS) $(LOCALDEFS) $< > $@
+	$(FPP) $(FPPFLAGS) $(DEFS) $(LOCALDEFS) -U__CHARMM $(GLOBALMACROS) $(LOCALMACROS) -P $< > $@
 %.F90:%.ftn $(LOCALDEPS) $(GLOBALDEPS) $(ROOT)/source.msg
 	$(FPP) $(FPPFLAGS) $(DEFS) -U__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(MSG) -P $< > $@
 %.src:%.ftn $(LOCALDEPS) $(GLOBALDEPS) $(ROOT)/charmm.msg
@@ -142,7 +148,6 @@ string:
 continua:
 	$(MAKE) -C $(ROOT)/continua
 
-
 force_look:
 	true
 mod:
@@ -150,12 +155,12 @@ mod:
 modules: $(OBJS) mod
 	for d in $(DIRS); do (cd $$d; $(MAKE) modules); done
 linklibs:
-	/bin/sh -c 'for file in `ls *.a 2>/dev/null`; do  ln -fs `pwd`/$$file ${ROOT}/lib/$$file; done'
+	/bin/sh -c 'for file in `ls *.a *.so 2>/dev/null`; do  ln -fs `pwd`/$$file ${ROOT}/lib/$$file; done'
 libs : libraries
 libraries: $(ROOT)/$(NAME).stamp linklibs
 	for d in $(DIRS); do (cd $$d; $(MAKE) libraries); done
-.SILENT : %.stamp clean $(DISTRIB) test force_look
+.SILENT : %.stamp clean $(DISTRIB) test ctest force_look
 clean::
-	rm -f *.mod *.a $(ROOT)/$(NAME).stamp $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(EXE) test.F90 test.dat test.out test.o 
+	rm -f *.mod *.a *.so $(ROOT)/$(NAME).stamp $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(EXE) test.F90 test.dat test.out test.o 
 	if [ -f test ] ; then rm -f test ; fi
 charmm:
