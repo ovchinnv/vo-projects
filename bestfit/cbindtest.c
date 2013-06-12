@@ -5,13 +5,17 @@
 #include <math.h>
 #include "bestfit.h"
 
+#define __TOL 1.e-8
+
 int main()
 {
 // declare data pointers
  __CFLOAT *r=NULL, *r_rot=NULL, *u=NULL, *w=NULL, *eigval=NULL;
+ __CFLOAT *ugrad=NULL, *ugrad_fd=NULL, *rtemp=NULL;
  __CINT natom;
- __CBOOL qswapdim=1 ; // if true, coordinates are stored as consequtive x,y,z triplets
- int i, n;
+ __CFLOAT uplus[9], uminus[9];
+ __CBOOL qswapdim=1 ; // if true, coordinates are stored as consecutive x,y,z triplets
+ int i, j, n;
  int ix, iy, iz;
  __CFLOAT *rmsd_=NULL;
 //
@@ -40,6 +44,7 @@ int main()
  int const slen=100;
  char line[slen], fname[slen];
 //
+ int size; // global
  for (n=0; n<nrep ;n++) {
   sprintf(line,__CINTFMT, n);
   strcpy(fname,basename);
@@ -54,7 +59,7 @@ int main()
   sscanf(line,__CINTFMT,&natom);
 //
   if (n==0) {
-    int size = 3*natom*sizeof(__CFLOAT);
+    size = 3*natom*sizeof(__CFLOAT);
     r = (__CFLOAT *) malloc(size*nrep);
     u = (__CFLOAT *) malloc(9*nrep*sizeof(__CFLOAT));
     w = (__CFLOAT *) malloc(natom*sizeof(__CFLOAT));
@@ -116,11 +121,79 @@ int main()
  for (i=1;i<nrep;i++){
   d=fabs(rmsd_[i]-rmsd_charmm[i-1]) ; if ( d  > dcharmm ) dcharmm=d;
   d=fabs(rmsd_[i]-rmsd_vmd[i-1])    ; if ( d  > dvmd    ) dvmd=d;
-}
+ }
 //
  puts(" -------------------------------------------------------");
  puts("Maximum RMS differences between different calculations:");
  printf("Present vs. CHARMM : %20.15e\n",dcharmm);
  printf("Present vs. VMD    : %20.15e\n",dvmd);
+//
+// compute gradients of rotation analytically and compare to finite-differences
+//
+ puts(" -------------------------------------- ");
+ puts(" Comparing analytical and finite-difference gradients from RMSBestFit ...");
+ puts("  max|u - ( u(x+h) - u(x-h) )/2h|");
+ puts("  (NOTE: 2nd order FD should exhibit a quadratic reduction in max. error [for h not too small!])");
+ puts;
+ puts("  FD interval, Max. grad. error (all structures): ");
+ puts("  ----------------------------------------------- ");
+//
+ ugrad=   (__CFLOAT *) malloc(size*9); //analytical
+ ugrad_fd=(__CFLOAT *) malloc(size*9); //FD
+//
+// initial FD step
+ double h=10.0;
+//
+ double err, maxerr;
+ rtemp=(__CFLOAT *) malloc(size);
+ for (i=0;i<3*natom;i++){ rtemp[i]=r[i]; } // copy first structure to rtemp 
+ do
+ {
+  maxerr=0.;
+  for (n=0;n<nrep;n++) { // over all structures
+   int dr=3*natom*n ; int du=9*n;
+//   RMSBestFitGrad(r+dr,rtemp,w,natom,u+du,ugrad,1,natom, qswapdim); // compute matrix and gradients
+   RMSBestFitGradEval(r+dr,rtemp,w,natom,u+du,ugrad,1,natom, eigval, qswapdim); // compute matrix and gradients; also, eigenvalues
+//
+   for (i=0;i<3*natom;i++) { // over all atoms
+     rtemp[i]=rtemp[i]+h; // fd perturbation
+     RMSBestFit(r+dr, rtemp, w, natom, uplus, qswapdim);
+     rtemp[i]=rtemp[i]-h*2; // fd perturbation
+     RMSBestFit(r+dr, rtemp, w, natom, uminus, qswapdim);
+//
+     int l;
+     for (l=0, iy=i*9 ; l<9 ;l++, iy++) {
+      ugrad_fd[iy] = (uplus[l]-uminus[l])*0.5/h ; // second - order
+     }
+//
+     rtemp[i]=r[i]; // restore coordinate
+   } // i
+// compare analytical and
 
+   err=0;
+   for (i=0;i<27*natom;i++){
+    d = fabs(ugrad[i]-ugrad_fd[i]) ; if ( d  > err ) err=d;
+   }
+   if ( err  > maxerr ) maxerr=err;
+//
+//  printf("  %d,%20.13e\n",n,err);
+  } // n-structures
+  printf("  %23.13e,%20.13e\n",h,maxerr);
+  h=h*0.1;
+ } while (h>__TOL);
+//
+ puts("  --------------------------------- ");
+//
+// deallocate memory
+ free(r);
+ free(r_rot);
+ free(rtemp);
+ free(u);
+ free(w);
+ free(ugrad);
+ free(ugrad_fd);
+ free(rmsd_);
+ free(eigval);
 } //main
+
+
