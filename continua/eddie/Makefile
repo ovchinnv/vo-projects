@@ -1,6 +1,6 @@
 ROOT=../..
 COMMON=..
-OBJS=eddie_grid.o eddie_info.o
+OBJS=eddie_grid.o eddie_info.o eddie_typedef.o
 NAME=continua/eddie
 DEPS=output parser constants continua/common
 
@@ -12,8 +12,8 @@ include $(ROOT)/Makefile.inc
 
 eddie_grid.F90: $(ROOT)/parser/parser_macro1.src
 eddie_info.o: eddie_grid.o
-eddie.o: eddie_grid.o eddie_info.o
-eddie.F90: $(ROOT)/parser/parser_macro1.src
+eddie.o: eddie_grid.o eddie_info.o eddie_typedef.o
+eddie.F90: $(ROOT)/parser/parser_macro1.src $(ROOT)/parser/parser_macro2.src 
 
 
 test:: force_look

@@ -68,4 +68,3 @@ clean::
 	rm -f *.mod $(CHARMM_SOURCES) $(SOURCES) $(BINDSOURCES) $(OBJS) $(CBINDOBJ) $(SBINDOBJS) $(DBINDOBJS) $(ROOT)/$(NAME).stamp \
 bestfit_c.F90 ctest.o fort.* ctest *_wrap* bestfit.h bestfit.py bestfit.pyc
 
-

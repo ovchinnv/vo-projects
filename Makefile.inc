@@ -29,7 +29,7 @@ MPI_HOME=/usr/lib/openmpi
 # G95 reguires no space between "-D" and the name
 DEFS+=-Dint=integer -Dfloat=real*8 -Dbool=logical -Dmpiint=MPI_INTEGER -Dmpifloat=MPI_REAL8 -Dmpichar=MPI_CHARACTER -Dmpiint4=MPI_INTEGER4\
      -Dmpibool=MPI_LOGICAL -Dint1="integer(kind=KIND('a'))" -D__DMOL -D__RCOMP -D__DMOL -D__CHES -D__EDDIE -D__FC=$(FC) \
-     -Dint4mpi=integer #-D__PARALLEL #-D__PATHSCALE #-Dint4mpi="integer(KIND=MPI_INTEGER_KIND)" 
+     -Dint4mpi=integer -D__PARALLEL #-D__PATHSCALE #-Dint4mpi="integer(KIND=MPI_INTEGER_KIND)" 
 
 # ! note: the VEC routines are probably slower
 
@@ -60,7 +60,7 @@ GLOBALDEPS=$(ROOT)/source.defs $(ROOT)/source.msg
 MPI_INCLUDE=-I $(MPI_HOME)/include -I $(MPI_HOME)
 #MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lpthread -lmpich -lmpichf90 -lmpl # -lmpi -lmpi_f90 -lmpi_f77 # mpich
 MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lpthread -lmpi -lmpi_f90 -lmpi_f77 # openmpi
-MPI_LIBS=
+#MPI_LIBS=
 
 INCLUDES+=-I $(ROOT)/include
 LIBS+=-L $(ROOT)/lib
@@ -117,7 +117,7 @@ $(ROOT)/$(NAME).stamp:: $(OBJS) $(DISTRIB)
 
 ########################## SOURCE CODE #######################
 %.h:%.H $(LOCALDEPS) $(GLOBALDEPS)
-	$(FPP) $(FPPFLAGS) $(DEFS) $(LOCALDEFS) -U__CHARMM $(GLOBALMACROS) $(LOCALMACROS) -P $< > $@
+	$(FPP) $(FPPFLAGS) $(DEFS) $(LOCALDEFS) -P $< > $@
 %.F90:%.ftn $(LOCALDEPS) $(GLOBALDEPS) $(ROOT)/source.msg
 	$(FPP) $(FPPFLAGS) $(DEFS) -U__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(MSG) -P $< > $@
 %.src:%.ftn $(LOCALDEPS) $(GLOBALDEPS) $(ROOT)/charmm.msg

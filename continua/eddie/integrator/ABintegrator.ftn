@@ -1,13 +1,14 @@
 module ABintegrator
 
  use size
- use flowstate ! basic variables
+ use datatypes
+ use state
+ use constants
+
+ __IMPNONE
 
 
-!.....uab1, vab1, wab1:		RHS predictor step for Adams-Bashforth advancement
-!.....uab2, vab2, wab2:		RHS corrector step (A/B)
-
-
+ public ab_init
  public ab_predictor
  public ab_corrector
 
@@ -16,6 +17,26 @@ module ABintegrator
  logical :: deltaform=.false.
 
  contains
+!
+       subroutine ab_initialize()
+!.....uab1, vab1, wab1:		RHS predictor step for Adams-Bashforth advancement
+!.....uab2, vab2, wab2:		RHS corrector step (A/B)
+       uab1(nx,ny,nz),vab1(nx,ny,nz),wab1(nx,ny,nz),
+       uab2(nx,ny,nz),vab2(nx,ny,nz),wab2(nx,ny,nz)
+
+
+       end subroutine ab_initialize
+!========================================
+       subroutine ab_done()
+       uab1,vab1,wab1,
+       uab2,vab2,wab2
+
+!
+       end subroutine ab_done
+
+       
+
+
 !* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
 !*                                                                 *
 !*            A D A M S  -  B A S H F O R T H   S T E P            *
@@ -32,18 +53,19 @@ module ABintegrator
      &                       us,vs,ws,xf,dpdx,dpdy,dpdz,dtm,a1,a2,botbc,topbc,
      &                       im,jm,km)
 c
-      implicit none
       include 'headers/common.h'
       integer im,jm,km,i,j,k,ii
       real tvip,tvim,delx
 c
-      REAL   uo(im,jm,km),vo(im,jm,km),wo(im,jm,km),
+      float, dimension(im,jm,km) ::
+             uo(im,jm,km),vo(im,jm,km),wo(im,jm,km),
      &       p(im,jm,km),
      &       uab1(im,jm,km),vab1(im,jm,km),wab1(im,jm,km),
      &       uab2(im,jm,km),vab2(im,jm,km),wab2(im,jm,km),
      &       ucn(im,jm,km),vcn(im,jm,km),wcn(im,jm,km),
      &       tv(im,jm,km),
      &       us(im,jm,km),vs(im,jm,km),ws(im,jm,km)
+!
       REAL   xf(im)
 c
       REAL   a(mmx-2),b(mmx-2),c(mmx-2)
@@ -56,13 +78,13 @@ c
 **** Compute provisional values for each momentum eq.
 *
 c      for implicit part
-      coef=   0.5*dtm
+      coef=   half*dtm
 
 c------------------------------------------------------------------
 c                                                    compute RHS
 c------------------------------------------------------------------
 c     uab1,vab1,wab1 store the rhs of the mom. equation since they will 
-c     not be used after this         
+c     not be used after this
 
       do k=kz1+1,kz2
          do j=jy1+1,jy2
@@ -91,24 +113,24 @@ c     x-mom
        do j=jy1+1,jy2
         do i=ibu,ieu
           ii=i-1
-	  tvip=ru1+2.*tv(i+1,j,k)
-	  tvim=ru1+2.*tv(i  ,j,k)
+	  tvip=ru1+two*tv(i+1,j,k)
+	  tvim=ru1+two*tv(i  ,j,k)
 	  a(ii)=-coef*au(i)*app(i)*tvim
 	  c(ii)=-coef*au(i)*app(i+1)*tvip
-	  b(ii)=1.-a(ii)-c(ii)
+	  b(ii)=one-a(ii)-c(ii)
         enddo !i
 c         botbc
         delx=xf(2)-xf(1)
         b(1)= b(1)*ibc(1,1)           !dirichlet
-     &      +(a(1)+b(1))*(1.-ibc(1,1))!neumann
+     &      +(a(1)+b(1))*(one-ibc(1,1))!neumann
         uab1(2,j,k)=(uab1(2,j,k)-a(1)*     botbc(1,j,k))*ibc(1,1) !dirichlet
-     &             +(uab1(2,j,k)+a(1)*delx*botbc(1,j,k))*(1.-ibc(1,1)) !neumann 1st o.
+     &             +(uab1(2,j,k)+a(1)*delx*botbc(1,j,k))*(one-ibc(1,1)) !neumann 1st o.
 c         topbc
         delx=xf(ix2)-xf(ix2-1)	  
         b(ieu-1)= b(ieu-1)*ibc(1,2)               !dirichlet
-     &          +(c(ieu-1)+b(ieu-1))*(1.-ibc(1,2))!neumann
+     &          +(c(ieu-1)+b(ieu-1))*(one-ibc(1,2))!neumann
         uab1(ieu,j,k)=(uab1(ieu,j,k)-c(ieu-1)*     topbc(1,j,k))*ibc(1,2) !dirichlet
-     &               +(uab1(ieu,j,k)-c(ieu-1)*delx*topbc(1,j,k))*(1.-ibc(1,2)) !neumann 1st o.
+     &               +(uab1(ieu,j,k)-c(ieu-1)*delx*topbc(1,j,k))*(one-ibc(1,2)) !neumann 1st o.
         call tridag(a,b,c,uab1(2,j,k),uab1(2,j,k),ieu-1,mmx-2)
        enddo !j
       enddo !k	
@@ -117,54 +139,54 @@ c     y-mom
        do j=jbv,jev
         do i=ix1+1,ix2
           ii=i-1
-	  tvip=ru1+0.25*(tv(i+1,j,k)+tv(i+1,j+1,k)
-     & 	               + tv(i  ,j,k)+tv(i  ,j+1,k))
-	  tvim=ru1+0.25*(tv(i  ,j,k)+tv(i  ,j+1,k)
-     & 	               + tv(i-1,j,k)+tv(i-1,j+1,k))
+	  tvip=ru1+quarter*(tv(i+1,j,k)+tv(i+1,j+1,k)
+     & 	                  + tv(i  ,j,k)+tv(i  ,j+1,k))
+	  tvim=ru1+quarter*(tv(i  ,j,k)+tv(i  ,j+1,k)
+     & 	                  + tv(i-1,j,k)+tv(i-1,j+1,k))
 	  a(ii)=-coef*av(i)*au(i-1)*tvim
 	  c(ii)=-coef*av(i)*au(i  )*tvip
-	  b(ii)=1.-a(ii)-c(ii)
+	  b(ii)=one-a(ii)-c(ii)
 c         botbc
         enddo !i
         delx=xf(2)-xf(1)
         b(1)=(b(1)-a(1))*ibc(2,1)           !dirichlet
-     &      +(a(1)+b(1))*(1.-ibc(2,1))      !neumann
-        vab1(2,j,k)=(vab1(2,j,k)-2.*a(1)*     botbc(2,j,k))*ibc(2,1) !dirichlet
-     &             +(vab1(2,j,k)+   a(1)*delx*botbc(2,j,k))*(1.-ibc(2,1)) !neumann 1st o.
+     &      +(a(1)+b(1))*(one-ibc(2,1))      !neumann
+        vab1(2,j,k)=(vab1(2,j,k)-two*a(1)*     botbc(2,j,k))*ibc(2,1) !dirichlet
+     &             +(vab1(2,j,k)+   a(1)*delx*botbc(2,j,k))*(one-ibc(2,1)) !neumann 1st o.
 c         topbc
         delx=xf(ix2+1)-xf(ix2)	  
         b(ix2-1)= (b(ix2-1)-c(ix2-1))*ibc(2,2)     !dirichlet
-     &          + (c(ix2-1)+b(ix2-1))*(1.-ibc(2,2))!neumann
-        vab1(ix2,j,k)=(vab1(ix2,j,k)-2.*c(ix2-1)*  topbc(2,j,k))*ibc(2,2) !dirichlet
-     &               +(vab1(ix2,j,k)-c(ix2-1)*delx*topbc(2,j,k))*(1.-ibc(2,2)) !neumann 1st o.
+     &          + (c(ix2-1)+b(ix2-1))*(one-ibc(2,2))!neumann
+        vab1(ix2,j,k)=(vab1(ix2,j,k)-two*c(ix2-1)*  topbc(2,j,k))*ibc(2,2) !dirichlet
+     &               +(vab1(ix2,j,k)-c(ix2-1)*delx*topbc(2,j,k))*(one-ibc(2,2)) !neumann 1st o.
         call tridag(a,b,c,vab1(2,j,k),vab1(2,j,k),ix2-1,mmx-2)
        enddo !j
-      enddo !k	
-c     z-mom        
+      enddo !k
+c     z-momentum
       do k=kbw,kew
        do j=jy1+1,jy2
         do i=ix1+1,ix2
           ii=i-1
-	  tvip=ru1+0.25*(tv(i+1,j,k)+tv(i+1,j,k+1)
-     & 	               + tv(i  ,j,k)+tv(i  ,j,k+1))
-	  tvim=ru1+0.25*(tv(i  ,j,k)+tv(i  ,j,k+1)
-     & 	               + tv(i-1,j,k)+tv(i-1,j,k+1))
+	  tvip=ru1+quarter*(tv(i+1,j,k)+tv(i+1,j,k+1)
+     & 	                  + tv(i  ,j,k)+tv(i  ,j,k+1))
+	  tvim=ru1+quarter*(tv(i  ,j,k)+tv(i  ,j,k+1)
+     & 	                  + tv(i-1,j,k)+tv(i-1,j,k+1))
 	  a(ii)=-coef*aw(i)*au(i-1)*tvim
 	  c(ii)=-coef*aw(i)*au(i  )*tvip
-	  b(ii)=1.-a(ii)-c(ii)
+	  b(ii)=one-a(ii)-c(ii)
 c         botbc
         enddo !i
         delx=xf(2)-xf(1)
         b(1)=(b(1)-a(1))*ibc(3,1)           !dirichlet
-     &      +(a(1)+b(1))*(1.-ibc(3,1))       !neumann
-        wab1(2,j,k)=(wab1(2,j,k)-2.*a(1)*     botbc(3,j,k))*ibc(3,1) !dirichlet
-     &             +(wab1(2,j,k)+   a(1)*delx*botbc(3,j,k))*(1.-ibc(3,1)) !neumann 1st o.
+     &      +(a(1)+b(1))*(one-ibc(3,1))       !neumann
+        wab1(2,j,k)=(wab1(2,j,k)-two*a(1)*     botbc(3,j,k))*ibc(3,1) !dirichlet
+     &             +(wab1(2,j,k)+   a(1)*delx*botbc(3,j,k))*(one-ibc(3,1)) !neumann 1st o.
 c         topbc
-        delx=xf(ix2+1)-xf(ix2)	  
+        delx=xf(ix2+1)-xf(ix2)
         b(ix2-1)= (b(ix2-1)-c(ix2-1))*ibc(3,2)               !dirichlet
-     &          + (c(ix2-1)+b(ix2-1))*(1.-ibc(3,2))!neumann
-        wab1(ix2,j,k)=(wab1(ix2,j,k)-2.*c(ix2-1)*  topbc(3,j,k))*ibc(3,2) !dirichlet
-     &               +(wab1(ix2,j,k)-c(ix2-1)*delx*topbc(3,j,k))*(1.-ibc(3,2)) !neumann 1st o.
+     &          + (c(ix2-1)+b(ix2-1))*(one-ibc(3,2))!neumann
+        wab1(ix2,j,k)=(wab1(ix2,j,k)-two*c(ix2-1)*  topbc(3,j,k))*ibc(3,2) !dirichlet
+     &               +(wab1(ix2,j,k)-c(ix2-1)*delx*topbc(3,j,k))*(one-ibc(3,2)) !neumann 1st o.
         call tridag(a,b,c,wab1(2,j,k),wab1(2,j,k),ix2-1,mmx-2)
        enddo !j
       enddo !k	
@@ -236,18 +258,16 @@ c
               do  i=ibu,ieu
 
 
-                uuab1(i,j,k)= (1.-tmeth)*uuab1(i,j,k)+tmeth*uuab2(i,j,k)
+                uuab1(i,j,k)= (one-tmeth)*uuab1(i,j,k)+tmeth*uuab2(i,j,k)
               enddo
            enddo
         enddo
 
-*
-
-
+!
         do  k=kz1+1,kz2
            do  j=jbv,jev
               do  i=ix1+1,ix2
-                 vvab1(i,j,k)=(1.-tmeth)*vvab1(i,j,k)+tmeth*vvab2(i,j,k)
+                 vvab1(i,j,k)=(one-tmeth)*vvab1(i,j,k)+tmeth*vvab2(i,j,k)
               enddo
            enddo
         enddo
@@ -255,24 +275,13 @@ c
         do  k=kbw,kew
            do  j=jy1+1,jy2
                do  i=ix1+1,ix2
-                 wwab1(i,j,k)=(1.-tmeth)*wwab1(i,j,k)+tmeth*wwab2(i,j,k)
+                 wwab1(i,j,k)=(one-tmeth)*wwab1(i,j,k)+tmeth*wwab2(i,j,k)
                enddo
             enddo
          enddo
       
       RETURN
       END
-
-
-
-
-
-
-
-
-
-
-
 
 
 

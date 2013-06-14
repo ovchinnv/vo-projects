@@ -30,6 +30,7 @@
 #ifdef __AB
       use ABintegrator    ! Adams-Bashforth integrator
 #endif
+
 #ifdef __central_fd2
       use central_fd2     ! central finite difference, second order derivatives
 #endif
@@ -65,6 +66,11 @@
       float, pointer, save, dimension(:,:,:) :: u, v, w, ustar, vstar, wstar, p, dp, div, nu
       float :: nu_m ! molecular viscosity
 !
+!
+      int :: t_integrator=0
+      int :: p_solver=0
+!
+!
 #ifdef __PARALLEL
       ierror
 #endif
@@ -78,6 +84,7 @@
 #undef __CTX
 #endif
 #ifdef __PARALLEL
+! use a trick to supply communicator only in parallel mode
 #define __CTX __COMM, ctx
 #else
 #define __CTX ctx
@@ -101,18 +108,16 @@
         call warning(whoami, 'State module not initialized. Nothing done.',-1)
         return
        endif
-!    initialize state variables
-       call message(whoami, 'Initializing state variables.');
 !
-       nullify(u_, v_, w_, pres_, nu_, pres_, deltap_, ustar_, vstar_, wstar_, div_)
-       nullify(u,v,w,p,nu,dp,div,ustar,vstar,wstar)
-!
-!    declare variables and boundary conditions
 !    prepare Cartesian grid and metrics (eddie - specific additions to grid)
 !
        call message(whoami, 'Initializing grid variables.');
        call eddie_grid_initialize()
 !    initialize state variables
+!    (declare variables and boundary conditions)
+       nullify(u_, v_, w_, pres_, nu_, pres_, deltap_, ustar_, vstar_, wstar_, div_)
+       nullify(u,v,w,p,nu,dp,div,ustar,vstar,wstar)
+!
        call message(whoami, 'Initializing state variables.');
 !
        call state_add3df('U'  ,'Streamwise velocity'      , __CTX, vptr=u_)     ; u=>u_%v
@@ -124,18 +129,60 @@
        call state_add3df('U*' ,'Predicted U-velocity'     , __CTX, vptr=ustar_) ; ustar=>ustar_%v
        call state_add3df('V*' ,'Predicted V-velocity'     , __CTX, vptr=vstar_) ; vstar=>vstar_%v
        call state_add3df('W*' ,'Predicted W-velocity'     , __CTX, vptr=wstar_) ; wstar=>wstar_%v
-! add boundary conditions
+! add boundary condition arrays
 
 
-#ifdef ABintegrator
-     &  uab1(nx,ny,nz),vab1(nx,ny,nz),wab1(nx,ny,nz),
-     &  uab2(nx,ny,nz),vab2(nx,ny,nz),wab2(nx,ny,nz)
-#endif
+!======================================================================================
+! parse other options (using preprocessor macros)
+!
+! integrator
+#define __WARNIFMISSING
+#define __CONTEXT ctx
+#define __VARNAME t_integrator
+#define __FILETAG integrator
+#define __DESCRIPTION	integrator
+#define __OPTIONS1 'AB','A-B','ADAMSBASHFORTH','ADAMS-BASHFORTH'
+#define __VALUE1 intAB
+#define __DEFAULT __VALUE1
+#define __NAMES int_name
+#include "parser/parser_macro2.src"
+!
+! now intAB is defined or the error flag is set
+!
+       if (.not.fatal_warning(__COMM)) then 
+        select case(t_integrator)
+        case(intAB) ; call ab_init()
+        case default ; call warning(whoami,' Unknown integrator option specified ('//itoa(t_integrator)//')',-1);
+       endif
+!
+! pressure solver
+#define __WARNIFMISSING
+#define __CONTEXT ctx
+#define __VARNAME t_integrator
+#define __FILETAG integrator
+#define __DESCRIPTION	integrator
+#define __OPTIONS1 'MG','MULTIGRID'
+#define __VALUE1 pMG
+#define __OPTIONS2 'MGFFT','MULTIGRIDFFT', 'MG-FFT', 'MULTIGRID-FFT'
+#define __VALUE2 pMGFFT
+#define __DEFAULT __VALUE1
+#define __NAMES pres_name
+#include "parser/parser_macro2.src"
+!
+
+
+
+
+
+
+
+
+
 
 !    initialize LES
 #ifdef LES
        call LES_initialize()
-#endif LES
+#endif // LES
 !    initialize immersed boundary
 #ifdef immbnd 
        call immbnd_initialize()
@@ -153,7 +200,7 @@
 !
 #define __MINUSERR
 #define __WARNIFMISSING
-#define __CTX ctx
+#define __CONTEXT ctx
 #define __VAR	nu_m
 #define __TAG	molecular_viscosity
 #define __NAME	molecular viscosity
@@ -390,7 +437,7 @@
 !
 #ifndef LES
       tv=0.
-#endif      	            
+#endif
 
 !-----------------------------------------------------------------------
       IF(MYRANK.EQ.0) THEN
@@ -483,7 +530,7 @@
      &     dpdx,dpdy,dpdz,dtm1,a1,a2,botbc,topbc,
      &     nx,ny,nz                          )
       Ltstep = .FALSE.
-!     don't think this is needed anymore since new IB does _NOT_ use ghost points
+!     don`t think this is needed anymore since new IB does _NOT_ use ghost points
 !      if (myrank.eq.0) write(66+mod(icycle,5),*) myrank,': refreshbc'
 !      CALL REFRESHBC(USTAR,NX*NY,NZ-2,MYSIZE,MYRANK,communicator)
 !      CALL REFRESHBC(VSTAR,NX*NY,NZ-2,MYSIZE,MYRANK,communicator)
@@ -581,7 +628,7 @@
 !	   write(0,*) 'max(u,v,w):',umx,vmx,wmx
        endif ! myrank
       endif !rogal
-#endif rogallo
+#endif // rogallo
 !
 #ifdef precursor_inflow
       if (box2) call box2read(ustar,vstar,wstar,a_u,a_w,b_u,b_w,ps_u,ps_w)
@@ -719,7 +766,7 @@
           call spec_write(uo,vo,wo,p,spec_cpu,spec_k,tlevel,j)
         endif
       endif	
-#endif ! probe
+#endif // probe
 !
 #ifdef immbnd      
 !     output for surface pressure
@@ -875,13 +922,13 @@
      &  xu,xcf,yv,ycf,zcf,zcg,cpuxy,kxy,type,real2d,cross2d,index,index2,icycle)
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-!cccccccccccccccccccccccccccccccREYNOLDS STRESS BUDGETS -- SEE 'RSBUD1.F cccccccccccccccccccccccccccccccccccccccccccccccccccc
+!cccccccccccccccccccccccccccccccREYNOLDS STRESS BUDGETS -- SEE RSBUD1.F cccccccccccccccccccccccccccccccccccccccccccccccccccc
          if (rstat) call rstress(rsblk_1,rsblkg_1,rsblk_2,
 #ifdef LES      
      &                           rsblk_3,rsblk_4,rsblkg_3,
 #endif     
      &                           uo,vo,wo,p,tv,utaug,tauwg,samples,statnum,rsnames,xcf,zcg,stat2d,index)
-!cccccccccccccccccccccccccccccccREYNOLDS STRESS BUDGETS -- SEE 'RSBUD1.F cccccccccccccccccccccccccccccccccccccccccccccccccccc
+!cccccccccccccccccccccccccccccccREYNOLDS STRESS BUDGETS -- SEE RSBUD1.F cccccccccccccccccccccccccccccccccccccccccccccccccccc
 !ccccccccccccccccccccccccccccccc two-point spanwise correlations cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
          if (two_pt_corr) then 
 	  call span_corr(uo,vo,wo,u2pt,v2pt,w2pt,um2pt,vm2pt,wm2pt,ks(myrank),ke(myrank),samples)
