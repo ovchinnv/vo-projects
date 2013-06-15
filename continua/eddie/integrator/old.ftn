@@ -1,0 +1,195 @@
+!* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+!*                                                                 *
+!*            A D A M S  -  B A S H F O R T H   S T E P            *
+!*                                                                 *
+!*           Routines to perform an A-B step are included          *
+!*                                                                 *
+!*                                                                 *
+!*                                                                 *
+!* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+! V.O 8/11/03.  Implicit mode solves for velocity _correction_ (delta form) 
+
+       SUBROUTINE ab_predictor(uo,vo,wo,p,uab1,vab1,wab1,
+     &                       uab2,vab2,wab2,ucn,vcn,wcn,tv,
+     &                       us,vs,ws,xf,dpdx,dpdy,dpdz,dtm,a1,a2,botbc,topbc,
+     &                       im,jm,km)
+c
+      include 'headers/common.h'
+      integer im,jm,km,i,j,k,ii
+      real tvip,tvim,delx
+c
+      float, dimension(im,jm,km) ::
+             uo(im,jm,km),vo(im,jm,km),wo(im,jm,km),
+     &       p(im,jm,km),
+     &       uab1(im,jm,km),vab1(im,jm,km),wab1(im,jm,km),
+     &       uab2(im,jm,km),vab2(im,jm,km),wab2(im,jm,km),
+     &       ucn(im,jm,km),vcn(im,jm,km),wcn(im,jm,km),
+     &       tv(im,jm,km),
+     &       us(im,jm,km),vs(im,jm,km),ws(im,jm,km)
+!
+      REAL   xf(im)
+c
+      REAL   a(mmx-2),b(mmx-2),c(mmx-2)
+c
+      REAL   dtm,dpdx,dpdy,dpdz,a1,a2
+      REAL   coef
+c
+      REAL   botbc(3,jm,km),topbc(3,jm,km)
+c
+**** Compute provisional values for each momentum eq.
+*
+c      for implicit part
+      coef=   half*dtm
+
+c------------------------------------------------------------------
+c                                                    compute RHS
+c------------------------------------------------------------------
+c     uab1,vab1,wab1 store the rhs of the mom. equation since they will 
+c     not be used after this
+
+      do k=kz1+1,kz2
+         do j=jy1+1,jy2
+            do i=ix1+1,ix2
+               uab1(i,j,k)=
+     &              (a2*uab2(i,j,k)-a1*uab1(i,j,k)
+     &              -au(i)*(p(i+1,j,k)-p(i,j,k))/dx
+     &              -dpdx      
+     &              +ucn(i,j,k))*dtm
+               vab1(i,j,k)=
+     &              (a2*vab2(i,j,k)-a1*vab1(i,j,k)
+     &              -bv(j)*(p(i,j+1,k)-p(i,j,k))/dy
+     &              -dpdy
+     &              +vcn(i,j,k))*dtm
+               wab1(i,j,k)=
+     &              (a2*wab2(i,j,k)-a1*wab1(i,j,k)
+     &              -cw(k)*(p(i,j,k+1)-p(i,j,k))/dz
+     &              -dpdz
+     &              +wcn(i,j,k))*dtm
+            enddo
+         enddo
+      enddo
+      if (impfla.eq.1) then 
+c     x-mom
+      do k=kz1+1,kz2
+       do j=jy1+1,jy2
+        do i=ibu,ieu
+          ii=i-1
+	  tvip=ru1+two*tv(i+1,j,k)
+	  tvim=ru1+two*tv(i  ,j,k)
+	  a(ii)=-coef*au(i)*app(i)*tvim
+	  c(ii)=-coef*au(i)*app(i+1)*tvip
+	  b(ii)=one-a(ii)-c(ii)
+        enddo !i
+c         botbc
+        delx=xf(2)-xf(1)
+        b(1)= b(1)*ibc(1,1)           !dirichlet
+     &      +(a(1)+b(1))*(one-ibc(1,1))!neumann
+        uab1(2,j,k)=(uab1(2,j,k)-a(1)*     botbc(1,j,k))*ibc(1,1) !dirichlet
+     &             +(uab1(2,j,k)+a(1)*delx*botbc(1,j,k))*(one-ibc(1,1)) !neumann 1st o.
+c         topbc
+        delx=xf(ix2)-xf(ix2-1)	  
+        b(ieu-1)= b(ieu-1)*ibc(1,2)               !dirichlet
+     &          +(c(ieu-1)+b(ieu-1))*(one-ibc(1,2))!neumann
+        uab1(ieu,j,k)=(uab1(ieu,j,k)-c(ieu-1)*     topbc(1,j,k))*ibc(1,2) !dirichlet
+     &               +(uab1(ieu,j,k)-c(ieu-1)*delx*topbc(1,j,k))*(one-ibc(1,2)) !neumann 1st o.
+        call tridag(a,b,c,uab1(2,j,k),uab1(2,j,k),ieu-1,mmx-2)
+       enddo !j
+      enddo !k	
+c     y-mom        
+      do k=kz1+1,kz2
+       do j=jbv,jev
+        do i=ix1+1,ix2
+          ii=i-1
+	  tvip=ru1+quarter*(tv(i+1,j,k)+tv(i+1,j+1,k)
+     & 	                  + tv(i  ,j,k)+tv(i  ,j+1,k))
+	  tvim=ru1+quarter*(tv(i  ,j,k)+tv(i  ,j+1,k)
+     & 	                  + tv(i-1,j,k)+tv(i-1,j+1,k))
+	  a(ii)=-coef*av(i)*au(i-1)*tvim
+	  c(ii)=-coef*av(i)*au(i  )*tvip
+	  b(ii)=one-a(ii)-c(ii)
+c         botbc
+        enddo !i
+        delx=xf(2)-xf(1)
+        b(1)=(b(1)-a(1))*ibc(2,1)           !dirichlet
+     &      +(a(1)+b(1))*(one-ibc(2,1))      !neumann
+        vab1(2,j,k)=(vab1(2,j,k)-two*a(1)*     botbc(2,j,k))*ibc(2,1) !dirichlet
+     &             +(vab1(2,j,k)+   a(1)*delx*botbc(2,j,k))*(one-ibc(2,1)) !neumann 1st o.
+c         topbc
+        delx=xf(ix2+1)-xf(ix2)	  
+        b(ix2-1)= (b(ix2-1)-c(ix2-1))*ibc(2,2)     !dirichlet
+     &          + (c(ix2-1)+b(ix2-1))*(one-ibc(2,2))!neumann
+        vab1(ix2,j,k)=(vab1(ix2,j,k)-two*c(ix2-1)*  topbc(2,j,k))*ibc(2,2) !dirichlet
+     &               +(vab1(ix2,j,k)-c(ix2-1)*delx*topbc(2,j,k))*(one-ibc(2,2)) !neumann 1st o.
+        call tridag(a,b,c,vab1(2,j,k),vab1(2,j,k),ix2-1,mmx-2)
+       enddo !j
+      enddo !k
+c     z-momentum
+      do k=kbw,kew
+       do j=jy1+1,jy2
+        do i=ix1+1,ix2
+          ii=i-1
+	  tvip=ru1+quarter*(tv(i+1,j,k)+tv(i+1,j,k+1)
+     & 	                  + tv(i  ,j,k)+tv(i  ,j,k+1))
+	  tvim=ru1+quarter*(tv(i  ,j,k)+tv(i  ,j,k+1)
+     & 	                  + tv(i-1,j,k)+tv(i-1,j,k+1))
+	  a(ii)=-coef*aw(i)*au(i-1)*tvim
+	  c(ii)=-coef*aw(i)*au(i  )*tvip
+	  b(ii)=one-a(ii)-c(ii)
+c         botbc
+        enddo !i
+        delx=xf(2)-xf(1)
+        b(1)=(b(1)-a(1))*ibc(3,1)           !dirichlet
+     &      +(a(1)+b(1))*(one-ibc(3,1))       !neumann
+        wab1(2,j,k)=(wab1(2,j,k)-two*a(1)*     botbc(3,j,k))*ibc(3,1) !dirichlet
+     &             +(wab1(2,j,k)+   a(1)*delx*botbc(3,j,k))*(one-ibc(3,1)) !neumann 1st o.
+c         topbc
+        delx=xf(ix2+1)-xf(ix2)
+        b(ix2-1)= (b(ix2-1)-c(ix2-1))*ibc(3,2)               !dirichlet
+     &          + (c(ix2-1)+b(ix2-1))*(one-ibc(3,2))!neumann
+        wab1(ix2,j,k)=(wab1(ix2,j,k)-two*c(ix2-1)*  topbc(3,j,k))*ibc(3,2) !dirichlet
+     &               +(wab1(ix2,j,k)-c(ix2-1)*delx*topbc(3,j,k))*(one-ibc(3,2)) !neumann 1st o.
+        call tridag(a,b,c,wab1(2,j,k),wab1(2,j,k),ix2-1,mmx-2)
+       enddo !j
+      enddo !k	
+      endif
+!
+!     now compute the velocities
+!------------------------------------------------------------------
+!                                                    compute ustar
+!------------------------------------------------------------------
+      do k=kz1+1,kz2
+         do j=jy1+1,jy2
+            do i=ibu,ieu
+              us(i,j,k)=uo(i,j,k)+uab1(i,j,k)
+            enddo
+         enddo
+      enddo
+!------------------------------------------------------------------
+!                                                    compute vstar
+!------------------------------------------------------------------
+      do k=kz1+1,kz2
+         do j=jbv,jev
+            do i=ix1+1,ix2
+              vs(i,j,k)=vo(i,j,k)+vab1(i,j,k)
+            enddo
+         enddo
+      enddo
+!------------------------------------------------------------------
+!                                                    compute wstar
+!------------------------------------------------------------------
+      do k=kbw,kew
+         do j=jy1+1,jy2
+            do i=ix1+1,ix2
+              ws(i,j,k)=wo(i,j,k)+wab1(i,j,k)
+            enddo
+         enddo
+      enddo
+!
+      end subroutine ab_predictor
+
+
+
+
+
+
+

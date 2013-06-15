@@ -1,13 +1,3 @@
-#ifdef __PARALLEL
-#define __COMM __CONCAT(MPI_COMM_,__EDDIECOMM )
-#define __ME   __CONCAT(ME_,__EDDIECOMM )
-#define __NCPU __CONCAT(SIZE_,__EDDIECOMM )
-#else
-#define __COMM
-#define __ME 0
-#endif
-#define __QPRINT qprint=(__ME.eq.0)
-!
 !
       module eddie
       private
@@ -22,10 +12,6 @@
       __DEP_OUTPUT
       use random
       use statistics
-#ifdef __PARALLEL
-      __DEP_MULTICOM
-      __DEP_MPI
-#endif
 !
 #ifdef __AB
       use ABintegrator    ! Adams-Bashforth integrator
@@ -64,6 +50,7 @@
       type(varray3df), save, pointer :: u_, v_, w_, ustar_, vstar_, wstar_, pres_, deltap_, div_, nu_
 !
       float, pointer, save, dimension(:,:,:) :: u, v, w, ustar, vstar, wstar, p, dp, div, nu
+!
       float :: nu_m ! molecular viscosity
 !
 !
@@ -135,13 +122,13 @@
 !======================================================================================
 ! parse other options (using preprocessor macros)
 !
-! integrator
+! determine integrator
 #define __WARNIFMISSING
 #define __CONTEXT ctx
 #define __VARNAME t_integrator
 #define __FILETAG integrator
 #define __DESCRIPTION	integrator
-#define __OPTIONS1 'AB','A-B','ADAMSBASHFORTH','ADAMS-BASHFORTH'
+#define __CASES1 'AB','A-B','ADAMSBASHFORTH','ADAMS-BASHFORTH'
 #define __VALUE1 intAB
 #define __DEFAULT __VALUE1
 #define __NAMES int_name
@@ -149,18 +136,18 @@
 !
 ! now intAB is defined or the error flag is set
 !
+! initialize integrator
+#define __CALL _init()
        if (.not.fatal_warning(__COMM)) then 
-        select case(t_integrator)
-        case(intAB) ; call ab_init()
-        case default ; call warning(whoami,' Unknown integrator option specified ('//itoa(t_integrator)//')',-1);
+#include "integrator_macro.src"
        endif
 !
-! pressure solver
+! determine pressure solver
 #define __WARNIFMISSING
 #define __CONTEXT ctx
-#define __VARNAME t_integrator
-#define __FILETAG integrator
-#define __DESCRIPTION	integrator
+#define __VARNAME p_solver
+#define __FILETAG pressure_solver
+#define __DESCRIPTION	pressure solver
 #define __OPTIONS1 'MG','MULTIGRID'
 #define __VALUE1 pMG
 #define __OPTIONS2 'MGFFT','MULTIGRIDFFT', 'MG-FFT', 'MULTIGRID-FFT'
@@ -169,12 +156,6 @@
 #define __NAMES pres_name
 #include "parser/parser_macro2.src"
 !
-
-
-
-
-
-
 
 
 
@@ -524,7 +505,7 @@
       endif
 !
       cpub=mpi_wtime()
-      CALL predictor(UO,VO,WO,P,UAB1,VAB1,WAB1,
+      CALL ab_predictor(UO,VO,WO,P,UAB1,VAB1,WAB1,
      &     UAB2,VAB2,WAB2,ucn,vcn,wcn,tv,
      &     USTAR,VSTAR,WSTAR,xu,
      &     dpdx,dpdy,dpdz,dtm1,a1,a2,botbc,topbc,
@@ -704,7 +685,14 @@
       if (box2) call box2bc(ustar,vstar,wstar,uo,vo,wo)
 !     .....divergence
       if (myrank.eq.0) write(66+mod(icycle,5),*) myrank,': done'
-      CALL Storen(UAB1,VAB1,WAB1,UAB2,VAB2,WAB2,tmeth,nx,ny,nz)
+!
+      __AB_
+
+#define __CALL _update_rhs()
+#include "integrator_macro.src"
+!      Storen(UAB1,VAB1,WAB1,UAB2,VAB2,WAB2,tmeth,nx,ny,nz)
+
+
 !     
       cpucorr=mpi_wtime()-cpub
 !     ccccccccccccccccccccccccccccccccccc

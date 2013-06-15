@@ -1,7 +1,4 @@
 
-#DEFS+=-DSIZE=gridsize \
-
-LOCALMACROS+=-include $(COMMON)/eddie/source.defs
-LOCALDEPS+=$(COMMON)/eddie/source.defs
-INCLUDES+=-I $(COMMON)/eddie
-
+LOCALMACROS+=-include $(EDDIE)/source.defs
+LOCALDEPS+=$(EDDIE)/source.defs
+INCLUDES+=-I $(EDDIE)

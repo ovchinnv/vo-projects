@@ -1,10 +1,12 @@
 ROOT=../..
 COMMON=..
+EDDIE=.
+#
 OBJS=eddie_grid.o eddie_info.o eddie_typedef.o
 NAME=continua/eddie
 DEPS=output parser constants continua/common
 
-
+include $(EDDIE)/Makefile.inc
 include $(COMMON)/Makefile.inc
 include $(ROOT)/Makefile.inc
 #include $(COMMON)/eddie/Makefile.inc

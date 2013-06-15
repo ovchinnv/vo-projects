@@ -1,230 +1,81 @@
 module ABintegrator
-
- use size
+!
+ use SIZE
  use datatypes
  use state
  use constants
-
- __IMPNONE
-
-
- public ab_init
- public ab_predictor
- public ab_corrector
-
- float, allocatable, save, dimension(:,:,:) :: uab1, vab1, wab1, uab2, vab2, wab2 ! vo: these arrays are unique to the AB method so they live here
- logical :: ab_initialized=.false.
- logical :: deltaform=.false.
-
- contains
+ __DEP_OUTPUT
+#ifdef __PARALLEL
+ __DEP_MULTICOM
+ __DEP_MPI
+#endif
 !
-       subroutine ab_initialize()
+ __IMPNONE
+!
+ public ab_init
+ public ab_done
+! public ab_predictor
+! public ab_corrector
+!
 !.....uab1, vab1, wab1:		RHS predictor step for Adams-Bashforth advancement
 !.....uab2, vab2, wab2:		RHS corrector step (A/B)
-       uab1(nx,ny,nz),vab1(nx,ny,nz),wab1(nx,ny,nz),
-       uab2(nx,ny,nz),vab2(nx,ny,nz),wab2(nx,ny,nz)
-
-
-       end subroutine ab_initialize
-!========================================
+ type(varray3df), save, pointer :: uab1_, vab1_, wab1_, uab2_, vab2_, wab2_
+ float, pointer, save, dimension(:,:,:) :: uab1, vab1, wab1, uab2, vab2, wab2
+!
+! float :: 
+!
+ logical :: ab_initialized=.false.
+ logical :: deltaform=.false.
+!
+ contains
+!
+       subroutine ab_init()
+       __IAM(AB_INIT)
+#ifdef __CTX
+#undef __CTX
+#endif
+#ifdef __PARALLEL
+! use a trick to supply communicator only in parallel mode
+#define __CTX __COMM, __EDCTX
+#else
+#define __CTX __EDCTX
+#endif
+!
+       nullify(uab1_, vab1_, wab1_,uab2_, vab2_, wab2_ )
+       nullify(uab1, vab1, wab1, uab2, vab2, wab2)
+!
+       call message(whoami, 'Initializing state variables.');
+!
+       call state_add3df('UAB1' ,'RHS U-component (n-1)'    , __CTX, vptr=uab1_)     ; uab1=>uab1_%v
+       call state_add3df('VAB1' ,'RHS V-component (n-1)'    , __CTX, vptr=vab1_)     ; vab1=>vab1_%v
+       call state_add3df('WAB1' ,'RHS W-component (n-1)'    , __CTX, vptr=wab1_)     ; wab1=>wab1_%v
+!
+       call state_add3df('UAB2' ,'RHS U-component (n)'      , __CTX, vptr=uab2_)     ; uab2=>uab2_%v
+       call state_add3df('VAB2' ,'RHS V-component (n)'      , __CTX, vptr=vab2_)     ; vab2=>vab2_%v
+       call state_add3df('WAB2' ,'RHS W-component (n)'      , __CTX, vptr=wab2_)     ; wab2=>wab2_%v
+!
+       end subroutine ab_init
+!=========================================================================
        subroutine ab_done()
-       uab1,vab1,wab1,
-       uab2,vab2,wab2
-
-!
+! for now, all deallocation done by state, only set initialized flag here
+       ab_initialized=.false.
        end subroutine ab_done
-
-       
-
-
-!* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
-!*                                                                 *
-!*            A D A M S  -  B A S H F O R T H   S T E P            *
-!*                                                                 *
-!*           Routines to perform an A-B step are included          *
-!*                                                                 *
-!*                                                                 *
-!*                                                                 *
-!* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
-! V.O 8/11/03.  Implicit mode solves for velocity _correction_ (delta form) 
-
-       SUBROUTINE ab_predictor(uo,vo,wo,p,uab1,vab1,wab1,
-     &                       uab2,vab2,wab2,ucn,vcn,wcn,tv,
-     &                       us,vs,ws,xf,dpdx,dpdy,dpdz,dtm,a1,a2,botbc,topbc,
-     &                       im,jm,km)
-c
-      include 'headers/common.h'
-      integer im,jm,km,i,j,k,ii
-      real tvip,tvim,delx
-c
-      float, dimension(im,jm,km) ::
-             uo(im,jm,km),vo(im,jm,km),wo(im,jm,km),
-     &       p(im,jm,km),
-     &       uab1(im,jm,km),vab1(im,jm,km),wab1(im,jm,km),
-     &       uab2(im,jm,km),vab2(im,jm,km),wab2(im,jm,km),
-     &       ucn(im,jm,km),vcn(im,jm,km),wcn(im,jm,km),
-     &       tv(im,jm,km),
-     &       us(im,jm,km),vs(im,jm,km),ws(im,jm,km)
-!
-      REAL   xf(im)
-c
-      REAL   a(mmx-2),b(mmx-2),c(mmx-2)
-c
-      REAL   dtm,dpdx,dpdy,dpdz,a1,a2
-      REAL   coef
-c
-      REAL   botbc(3,jm,km),topbc(3,jm,km)
-c
-**** Compute provisional values for each momentum eq.
-*
-c      for implicit part
-      coef=   half*dtm
-
-c------------------------------------------------------------------
-c                                                    compute RHS
-c------------------------------------------------------------------
-c     uab1,vab1,wab1 store the rhs of the mom. equation since they will 
-c     not be used after this
-
-      do k=kz1+1,kz2
-         do j=jy1+1,jy2
-            do i=ix1+1,ix2
-               uab1(i,j,k)=
-     &              (a2*uab2(i,j,k)-a1*uab1(i,j,k)
-     &              -au(i)*(p(i+1,j,k)-p(i,j,k))/dx
-     &              -dpdx      
-     &              +ucn(i,j,k))*dtm
-               vab1(i,j,k)=
-     &              (a2*vab2(i,j,k)-a1*vab1(i,j,k)
-     &              -bv(j)*(p(i,j+1,k)-p(i,j,k))/dy
-     &              -dpdy
-     &              +vcn(i,j,k))*dtm
-               wab1(i,j,k)=
-     &              (a2*wab2(i,j,k)-a1*wab1(i,j,k)
-     &              -cw(k)*(p(i,j,k+1)-p(i,j,k))/dz
-     &              -dpdz
-     &              +wcn(i,j,k))*dtm
-            enddo
-         enddo
-      enddo
-      if (impfla.eq.1) then 
-c     x-mom
-      do k=kz1+1,kz2
-       do j=jy1+1,jy2
-        do i=ibu,ieu
-          ii=i-1
-	  tvip=ru1+two*tv(i+1,j,k)
-	  tvim=ru1+two*tv(i  ,j,k)
-	  a(ii)=-coef*au(i)*app(i)*tvim
-	  c(ii)=-coef*au(i)*app(i+1)*tvip
-	  b(ii)=one-a(ii)-c(ii)
-        enddo !i
-c         botbc
-        delx=xf(2)-xf(1)
-        b(1)= b(1)*ibc(1,1)           !dirichlet
-     &      +(a(1)+b(1))*(one-ibc(1,1))!neumann
-        uab1(2,j,k)=(uab1(2,j,k)-a(1)*     botbc(1,j,k))*ibc(1,1) !dirichlet
-     &             +(uab1(2,j,k)+a(1)*delx*botbc(1,j,k))*(one-ibc(1,1)) !neumann 1st o.
-c         topbc
-        delx=xf(ix2)-xf(ix2-1)	  
-        b(ieu-1)= b(ieu-1)*ibc(1,2)               !dirichlet
-     &          +(c(ieu-1)+b(ieu-1))*(one-ibc(1,2))!neumann
-        uab1(ieu,j,k)=(uab1(ieu,j,k)-c(ieu-1)*     topbc(1,j,k))*ibc(1,2) !dirichlet
-     &               +(uab1(ieu,j,k)-c(ieu-1)*delx*topbc(1,j,k))*(one-ibc(1,2)) !neumann 1st o.
-        call tridag(a,b,c,uab1(2,j,k),uab1(2,j,k),ieu-1,mmx-2)
-       enddo !j
-      enddo !k	
-c     y-mom        
-      do k=kz1+1,kz2
-       do j=jbv,jev
-        do i=ix1+1,ix2
-          ii=i-1
-	  tvip=ru1+quarter*(tv(i+1,j,k)+tv(i+1,j+1,k)
-     & 	                  + tv(i  ,j,k)+tv(i  ,j+1,k))
-	  tvim=ru1+quarter*(tv(i  ,j,k)+tv(i  ,j+1,k)
-     & 	                  + tv(i-1,j,k)+tv(i-1,j+1,k))
-	  a(ii)=-coef*av(i)*au(i-1)*tvim
-	  c(ii)=-coef*av(i)*au(i  )*tvip
-	  b(ii)=one-a(ii)-c(ii)
-c         botbc
-        enddo !i
-        delx=xf(2)-xf(1)
-        b(1)=(b(1)-a(1))*ibc(2,1)           !dirichlet
-     &      +(a(1)+b(1))*(one-ibc(2,1))      !neumann
-        vab1(2,j,k)=(vab1(2,j,k)-two*a(1)*     botbc(2,j,k))*ibc(2,1) !dirichlet
-     &             +(vab1(2,j,k)+   a(1)*delx*botbc(2,j,k))*(one-ibc(2,1)) !neumann 1st o.
-c         topbc
-        delx=xf(ix2+1)-xf(ix2)	  
-        b(ix2-1)= (b(ix2-1)-c(ix2-1))*ibc(2,2)     !dirichlet
-     &          + (c(ix2-1)+b(ix2-1))*(one-ibc(2,2))!neumann
-        vab1(ix2,j,k)=(vab1(ix2,j,k)-two*c(ix2-1)*  topbc(2,j,k))*ibc(2,2) !dirichlet
-     &               +(vab1(ix2,j,k)-c(ix2-1)*delx*topbc(2,j,k))*(one-ibc(2,2)) !neumann 1st o.
-        call tridag(a,b,c,vab1(2,j,k),vab1(2,j,k),ix2-1,mmx-2)
-       enddo !j
-      enddo !k
-c     z-momentum
-      do k=kbw,kew
-       do j=jy1+1,jy2
-        do i=ix1+1,ix2
-          ii=i-1
-	  tvip=ru1+quarter*(tv(i+1,j,k)+tv(i+1,j,k+1)
-     & 	                  + tv(i  ,j,k)+tv(i  ,j,k+1))
-	  tvim=ru1+quarter*(tv(i  ,j,k)+tv(i  ,j,k+1)
-     & 	                  + tv(i-1,j,k)+tv(i-1,j,k+1))
-	  a(ii)=-coef*aw(i)*au(i-1)*tvim
-	  c(ii)=-coef*aw(i)*au(i  )*tvip
-	  b(ii)=one-a(ii)-c(ii)
-c         botbc
-        enddo !i
-        delx=xf(2)-xf(1)
-        b(1)=(b(1)-a(1))*ibc(3,1)           !dirichlet
-     &      +(a(1)+b(1))*(one-ibc(3,1))       !neumann
-        wab1(2,j,k)=(wab1(2,j,k)-two*a(1)*     botbc(3,j,k))*ibc(3,1) !dirichlet
-     &             +(wab1(2,j,k)+   a(1)*delx*botbc(3,j,k))*(one-ibc(3,1)) !neumann 1st o.
-c         topbc
-        delx=xf(ix2+1)-xf(ix2)
-        b(ix2-1)= (b(ix2-1)-c(ix2-1))*ibc(3,2)               !dirichlet
-     &          + (c(ix2-1)+b(ix2-1))*(one-ibc(3,2))!neumann
-        wab1(ix2,j,k)=(wab1(ix2,j,k)-two*c(ix2-1)*  topbc(3,j,k))*ibc(3,2) !dirichlet
-     &               +(wab1(ix2,j,k)-c(ix2-1)*delx*topbc(3,j,k))*(one-ibc(3,2)) !neumann 1st o.
-        call tridag(a,b,c,wab1(2,j,k),wab1(2,j,k),ix2-1,mmx-2)
-       enddo !j
-      enddo !k	
-      endif
-!
-!     now compute the velocities
-!------------------------------------------------------------------
-!                                                    compute ustar
-!------------------------------------------------------------------
-      do k=kz1+1,kz2
-         do j=jy1+1,jy2
-            do i=ibu,ieu
-              us(i,j,k)=uo(i,j,k)+uab1(i,j,k)
-            enddo
-         enddo
-      enddo
-!------------------------------------------------------------------
-!                                                    compute vstar
-!------------------------------------------------------------------
-      do k=kz1+1,kz2
-         do j=jbv,jev
-            do i=ix1+1,ix2
-              vs(i,j,k)=vo(i,j,k)+vab1(i,j,k)
-            enddo
-         enddo
-      enddo
-!------------------------------------------------------------------
-!                                                    compute wstar
-!------------------------------------------------------------------
-      do k=kbw,kew
-         do j=jy1+1,jy2
-            do i=ix1+1,ix2
-              ws(i,j,k)=wo(i,j,k)+wab1(i,j,k)
-            enddo
-         enddo
-      enddo
-!
-      end subroutine ab_predictor
+!=========================================================================
+       subroutine ab_update_rhs(t_)
+       use eddie_grid, only : ib, ie, jb, je, kb, ke
+       float, optional :: t_
+       float :: t, omt
+       int :: i,j,k
+       if (present(t_)) then ; t=t_ ; else ; t=1 ; endif ! not sure under what circumstances t =/= 1 !
+       omt=one-t;
+!      store uab2 as uab1 (i.e. typically t=1)
+       do k=kb,ke  ; do j=jb,je ; do i=ib,ie
+        uab1(i,j,k) = omt*uab1(i,j,k)+t*uab2(i,j,k)
+        vab1(i,j,k) = omt*vab1(i,j,k)+t*vab2(i,j,k)
+        wab1(i,j,k) = omt*wab1(i,j,k)+t*wab2(i,j,k)
+       enddo       ; enddo      ; enddo
+       end subroutine ab_update_rhs
+!=========================================================================
 
 
 
@@ -232,59 +83,8 @@ c         topbc
 
 
 
-!
-* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
-*                                                                 *
-      subroutine STOREN(UUAB1,VVAB1,WWAB1,UUAB2,VVAB2,WWAB2,
-     &                   tmeth,IM,JM,KM                      )
-*                                                                 *
-*              Stores RHS + Presure gradient                      *
-*            to be used in the predictor step                     *
-*                                                                 *
-* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
-
-      include 'headers/common.h'
-
-      real UUAB1(IM,JM,KM),VVAB1(IM,JM,KM),WWAB1(IM,JM,KM),
-     &          UUAB2(IM,JM,KM),VVAB2(IM,JM,KM),WWAB2(IM,JM,KM)
-c
-      REAL     tmeth
-      integer i,j,k, im, jm, km 
-*
-**** Store RHS + presure gradient for 3 momentum equations
-*
-        do  k=kz1+1,kz2
-           do  j=jy1+1,jy2
-              do  i=ibu,ieu
-
-
-                uuab1(i,j,k)= (one-tmeth)*uuab1(i,j,k)+tmeth*uuab2(i,j,k)
-              enddo
-           enddo
-        enddo
-
-!
-        do  k=kz1+1,kz2
-           do  j=jbv,jev
-              do  i=ix1+1,ix2
-                 vvab1(i,j,k)=(one-tmeth)*vvab1(i,j,k)+tmeth*vvab2(i,j,k)
-              enddo
-           enddo
-        enddo
-*
-        do  k=kbw,kew
-           do  j=jy1+1,jy2
-               do  i=ix1+1,ix2
-                 wwab1(i,j,k)=(one-tmeth)*wwab1(i,j,k)+tmeth*wwab2(i,j,k)
-               enddo
-            enddo
-         enddo
-      
-      RETURN
-      END
 
 
 
-
-end module integrator
+end module ABintegrator
 
