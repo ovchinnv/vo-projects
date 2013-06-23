@@ -1,0 +1,120 @@
+module basediscretization
+ use datatypes
+ __IMPNONE
+!
+ type, abstract :: discretization_base
+!
+  bool :: initialized=.false.
+!  character(len=:), parameter, private :: ctx=__EDCTX
+  character(len=20) :: ctx=__EDCTX
+  type(varray3df), pointer :: ru_, rv_, rw_      ! right hand side
+  float, pointer, dimension(:,:,:) :: ru, rv, rw ! right hand size
+  float, pointer, dimension(:,:,:) :: u, v, w, div, p, nuf
+  float :: nu ! constant molecular viscosity
+!
+  bool :: qimpl_v_z ! whether z-viscous term implicit (valid only for certain discretizations)
+!
+ contains
+  procedure(init), deferred :: init               ! initialize
+  procedure(done), deferred :: done               ! finalize
+  procedure(divergence), deferred :: divergence   ! divergence
+  procedure(compute), deferred :: compute         ! compute (advective and diffusive terms)
+  procedure(p_compute), deferred :: p_compute     ! compute projection onto divergence-free v. field
+  procedure(pgrad), deferred :: pgrad             ! add pressure gradient correction
+!
+  procedure(update_next), deferred :: update_next ! perform any misc operations before next step
+ end type discretization_base
+!
+ abstract interface
+  subroutine init(me)
+  import discretization_base
+  class(discretization_base) :: me
+  end subroutine init
+!
+  subroutine done(me)
+  import discretization_base
+  class(discretization_base) :: me
+  end subroutine done
+!
+  subroutine update_next(me)
+  import discretization_base
+  class(discretization_base) :: me
+  end subroutine update_next
+!
+  subroutine compute(me)
+  import discretization_base
+  class(discretization_base) :: me
+  end subroutine compute
+!
+  subroutine divergence(me)
+  import discretization_base
+  class(discretization_base) :: me
+  end subroutine divergence
+!
+  subroutine pgrad(me)
+  import discretization_base
+  class(discretization_base) :: me
+  end subroutine pgrad
+!
+  subroutine p_compute(me)
+  import discretization_base
+  class(discretization_base) :: me
+  end subroutine p_compute
+ end interface
+!
+ contains
+!========================================================================
+ subroutine discretization_base_init(me)
+!
+#ifdef __CTX
+#undef __CTX
+#endif
+#ifdef __PARALLEL
+ __DEP_MULTICOM
+ __DEP_MPI
+! use a trick to supply communicator only in parallel mode
+#define __CTX __COMM, __EDCTX
+#else
+#define __CTX __EDCTX
+#endif
+  __DEP_PARSER
+  __DEP_CONST
+  use state, only : state_get3df, state_add3df
+  class(discretization_base) :: me
+!
+! read molecular viscosity
+#define __MINUSERR
+#define __WARNIFMISSING
+#define __CONTEXT ctx
+#define __VAR	nu
+#define __TAG	molecular_viscosity
+#define __NAME	molecular viscosity
+#include "parser/parser_macro1.src"
+!
+  __GET_OPT_PAR_B('VIMPLICIT_Z', me%qimpl_v_z, .false., me%ctx) ; ! check if the z-viscous term is treated implicitly
+!
+  nullify(me%ru_, me%rv_, me%rw_)
+  nullify(me%ru, me%rv, me%rw)
+!
+  call state_add3df('RHSX' ,'RHS U-component'      , __CTX, vptr=me%ru_) ; me%ru=>me%ru_%v
+  call state_add3df('RHSY' ,'RHS V-component'      , __CTX, vptr=me%rv_) ; me%rv=>me%rv_%v
+  call state_add3df('RHSZ' ,'RHS W-component'      , __CTX, vptr=me%rw_) ; me%rw=>me%rw_%v
+!
+  me%u=>state_get3df('U',me%ctx)
+  me%v=>state_get3df('V',me%ctx)
+  me%w=>state_get3df('W',me%ctx)
+  me%p=>state_get3df('P',me%ctx)
+  me%div=>state_get3df('DIV',me%ctx)
+  me%nuf=>state_get3df('NU',me%ctx)
+!
+ end subroutine discretization_base_init
+!=========================================================================
+ subroutine discretization_base_done(me)
+  __DEP_CONST
+  class(discretization_base) :: me
+  nullify(me%u, me%v, me%w, me%div, me%nuf)
+  me%initialized=.false.
+  me%qimpl_v_z=.false.
+ end subroutine discretization_base_done
+!
+end module basediscretization

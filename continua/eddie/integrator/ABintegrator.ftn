@@ -1,9 +1,10 @@
-module ABintegrator
+module ABCNintegrator
 !
+ use baseintegrator
  use SIZE
  use datatypes
- use state
  use constants
+ use state
  __DEP_OUTPUT
 #ifdef __PARALLEL
  __DEP_MULTICOM
@@ -12,25 +13,37 @@ module ABintegrator
 !
  __IMPNONE
 !
- public ab_init
- public ab_done
-! public ab_predictor
-! public ab_corrector
-!
+ type, extends(integrator_base) :: integrator_ABCN
 !.....uab1, vab1, wab1:		RHS predictor step for Adams-Bashforth advancement
 !.....uab2, vab2, wab2:		RHS corrector step (A/B)
- type(varray3df), save, pointer :: uab1_, vab1_, wab1_, uab2_, vab2_, wab2_
- float, pointer, save, dimension(:,:,:) :: uab1, vab1, wab1, uab2, vab2, wab2
+ type(varray3df), pointer :: uab1_, vab1_, wab1_
+ float, pointer, dimension(:,:,:) :: uab1, vab1, wab1, uab2, vab2, wab2, ucn, vcn, wcn
+ float, pointer, dimension(:,:,:) :: us, vs, ws ! predicted velocity
 !
-! float :: 
+ contains
+  procedure :: init => abcn_init
+  procedure :: done => abcn_done
+  procedure :: predict => abcn_integrate
+  procedure :: correct => abcn_correct
+ end type integrator_ABCN
 !
- logical :: ab_initialized=.false.
- logical :: deltaform=.false.
+!
+#define __ASSOC associate(ctx=>me%ctx,fconst=>me%fconst,\
+uab1=>me%uab1,vab1=>me%vab1,wab1=>me%wab1,\
+uab2=>me%uab2,vab2=>me%vab2,wab2=>me%wab2,\
+ucn=>me%ucn,vcn=>me%vcn,wcn=>me%wcn,\
+u=>me%u,v=>me%v,w=>me%w,\
+us=>me%us,vs=>me%vs,ws=>me%ws,\
+dt=>me%dt\
+)
+#define __UNASSOC end associate
 !
  contains
 !
-       subroutine ab_init()
-       __IAM(AB_INIT)
+       subroutine abcn_init(me)
+       __DEP_PARSER
+       class(integrator_ABCN) :: me
+       __IAM(ABCN_INIT)
 #ifdef __CTX
 #undef __CTX
 #endif
@@ -41,50 +54,124 @@ module ABintegrator
 #define __CTX __EDCTX
 #endif
 !
-       nullify(uab1_, vab1_, wab1_,uab2_, vab2_, wab2_ )
-       nullify(uab1, vab1, wab1, uab2, vab2, wab2)
+       call integrator_base_init(me)
+!
+       nullify(me%uab1_, me%vab1_, me%wab1_)
+       nullify(me%uab1, me%vab1, me%wab1, me%uab2, me%vab2, me%wab2, me%ucn, me%vcn, me%wcn)
 !
        call message(whoami, 'Initializing state variables.');
 !
-       call state_add3df('UAB1' ,'RHS U-component (n-1)'    , __CTX, vptr=uab1_)     ; uab1=>uab1_%v
-       call state_add3df('VAB1' ,'RHS V-component (n-1)'    , __CTX, vptr=vab1_)     ; vab1=>vab1_%v
-       call state_add3df('WAB1' ,'RHS W-component (n-1)'    , __CTX, vptr=wab1_)     ; wab1=>wab1_%v
+       call state_add3df('UAB1' ,'AB U-component (n-1)'    , __CTX, vptr=me%uab1_)     ; me%uab1=>me%uab1_%v
+       call state_add3df('VAB1' ,'AB V-component (n-1)'    , __CTX, vptr=me%vab1_)     ; me%vab1=>me%vab1_%v
+       call state_add3df('WAB1' ,'AB W-component (n-1)'    , __CTX, vptr=me%wab1_)     ; me%wab1=>me%wab1_%v
 !
-       call state_add3df('UAB2' ,'RHS U-component (n)'      , __CTX, vptr=uab2_)     ; uab2=>uab2_%v
-       call state_add3df('VAB2' ,'RHS V-component (n)'      , __CTX, vptr=vab2_)     ; vab2=>vab2_%v
-       call state_add3df('WAB2' ,'RHS W-component (n)'      , __CTX, vptr=wab2_)     ; wab2=>wab2_%v
+! other variables
+       me%us=>state_get3df('U*',me%ctx)
+       me%vs=>state_get3df('V*',me%ctx)
+       me%ws=>state_get3df('W*',me%ctx)
 !
-       end subroutine ab_init
+       me%uab2=>state_get3df('RHSX',me%ctx)
+       me%vab2=>state_get3df('RHSY',me%ctx)
+       me%wab2=>state_get3df('RHSZ',me%ctx)
+!
+       me%ucn=>state_get3df('RHSX2',me%ctx)
+       me%vcn=>state_get3df('RHSY2',me%ctx)
+       me%wcn=>state_get3df('RHSZ2',me%ctx)
+!
+       me%initilalized=.true.
+!
+       end subroutine abcn_init
 !=========================================================================
-       subroutine ab_done()
-! for now, all deallocation done by state, only set initialized flag here
-       ab_initialized=.false.
-       end subroutine ab_done
+       subroutine abcn_done(me)
+       class(integrator_ABCN) :: me
+       call integrator_base_done(me)
+       nullify(me%uab2, me%vab2, me%wab2, me%ucn, me%vcn, me%wcn, me%us, me%vs, me%ws)
+       end subroutine abcn_done
 !=========================================================================
-       subroutine ab_update_rhs(t_)
-       use eddie_grid, only : ib, ie, jb, je, kb, ke
-       float, optional :: t_
-       float :: t, omt
-       int :: i,j,k
-       if (present(t_)) then ; t=t_ ; else ; t=1 ; endif ! not sure under what circumstances t =/= 1 !
-       omt=one-t;
-!      store uab2 as uab1 (i.e. typically t=1)
+       subroutine abcn_integrate(me,qeuler_)
+       __DEP_METRICS
+       use timestep, only : tstep_compute
+       use discretization, only : s_discretization
+!
+       class(integrator_ABCN) :: me
+       int :: i, j, k
+       bool, optional :: qeuler_
+       bool :: qeuler
+       float :: dt, a1, a2
+!
+       if (.not. me%initialized) call me%init()
+       if (present(qeuler_)) then ; qeuler = qeuler_ ; else ; qeuler = .false. ; endif
+       if (qeuler) then ; a1=zero ; a2=one ; else ; a1=half ; a2=one+half ; endif
+!------------------------------------------------------------------
+!    compute RHS
+       call s_discretization%compute()
+!------------------------------------------------------------------
+! NOTE : in the implicit z case, the velocity correction is computed (delta form),
+! i.e. we solve for du(n+1) such that u(n+1)=u(n)+du(n+1) [ and not u(n+1) directly
+! this is why the coefficient of ucn in the step below is 1 and not 1/2 (C-N) : add and subtract 0.5 * LAP(u^n)
+!
+__ASSOC
+       dt=tstep_compute()
+       me%time=me%time+dt
+!     uab1,vab1,wab1 store the rhs of the mom. equation since they will 
+!     not be used after this
+!
        do k=kb,ke  ; do j=jb,je ; do i=ib,ie
-        uab1(i,j,k) = omt*uab1(i,j,k)+t*uab2(i,j,k)
-        vab1(i,j,k) = omt*vab1(i,j,k)+t*vab2(i,j,k)
-        wab1(i,j,k) = omt*wab1(i,j,k)+t*wab2(i,j,k)
+               uab1(i,j,k)=                           &  ! momentum RHS
+     &              (a2*uab2(i,j,k)-a1*uab1(i,j,k)    &  ! AB step
+     &              +ucn(i,j,k))*dt                   &  ! viscous term(s) treated either by C-N or zero; also, the pressure term for delta-form (default)
+     &              -fconst(1)                           ! extra source term for e.g. gradient/gravity-driven flow
+!
+               vab1(i,j,k)=                           &
+     &              (a2*vab2(i,j,k)-a1*vab1(i,j,k)    &
+     &              +vcn(i,j,k))*dt                   &
+     &              -fconst(2)
+               wab1(i,j,k)=                           &
+     &              (a2*wab2(i,j,k)-a1*wab1(i,j,k)    &
+     &              +wcn(i,j,k))*dt                   &
+     &              -fconst(3)
        enddo       ; enddo      ; enddo
-       end subroutine ab_update_rhs
+!
+!------------------------------------------------------------------
+!     now compute us(tar) (note : will need to update 1st point, eg ibu)
+!------------------------------------------------------------------
+       do k=kb,ke  ; do j=jb,je ; do i=ib,ie
+        us(i,j,k)=u(i,j,k) + uab1(i,j,k)
+        vs(i,j,k)=v(i,j,k) + vab1(i,j,k)
+        ws(i,j,k)=w(i,j,k) + wab1(i,j,k)
+       enddo       ; enddo      ; enddo
+!
+
+ __UNASSOC
+       end subroutine abcn_integrate
 !=========================================================================
-
-
-
-
-
-
-
-
-
-
-end module ABintegrator
-
+       subroutine abcn_correct(me)
+       use discretization, only : s_discretization
+       class(integrator_ABCN) :: me
+       int :: i,j,k
+!
+!      call the necessary routines in discretization
+!
+       call s_discretization%divergence(us, vs, ws) ! need to pass ustar explicitly; discretization does not know about such things
+!      solve pressure poisson equation
+       call s_discretization%p_compute() ! this is done via discretization because the pressure discretization must match velocity discretization
+!
+__ASSOC
+       do k=kb,ke  ; do j=jb,je ; do i=ib,ie
+!
+        u(i,j,k)=us(i,j,k);    v(i,j,k)=vs(i,j,k);    w(i,j,k)=ws(i,j,k);
+! misc : store velocity data
+        uab1(i,j,k) = uab2(i,j,k)
+        vab1(i,j,k) = vab2(i,j,k)
+        wab1(i,j,k) = wab2(i,j,k)
+!
+       enddo       ; enddo      ; enddo
+       call s_discretization%correct() ! correct velocities with pressure correction gradient
+! correct pressure
+       p=p+two/dt
+__UNASSOC
+!
+       end subroutine abcn_correct
+!
+end module ABCNintegrator
+!

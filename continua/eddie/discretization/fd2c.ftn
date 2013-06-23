@@ -1,0 +1,415 @@
+!
+#define __ASSOC associate(u=>me%u,v=>me%v,w=>me%w,ru=>me%ru,rv=>me%rv,rw=>me%rw,rui=>me%rui,rvi=>me%rvi,rwi=>me%rwi,p=>me%p,div=>me%div,deltap=>me%div)
+#define __UNASSOC end associate
+!
+module fd2c
+!
+ use basediscretization
+ __DEP_CONST
+ __DEP_METRICS
+ __DEP_OUTPUT
+ use datatypes
+ use state
+ __IMPNONE
+!
+!
+ type, extends(discretization_base) :: discretization_f2dc
+  type(varray3df), pointer :: rui_, rvi_, rwi_ ! implicit parts of right hand side
+  float, pointer, dimension(:,:,:) :: rui, rvi, rwi
+!
+ contains
+  procedure init :: => fd2c_init
+  procedure :: done => fd2c_done
+  procedure :: divergence => fd2c_divergence
+  procedure :: compute => fd2c_rhs
+  procedure :: p_compute => fd2c_pressure ! should be consistent with discretization, so lives here
+  procedure :: correct => fd2c_correct
+!
+ end type discretization_fd2c
+!
+ contains
+!
+      subroutine fd2c_init(me)
+       __DEP_PARSER
+       class(discretization_fd2c) :: me
+       __IAM(FD2C_INIT)
+#ifdef __CTX
+#undef __CTX
+#endif
+#ifdef __PARALLEL
+! use a trick to supply communicator only in parallel mode
+#define __CTX __COMM, __EDCTX
+#else
+#define __CTX __EDCTX
+#endif
+!
+       call message(whoami, 'Initializing state variables.');
+       call discretization_base_init(me)
+!
+       nullify(me%rui_, me%rui_, me%rwi_)
+       nullify(me%rui,  me%rvi,  me%rwi)
+!
+       call state_add3df('RHSX2' ,'RHS2 U-component'      , __CTX, vptr=me%rui_) ; me%rui=>me%rui_%v
+       call state_add3df('RHSY2' ,'RHS2 V-component'      , __CTX, vptr=me%rvi_) ; me%rvi=>me%rvi_%v
+       call state_add3df('RHSZ2' ,'RHS2 W-component'      , __CTX, vptr=me%rwi_) ; me%rwi=>me%rwi_%v
+!
+       me%initialized=.true.
+      end subroutine fd2c_init
+!===================================================================================
+      subroutine fd2c_divergence(me, u_, v_, w_)
+      class(discretization_fd2c) :: me
+      float, optional, pointer, dimension(:,:,:) :: u_, v_, w_
+      float, pointer, dimension(:,:,:) :: u, v, w
+      int :: i,j,k
+      float :: um,up
+!
+      if (present(u_)) then ; u=>u_ ; else ; u=>me%u ; endif
+      if (present(v_)) then ; v=>v_ ; else ; v=>me%v ; endif
+      if (present(w_)) then ; w=>w_ ; else ; w=>me%w ; endif
+!
+      do k=kb,ke  ; do j=jb,je ; um = u(ib-1,j,k) ;
+                                 do i=ib,ie ;
+         up=u(i,j,k);
+         div(i,j,k)=                                           &
+     &                   ( ap(i) * ( up      -um             ) &
+     &                   + bp(j) * ( v(i,j,k)-v(i,  j-1,k  ) ) &
+     &                   + cp(k) * ( w(i,j,k)-w(i,  j,  k-1) ) &
+     &                   )
+         um=up;
+      enddo       ; enddo      ; enddo
+!
+      end subroutine fd2c_divergence
+!===================================================================================
+      subroutine fd2c_correct(me)
+!     Corector step : u = u - grad dp (dt) ! dt is absorbed into dp, which is rescaled in integrator%correct before being added to p
+      class(discretization_fd2c) :: me
+      float ::  dt, dp, dpp
+      int :: i, j, k
+!
+__ASSOC
+      do k=kb,ke  ; do j=jb,je ; dp=deltap(ib,j,k)
+                                 do i=ib,ie 
+       dpp=deltap(i+1,j,k)
+       u(i,j,k)=u(i,j,k) - au(i) * ( dpp             - dp )
+       v(i,j,k)=v(i,j,k) - bv(j) * ( deltap(i,j+1,k) - dp )
+       w(i,j,k)=w(i,j,k) - cw(k) * ( deltap(i,j,k+1) - dp )
+!
+       dp=dpp
+!
+      enddo       ; enddo      ; enddo
+__UNASSOC
+!
+      end subroutine fd2c_correct
+!===================================================================================
+      subroutine fd2c_rhs(me)
+!-----Formerly subroutine-Rhscent----------------------E. Balaras  7/1/99------
+!
+!      CUMPUTES THE RIGHT SIDE OF THE MOMENTUM EQUATION
+!      (ADVECTION AND VISCOUS TERMS)
+!
+      class(discretization_fd2c) :: me
+!-----------------------------------------------------------------------
+      int :: i, j, k
+      float :: wzminus, wzplus, wyminus, wyplus, wxminus, wxplus, &
+     &     vzminus, vzplus, vyminus, vyplus, vxminus, vxplus,     &
+     &     uzminus, uzplus, uyminus, uyplus, uxminus, uxplus,     &
+     &     txzp, txzm, tzzp, tzzm, tyzm, tyyp, tyzp, tvip, txyp,  &
+     &     tvkp, txxm, txym, txxp, tyym, tvjp, tvim, tvjm, tvkm,  &
+     &     dwdzm, dwdzp, dwdxp, dwdym, dvdzp, dvdym, dvdxp,       &
+     &     dudym, dvdxm, dudzp, dudzm, dvdyp, dvdzm, dwdyp,       &
+     &     dudxp, dudxm, dudyp, dwdxm
+!
+      float :: zimp, omzimp
+!
+!
+      if (qimpl_v_z) then ; zimp=one ; else ; zimp=zero ; enddo ; omzimp = one-zimp
+!
+__ASSOC
+!CCCCCCCCCCCCCCCCCC     U COMPONENT     CCCCCCCCCCCCCCCCCC
+!
+      do k=kb,ke  ; do j=jb,je ; do i=ib,ie
+!...get velocities at 1/2 locations
+         uxplus =(u(i+1,j  ,k  )+u(i  ,j  ,k  ))*half
+         uxminus=(u(i  ,j  ,k  )+u(i-1,j  ,k  ))*half
+!
+         vxplus =(v(i+1,j  ,k  )+v(i  ,j  ,k  ))*half
+         vxminus=(v(i+1,j-1,k  )+v(i  ,j-1,k  ))*half
+!
+         wxplus =(w(i+1,j  ,k  )+w(i  ,j  ,k  ))*half
+         wxminus=(w(i+1,j  ,k-1)+w(i  ,j  ,k-1))*half
+!
+         uyplus =(u(i  ,j+1,k  )+u(i  ,j  ,k  ))*half
+         uyminus=(u(i  ,j  ,k  )+u(i  ,j-1,k  ))*half
+!
+         uzplus =(u(i  ,j  ,k+1)+u(i  ,j  ,k  ))*half
+         uzminus=(u(i  ,j  ,k  )+u(i  ,j  ,k-1))*half
+!
+!   get derivatives at 1/2 locations
+         dudxp= ap(i+1)*(u(i+1,j,  k)-u(i,  j,  k  ))
+         dudxm= ap(i  )*(u(i,  j,  k)-u(i-1,j,  k  ))
+         dudyp= bv(j  )*(u(i,  j+1,k)-u(i,  j,  k  ))
+         dudym= bv(j-1)*(u(i,  j  ,k)-u(i,  j-1,k  ))
+         dudzp= cw(k  )*(u(i,  j,k+1)-u(i,  j,  k  ))
+         dudzm= cw(k-1)*(u(i,  j,  k)-u(i,  j,  k-1))
+         dvdxp= au(i  )*(v(i+1,j  ,k)-v(i,  j  ,k  ))
+         dvdxm= au(i  )*(v(i+1,j-1,k)-v(i,  j-1,k  ))
+         dwdxp= au(i  )*(w(i+1,j,  k)-w(i,  j,  k  ))
+         dwdxm= au(i  )*(w(i+1,j,k-1)-w(i,  j,  k-1))
+!
+         tvip=zero; tvim=zero; tvjp=zero; tvjm=zero; tvkm=zero, tvkp=zero
+!  subgrid stress
+#ifdef __SGS
+         tvjp=quarter*(tv(i,j,  k  ) + tv(i+1,j,  k  )  &
+     &                +tv(i,j+1,k  ) + tv(i+1,j+1,k  ))
+         tvjm=quarter*(tv(i,j,  k  ) + tv(i+1,j,  k  )  &
+     &                +tv(i,j-1,k  ) + tv(i+1,j-1,k  ))
+         tvkp=quarter*(tv(i,j,  k  ) + tv(i+1,j,  k  )  &
+     &                +tv(i,j,  k+1) + tv(i+1,j,  k+1))
+         tvkm=quarter*(tv(i,j,  k  ) + tv(i+1,j,  k  )  &
+     &                +tv(i,j,  k-1) + tv(i+1,j,  k-1))
+         tvip=two*     tv(i+1,j,k) ! SGS tensor symmetric, hence x 2
+         tvim=two*     tv(i  ,j,k)
+#endif
+!...flux of cross sgs stresses
+         txyp=tvjp*dvdxp
+         txym=tvjm*dvdxm
+         txzp=tvkp*dwdxp
+         txzm=tvkm*dwdxm
+!
+!    3D viscosity field
+!
+         tvjp=tvjp+quarter*(nuf(i,j,  k  ) + nuf(i+1,j,  k  )  &
+     &                     +nuf(i,j+1,k  ) + nuf(i+1,j+1,k  ))
+         tvjm=tvjm+quarter*(nuf(i,j,  k  ) + nuf(i+1,j,  k  )  &
+     &                     +nuf(i,j-1,k  ) + nuf(i+1,j-1,k  ))
+         tvkp=tvkp+quarter*(nuf(i,j,  k  ) + nuf(i+1,j,  k  )  &
+     &                     +nuf(i,j,  k+1) + nuf(i+1,j,  k+1))
+         tvkm=tvkm+quarter*(nuf(i,j,  k  ) + nuf(i+1,j,  k  )  &
+     &                     +nuf(i,j,  k-1) + nuf(i+1,j,  k-1))
+         tvip=tvip+         nuf(i+1,j,k)
+         tvim=tvim+         nuf(i  ,j,k)
+
+!...flux of normal total stresses
+         txxp=(nu + tvip)*dudxp ! includes part of sgs stress 
+         txxm=(nu + tvim)*dudxm
+         tyyp=(nu + tvjp)*dudyp
+         tyym=(nu + tvjm)*dudym
+         tzzp=(nu + tvkp)*dudzp
+         tzzm=(nu + tvkm)*dudzm
+!
+!......calculate RHS for u-momentum
+!
+         ru(i,j,k)= &
+&!..advective term in conservative formulation
+     &   -au(i)*(uxplus*uxplus-uxminus*uxminus) &
+     &   -bu(j)*(vxplus*uyplus-vxminus*uyminus) &
+     &   -cu(k)*(wxplus*uzplus-wxminus*uzminus) &
+&!..viscous + part of subgrid stress diffusion
+     &   +au(i)*(txxp-txxm) &
+     &   +bu(j)*(tyyp-tyym) &
+     &   +cu(k)*(tzzp-tzzm)*omzimp &
+&!..rest of sgs diffusion
+     &   +bu(j)*(txyp-txym) &
+     &   +cu(k)*(txzp-txzm)
+!
+         rui(i,j,k) = cu(k)*(tzzp-tzzm)*zimp         & ! explicit part of wall normal diffusio for C.N.
+&                    -au(i)*(p(i+1,j,k)-p(i,j,k))      ! pressure gradient
+!
+      enddo ; enddo ; enddo
+!
+!CCCCCCCCCCCCCCCCCC     V COMPONENT     CCCCCCCCCCCCCCCCCC
+!
+      do k=kb, ke  ;  do j=jb,je  ;  do i=ib,ie
+!...get velocities at 1/2 locations
+         vxplus =(v(i+1,j  ,k  )+v(i  ,j  ,k  ))*half
+         vxminus=(v(i  ,j  ,k  )+v(i-1,j  ,k  ))*half
+!
+         vyplus =(v(i  ,j+1,k  )+v(i  ,j  ,k  ))*half
+         vyminus=(v(i  ,j  ,k  )+v(i  ,j-1,k  ))*half
+!
+         vzplus =(v(i  ,j  ,k+1)+v(i  ,j  ,k  ))*half
+         vzminus=(v(i  ,j  ,k  )+v(i  ,j  ,k-1))*half
+!
+         uyplus =(u(i  ,j+1,k  )+u(i  ,j  ,k  ))*half
+         uyminus=(u(i-1,j+1,k  )+u(i-1,j  ,k  ))*half
+!
+         wyplus =(w(i  ,j+1,k  )+w(i  ,j  ,k  ))*half
+         wyminus=(w(i  ,j+1,k-1)+w(i  ,j  ,k-1))*half
+!
+!...get derivatives at 1/2 locations
+         dvdxp= au(i  )*( v(i+1,j,  k  )-v(i,  j,  k  ) )
+         dvdxm= au(i-1)*( v(i,  j,  k  )-v(i-1,j,  k  ) )
+         dvdyp= bp(j+1)*( v(i,  j+1,k  )-v(i,  j,  k  ) )
+         dvdym= bp(j  )*( v(i,  j,  k  )-v(i,  j-1,k  ) )
+         dvdzp= cw(k  )*( v(i,  j,  k+1)-v(i,  j,  k  ) )
+         dvdzm= cw(k-1)*( v(i,  j,  k  )-v(i,  j,  k-1) )
+         dudyp= bv(j  )*( u(i,  j+1,k  )-u(i,  j,  k  ) )
+         dudym= bv(j  )*( u(i-1,j+1,k  )-u(i-1,j,  k  ) )
+         dwdyp= bv(j  )*( w(i,  j+1,k  )-w(i,  j,  k  ) )
+         dwdym= bv(j  )*( w(i,  j+1,k-1)-w(i,  j,  k-1) )
+!
+         tvip=zero; tvim=zero; tvjp=zero; tvjm=zero; tvkm=zero, tvkp=zero
+!
+! subgrid stress
+!
+#ifdef __SGS
+         tvip=quarter*(tv(i,j  ,k) + tv(i+1,j,  k  )   &
+     &                +tv(i,j+1,k) + tv(i+1,j+1,k  ))
+         tvim=quarter*(tv(i,j  ,k) + tv(i-1,j,  k  )   &
+     &                +tv(i,j+1,k) + tv(i-1,j+1,k  ))
+         tvkp=quarter*(tv(i,j  ,k) + tv(i,  j,  k+1)   &
+     &                +tv(i,j+1,k) + tv(i,  j+1,k+1))
+         tvkm=quarter*(tv(i,j  ,k) + tv(i,  j,  k-1)   &
+     &                +tv(i,j+1,k) + tv(i,  j+1,k-1))
+         tvjp=two*     tv(i,j+1,k)
+         tvjm=two*     tv(i,j  ,k)
+!
+!...flux of cross sgs stresses
+!
+#endif
+         txyp=tvip*dudyp
+         txym=tvim*dudym
+         tyzp=tvkp*dwdyp
+         tyzm=tvkm*dwdym
+!
+! 3D viscosity field
+!
+         tvip=tvip+quarter*(nuf(i,j  ,k) + nuf(i+1,j,  k  )   &
+     &                     +nuf(i,j+1,k) + nuf(i+1,j+1,k  ))
+         tvim=tvim+quarter*(nuf(i,j  ,k) + nuf(i-1,j,  k  )   &
+     &                     +nuf(i,j+1,k) + nuf(i-1,j+1,k  ))
+         tvkp=tvkp+quarter*(nuf(i,j  ,k) + nuf(i,  j,  k+1)   &
+     &                     +nuf(i,j+1,k) + nuf(i,  j+1,k+1))
+         tvkm=tvkm+quarter*(nuf(i,j  ,k) + nuf(i,  j,  k-1)   &
+     &                     +nuf(i,j+1,k) + nuf(i,  j+1,k-1))
+         tvjp=tvjp+         nuf(i,j+1,k)
+         tvjm=tvjm+         nuf(i,j  ,k)
+!
+!...flux of normal total stresses
+!
+         txxp=(nu + tvip)*dvdxp
+         txxm=(nu + tvim)*dvdxm
+         tyyp=(nu + tvjp)*dvdyp
+         tyym=(nu + tvjm)*dvdym
+         tzzp=(nu + tvkp)*dvdzp
+         tzzm=(nu + tvkm)*dvdzm
+!
+!......calculate RHS for v-momentum
+!
+         rv(i,j,k)= &
+&!..advective term in conservative formulation
+     &    -av(i)*(uyplus*vxplus-uyminus*vxminus) &
+     &    -bv(j)*(vyplus*vyplus-vyminus*vyminus) &
+     &    -cv(k)*(wyplus*vzplus-wyminus*vzminus) &
+&!..viscous+part of sgs diffusion
+     &    +av(i)*(txxp-txxm) &
+     &    +bv(j)*(tyyp-tyym) &
+& +omzimp *cv(k)*(tzzp-tzzm) &
+&!..rest of sgs diffusion
+     &    +av(i)*(txyp-txym) &
+     &    +cv(k)*(tyzp-tyzm)
+!
+          rvi(i,j,k) = cv(k)*(tzzp-tzzm) * zimp     &   ! explicit part of wall normal diffusio for C.N.
+&                     -bv(j)*(p(i,j+1,k)-p(i,j,k))
+!
+      enddo ;  enddo  ;  enddo
+!
+!CCCCCCCCCCCCCCCCCC    W COMPONENT     CCCCCCCCCCCCCCCCCC
+!
+      do k=bk,ke  ;  do j=jb,je  ;  do i=ib,ie
+!    velocities at 1/2 locations
+          wxplus =(w(i+1,j  ,k  ) + w(i  ,j  ,k  ))*half
+          wxminus=(w(i  ,j  ,k  ) + w(i-1,j  ,k  ))*half
+!
+          wyplus =(w(i  ,j+1,k  ) + w(i  ,j  ,k  ))*half
+          wyminus=(w(i  ,j  ,k  ) + w(i  ,j-1,k  ))*half
+!
+          wzplus =(w(i  ,j  ,k+1) + w(i  ,j  ,k  ))*half
+          wzminus=(w(i  ,j  ,k  ) + w(i  ,j  ,k-1))*half
+!
+          uzplus =(u(i  ,j  ,k+1) + u(i  ,j  ,k  ))*half
+          uzminus=(u(i-1,j  ,k+1) + u(i-1,j  ,k  ))*half
+!
+          vzplus =(v(i  ,j  ,k+1) + v(i  ,j  ,k  ))*half
+          vzminus=(v(i  ,j-1,k+1) + v(i  ,j-1,k  ))*half
+
+!    derivatives at 1/2 locations
+          dwdxp= au(i  )*(w(i+1,j,  k  )-w(i,  j,  k  ))
+          dwdxm= au(i-1)*(w(i,  j,  k  )-w(i-1,j,  k  ))
+          dwdyp= bv(j  )*(w(i,  j+1,k  )-w(i,  j,  k  ))
+          dwdym= bv(j-1)*(w(i,  j,  k  )-w(i,  j-1,k  ))
+          dwdzp= cp(k+1)*(w(i,  j,  k+1)-w(i,  j,  k  ))
+          dwdzm= cp(k  )*(w(i,  j,  k  )-w(i,  j,  k-1))
+          dudzp= cw(k  )*(u(i,  j,  k+1)-u(i  ,j,  k  ))
+          dudzm= cw(k  )*(u(i-1,j,  k+1)-u(i-1,j,  k  ))
+          dvdzp= cw(k  )*(v(i,  j,  k+1)-v(i,  j,  k  ))
+          dvdzm= cw(k  )*(v(i,  j-1,k+1)-v(i,  j-1,k  ))
+!
+          tvip=zero; tvim=zero; tvjp=zero; tvjm=zero; tvkm=zero, tvkp=zero
+!    nu_t (if needed)
+!    this is computed first to obtain SGS cross stresses (to which molecular viscosity makes no contribution)
+#ifdef __SGS
+          tvip=quarter*(tv(i,j,k  ) + tv(i+1,j,  k  )
+     &                 +tv(i,j,k+1) + tv(i+1,j,  k+1))
+          tvim=quarter*(tv(i,j,k  ) + tv(i-1,j,  k  )
+     &                 +tv(i,j,k+1) + tv(i-1,j,  k+1))
+          tvjp=quarter*(tv(i,j,k  ) + tv(i,  j+1,k  )
+     &                 +tv(i,j,k+1) + tv(i,  j+1,k+1))
+          tvjm=quarter*(tv(i,j,k  ) + tv(i,  j-1,k  )
+     &                 +tv(i,j,k+1) + tv(i,  j-1,k+1))
+          tvkp=two   *  tv(i,j,k+1)
+          tvkm=two   *  tv(i,j,k)
+#endif
+!...flux of cross sgs stresses
+          txzp=tvip*dudzp
+          txzm=tvim*dudzm
+          tyzp=tvjp*dvdzp
+          tyzm=tvjm*dvdzm
+!
+!    3D viscosity field (distinct from turbulent viscosity above)
+!
+          tvip=tvip+quarter*(nuf(i,j,k  ) + nuf(i+1,j,  k  )
+     &                      +nuf(i,j,k+1) + nuf(i+1,j,  k+1))
+          tvim=tvim+quarter*(nuf(i,j,k  ) + nuf(i-1,j,  k  )
+     &                      +nuf(i,j,k+1) + nuf(i-1,j,  k+1))
+          tvjp=tvjp+quarter*(nuf(i,j,k  ) + nuf(i,  j+1,k  )
+     &                      +nuf(i,j,k+1) + nuf(i,  j+1,k+1))
+          tvjm=tvjm+quarter*(nuf(i,j,k  ) + nuf(i,  j-1,k  )
+     &                      +nuf(i,j,k+1) + nuf(i,  j-1,k+1))
+          tvkp=tvkp+         nuf(i,j,k+1)
+          tvkm=tvkm+         nuf(i,j,k)
+!
+!...flux of normal total stresses
+          txxp=(nu + tvip)*dwdxp
+          txxm=(nu + tvim)*dwdxm
+          tyyp=(nu + tvjp)*dwdyp
+          tyym=(nu + tvjm)*dwdym
+          tzzp=(nu + tvkp)*dwdzp
+          tzzm=(nu + tvkm)*dwdzm
+!
+!......calculate RHS for w-momentum
+!
+          rw(i,j,k)= &
+&!..advective term in conservative formulation
+     &     -aw(i)*(uzplus * wxplus - uzminus * wxminus) &
+     &     -bw(j)*(vzplus * wyplus - vzminus * wyminus) &
+     &     -cw(k)*(wzplus * wzplus - wzminus * wzminus) &
+&!..viscous + subgrid diffusion
+     &     +aw(i)*(txxp-txxm) &
+     &     +bw(j)*(tyyp-tyym) &
+   &+omzimp*cw(k)*(tzzp-tzzm) &
+&!..rest of subgrid diffusion
+     &     +aw(i)*(txzp-txzm) &
+     &     +bw(j)*(tyzp-tyzm)
+!
+          rwi(i,j,k) = cw(k)*(tzzp-tzzm) * zimp         & ! explicit part of wall normal diffusio for C.N.
+     &                -cw(k)*(p(i,j,k+1)-p(i,j,k))
+!
+      enddo   ;   enddo   ;   enddo
+!
+__UNASSOC
+!
+      end subroutine fd2c_rhs
+!=====================================================================================
+!
+end module f2dc

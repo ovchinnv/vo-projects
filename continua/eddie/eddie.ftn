@@ -13,9 +13,8 @@
       use random
       use statistics
 !
-#ifdef __AB
-      use ABintegrator    ! Adams-Bashforth integrator
-#endif
+      use integrator
+      use discretization
 
 #ifdef __central_fd2
       use central_fd2     ! central finite difference, second order derivatives
@@ -52,11 +51,6 @@
       float, pointer, save, dimension(:,:,:) :: u, v, w, ustar, vstar, wstar, p, dp, div, nu
 !
       float :: nu_m ! molecular viscosity
-!
-!
-      int :: t_integrator=0
-      int :: p_solver=0
-!
 !
 #ifdef __PARALLEL
       ierror
@@ -112,36 +106,17 @@
        call state_add3df('W'  ,'Wall-normal velocity'     , __CTX, vptr=w_)     ; w=>w_%v
        call state_add3df('P'  ,'Pressure field'           , __CTX, vptr=pres_)  ; p=>pres_%v
        call state_add3df('NU' ,'Viscosity (nonuniform)'   , __CTX, vptr=nu_)    ; nu=>nu_%v
-       call state_add3df('DP' ,'Pressure correction field', __CTX, vptr=deltap_); dp=>deltap_%v ; div_=>deltap_ ; div=>dp
+       call state_add3df('DIV' ,'Divergence field'        , __CTX, vptr=div_)   ; div=>div_%v ; deltap_=>div_ ; dp=>deltap_%v 
        call state_add3df('U*' ,'Predicted U-velocity'     , __CTX, vptr=ustar_) ; ustar=>ustar_%v
        call state_add3df('V*' ,'Predicted V-velocity'     , __CTX, vptr=vstar_) ; vstar=>vstar_%v
        call state_add3df('W*' ,'Predicted W-velocity'     , __CTX, vptr=wstar_) ; wstar=>wstar_%v
 ! add boundary condition arrays
-
-
+!
+!
+       call discretization_init()
+       call integrator_init()
+       call pressure_init()
 !======================================================================================
-! parse other options (using preprocessor macros)
-!
-! determine integrator
-#define __WARNIFMISSING
-#define __CONTEXT ctx
-#define __VARNAME t_integrator
-#define __FILETAG integrator
-#define __DESCRIPTION	integrator
-#define __CASES1 'AB','A-B','ADAMSBASHFORTH','ADAMS-BASHFORTH'
-#define __VALUE1 intAB
-#define __DEFAULT __VALUE1
-#define __NAMES int_name
-#include "parser/parser_macro2.src"
-!
-! now intAB is defined or the error flag is set
-!
-! initialize integrator
-#define __CALL _init()
-       if (.not.fatal_warning(__COMM)) then 
-#include "integrator_macro.src"
-       endif
-!
 ! determine pressure solver
 #define __WARNIFMISSING
 #define __CONTEXT ctx
@@ -162,14 +137,13 @@
 
 !    initialize LES
 #ifdef LES
-       call LES_initialize()
+       call LES_init)
 #endif // LES
 !    initialize immersed boundary
 #ifdef immbnd 
        call immbnd_initialize()
 #endif
 !    set initial condition
-
 
        call initial()
 
@@ -210,19 +184,15 @@
         call random_init()
        endif
 !
-!    Extra source terms (e.g. pressure gradient, gravity)
-       if (existtag_nocase('DPDX',ctx)) then ; dpdx=atof(getval_nocase('DPDX')) ; else ; dpdx=zero ; endif
-       if (existtag_nocase('DPDY',ctx)) then ; dpdy=atof(getval_nocase('DPDY')) ; else ; dpdy=zero ; endif
-       if (existtag_nocase('DPDZ',ctx)) then ; dpdz=atof(getval_nocase('DPDZ')) ; else ; dpdz=zerp ; endif
 !================================================================
 #ifdef __PARALLEL
       if (me.eq.0) then 
 #endif
-       if (dpdx.ne.0) then 
+       if (t_integrator%dpdx.ne.0) then 
         if (bctype(west).ne.periodic.or.bctype(east).ne.periodic) call warning(whoami,' DPDX =/= 0 FOR NONPERIODIC X-BC',0)
-       elseif (dpdy.ne.0) then
+       elseif (t_integrator%dpdy.ne.0) then
         if (bctype(front).ne.periodic.or.bctype(back).ne.periodic) call warning(whoami,' DPDY =/= 0 FOR NONPERIODIC Y-BC',0)
-       elseif (dpdz.ne.0) then
+       elseif (t_integrator%dpdz.ne.0) then
         if (bctype(bottom).ne.periodic) call warning(whoami,' DPDZ =/= 0 FOR NONPERIODIC Z0-BC',0)
        elseif (me.eq.ncpu-1) then
         if (bctype(top).ne.periodic) call warning(whoami,' DPDZ =/= 0 FOR NONPERIODIC Z1-BC',0)
@@ -278,7 +248,6 @@
 
 
       real upr(nx,ny,nz),vpr(nx,ny,nz),wpr(nx,ny,nz)
-      real ucn(nx,ny,nz),vcn(nx,ny,nz),wcn(nx,ny,nz)
 !      real dummy(nx,ny,nz) !artifice for the doubly periodic poisson solver
 
       real wfrg(nx,ny,nz) ! probably for the "fringe region" boundary layer sim 
@@ -294,16 +263,12 @@
 
       integer statnum,samples,psample
 
-
 !     start of inflow        
-      CHARACTER*(30) InputFile
-!     
       REAL TPRESSURE(3)
       REAL    qo,qold,dpdx,tke,divmax,dpdz
       INTEGER i, j, k, ii, jj, kk, iii, jjj, kkk
 !     
       LOGICAL Ltstep            ! .f.-predictor .t.-corrector
-      REAL    a1,a2,tmeth
 !     
       REAL    delt, yplusmin, erm
       INTEGER icycle,istart,icount1,icount2,icinf,Niter,ibnd
@@ -327,10 +292,7 @@
       real*8 cputurvis
       real*8 cpucorr
       real*8 cpupres,cpupredict,cpurhs
-!     
 !
-      integer type !double or single (for MPI)
-!     
 !     added for boundary layer simulation VO
       integer iistart,imid,imidf,ifin,nload,n,nn,status(MPI_STATUS_SIZE),counter,cpusave
       integer np,ksave
@@ -380,10 +342,6 @@
 !-----------------------------------------------------------------------
 !     compute coefficients
 !-----------------------------------------------------------------------
-      IF(MYRANK.EQ.0) THEN
-         WRITE(6,*) '*..compute coefficients'
-      ENDIF
-!
 #ifdef LES
 !
       dtm1=1. ! should be ineffectual in this first call , but included to avoid an undefined variable error
@@ -395,6 +353,7 @@
      &     tv,dtm1,icycle-itini,nx,ny,nz       )
 !
 #ifdef immbnd
+!
       if(ibswitch.and.Isgsmodel.ne.0) then
 !
              CALL IB_forcing(tv,tvim,
@@ -412,18 +371,12 @@
            endif
          CALL REFRESHBC(tv, nx*ny,(nz-2),MYSIZE,MYRANK,communicator)
       endif
-#endif
-
-#endif
 !
-#ifndef LES
+#else // LES not defined
+!
       tv=0.
 #endif
 
-!-----------------------------------------------------------------------
-      IF(MYRANK.EQ.0) THEN
-         WRITE(6,*) '*..start flow'
-      ENDIF
 !-----------------------------------------------------------------------
 !     begin main loop
 !-----------------------------------------------------------------------
@@ -436,19 +389,17 @@
       oldtime=znewtime
       close(666)
 !
+! switch to the timer class for this ...
       cpurhs=0
       cpupredict=0
       cpupres=0
       cpucorr=0
       cputurvis=0
-!.....time step
-      if(Lcfl) then
-         CALL TSTEPCEN(XU,YV,ZW,UO,VO,WO,TV,nx,ny,nz,DTM1)
-      else
-         dtm1=tstep
-      endif
-!     for phase reshuffling -- new routine
+!.....time step (computed by integrator)
+
+
 #ifdef rogallo
+!     for phase reshuffling -- new routine
       if (jdose.or.rogal) then 
        if (myrank.eq.0) then 
         dummy1=mod(uinfty*tlevel+zw(1),zlen)
@@ -469,47 +420,41 @@
 #ifdef precursor_inflow
       if (box2) call box2dt(dtm1,icycle,index,type)
 #endif
-!      
-      TLEVEL=TLEVEL+DTM1
+!
+!      TLEVEL=TLEVEL+DTM1 ! done inside integrator
 !-----------------------------------------------------------------------
 !     predictor-corrector step
 !-----------------------------------------------------------------------
       ITSTAMP = ITMAX
       ICOUNT1 = MOD(ICYCLE,100000)
-      
-      IF ((ICOUNT1.EQ.0).OR.((IFIELD.NE.2).AND.(ICYCLE-ITINI.EQ.1))) THEN
-!...  Euler step
-         a1   =0.
-         a2   =1.
-         tmeth=1.
-         cpub=mpi_wtime()
-         CALL Rhs(uo,vo,wo,ucn,vcn,wcn,tv,wfrg,uab2,vab2,wab2,nx,ny,nz )        
-         cpurhs=mpi_wtime()-cpub
-      ELSE
-!...  Adams-Bashforth step
-         a1   =0.5
-         a2   =1.5
-         tmeth=1.
-         cpub=mpi_wtime()
-         CALL Rhs(uo,vo,wo,ucn,vcn,wcn,tv,wfrg,uab2,vab2,wab2,nx,ny,nz )   
-         cpurhs=mpi_wtime()-cpub
-      ENDIF
+!
+      ! timer_stamp
+!
+!      call s_discretization%compute() ! now in the integrator
+!      CALL Rhs(uo,vo,wo,ucn,vcn,wcn,tv,wfrg,uab2,vab2,wab2,nx,ny,nz )
+!      cpurhs= (timer)
+!
+      qeuler = ((ICOUNT1.EQ.0).OR.((IFIELD.NE.2).AND.(ICYCLE-ITINI.EQ.1)))
 
       
 !.....Predictor step + boundary conditions for Ustar
 !     
       if(impfla.eq.1.and.icycle-itini.eq.1) then ! : to be moved to setup since this is an INIT call
 !...  boundary condition setup for implicit part
-
          CALL BOUN_IMP(botbc,topbc,nx,ny,nz)
       endif
 !
-      cpub=mpi_wtime()
-      CALL ab_predictor(UO,VO,WO,P,UAB1,VAB1,WAB1,
-     &     UAB2,VAB2,WAB2,ucn,vcn,wcn,tv,
-     &     USTAR,VSTAR,WSTAR,xu,
-     &     dpdx,dpdy,dpdz,dtm1,a1,a2,botbc,topbc,
-     &     nx,ny,nz                          )
+#ifdef __TIMER
+      cpub=timer_stamp()
+
+      call t_integrator%predict() !
+!      CALL ab_predictor(UO,VO,WO,P,UAB1,VAB1,WAB1,
+!     &     UAB2,VAB2,WAB2,ucn,vcn,wcn,tv,
+!     &     USTAR,VSTAR,WSTAR,xu,
+!     &     dpdx,dpdy,dpdz,dtm1,a1,a2,
+     
+     botbc,topbc)
+
       Ltstep = .FALSE.
 !     don`t think this is needed anymore since new IB does _NOT_ use ghost points
 !      if (myrank.eq.0) write(66+mod(icycle,5),*) myrank,': refreshbc'
@@ -615,35 +560,40 @@
       if (box2) call box2read(ustar,vstar,wstar,a_u,a_w,b_u,b_w,ps_u,ps_w)
 #endif
 !
-!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccc          
+!================================================================
       cpupredict=mpi_wtime()-cpub
-!     
+!
+! all below (massbal/div/pres/correct) should be part of correct
+!
 !      call correct_mass(USTAR,VSTAR,WSTAR,xu,yv,zw,icycle-itini,nx,ny,nz) ! MasBlas routine
-      call correct_mass(USTAR,VSTAR,WSTAR,xu,yv,zw,nx,ny,nz) ! mass-balance routine
-!     
-      cpub=mpi_wtime()
-      call divergence(USTAR,VSTAR,WSTAR,nx,ny,nz,DTM1,dp)
+!      call s_discretization%correct_mass()
+!      call correct_mass(USTAR,VSTAR,WSTAR,xu,yv,zw,nx,ny,nz) ! mass-balance routine
+      ! timer_stamp
+!      call t_integrator%divergence() ! formerly div(USTAR,VSTAR,WSTAR,nx,ny,nz,DTM1,dp) )
+!      call t_integrator%compute_p()
 !
-      if(IPresMethod .eq. 1) then
-         CALL PRESDP2P(dp,dp,P,ZWG,YV,XU,DUMMY,
-     &        MYRANK,communicator,TPRESSURE)
-      elseif(IPresMethod.eq.11) then 
-         call pfft_yz(p,dp,dp,dummy,dummy,au,ap,bp(1),cwg(1),myrank,communicator,type)
-      elseif(IPresMethod .eq. 22) then
-
-         CALL presdirect(dp,dp,p,xu,yv,zwg,au,cwg,icycle-itini,
-     &        myrank,communicator,tpressure)
-      else
-         call error(whoami,' UNKNOWN PRESSURE SOLVER. ABORTING.',-1)
-         return
-      endif
+!      if(IPresMethod .eq. 1) then
+!         CALL PRESDP2P(dp,dp,P,ZWG,YV,XU,DUMMY,
+!     &        MYRANK,communicator,TPRESSURE)
+!      elseif(IPresMethod.eq.11) then 
+!         call pfft_yz(p,dp,dp,dummy,dummy,au,ap,bp(1),cwg(1),myrank,communicator,type)
+!      elseif(IPresMethod .eq. 22) then
 !
-      cpupres=mpi_wtime()-cpub
+!         CALL presdirect(dp,dp,p,xu,yv,zwg,au,cwg,icycle-itini,
+!     &        myrank,communicator,tpressure)
+!      else
+!         call error(whoami,' UNKNOWN PRESSURE SOLVER. ABORTING.',-1)
+!         return
+!      endif
+!
+!      cpupres=mpi_wtime()-cpub
 !     
 !.....Update velocity values , compute residuals and store RHS
 !     
-      cpub=mpi_wtime()
-      call Correct(USTAR,VSTAR,WSTAR,DP,DTM1,nx,ny,nz,UO,VO,WO)
+!      cpub=mpi_wtime()
+      call t_integrator%correct()
+!
+!      call Correct(USTAR,VSTAR,WSTAR,DP,DTM1,nx,ny,nz,UO,VO,WO)
 !cccc pressure recovery
 !      me=myrank
 !      do i=1,ptrashn

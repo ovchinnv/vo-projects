@@ -119,7 +119,7 @@ $(ROOT)/$(NAME).stamp:: $(OBJS) $(DISTRIB)
 %.h:%.H $(LOCALDEPS) $(GLOBALDEPS)
 	$(FPP) $(FPPFLAGS) $(DEFS) $(LOCALDEFS) -P $< > $@
 %.F90:%.ftn $(LOCALDEPS) $(GLOBALDEPS) $(ROOT)/source.msg
-	$(FPP) $(FPPFLAGS) $(DEFS) -U__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(MSG) -P $< > $@
+	$(FPP) $(FPPFLAGS) $(DEFS) -U__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(MSG) $(INCLUDES) -P $< > $@
 %.src:%.ftn $(LOCALDEPS) $(GLOBALDEPS) $(ROOT)/charmm.msg
 	$(FPP) $(FPPFLAGS)         -D__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(CHMSG) -P $< > $@
 ########################## TEST PROGRAM ######################
