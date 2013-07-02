@@ -3,16 +3,16 @@ SHELL=/bin/sh
 CC=gcc
 CFLAGS =-O3 -fno-math-errno -g -c
 #---INTEL
-#FC=ifort
+FC=ifort
 #FFLAGS=-O2 -c
-#FFLAGS=-O3 -fast -finline -fp-model fast=2 -xhost -ipo -fno-math-errno -no-inline-factor -no-inline-min-size -c
+FFLAGS=-O3 -fast -finline -fp-model fast=2 -xhost -ipo -fno-math-errno -no-inline-factor -no-inline-min-size -c
 #FFLAGS= -O3 -check-all -extend-source -fast -fno-math-errno -finline -fp-model fast=2 -xhost -ipo  #-ipo 
 #FFLAGS= -O3 -c -extend-source -fast -fno-math-errno -finline -fp-model fast=2 -xSSE3 -ipo # -no-inline-factor -no-inline-min-size #-ipo 
 #FFLAGS= -O3 -c -extend-source -fast -fno-math-errno -finline -fp-model fast=2 -xhost -no-ipo # -no-inline-factor -no-inline-min-size #-ipo 
 #MPI_HOME=/usr/local/mpich2-intel
 #---GNU
-FC=gfortran
-FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  #-fopenmp 
+#FC=gfortran
+#FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  #-fopenmp 
 #FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno #-fbounds-check -frange-check 
 #MPI_HOME=/usr/local/mpich2-gnu
 MPI_HOME=/usr/lib/openmpi
