@@ -2,6 +2,7 @@
 ! C interfaces to module bestfit
 ! Currently there is no portable interoperability involving optional parameters, so I am declaring
 ! different c bindings for each optional argument to RMSBestFit
+! NOTE : these routines are more complicated than needed because of the possibility to swap component and coordinate dimensions (qdimswap)
 ! ============================================================================
 subroutine RMSBestFit_c(x0_,y0_,w_,n,u_,qdimswap_) bind(c,NAME='RMSBestFit') ! will return the rotation matrix u to align structure x0 onto y0 using weights w 
  use, intrinsic :: iso_c_binding
@@ -9,7 +10,7 @@ subroutine RMSBestFit_c(x0_,y0_,w_,n,u_,qdimswap_) bind(c,NAME='RMSBestFit') ! w
  implicit none
 !
  integer(__FCINT), value :: n ! number of atoms
- type (c_ptr), value, intent(in) :: y0_, x0_
+ type (c_ptr), value, intent(in) :: y0_, x0_ ! passing actual address by value
  real (__FCFLOAT), dimension(n), intent(in) :: w_
  real (__FCFLOAT), dimension(9), intent(out) :: u_
  logical(__FCBOOL), value :: qdimswap_
@@ -22,7 +23,7 @@ subroutine RMSBestFit_c(x0_,y0_,w_,n,u_,qdimswap_) bind(c,NAME='RMSBestFit') ! w
 !
  qdimswap=qdimswap_;
  if (qdimswap) then
-  call c_f_pointer(x0_,xptr,(/3,n/));  call c_f_pointer(y0_,yptr,(/3,n/))
+  call c_f_pointer(x0_,xptr,(/3,n/));  call c_f_pointer(y0_,yptr,(/3,n/)) ! extract F pointer
   allocate(x0(3,n), y0(3,n))
  else
   call c_f_pointer(x0_,xptr,(/n,3/));  call c_f_pointer(y0_,yptr,(/n,3/))
@@ -69,6 +70,81 @@ subroutine RMSBestFitEv_c(x0_,y0_,w_,n,u_,eigval_,qdimswap_) bind(c,NAME='RMSBes
 !
 end subroutine RMSBestFitEv_c
 !
+!============================================================================
+subroutine RMSBestFitGrad_c(x0_,y0_,w_,n,u_,gradu_,ibeg,iend,qdimswap_) bind(c,NAME='RMSBestFitGrad')
+ use, intrinsic :: iso_c_binding
+ use bestfit, only : RMSBestFit
+ implicit none
+!
+ integer(__FCINT), value :: n, ibeg, iend ! number of atoms followed by beginning and ending atom indices for gradient computation
+ type (c_ptr), value, intent(in) :: y0_, x0_ ! passing actual address by value
+ real (__FCFLOAT), dimension(3,3,3,n), intent(out) :: gradu_
+ real (__FCFLOAT), dimension(n), intent(in) :: w_
+ real (__FCFLOAT), dimension(9), intent(out) :: u_
+ logical(__FCBOOL), value :: qdimswap_
+!
+ real (__FCFLOAT), pointer, dimension(:,:) :: xptr, yptr
+ float, allocatable, dimension(:,:) :: x0, y0
+ float, dimension(n)   :: w
+ float, dimension(3,3) :: u
+ float, dimension(3,3,3,n) :: gradu
+ bool :: qdimswap
+ int :: i, j
+ qdimswap=qdimswap_;
+ if (qdimswap) then
+  call c_f_pointer(x0_,xptr,(/3,n/));  call c_f_pointer(y0_,yptr,(/3,n/)) ! extract F pointer
+  allocate(x0(3,n), y0(3,n))
+ else
+  call c_f_pointer(x0_,xptr,(/n,3/));  call c_f_pointer(y0_,yptr,(/n,3/))
+  allocate(x0(n,3), y0(n,3))
+ endif
+ x0=xptr ; y0=yptr; w=w_ ; i=ibeg ; j=iend
+!
+ call RMSBestFit(x0,y0,w,u,i,j,gradu,QDIMSWAP_=qdimswap)
+ u_=reshape(u, (/9/) )
+ gradu_(:,:,:,i:j)=gradu(:,:,:,i:j) ! copy only the specified indices
+ deallocate(x0,y0)
+!
+end subroutine RMSBestFitGrad_c
+!============================================================================
+subroutine RMSBestFitGradEv_c(x0_,y0_,w_,n,u_,gradu_,ibeg,iend,eigval_,qdimswap_) bind(c,NAME='RMSBestFitGradEval')
+ use, intrinsic :: iso_c_binding
+ use bestfit, only : RMSBestFit
+ implicit none
+!
+ integer(__FCINT), value :: n, ibeg, iend ! number of atoms followed by beginning and ending atom indices for gradient computation
+ type (c_ptr), value, intent(in) :: y0_, x0_ ! passing actual address by value
+ real (__FCFLOAT), dimension(3,3,3,n), intent(out) :: gradu_
+ real (__FCFLOAT), dimension(n), intent(in) :: w_
+ real (__FCFLOAT), dimension(9), intent(out) :: u_
+ real (__FCFLOAT), dimension(3), intent(out) :: eigval_
+ logical(__FCBOOL), value :: qdimswap_
+!
+ real (__FCFLOAT), pointer, dimension(:,:) :: xptr, yptr
+ float, allocatable, dimension(:,:) :: x0, y0
+ float, dimension(n)   :: w
+ float, dimension(3,3) :: u
+ float, dimension(3,3,3,n) :: gradu
+ float, dimension(3)  :: eigval
+ bool :: qdimswap
+ int :: i, j
+!
+ qdimswap=qdimswap_;
+ if (qdimswap) then
+  call c_f_pointer(x0_,xptr,(/3,n/));  call c_f_pointer(y0_,yptr,(/3,n/)) ! extract F pointer
+  allocate(x0(3,n), y0(3,n))
+ else
+  call c_f_pointer(x0_,xptr,(/n,3/));  call c_f_pointer(y0_,yptr,(/n,3/))
+  allocate(x0(n,3), y0(n,3))
+ endif
+ x0=xptr ; y0=yptr; w=w_ ; i=ibeg ; j=iend
+ call RMSBestFit(x0,y0,w,u,i,j,gradu,eigval,qdimswap)
+ u_=reshape(u, (/9/) )
+ gradu_(:,:,:,i:j)=gradu(:,:,:,i:j)
+ eigval_=eigval
+ deallocate(x0,y0)
+!
+end subroutine RMSBestFitGradEv_c
 !================================================================================
  type(c_ptr) function com_c(x_,w_,n,qdimswap_) bind(c,NAME='com')
  use, intrinsic :: iso_c_binding

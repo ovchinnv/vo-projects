@@ -377,16 +377,15 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
       ! eigval -- square root of eigenvalues of the correlation matrix
       ! qdimswap -- if false, the shapes of coordinate arrays are (1:natom,1:3); if true, (1:3,1:natom)
 !
-       float, intent(in) :: x0(:,:), y0(:,:), w(:)
+       float, intent(in), target :: x0(:,:), y0(:,:), w(:)
        float, intent(out) :: u(3,3)
        int, optional, intent(in) :: ibeg_, iend_
        float, optional :: gradu(:,:,:,:) ! gradient of rotation matrix wrt x0
        float, optional, intent(out) :: eigval(3) ! eigenvalues
 !
-       float, dimension(size(x0,1)) :: x1, x2, x3, y1, y2, y3
-!
+       float, pointer, dimension(:) :: x1, x2, x3, y1, y2, y3
        float :: xcom(3),ycom(3),r11,r12,r13,r21,r22,r23,r31,r32,r33,   &
-     &     detr,reflect_flag, x1w, x2w, x3w
+     &     detr,reflect_flag, x1w, x2w, x3w, y1s, y2s, y3s
        float :: r(3,3),rr(3,3),a(3,3),b(3,3),b0(3,3),mu(3),oomu(2),    &
      &           rmu(3), roomu(2)
        int :: i, j, k, l, n
@@ -408,7 +407,7 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
 !
        errtol_=__ERRTOL
 !
-       if (qdebug) then ; __DEBUG_OUT(*, whoami, 'ERRTOL:= ', errtol_) ; endif
+       if (qdebug) then ; __DEBUG_OUT(*, whoami, ' ERRTOL:= ', errtol_) ; endif
 !
        qgrad=(present(gradu).and.present(ibeg_).and.present(iend_))
        if (present(qdimswap_)) then ; qdimswap=qdimswap ; else ; qdimswap=.false. ; endif
@@ -422,38 +421,50 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
 !
        if (qdimswap) then
         n=size(x0, 2)
-        do i=1,n
-
-
-
-       else
-        n=size(x0, 1)
-        x1=x0(:,1)-xcom(1) !x
-        x2=x0(:,2)-xcom(2) !y
-        x3=x0(:,3)-xcom(3) !z
-!
-        y1=y0(:,1)-ycom(1)
-        y2=y0(:,2)-ycom(2)
-        y3=y0(:,3)-ycom(3)
 ! build correlation matrix
         do i=1,n
-         x1=x0(i,1)-xcom(1)
-
-         x1w=x1(i)*w(i)
-         x2w=x2(i)*w(i)
-         x3w=x3(i)*w(i)
-      !
-         r11=r11+y1(i)*x1w
-         r12=r12+y1(i)*x2w
-         r13=r13+y1(i)*x3w
-      !
-         r21=r21+y2(i)*x1w
-         r22=r22+y2(i)*x2w
-         r23=r23+y2(i)*x3w
-      !
-         r31=r31+y3(i)*x1w
-         r32=r32+y3(i)*x2w
-         r33=r33+y3(i)*x3w
+         x1w = (x0(1,i)-xcom(1)) * w(i)
+         x2w = (x0(2,i)-xcom(2)) * w(i)
+         x3w = (x0(3,i)-xcom(3)) * w(i)
+!
+         y1s = (y0(1,i)-ycom(1))
+         y2s = (y0(2,i)-ycom(2))
+         y3s = (y0(3,i)-ycom(3))
+!
+         r11=r11+y1s*x1w
+         r12=r12+y1s*x2w
+         r13=r13+y1s*x3w
+!
+         r21=r21+y2s*x1w
+         r22=r22+y2s*x2w
+         r23=r23+y2s*x3w
+!
+         r31=r31+y3s*x1w
+         r32=r32+y3s*x2w
+         r33=r33+y3s*x3w
+        enddo
+       else
+        n=size(x0, 1)
+        do i=1,n
+         x1w = (x0(i,1)-xcom(1)) * w(i)
+         x2w = (x0(i,2)-xcom(2)) * w(i)
+         x3w = (x0(i,3)-xcom(3)) * w(i)
+!
+         y1s = (y0(i,1)-ycom(1))
+         y2s = (y0(i,2)-ycom(2))
+         y3s = (y0(i,3)-ycom(3))
+!
+         r11=r11+y1s*x1w
+         r12=r12+y1s*x2w
+         r13=r13+y1s*x3w
+!
+         r21=r21+y2s*x1w
+         r22=r22+y2s*x2w
+         r23=r23+y2s*x3w
+!
+         r31=r31+y3s*x1w
+         r32=r32+y3s*x2w
+         r33=r33+y3s*x3w
         enddo
        endif ! qdimswap
 !
@@ -566,6 +577,13 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
        if (qgrad) then
         ibeg = max(1,ibeg_)
         iend = min(n,iend_)
+        if (qdimswap) then
+         x1=>x0(1,:); x2=>x0(2,:); x3=>x0(3,:);
+         y1=>y0(1,:); y2=>y0(2,:); y3=>y0(3,:);
+        else
+         x1=>x0(:,1); x2=>x0(:,2); x3=>x0(:,3);
+         y1=>y0(:,1); y2=>y0(:,2); y3=>y0(:,3);
+        endif
 !    1) compute derivative of A w.r.t. RR (and Mu w.r.t RR)
 !    2) compute derivative of RR w.r.t. atom coordinates
 !    3) combine 1 and 2 to produce the derivative of u w.r.t coordinates
@@ -663,7 +681,7 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
 !    compute derivatives w.r.t. relative coordinates
         gradu(:,:,:,ibeg:iend)=0d0
         do q=ibeg, iend
-         x=x1(q); y=x2(q); z=x3(q); wgt=w(q)
+         x=x1(q)-xcom(1); y=x2(q)-xcom(2); z=x3(q)-xcom(3); wgt=w(q)
 !
          do i=1,3
 !    compute eigenvalue derivatives
@@ -803,9 +821,13 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
 !                                              grad u passed
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 !      repeated code from above:
+!      NOTE that formally these are gradients w.r.t. COM-free coordinates; mathematically it does not matter;
 !       dum=a;
-       if (.false.) then
+       if (.false.) then ! should make this a unit test
 !       if (.true.) then
+       nullify(x1, x2, x3, y1, y2, y3)
+       allocate(x1(n),x2(n),x3(n),y1(n),y2(n),y3(n))
+!
        dum=u;
 !       dum=a;
        v=mu
@@ -813,21 +835,20 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
        e=0d0
        do k=ibeg, iend
 !
-       x1=x0(:,1)-xcom(1) !x
-       x2=x0(:,2)-xcom(2) !y
-       x3=x0(:,3)-xcom(3) !z
-!
-       y1=y0(:,1)-ycom(1)
-       y2=y0(:,2)-ycom(2)
-       y3=y0(:,3)-ycom(3)
+       if (qdimswap) then
+        x1=x0(1,:)-xcom(1) ;x2=x0(2,:)-xcom(2) ; x3=x0(3,:)-xcom(3)
+        y1=y0(1,:)-ycom(1) ;y2=y0(2,:)-ycom(2) ; y3=y0(3,:)-ycom(3)
+       else
+        x1=x0(:,1)-xcom(1) ;x2=x0(:,2)-xcom(2) ; x3=x0(:,3)-xcom(3)
+        y1=y0(:,1)-ycom(1) ;y2=y0(:,2)-ycom(2) ; y3=y0(:,3)-ycom(3)
+       endif
 !
        y2(k)=y2(k)+detA ! perturbation
 !
+       r11=zero; r12=zero; r13=zero 
+       r21=zero; r22=zero; r23=zero
+       r31=zero; r32=zero; r33=zero
 !      proceed as usual
-! initialize
-       r11=0.0d0; r12=0.0d0; r13=0.0d0
-       r21=0.0d0; r22=0.0d0; r23=0.0d0
-       r31=0.0d0; r32=0.0d0; r33=0.0d0
       ! build correlation matrix
        do i=1,n
         x1w=x1(i)*w(i)
@@ -848,26 +869,7 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
        enddo
        r=RESHAPE( (/r11,r21,r31,r12,r22,r32,r13,r23,r33/),(/3,3/))
        rr=matmul(transpose(r),r) ! r`r
-      ! determinant of r
-!      detr=
-!     &  r(1,1)*r(2,2)*r(3,3)+r(1,2)*r(2,3)*r(3,1)+r(1,3)*r(2,1)*r(3,2)
-!     & -r(1,3)*r(2,2)*r(3,1)-r(1,2)*r(2,1)*r(3,3)-r(1,1)*r(2,3)*r(3,2)
-!     a little faster:
-!      detr=
-!     &  r(1,1)*(r(2,2)*r(3,3)-r(2,3)*r(3,2))+
-!     &  r(1,2)*(r(2,3)*r(3,1)-r(2,1)*r(3,3))+
-!     &  r(1,3)*(r(2,1)*r(3,2)-r(2,2)*r(3,1))
-
-!       reflect_flag=detr/abs(detr) ! this flag is -1 if we have a reflection
-      ! diagonalize rr
        call eig3s(rr, mu, a) ! mu -- evalues a -- e-vectors
-!
-!       write(6,'("EVAL:",3F11.5)') mu
-!       write(6,*) mu
-!       write(6,'("EVEC:",3F11.5)') a
-!       write(6,'("R:",3G20.10)') r
-!       write(6,'("RR:",3G20.10)') rr
-!
        b0=matmul(r,a)
        do i=1,2 ! if two evals are zero cannot find an optimal rotation
         if (abs(mu(i)) .lt. errtol_) then ; oomu(i)=1.0d0; roomu(i)=1d0;
@@ -891,6 +893,7 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
 !        write(600,*) 'FDIF: ',gradmu(:,2,:)
 !       write(666,*) 'GRAD_Y U MAXe', e
 !       write(666,*) 'GRAD_Y A MAXe', e
+       deallocate(x1,x2,x3,y1,y2,y3)
       endif ! ( FD check )
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 !

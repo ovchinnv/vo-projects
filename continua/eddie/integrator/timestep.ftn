@@ -1,0 +1,105 @@
+!
+module timestep
+!
+ __IMPNONE
+
+ float, parameter :: ccfl = 0.35d0, cvisc = 0.25d0
+!
+ float :: dt
+!
+ float, pointer, save, private, dimension(:,:,:) :: u,v,w,nu
+!
+ bool :: qcfl, tstep_initialized=.false.
+ bool, private :: novisc_z ! exclude z-direction from CFL condition calculation
+!
+ character(len=:), parameter, private :: ctx=__EDCTX
+
+ contains 
+!=====================================
+  subroutine tstep_init()
+   __DEP_PARSER
+   __DEP_OUTPUT
+   __DEP_CONST
+   use state, only : state_get3df
+   __IAM(TSTEP_INIT)
+!
+   character(len=20) :: word
+!
+   nullify(u,v,w,nu)
+!
+!      get velocity variables from state
+!
+   word=(getval_nocase('timestep', ctx))
+   select case(word)
+    case('CFL', 'COURANT', 'FRIEDRICHS', 'LEWY', 'DYNAMIC', 'COURANT-FRIEDRICHS-LEWY', 'COURANT_FRIEDRICHS_LEWY')
+     qcfl=.true.; dt=-one;
+     u=>state_get3df('U',  ctx)
+     v=>state_get3df('V',  ctx)
+     w=>state_get3df('W',  ctx)
+     nu=>state_get3df('NU',ctx)
+!
+     call message(whoami, 'Simulation step will be determined from the CFL condition');
+    case default
+! constant timestep : 
+     qcfl=.false.
+     dt=atof(word);
+     call message(whoami, 'Simulation step set to '//trim(word)//'.');
+   end select
+!
+   if (qcfl) then
+    __GET_OPT_PAR_B('VIMPLICIT_Z', novisc_z, .false., ctx) ; ! check if the z-viscous term is treated implicitly
+   endif
+!
+   tstep_initialized=.true.
+  end subroutine tstep_init
+!=====================================
+  function tstep_compute()
+!
+#ifdef __PARALLEL
+  __DEP_MULTICOM
+#endif
+!
+  __DEP_CONSTANTS
+  __DEP_METRICS
+  float :: tstep_compute, dtvisc, dtcfl
+  float :: eps, uabs, vabs, wabs, flag
+  float :: odx2, ody2, odz2
+  int :: i, j, k
+!
+  if (qcfl) then
+   eps=__ERRTOL
+!
+! use CFL and Viscous condition to determine maximum allowable timestep
+!
+   dtcfl=ismall; dtvisc=ismall; ! note: optimizing the reciprocal here -- invert below
+!
+   do k=kb,ke  ; odz2=cw(k)*cw(k)
+    do j=jb,je ; ody2=bv(j)*bv(j) ; if (.not. novisc_z) ody2=max(ody2, odz2) ;
+     do i=ib,ie; odx2=au(i)*au(i) ; odx2=max(odx2,ody2)  ;
+!
+!    Viscous condition 
+      dtvisc = max (dtvisc, (  nu(i,j,k)  )*odx2 ) ; ! need to invert (below)
+!    Convective condition
+      dtcfl = max ( dtcfl, (eps + abs (u(i,j,k)))*au(i),  (eps + abs (v(i,j,k)))*bv(j), (eps + abs (w(i,j,k)))*cw(k) )
+!
+   enddo ; enddo ; enddo
+!
+   dtvisc = cvisc/dtvisc; ! invert
+   dtcfl  = ccfl/dtcfl; ! invert
+!
+   dtcfl = min(dtcfl, dtvisc)
+!
+#ifdef __PARALLEL
+   call mpi_allreduce(dtcfl, dt, 1, mpifloat, MPI_MIN, __COMM, i)
+#else
+   dt=dtcfl
+#endif // __PARALLEL
+!
+  endif ! qcfl
+!
+  tstep_compute=dt
+!
+  end function tstep_compute
+!=====================================
+!
+end module timestep
