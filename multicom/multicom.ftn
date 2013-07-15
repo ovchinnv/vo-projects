@@ -29,12 +29,12 @@ __CHARMM_ONLY##IF MULTICOM
 !
 !     variables
 !
-      type (comm_type), allocatable, private, save :: communicators(:) ! array of communicators
+      type (comm_type), pointer, private, save :: communicators(:) ! array of communicators
       int, save,  private :: ncomm=0 ! number of defined communicators
       bool, save, public :: multicom_initialized=.false.
       int, save,  private :: first_me=-1, first_size=0
 !
-      int, parameter, private :: max_comm = 2048
+      int, parameter, private :: mcom_expand = 10
 !
 #ifndef __CHARMM
       character(len=:), private, parameter :: ctx=__MCOMCTX
@@ -61,7 +61,7 @@ __CHARMM_ONLY##IF MULTICOM
 #ifndef __CHARMM
        subroutine multicom_exec()  ! execute command block
        use parser
-       character(len=:), parameter :: whoami='MULTICOM_EXEC'
+       __IAM(MULTICOM_EXEC)
        character(len=:), pointer :: command
        int :: l
  __DECLARE_MSGBUF
@@ -102,7 +102,7 @@ __CHARMM_ONLY##IF MULTICOM
 !
 ! local variables
        character(len=8) :: keyword
-       character(len=13), parameter :: whoami='MULTICOM_MAIN'
+       __IAM(MULTICOM_MAIN)
        int4mpi :: ncpu, me, bug
        int :: newcomm
        int :: kstep, i, j, k, ind, klen
@@ -339,9 +339,7 @@ __CHARMM_ONLY##IF MULTICOM
 #ifdef __CHARMM
        __DEP_OUTPUT
 #endif
-       character(len=16) :: whoami
-!
-       data whoami /'MULTICOM_PARINIT'/
+       __IAM(MULTICOM_PARINIT)
 !
 !
 #ifdef __CHARMM
@@ -365,13 +363,12 @@ __CHARMM_ONLY##IF MULTICOM
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine multicom_init()
        __DEP_MPI 
-       implicit none
 !     locals
        int4mpi :: communicator
        int :: i, j
        int4mpi :: ii, jj
        int4mpi :: bug=0
-       character(len=13), parameter :: whoami='MULTICOM_INIT'
+       __IAM(MULTICOM_INIT)
        bool :: found=.false., mpiinit
 !
 #ifdef __BASIC
@@ -383,11 +380,19 @@ __CHARMM_ONLY##IF MULTICOM
        if (multicom_initialized) then
         call multicom_cleanup()
        endif
-
+!
 !     allocate communicator array:
-       allocate(communicators(max_comm))
+!
+       allocate(communicators(mcom_expand))
+!
+       if (size(communicators).lt.1) then
+        __WRN(whoami,' INTERNAL ERROR : COMMUNICATOR ARRAY HAS NONPOSITIVE SIZE.')
+        call multicom_cleanup()
+        return
+       endif
+!
        ncomm=0 ! number of communicators
-       do i=1, max_comm
+       do i=1, size(communicators)
         communicators(i)%me=MPI_UNDEFINED
         communicators(i)%size=1
         communicators(i)%comm_id=MPI_COMM_NULL
@@ -395,20 +400,13 @@ __CHARMM_ONLY##IF MULTICOM
         communicators(i)%parent_id=-1
        enddo
 !
-       if (ncomm.eq.max_comm) then
-        __WRN(whoami,' NUMBER OF ALLOWED COMMUNICATORS EXCEEDED.')
-        call multicom_cleanup()
-        return
-       endif
-!
        call mpi_initialized(mpiinit,bug)
        if (.not.mpiinit) call mpi_init(bug)
        communicator=MPI_COMM_WORLD
 !
        ncomm=ncomm+1
 !
-       call MPI_COMM_GROUP(communicator, communicators(ncomm)%group_id, &
-     &                     bug)
+       call MPI_COMM_GROUP(communicator, communicators(ncomm)%group_id, bug)
        call MPI_GROUP_SIZE(communicators(ncomm)%group_id, ii, jj)
        call MPI_COMM_RANK(communicator, communicators(ncomm)%me, bug)
        call MPI_COMM_SIZE(communicator, communicators(ncomm)%size, bug)
@@ -446,8 +444,6 @@ __CHARMM_ONLY##IF MULTICOM
 !
        __DEP_MPI 
 !
-       implicit none
-!
        int, optional :: comm ! omission implies 1st communicator (WORLD)
        int :: nodes(:)
 !     locals
@@ -456,10 +452,7 @@ __CHARMM_ONLY##IF MULTICOM
        int :: multicom_add
        int4mpi :: bug=0, nproc
        int4mpi, allocatable :: list(:)
-!
-       character(len=12) :: whoami
-!
-       data whoami /'MULTICOM_ADD'/
+       __IAM(MULTICOM_ADD)
 !
        multicom_add=-1
        if (.not.multicom_initialized) call multicom_init()
@@ -476,10 +469,16 @@ __CHARMM_ONLY##IF MULTICOM
        endif
 !
 !     parse processor array
-       if (ncomm.eq.max_comm) then
-        __WRN(whoami,' NUMBER OF ALLOWED COMMUNICATORS EXCEEDED.')
+       if (ncomm.eq.size(communicators)) then
+! reallocate
+
+
+
+        __WRN(whoami,' INTERNAL EROR : COULD NOT EXPAND COMMUNICATOR ARRAY.')
         return
        endif
+
+
 !
        ncomm=ncomm+1
 !
@@ -542,13 +541,11 @@ __CHARMM_ONLY##IF MULTICOM
 !      remove all traces of multicom, but leave MPI_COMM_WORLD intact
        __DEP_MPI
 !
-       implicit none
-!
        int :: i
        int4mpi :: bug
        int4mpi :: result
 !
-       if (allocated(communicators)) then
+       if (associated(communicators)) then
         do i=1,ncomm
          call int_vector_done(communicators(i)%nodes)
 !     destroy group & communicators
@@ -583,11 +580,9 @@ __CHARMM_ONLY##IF MULTICOM
 !       __DEP_MPI
        __DEP_OUTPUT
 !
-       implicit none
-!
        int :: i, bug
        int4mpi :: j,k ! aardvark
-       character(len=13), parameter :: whoami='MULTICOM_LIST'
+       __IAM(MULTICOM_LIST)
 !
  __DECLARE_MSGBUF
 !
@@ -630,16 +625,13 @@ __CHARMM_ONLY##IF MULTICOM
        __DEP_OUTPUT
        __DEP_MPI
 !
-       implicit none
-!
        character(len=*) :: comm_name
 !    local vars
-       character(len=16) :: whoami
        int :: s, m, l
        int4mpi :: c, ierror
  __DECLARE_MSGBUF
 !
-       data whoami /'MULTICOM_BARRIER'/
+       __IAM(MULTICOM_BARRIER)
 !
        if (.not.multicom_initialized) then
         __WRN(whoami,' COMMUNICATOR MODULE NOT INITIALIZED. NOTHING DONE.')
@@ -670,7 +662,7 @@ __CHARMM_ONLY##IF MULTICOM
        elseif (comm_name(1:5).eq.'ENSBL') then                         !__CHARMM_ONLY##ENSEMBLE
         c=MPI_COMM_ENSBL; s=SIZE_ENSBL; m=ME_ENSBL;                    !__CHARMM_ONLY##ENSEMBLE
 #endif
-#ifdef __STRING
+#ifdef __STRINGM
        elseif (comm_name(1:5).eq.'STRNG') then                         !__CHARMM_ONLY##STRINGM
         c=MPI_COMM_STRNG; s=SIZE_STRNG; m=ME_STRNG;                    !__CHARMM_ONLY##STRINGM
 #endif
@@ -715,14 +707,12 @@ __CHARMM_ONLY##IF MULTICOM
        __DEP_OUTPUT
        __DEP_MPI
 !
-       implicit none
-!
        character(len=*) :: comm_name
        int :: commlist(:)
 !    local vars
+       __IAM(MULTICOM_SET)
        int :: llist
        int :: comm_id, node_id, parent_id
-       character(len=12), parameter :: whoami='MULTICOM_SET'
        int :: numnodes, c, m, s
        int :: itype, bug, lcomm, i, j
        bool :: found=.false., foundg=.false.
@@ -807,7 +797,7 @@ __CHARMM_ONLY##IF MULTICOM
             MPI_COMM_ENSBL=c; SIZE_ENSBL=s; ME_ENSBL=m                     !__CHARMM_ONLY##ENSEMBLE
 #endif
 !
-#ifdef __STRING
+#ifdef __STRINGM
            elseif (comm_name(1:5).eq.'STRNG') then                         !__CHARMM_ONLY##STRINGM
             MPI_COMM_STRNG=c; SIZE_STRNG=s; ME_STRNG=m                     !__CHARMM_ONLY##STRINGM
 #endif
@@ -874,7 +864,7 @@ __CHARMM_ONLY##IF MULTICOM
           MPI_COMM_ENSBL=c; SIZE_ENSBL=s; ME_ENSBL=m                     !__CHARMM_ONLY##ENSEMBLE
 #endif
 !
-#ifdef __STRING
+#ifdef __STRINGM
          elseif (comm_name(1:5).eq.'STRNG') then                         !__CHARMM_ONLY##STRINGM
           MPI_COMM_STRNG=c; SIZE_STRNG=s; ME_STRNG=m                     !__CHARMM_ONLY##STRINGM
 #endif
@@ -929,7 +919,7 @@ __CHARMM_ONLY##IF MULTICOM
 !
        end subroutine multicom_set
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-#ifdef __STRING
+#ifdef __STRINGM
 __CHARMM_ONLY##IF STRINGM
        subroutine multicom_permute_string_ranks(ranks)
        __DEP_MULTICOM
@@ -940,7 +930,6 @@ __CHARMM_ONLY##IF STRINGM
 !    using WORLD as parent. Delete the existing string communicator
 !    and set the new communicator to MPI_COMM STRNG.
 !
-       implicit none
        int :: ranks(:)
 !
        int :: ranks_world(size(ranks)) ! ranks with respect to WORLD communicator
@@ -948,8 +937,7 @@ __CHARMM_ONLY##IF STRINGM
        bool :: found
        int :: itype
        int4mpi :: bug
-       character(len=29) :: whoami
-       data whoami /'MULTICOM_PERMUTE_STRING_RANKS'/
+       __IAM(MULTICOM_PERMUTE_STRING_RANKS)
 !
        if (.not.multicom_initialized) then
         __WRN(whoami,' COMMUNICATOR MODULE NOT INITIALIZED. NOTHING DONE.')
