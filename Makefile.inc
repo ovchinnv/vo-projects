@@ -11,9 +11,9 @@ FFLAGS=-O3 -fast -finline -fp-model fast=2 -xhost -ipo -fno-math-errno -no-inlin
 #FFLAGS= -O3 -c -extend-source -fast -fno-math-errno -finline -fp-model fast=2 -xhost -no-ipo # -no-inline-factor -no-inline-min-size #-ipo 
 #MPI_HOME=/usr/local/mpich2-intel
 #---GNU
-#FC=gfortran
+FC=gfortran
 #FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  #-fopenmp 
-#FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno #-fbounds-check -frange-check 
+FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno #-fbounds-check -frange-check 
 #MPI_HOME=/usr/local/mpich2-gnu
 MPI_HOME=/usr/lib/openmpi
 #---PATHSCALE
