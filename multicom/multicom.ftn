@@ -29,7 +29,7 @@ __CHARMM_ONLY##IF MULTICOM
 !
 !     variables
 !
-      type (comm_type), pointer, private, save :: communicators(:) ! array of communicators
+      type (comm_type), pointer, private, save :: communicators(:)=>NULL() ! array of communicators
       int, save,  private :: ncomm=0 ! number of defined communicators
       bool, save, public :: multicom_initialized=.false.
       int, save,  private :: first_me=-1, first_size=0
@@ -37,7 +37,7 @@ __CHARMM_ONLY##IF MULTICOM
       int, parameter, private :: mcom_expand = 10
 !
 #ifndef __CHARMM
-      character(len=:), private, parameter :: ctx=__MCOMCTX
+      character(len=len(__MCOMCTX)), private, parameter :: ctx=__MCOMCTX
 #endif
 !
 !     subroutines (parallel only)
@@ -62,7 +62,12 @@ __CHARMM_ONLY##IF MULTICOM
        subroutine multicom_exec()  ! execute command block
        use parser
        __IAM(MULTICOM_EXEC)
+!
+#if defined(__pathf90) || defined(__pathf77) || defined(__pathf95)
+       character(len=200), pointer :: command
+#else
        character(len=:), pointer :: command
+#endif
        int :: l
  __DECLARE_MSGBUF
 !
@@ -452,6 +457,9 @@ __CHARMM_ONLY##IF MULTICOM
        int :: multicom_add
        int4mpi :: bug=0, nproc
        int4mpi, allocatable :: list(:)
+!
+       type (comm_type), pointer :: newcomms(:)=>NULL() ! reallocation
+!
        __IAM(MULTICOM_ADD)
 !
        multicom_add=-1
@@ -471,14 +479,20 @@ __CHARMM_ONLY##IF MULTICOM
 !     parse processor array
        if (ncomm.eq.size(communicators)) then
 ! reallocate
-
-
-
-        __WRN(whoami,' INTERNAL EROR : COULD NOT EXPAND COMMUNICATOR ARRAY.')
-        return
+        allocate(newcomms(ncomm+mcom_expand))
+        newcomms(1:ncomm)=communicators
+        do i=1,ncomm
+!    make sure nodelist pointers are copied
+         newcomms(i)%nodes%i=>communicators(i)%nodes%i
+         nullify(communicators(i)%nodes%i)
+        enddo
+        deallocate(communicators)
+        communicators=>newcomms
+        if (ncomm.eq.size(communicators)) then
+         __WRN(whoami,' INTERNAL EROR : COULD NOT EXPAND COMMUNICATOR ARRAY.')
+         return
+        endif
        endif
-
-
 !
        ncomm=ncomm+1
 !
