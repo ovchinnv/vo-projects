@@ -15,13 +15,13 @@ FC=gfortran
 #FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  #-fopenmp 
 FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno #-fbounds-check -frange-check 
 MPI_HOME=/usr/local/mpich2-gnu
-MPI_HOME=/usr/lib/openmpi
+#MPI_HOME=/usr/lib/openmpi
 #---PATHSCALE
-FC=pathf95
-FFLAGS=-Ofast -fno-math-errno -extend-source -INLINE -ipa -c
+#FC=pathf95
+#FFLAGS=-Ofast -fno-math-errno -extend-source -INLINE -ipa -c
 #FFLAGS=-Ofast -fno-math-errno -extend-source -ffortran-bounds-check -OPT:Olimit=8753 -INLINE -ipa -c
 #FFLAGS=-extend-source -OPT:Olimit=8753 -INLINE -c
-MPI_HOME=/usr/local/mpich2-path64
+#MPI_HOME=/usr/local/mpich2-path64
 #FC=g95
 #FFLAGS=-O3 -c -ffree-line-length-huge -ffixed-line-length-132 -fno-second-underscore -cpp
 #MPI_HOME=/usr/local/mpich2-g95
