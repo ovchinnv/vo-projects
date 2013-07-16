@@ -3,16 +3,16 @@ SHELL=/bin/sh
 CC=gcc
 CFLAGS =-O3 -fno-math-errno -g -c
 #---INTEL
-FC=ifort
+#FC=ifort
 #FFLAGS=-O2 -c
-FFLAGS=-O3 -fast -finline -fp-model fast=2 -xhost -ipo -fno-math-errno -no-inline-factor -no-inline-min-size -c
-#FFLAGS= -O3 -check-all -extend-source -fast -fno-math-errno -finline -fp-model fast=2 -xhost -ipo  #-ipo 
+#FFLAGS=-O3 -fast -finline -fp-model fast=2 -xhost -ipo -fno-math-errno -no-inline-factor -no-inline-min-size -c
+#FFLAGS= -O3 -c -g -check-all -extend-source -fast -fno-math-errno -finline -fp-model fast=2 -xhost -ipo #-ipo 
 #FFLAGS= -O3 -c -extend-source -fast -fno-math-errno -finline -fp-model fast=2 -xSSE3 -ipo # -no-inline-factor -no-inline-min-size #-ipo 
 #FFLAGS= -O3 -c -extend-source -fast -fno-math-errno -finline -fp-model fast=2 -xhost -no-ipo # -no-inline-factor -no-inline-min-size #-ipo 
-#MPI_HOME=/usr/local/mpich2-intel
+MPI_HOME=/usr/local/mpich2-intel
 #---GNU
 FC=gfortran
-#FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  #-fopenmp 
+#FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno #-fcheck=all  #-fopenmp 
 FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno #-fbounds-check -frange-check 
 MPI_HOME=/usr/local/mpich2-gnu
 #MPI_HOME=/usr/lib/openmpi
@@ -23,13 +23,13 @@ MPI_HOME=/usr/local/mpich2-gnu
 #FFLAGS=-extend-source -OPT:Olimit=8753 -INLINE -c
 #MPI_HOME=/usr/local/mpich2-path64
 #FC=g95
-#FFLAGS=-O3 -c -ffree-line-length-huge -ffixed-line-length-132 -fno-second-underscore -cpp
+#FFLAGS=-O3 -c -g -ffree-line-length-huge -ffixed-line-length-132 -fno-second-underscore -cpp
 #MPI_HOME=/usr/local/mpich2-g95
 #
 # G95 reguires no space between "-D" and the name
 DEFS+=-Dint=integer -Dfloat=real*8 -Dbool=logical -Dmpiint=MPI_INTEGER -Dmpifloat=MPI_REAL8 -Dmpichar=MPI_CHARACTER -Dmpiint4=MPI_INTEGER4\
      -Dmpibool=MPI_LOGICAL -Dint1="integer(kind=KIND('a'))" -D__DMOL -D__RCOMP -D__DMOL -D__CHES -D__EDDIE -D__$(FC) \
-     -Dint4mpi=integer -D__PARALLEL #-D__PATHSCALE #-Dint4mpi="integer(KIND=MPI_INTEGER_KIND)" 
+     -Dint4mpi=integer #-D__PARALLEL #-D__PATHSCALE #-Dint4mpi="integer(KIND=MPI_INTEGER_KIND)" 
 
 # ! note: the VEC routines are probably slower
 
@@ -60,7 +60,7 @@ GLOBALDEPS=$(ROOT)/source.defs $(ROOT)/source.msg
 MPI_INCLUDE=-I $(MPI_HOME)/include -I $(MPI_HOME)
 #MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lpthread -lmpich -lmpichf90 -lmpl # -lmpi -lmpi_f90 -lmpi_f77 # mpich
 MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lpthread -lmpi -lmpi_f90 -lmpi_f77 # openmpi
-#MPI_LIBS=
+MPI_LIBS=
 
 INCLUDES+=-I $(ROOT)/include
 LIBS+=-L $(ROOT)/lib
