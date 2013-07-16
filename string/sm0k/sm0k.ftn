@@ -1386,13 +1386,11 @@ __TRIMA(methods(interp_method),mlen)
 !     given a collection of n string replicas, interpolate onto a finer/coarser path
 !
       __DEP_BESTFIT
-!
       __DEP_OUTPUT
-      __DEP_MPI 
-!
-      __DEP_PARSER 
-      __DEP_SIZE 
-      __DEP_NUMBER 
+      __DEP_MPI
+      __DEP_PARSER
+      __DEP_SIZE
+      __DEP_NUMBER
 !
 #ifdef __CHARMM
 !
@@ -1409,9 +1407,10 @@ __TRIMA(methods(interp_method),mlen)
 ##USE ctitla
 #endif
 !
-!
       __IMPNONE
  __DECLARE_MSGBUF
+!
+      __IAM(SM0K_INTERPOLATE)
 !
       CHARACTER(LEN=*) :: COMLYN
       int :: COMLEN
@@ -1421,6 +1420,7 @@ __TRIMA(methods(interp_method),mlen)
       int :: ifile, ofile, num_rep_in, num_rep_out
       int :: len_cor_in, len_cor_out,        &
      &       length, mlen, interp_method
+      int :: ibegin, istep
       int :: i,j,k, orient=0, repa_mass=0, orient_mass=0, me, norient
 !
       float, allocatable :: rin_all(:,:,:), dr(:,:,:), rout_all(:,:,:)
@@ -1430,10 +1430,9 @@ __TRIMA(methods(interp_method),mlen)
       character(len=80), allocatable :: fname_cor_in(:), fname_cor_out(:)
       character(len=80) :: name_cor_in, name_cor_out, dummy
       character(len=20) :: methods(4), method, form
-      character(len=18) :: whoami
       character(len=8)  :: keyword
 !
-      bool :: qprint
+      bool :: qprint, qdcd, qcor
 !
 #ifdef __CHARMM
 !
@@ -1445,6 +1444,16 @@ __TRIMA(methods(interp_method),mlen)
       int :: icntrl(20)
       int :: iselct(natom), ifreea(natom), pairs(2,natom)
       character, parameter :: tab=char(9)
+!================== dcd reading v
+      character(len=80) :: title(maxtit)
+      real*4 :: trash4(natom) ! scratch array for ugly routine
+      float :: trash8(natom) ! scratch array for ugly routine
+!     some dummy vars for coordinate read
+      int :: nfile, istats, ndof, begin_, stop_,             &
+     &           skip_, nsavv_, satoms, ntitle
+      float :: delta
+      bool :: qdim4, qcg
+!================== dcd reading ^
 !
 #elif defined (__DMOL)
  __DECLARE_DMOL_SELECT
@@ -1454,6 +1463,7 @@ __TRIMA(methods(interp_method),mlen)
       int :: ierror
       float :: u(3,3) ! rotation matrix
       float :: r_com(3)=(/0d0, 0d0, 0d0/)
+      int, pointer :: stringatoms(:)
 !
 !
       interface ! to linear interpolation routine
@@ -1468,7 +1478,6 @@ __TRIMA(methods(interp_method),mlen)
        end subroutine linear_interp
       end interface
 !
-      data whoami /' SM0K_INTERPOLATE>'/
       data methods/ 'LINEAR','CUBIC SPLINE','B-SPLINE','DST'/
 !
       if (.not.sm0k_initialized) call sm0k_init()
@@ -1553,26 +1562,50 @@ __TRIMA(methods(interp_method),length)
      & A,' NOTHING DONE.')
          return
       endif ! indx('NIN')
-!ccccc
+!=======================================================================
 ! get input coordinate file info
-      __GET_RM_A(comlyn, comlen, 'CRIN', 4, name_cor_in, 80, len_cor_in)
+      qcor=__INDX(comlyn, comlen, 'CRIN', 4).gt.0
+      qdcd=__INDX(comlyn, comlen, 'DCDIN', 5).gt.0
+!
+      if (qcor) then
+       if (qdcd) then ; __WRN(whoami, "CANNOT SPECIFY BOTH 'CRIN' and 'DCDIN'. NOTHING DONE"); return ; endif
+       keyword='CRIN' ; i=4;
+      elseif (qdcd) then 
+       keyword='DCDIN' ; i=5;
+      endif
+      len_cor_in=-1
+!
+      if (qcor .or. qdcd) then ; __GET_RM_A(comlyn, comlen, keyword, i, name_cor_in, 80, len_cor_in); endif
       if (len_cor_in.le.0) then
        if (qprint) then ; write(_MSGBUF, 6789) whoami ; __PRINT(_MSGBUF) ; endif
- 6789 format(A,' INPUT COORDINATE FILE NAME UNSPECIFIED.',/,            &
-     & '  NOTHING DONE.')
+ 6789 format(A,' INPUT COORDINATE FILE NAME UNSPECIFIED.',/,'  NOTHING DONE.')
        return
       endif
-! get output coordinate file info
+!
+      if (qdcd) then ! parse trajectory options
+       ibegin = __GET_RM_I(comlyn, comlen, 'BEGI',1);
+       istep  = __GET_RM_I(comlyn, comlen, 'STEP',1);
+       if (ibegin.lt.1) then 
+        __WRN(whoami, 'BEGIN LESS THAN 1. RESETTING TO 1'); ibegin=1
+       endif
+!
+       if (istep.lt.1) then 
+        __WRN(whoami, 'STEP LESS THAN 1. RESETTING TO 1'); istep=1
+       endif
+      endif
+!
+! get output coordinate file info (DCDOUT not provided because it is not useful in SM0K)
       __GET_RM_A(comlyn, comlen, 'CROUT', 5, name_cor_out, 80, len_cor_out)
       if (len_cor_out.le.0) then
        if (qprint) then ; write(_MSGBUF, 6790) whoami ; __PRINT(_MSGBUF) ; endif
- 6790 format(A,' OUTPUT COORDINATE FILE NAME UNSPECIFIED.',/,           &
-     & ' NOTHING DONE.')
+ 6790 format(A,' OUTPUT COORDINATE FILE NAME UNSPECIFIED.',/,' NOTHING DONE.')
        return
       endif ! len_cor_out
+!
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 !        parse file format spec. (same for both input/output)c
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+! when reading from a dcd file, the formatting below applies only to the output files
 #ifdef __CHARMM
       lresid=.false.
 #endif
@@ -1617,28 +1650,32 @@ __TRIMA(methods(interp_method),length)
 !ccccc   get coordinate file names
        ifile=-1 ! a valid unit number will be assigned by __OPEN_FILE
        ofile=-1
-       __OPEN_FILE(ifile,name_cor_in(1:len_cor_in),'FORMATTED','READ')
-       allocate(fname_cor_in(num_rep_in))
+!==========================
+       if (qdcd) then 
+        __OPEN_FILE(ifile,name_cor_in(1:len_cor_in),'UNFORMATTED','READ')
+       else
+        __OPEN_FILE(ifile,name_cor_in(1:len_cor_in),'FORMATTED','READ')
+        allocate(fname_cor_in(num_rep_in))
 !
-       do j=1, num_rep_in
-        read(ifile,'(A80)') fname_cor_in(j)
-       enddo
-       __CLOSE_FILE(ifile,'KEEP',ierror)
+        do j=1, num_rep_in
+         read(ifile,'(A80)') fname_cor_in(j)
+        enddo
+        __CLOSE_FILE(ifile,'KEEP',ierror)
 !
-       write(_MSGBUF,6791) whoami ; __PRINT(_MSGBUF)
- 6791 format(A,' COORDINATE SETS WILL BE READ FROM',                    &
-     & ' THE FOLLOWING FILES:' )
+         write(_MSGBUF,6791) whoami ; __PRINT(_MSGBUF)
+ 6791 format(A,' COORDINATE SETS WILL BE READ FROM THE FOLLOWING FILES:' )
 !
-       do j=1, num_rep_in
-        write(_MSGBUF,'(A1,I5," ",A80)') tab, j, fname_cor_in(j) ; __PRINT(_MSGBUF)
-       enddo
+        do j=1, num_rep_in
+         write(_MSGBUF,'(A1,I5," ",A80)') tab, j, fname_cor_in(j) ; __PRINT(_MSGBUF)
+        enddo
+       endif
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        __OPEN_FILE(ofile,name_cor_out(1:len_cor_out),'FORMATTED','READ')
 !
        allocate(fname_cor_out(num_rep_out))
 !
        do j=1, num_rep_out
-        read(ifile,'(A80)') fname_cor_out(j)
+        read(ofile,'(A80)') fname_cor_out(j)
        enddo
        __CLOSE_FILE(ofile,'KEEP',ierror)
 !
@@ -1765,18 +1802,63 @@ __TRIMA(methods(interp_method),length)
       allocate(rout_all(natom,3,num_rep_out))
       rout_all=__NAN
 !
-      ifile=-1 ! __OPEN_FILE will assign a valut unit #
-!
 #ifdef __CHARMM
       iselct=1. ! CHARMM compatibility
 #endif
 !
-      do j=1, num_rep_in
+      if (qdcd) then
+! most of the code lifted from ftsm
+       if (qprint) then
 !
+!    call trajectory reader
+!
+#ifdef __CHARMM
+        istats=1
+        qcg=.false.
+        qdim4=.false.
+        begin_=0 ! note begin <=0 forces a strange "reset" with begin=istep (which is zero below); this is to support trajectories
+                 ! made with VMD
+        skip_=1
+        stop_=nstring
+        ntitle=0
+        istep=0
+        allocate(stringatoms(natom))
+#endif
+        do i=1, ibegin-1 ! skip frames
+#ifdef __CHARMM
+         call readcv(rin_all(:,1,1), rin_all(:,2,1), rin_all(:,3,1),     &
+     &   trash8, qcg,                                                    & !__CHARMM_ONLY##CHEQ
+     &   trash4, natom,                                                  &
+     &   stringatoms, satoms, ifile, 1, ifile, nfile,                    &
+     &   istep, istats, ndof, delta, begin_, stop_, skip_,               &
+     &   nsavv_, 'CORD', 'CORD', title, ntitle, qdim4, trash8, .false.)
+#elif defined(__DMOL)
+         call dcd_read_frame(ifile, rin_all(:,:,1), i.eq.1, FREEATOMS=stringatoms) ! read header only if i==1
+#endif
+        enddo ! skip frames
+       endif ! ME_STRNG==0
+      endif
+!
+!
+      do j=1, num_rep_in ! over all input replicas
+!
+       if (qdcd) then
+#ifdef __CHARMM
+        call readcv(rin_all(:,1,j), rin_all(:,2,j), rin_all(:,3,j),     &
+     &  trash8, qcg,                                                    & !__CHARMM_ONLY##CHEQ
+     &  trash4, natom,                                                  &
+     &  stringatoms, satoms, ifile, 1, ifile, nfile,                    &
+     &  istep, istats, ndof, delta, begin_, stop_, skip_,               &
+     &  nsavv_, 'CORD', 'CORD', title, ntitle, qdim4, trash8, .false.)
+#elif defined(__DMOL)
+        call dcd_read_frame(ifile, rin_all(:,:,1), j+ibegin.eq.2, FREEATOMS=stringatoms) ! read header only if ibegin=1 & j=1
+#endif
+!
+       else ! coordinate files
         length=len_trim(fname_cor_in(j))
         dummy=fname_cor_in(j)(1:length)
 !
-        if (qprint) then ; __OPEN_FILE(ifile,dummy,form,'READ') ; endif
+        if (qprint) then ; ifile=-1 ; __OPEN_FILE(ifile,dummy,form,'READ') ; endif
 !
 #ifdef __CHARMM
         dummy=''
@@ -1793,8 +1875,12 @@ __TRIMA(methods(interp_method),length)
         end select
         rin_all(:,:,j)=transpose(rcomp)
 #endif
-       if (qprint) then ; __CLOSE_FILE(ifile,'KEEP',ierror) ; endif
+        if (qprint) then ; __CLOSE_FILE(ifile,'KEEP',ierror) ; endif
+       endif ! qdcd
       enddo
+!
+      if (qdcd.and.qprint) then ; __CLOSE_FILE(ifile,'KEEP',ierror) ; endif ! close dcd file
+      if (associated(stringatoms)) deallocate(stringatoms)
 !
 !     check for undefined coordinates
       if (any(rin_all.eq.__NAN)) then 
@@ -1926,7 +2012,7 @@ __TRIMA(methods(interp_method),length)
         wdum=1. ! reset weighting array (can modify this if needed)
 #endif
 !
-        ofile=-1 ! open_file will assign a valut unit #
+        ofile=-1 ! open_file will assign a unit #
         do j=1,num_rep_out
 !cccccccccccc write new coordinate file
          length=len_trim(fname_cor_out(j))
