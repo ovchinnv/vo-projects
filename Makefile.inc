@@ -17,11 +17,11 @@ FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none
 MPI_HOME=/usr/local/mpich2-gnu
 #MPI_HOME=/usr/lib/openmpi
 #---PATHSCALE
-#FC=pathf95
-#FFLAGS=-Ofast -fno-math-errno -extend-source -INLINE -ipa -c
+FC=pathf95
+#FFLAGS=-Ofast -fno-math-errno -extend-source -INLINE -c -ipa
 #FFLAGS=-Ofast -fno-math-errno -extend-source -ffortran-bounds-check -OPT:Olimit=8753 -INLINE -ipa -c
-#FFLAGS=-extend-source -OPT:Olimit=8753 -INLINE -c
-#MPI_HOME=/usr/local/mpich2-path64
+FFLAGS=-extend-source -OPT:Olimit=8753 -INLINE -c
+MPI_HOME=/usr/local/mpich2-path64
 #FC=g95
 #FFLAGS=-O3 -c -g -ffree-line-length-huge -ffixed-line-length-132 -fno-second-underscore -cpp
 #MPI_HOME=/usr/local/mpich2-g95
@@ -40,7 +40,7 @@ DEFS+=-Dint=integer -Dfloat=real*8 -Dbool=logical -Dmpiint=MPI_INTEGER -Dmpifloa
 # preprocess with C++ style preprocessor
 # -C flag preserves comments
 
-#AR=xiar
+AR=xiar
 AR=ar
 AFLAGS=rvcs
 
@@ -59,7 +59,7 @@ GLOBALDEPS=$(ROOT)/source.defs $(ROOT)/source.msg
 
 MPI_INCLUDE=-I $(MPI_HOME)/include -I $(MPI_HOME)
 #MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lpthread -lmpich -lmpichf90 -lmpl # -lmpi -lmpi_f90 -lmpi_f77 # mpich
-MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lpthread -lmpi -lmpi_f90 -lmpi_f77 # openmpi
+#MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lpthread -lmpi -lmpi_f90 -lmpi_f77 # openmpi
 MPI_LIBS=
 
 INCLUDES+=-I $(ROOT)/include

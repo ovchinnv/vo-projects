@@ -8,3 +8,5 @@ LINKOBJS=output.o
 include $(ROOT)/Makefile.inc
 
 parser.o : cmd.o prm.o
+clean ::
+	rm -f _parser.tmp
