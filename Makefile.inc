@@ -17,11 +17,11 @@ FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none
 MPI_HOME=/usr/local/mpich2-gnu
 #MPI_HOME=/usr/lib/openmpi
 #---PATHSCALE
-FC=pathf95
+#FC=pathf95
 #FFLAGS=-Ofast -fno-math-errno -extend-source -INLINE -c -ipa
 #FFLAGS=-Ofast -fno-math-errno -extend-source -ffortran-bounds-check -OPT:Olimit=8753 -INLINE -ipa -c
-FFLAGS=-extend-source -OPT:Olimit=8753 -INLINE -c
-MPI_HOME=/usr/local/mpich2-path64
+#FFLAGS=-extend-source -OPT:Olimit=8753 -INLINE -c
+#MPI_HOME=/usr/local/mpich2-path64
 #FC=g95
 #FFLAGS=-O3 -c -g -ffree-line-length-huge -ffixed-line-length-132 -fno-second-underscore -cpp
 #MPI_HOME=/usr/local/mpich2-g95
@@ -29,7 +29,7 @@ MPI_HOME=/usr/local/mpich2-path64
 # G95 reguires no space between "-D" and the name
 DEFS+=-Dint=integer -Dfloat=real*8 -Dbool=logical -Dmpiint=MPI_INTEGER -Dmpifloat=MPI_REAL8 -Dmpichar=MPI_CHARACTER -Dmpiint4=MPI_INTEGER4\
      -Dmpibool=MPI_LOGICAL -Dint1="integer(kind=KIND('a'))" -D__DMOL -D__RCOMP -D__DMOL -D__CHES -D__EDDIE -D__$(FC) \
-     -Dint4mpi=integer #-D__PARALLEL #-D__PATHSCALE #-Dint4mpi="integer(KIND=MPI_INTEGER_KIND)" 
+     -Dint4mpi=integer -D__PARALLEL #-D__PATHSCALE #-Dint4mpi="integer(KIND=MPI_INTEGER_KIND)" 
 
 # ! note: the VEC routines are probably slower
 
