@@ -77,9 +77,9 @@ __CHARMM_ONLY##IF STRINGM
       int :: ivver, ivv2, iorig, ileap ! for dynamics
       int :: error, klen, strl
 !
+      __IAM(FTSM)
       character(len=16) :: keyword
       character(len=80) :: fname
-      character(len=6) :: whoami
       float :: zval, k, step, voro_cut
       int :: ifile, c1, c2, qcor, qdcd, flen,            &
      &           num_ave_samples, irep, i, a, imode,        &
@@ -95,13 +95,12 @@ __CHARMM_ONLY##IF STRINGM
 #endif
       float, pointer :: fd_error(:,:)
 !
-      bool :: qroot, qslave, qprint, qcomp, voronoi_check_map, ok
+      bool :: qroot, qslave, qprint, qcomp, voronoi_check_map, ok, &
+     &        qangstrom
 !
  __DECLARE_MSGBUF
 !
 #include "../../mpitype.def"
-!
-      data whoami /' FTSM>'/
 !
       keyword=__NEXTA(comlyn,comlen)
 !
@@ -342,6 +341,44 @@ __CHARMM_ONLY##IF STRINGM
           restrained_eq_steps=0
         endif
         restrained_eq0=0
+! scale force constants and restraint reference values, if necessary
+!
+        if (qkpara_angstrom.or.qkperp_angstrom.or.qdperp_angstrom.or.qdperpf_angstrom) then
+         call ftsm_compute_arcl_curv(linear)
+!writE(0,*) 'DARCL : ', ds ! aa
+         zval = two * sum(ds) / ( max( nstring-1 , 1 ) ) * sqrt ( three ) ; ! sq(3) makes the arclength correspond to the RMSD in 3D
+!
+         if (qkpara_angstrom) then
+          fname='PARALLEL FORCE CONSTANT (KPAR)' ; kpara = kpara * zval**2 ;
+          if (qprint) then ; write(_MSGBUF,6712) whoami, trim(fname), ftoa(zval), ftoa(kpara)
+          __PRINT(_MSGBUF) ; 
+          endif
+          qkpara_angstrom=.false. ! make sure no additional scaling will occur if there are multiple runs per initialization
+         endif
+         if (qkperp_angstrom) then
+          fname='PERPENDICULAR FORCE CONSTANT (KPRP)' ; kperp = kperp * zval**2 ;
+          if (qprint) then ; write(_MSGBUF,6712) whoami, trim(fname), ftoa(zval), ftoa(kpara)
+          __PRINT(_MSGBUF)
+          endif
+          qkperp_angstrom=.false.
+         endif
+         if (qdperp_angstrom) then
+          fname='REFERENCE TUBE WIDTH (DPRP)' ; dperp0 = dperp0 / zval ; dperp0i = dperp0i / zval ;
+          if (qprint) then ; write(_MSGBUF,6712) whoami, trim(fname), ftoa(zval), ftoa(kpara)
+          __PRINT(_MSGBUF)
+          endif
+          qdperp_angstrom=.false.
+         endif
+         if (qdperpf_angstrom) then
+          fname='FINAL REFERENCE TUBE WIDTH (DPRPF)' ; dperp0f = dperp0f / zval ;
+          if (qprint) then ; write(_MSGBUF,6712) whoami, trim(fname), ftoa(zval), ftoa(kpara)
+          __PRINT(_MSGBUF)
+          endif
+          qdperpf_angstrom=.false.
+         endif
+ 6712 format(A,' SCALING ',A,' BY 2 x INTER-REPLICA DS (',A,' ANG). NEW VALUE IS ',A)
+        endif ! qpara .or. ...
+!
        endif
 !
        repl_x_on=(__INDX_RM(comlyn,comlen,'REX').gt.0)
@@ -416,7 +453,6 @@ __CHARMM_ONLY##IF STRINGM
 !
             write(_MSGBUF,665) whoami, restrained_eq_steps ;   __PRINT(_MSGBUF)
  665  format(A, ' WILL ADJUST TO NEW RESTRAINTS OVER ',I11, ' STEPS.')
-!
 !       proj_on is necessary to compute free energies
          if (proj_on) then
             write (_MSGBUF,'(2A)') whoami,                                 &
@@ -1160,25 +1196,42 @@ __CHARMM_ONLY##IF STRINGM
           __WRN(whoami,'ATOM SELECTION MUST BE SPECIFIED AFTER RMSD.')
           return
          endif
-!*************************************************************
+!**************************************************************
+!==============================================================
+! scaling output macro
+#define __IS_DISTANCE_SCALED then;write(_MSGBUF,6758)whoami;else;write(_MSGBUF,6759)whoami;endif;__PRINT(_MSGBUF);
+ 6758 format(A,'( LENGTH SCALE ASSUMED TO BE IN ANGSTROMS AND WILL BE SCALED INTERNALLY.)')
+ 6759 format(A,'( LENGTH SCALE ASSUMED TO BE SCALED BY TWICE THE INTER-REPLICA DISTANCE.)')
+!==============================================================
+!
 !      set k parallel to path (for off-path dynamics)
         elseif (__INDX(comlyn,comlen,'KPAR',4).gt.0) then
           k=__GET_RM_F(comlyn,comlen,'KPAR',-1d0)
+! check for distance scaling option: if set the force constant is specified as u[k] =  kcal/ mol /A^2
+! otherwise, distance is dimensionless (scaled by twice the interimage distance in the default method), so u[k] = kcal/mol
+          qkpara_angstrom = __INDX_RM(comlyn, comlen, 'ANGS').gt.0
           if (k.ge.0d0) then
            kpara=k
-           if (qprint) then ; write(_MSGBUF,6756) whoami, k ; __PRINT(_MSGBUF) ; endif
+           if (qprint) then
+            write(_MSGBUF,6756) whoami, k ; __PRINT(_MSGBUF)
+            if (qkpara_angstrom) __IS_DISTANCE_SCALED
+           endif
  6756 format(A,' SETTING PARALLEL RESTRAINT FORCE CONSTANT TO ',F11.5)
           else
            if (qprint) then ; write(_MSGBUF,6757) whoami, k ; __PRINT(_MSGBUF) ; endif
- 6757 format(A,' INVALID FORCE CONSTANT SPECIFIED: ',F11.5)
+ 6757 format(A,' NEGATIVE FORCE CONSTANT SPECIFIED: ',F11.5, '. NOT SET.')
           endif
 !*************************************************************
 !      set k perpendicular to path (for off-path dynamics)
         elseif (__INDX(comlyn,comlen,'KPRP',4).gt.0) then
           k=__GET_RM_F(comlyn,comlen,'KPRP',-one)
+          qkperp_angstrom = __INDX_RM(comlyn, comlen, 'ANGS').gt.0
           if (k.ge.0d0) then
            kperp=k
-           if (qprint) then  ; write(_MSGBUF,6746) whoami, k ; __PRINT(_MSGBUF) ; endif
+           if (qprint) then
+            write(_MSGBUF,6746) whoami, k ; __PRINT(_MSGBUF)
+            if (qkperp_angstrom) __IS_DISTANCE_SCALED
+           endif
  6746 format(A,' SETTING PERPENDICULAR RESTRAINT FORCE CONSTANT TO '    &
      &       ,F11.5)
           else
@@ -1250,6 +1303,7 @@ __CHARMM_ONLY##IF STRINGM
 !*********************************************************************
         elseif (__INDX(comlyn,comlen,'DPAR',4).gt.0) then ! normalized distance parallel to vector between neighboring replicas at which this system is restrained
           zval=__GET_RM_F(comlyn, comlen, 'DPAR', -1.0d0)
+          qkperp_angstrom = __INDX_RM(comlyn, comlen, 'ANGS').gt.0
 !    check replica spec
           irep=__GET_RM_I(comlyn, comlen, 'REP', -1)
           if (irep.lt.0.or.irep.ge.nstring) then
@@ -1267,20 +1321,26 @@ __CHARMM_ONLY##IF STRINGM
         ! DPAR
 !******************************************************************************************
         elseif (__INDX(comlyn,comlen,'DPRPF',5).gt.0) then ! final perpendicular distance at which the replicas are restrained
+          qangstrom = __INDX_RM(comlyn, comlen, 'ANGS').gt.0 ! scaled/unscaled units
 !
           zval=__GET_RM_F(comlyn, comlen, 'DPRPF', __NAN)
-!
           if (zval.eq.__NAN) then
            __WRN(whoami,' FINAL OFFSET DISTANCE FOR PERPENDICULAR RESTRAINT NOT SPECIFIED.')
           else
 !    check replica spec
            irep=__GET_RM_I(comlyn, comlen, 'REP', -1)
            if (irep.lt.0.or.irep.ge.nstring) then
-            if (qprint) then ; write(_MSGBUF, 67761) whoami, whoami, zval ; __PRINT(_MSGBUF) ; endif
+            qdperpf_angstrom=qangstrom
+            if (qprint) then 
+             write(_MSGBUF, 67761) whoami, whoami, zval ; __PRINT(_MSGBUF) 
+             if (qangstrom) __IS_DISTANCE_SCALED
+            endif
             dperp0f=zval
            else
-            if (qprint) then ; write(_MSGBUF,67762) whoami, irep, zval ; __PRINT(_MSGBUF) ; endif
-            if (mestring.eq.irep) dperp0f=zval ! note: permitting any value
+            if (qprint) then ; write(_MSGBUF,67762) whoami, irep, zval ; __PRINT(_MSGBUF) ; 
+             if (qangstrom) __IS_DISTANCE_SCALED
+            endif
+            if (mestring.eq.irep) then ; dperp0f=zval ; qdperpf_angstrom=qangstrom ; endif ! note: permitting any value
            endif ! irep
 67761 format(A,' REPLICA NUMBER INVALID OR UNSPECIFIED.',               &
      &      /A,' WILL SET FINAL OFFSET DISTANCE FOR PERPENDICULAR RESTRAINT', &
@@ -1313,6 +1373,7 @@ __CHARMM_ONLY##IF STRINGM
           endif ! i valid
 !****************************************************************************************
         elseif (__INDX(comlyn,comlen,'DPRP',4).gt.0) then ! (initial) distance perpendicular to vector between neighboring replicas 
+          qangstrom = __INDX_RM(comlyn, comlen, 'ANGS').gt.0 ! scaled/unscaled units
           zval=__GET_RM_F(comlyn, comlen, 'DPRP', __NAN)
 !
           if (zval.eq.__NAN) then
@@ -1321,11 +1382,16 @@ __CHARMM_ONLY##IF STRINGM
 !    check replica spec
            irep=__GET_RM_I(comlyn, comlen, 'REP', -1)
            if (irep.lt.0.or.irep.ge.nstring) then
-            if (qprint) then ; write(_MSGBUF, 67765) whoami, whoami, zval ; __PRINT(_MSGBUF) ; endif
+            qdperp_angstrom=qangstrom
+            if (qprint) then ; write(_MSGBUF, 67765) whoami, whoami, zval ; __PRINT(_MSGBUF) 
+             if (qdperp_angstrom) __IS_DISTANCE_SCALED
+            endif
             dperp0=zval ; dperp0i=dperp0
            else
-            if (qprint) then ; write(_MSGBUF,67766) whoami, irep, zval ; __PRINT(_MSGBUF) ; endif
-            if (mestring.eq.irep) then  ; dperp0=zval ; dperp0i=dperp0 ; endif ! note: permitting any value
+            if (qprint) then ; write(_MSGBUF,67766) whoami, irep, zval ; __PRINT(_MSGBUF)
+             if (qangstrom) __IS_DISTANCE_SCALED
+            endif
+            if (mestring.eq.irep) then  ; dperp0=zval ; dperp0i=dperp0 ; qdperp_angstrom=qangstrom ; endif ! note: permitting any value
            endif ! irep
 67765 format(A,' REPLICA NUMBER INVALID OR UNSPECIFIED.',               &
      &      /A,' WILL SET OFFSET DISTANCE FOR PERPENDICULAR RESTRAINT', &
@@ -1746,9 +1812,7 @@ __CHARMM_ONLY##IF STRINGM
 !
       int :: j
       character(len=8) :: sid, rid, ren, ac
-      character(len=17) :: whoami
-!
-      data whoami /' FTSM_LIST_ATOMS>'/
+      __IAM(FTSM_LIST_ATOMS)
 !
       if (MPI_COMM_STRNG.eq.MPI_COMM_NULL) return ! only replica heads stay
 !
@@ -1783,11 +1847,9 @@ __CHARMM_ONLY##IF STRINGM
 !
       int :: i, j, n
       float :: w(n), a
-      character(len=18) :: whoami
+      __IAM(FTSM_SET_WEIGHTS)
 !
  __DECLARE_MSGBUF
-!
-      data whoami /' FTSM_SET_WEIGHTS>'/
 !
       if (ME_STRNG.eq.0.and.ME_LOCAL.eq.0) then
        write(_MSGBUF,668)                                               &
@@ -1850,12 +1912,10 @@ __CHARMM_ONLY##IF STRINGM
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine ftsm_swap(c1,c2)
 !      __DEP_OUTPUT
+      __IAM(FTSM_SWAP)
       int :: c1, c2
       float :: com(3)
-      character(len=11) :: whoami
       int :: i,j
-!
-      data whoami /' FTSM_SWAP>'/
 !
       if (.not.ftsm_check(qorient)) return
 !
@@ -1882,12 +1942,9 @@ __CHARMM_ONLY##IF STRINGM
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine ftsm_copy(c1,c2)
       __DEP_NUMBER 
-!
+      __IAM(FTSM_COPY)
       int :: c1, c2
-      character(len=11) :: whoami
       int :: i,j
-!
-      data whoami /' FTSM_COPY>'/
 !
       if (.not.ftsm_check(qorient)) return
 !
@@ -1907,16 +1964,13 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_NUMBER 
       __DEP_MULTICOM       __CHARMM_ONLY !##MULTICOM
 !      __DEP_MPI 
-!
+      __IAM(FTSM_FILL)
 !
       float :: x(:), y(:), z(:)
-      character(len=11) :: whoami
       int :: i,j,n
       bool :: qroot, qslave
       float, pointer, dimension(:,:) :: rl, rc, rr
       int :: me
-!
-      data whoami /' FTSM_FILL>'/
 !
       n=min(size(x), size(y), size(z))
 !
@@ -2829,6 +2883,7 @@ __CHARMM_ONLY##IF STRINGM
 !
  __DECLARE_MSGBUF
 !
+      __IAM(FTSM_STAT_INIT)
       CHARACTER(LEN=*) :: COMLYN
       int :: COMLEN
 !
@@ -2836,7 +2891,6 @@ __CHARMM_ONLY##IF STRINGM
       int :: rex_flen_old, oldiol, error
 !
       character(len=8) :: keyword
-      character(len=16), parameter :: whoami=' FTSM_STAT_INIT>'
 !
       bool :: qroot, qprint
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -3241,7 +3295,7 @@ __CHARMM_ONLY##IF STRINGM
       float, pointer :: M_all(:,:,:,:,:) ! Mtensor combined from all images
 !
       int :: ierror
-      character(len=11), parameter :: whoami=' FTSM_STAT>'
+      __IAM(FTSM_STAT)
 !
       bool :: qroot, qprint, qgrp
 !
@@ -3317,7 +3371,7 @@ __CHARMM_ONLY##IF STRINGM
      &                                 //real_format//')'
          endif
 !
-         write(s_funit, fmt) ds * sqrt(3d0) ! correction factor for consistency with atomic RMSD
+         write(s_funit, fmt) ds * sqrt(three) ! correction factor for consistency with atomic RMSD
 !     flush unit: close and reopen later
          if (s_funit.ne.__OSTREAM) then
           __CLOSE_FILE(s_funit, 'KEEP', ierror)
@@ -5818,12 +5872,12 @@ __CHARMM_ONLY        wrnlev=-1 ! turn off warnings for the first part of minimiz
        weights(:,2)=forcedWeights
        weights(:,3)=forcedWeights
 !
-       if (interp_method.eq.linear_exact) then
+       if (interp_m.eq.linear_exact) then
         call interp_linear_exact(rf,rf,weights,3*nforced,ds,curv)
        else
         i=0; ! request zero maximum iterations
         call interp_driver_sci(rf,rf,weights,3*nforced,                 &
-     &   interp_method,def,i,ds,curv,dst_cutoff)
+     &   interp_m,def,i,ds,curv,dst_cutoff)
        endif
       endif ! qroot
 !
