@@ -7,7 +7,7 @@ CBINDOBJS=bestfit_c.o
 BINDSOURCES=$(OBJS:%.o=%_.F90) $(CBINDOBJS:%.o=%_.F90)
 SBINDOBJS  =$(OBJS:%.o=%_.o)   $(CBINDOBJS:%.o=%_.o) 
 DBINDOBJS  =$(OBJS:%.o=%__.o)  $(CBINDOBJS:%.o=%__.o)
-CLIB=-lbestfit
+CLIB=-L. -lbestfit
 #
 LOCALMACROS=-include source.defs
 LOCALDEPS=source.defs
