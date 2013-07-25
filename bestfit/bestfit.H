@@ -1,6 +1,6 @@
 /* C prototypes */
 #ifdef __CPLUSPLUS
-#define __EXTERN "extern C"
+#define __EXTERN extern "C"
 //#elif defined(__SWIG)
 //#define __EXTERN extern
 #else
