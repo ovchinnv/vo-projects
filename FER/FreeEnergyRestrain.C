@@ -31,13 +31,15 @@ extern "C" {
 #include "FreeEnergyRMgr.h"
 #include "FreeEnergyLambda.h"
 #include "FreeEnergyLambdMgr.h"
-
+//
 #include "NamdTypes.h"
 #include "GlobalMaster.h"
 #include "GlobalMasterFreeEnergy.h"
 #include "Molecule.h"
-
+//
+#define DEBUGM
 #define MIN_DEBUG_LEVEL 1
+#define MAX_DEBUG_LEVEL 8
 #include "Debug.h"
 
 // initialize static member variables
@@ -1259,7 +1261,7 @@ void AnRMSDRestraint::ApplyForce(GlobalMasterFreeEnergy &CFE) {
   Vector force(f[0], f[1], f[2]);
   force*=(-pref);
 //
-  DebugM(2,"Applying force "<<force<<" to forced atom "<<aid<<"\n");
+  DebugM(9,"Applying force "<<force<<" to forced atom "<<aid<<"\n");
   CFE.modifyForcedAtoms().add(aid);
   CFE.modifyAppliedForces().add( force );
  }
@@ -1271,7 +1273,7 @@ void AnRMSDRestraint::ApplyForce(GlobalMasterFreeEnergy &CFE) {
    Vector force(f[0], f[1], f[2]);
    force*=(-pref);
 //
-   DebugM(2,"Applying force "<<force<<" to orientation atom "<<aid<<"\n");
+   DebugM(9,"Applying force "<<force<<" to orientation atom "<<aid<<"\n");
    CFE.modifyForcedAtoms().add(aid);
    CFE.modifyAppliedForces().add( force );
   }

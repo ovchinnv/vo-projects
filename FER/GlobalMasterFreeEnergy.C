@@ -30,7 +30,7 @@
 
 #include <stdio.h>
 
-//#define DEBUGM
+#define DEBUGM
 #define MIN_DEBUG_LEVEL 1
 #include "Debug.h"
 
@@ -46,22 +46,24 @@ void GlobalMasterFreeEnergy::calculate() {
 //  iout << iDEBUG << "Free energy perturbation - calculate()\n" << endi; 
   m_LambdaManager.IncCurrStep();
 //-----------------------------------------------------------------
-// get lambdas from LambdaManager, inform RestraintManager.
+// get lambdas from LambdaManager
 // calculate gradients for each center-of-mass of each restraint,
 // and apply the forces to the atoms involved
 //-----------------------------------------------------------------
+
   double  LambdaKf, LambdaRef;
   double  Sum_dU_dLambdas;
 
-  if (m_LambdaManager.GetLambdas(LambdaKf, LambdaRef)) {
+  if (m_RestraintManager.GetNumRestraints() > 0) { // no need to worry if nothing is defined
 
-    // stuff that's done every time step
-    m_RestraintManager.SetLambdas(LambdaKf, LambdaRef);
-    // fetch all positions (I actually think this should be done at the GlobalMaster level)
-    fetchPositions();
-    // restraint manager calls individual restraints to add their forces
-    m_RestraintManager.AddForces(*this);
+   bool LambdasActive=(m_LambdaManager.GetLambdas(LambdaKf, LambdaRef));
+   if (LambdasActive) m_RestraintManager.SetLambdas(LambdaKf, LambdaRef); // set new lamdas on RestraintManager
+// fetch all positions (I actually think this should be done at the GlobalMaster level)
+   fetchPositions();
+// restraint manager calls individual restraints to add their forces
+   m_RestraintManager.AddForces(*this);
 
+   if (LambdasActive) {
     if (m_LambdaManager.IsTimeToClearAccumulator()) {
       m_LambdaManager.ZeroAccumulator();
     }
@@ -94,7 +96,9 @@ void GlobalMasterFreeEnergy::calculate() {
         m_LambdaManager.Print_MCTI_Integration();
       }
     }
-  }
+   }
+
+  } // numRestraints > 0
 }
 
 
@@ -103,8 +107,8 @@ void GlobalMasterFreeEnergy::user_initialize() {
 // read all the input from config
 //-----------------------------------------------------------------
 
-  iout << iINFO << "  FREE ENERGY PERTURBATION CONFIG\n"; 
-  iout << iINFO << "***********************************\n"; 
+  iout << iINFO << "  FREE ENERGY CONFIG SRIPT\n"; 
+  iout << iINFO << "=============================\n"; 
   int config_len = strlen(config);
   if ( config_len < 10000 ) {
     iout << config;
@@ -116,7 +120,7 @@ void GlobalMasterFreeEnergy::user_initialize() {
     iout << new_config;
     delete [] new_config;
   }
-  iout << iINFO << "***********************************\n" << endi; 
+  iout << iINFO << "===============================\n" << endi; 
 
   ReadInput(config, m_RestraintManager, m_LambdaManager, *this, simParams->dt);
 

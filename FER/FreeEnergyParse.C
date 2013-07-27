@@ -3,8 +3,8 @@
 ***  The Board of Trustees of the University of Illinois.
 ***  All rights reserved.
 **/
-
 // written by David Hurwitz, March to May 1998.
+// modifications by Victor Ovchinnikov (VO) 2013
 
 #include <ctype.h>
 #include <string.h>
@@ -28,6 +28,13 @@
 #include "FreeEnergyParse.h"
 #include "PDB.h" // VO 2013 : add option to read atoms inds/coord from PDB
 #include "PDBData.h" // VO 2013
+
+#define DEBUGM
+
+#ifdef DEBUGM
+#include "Debug.h"
+//#include <string>
+#endif
 
 void ProblemParsing(const char* Message, const char* Str, Bool_t Terminate) {
 //----------------------------------------------------------------------------
@@ -389,6 +396,7 @@ int ReadRestraints(char* Str, ARestraintManager& AllRestraints,
     Str += ReadChar(Str, '{');
     // read restraints until "}" is found or can't read a restraint
     do {
+DebugM(1, "ReadRestraints : Attempting to read next restraint\n");
       pRestraint = GetRestraint(Str, Count, CFE);
       Str += Count;
       // if a restraint could not be read, then we're finished
@@ -436,7 +444,7 @@ ARestraint* GetRestraint(char* Str, int& NumChars, GlobalMasterFreeEnergy& CFE) 
   NumChars = 0;
 
   // get restraint type
-  Restraint = ReadNextRestraintType(Str, Count);
+  Restraint = ReadRestraintType(Str, Count);
   if (Count == 0) {
     ProblemParsing("Can't Read Restraint Type", Str);
     return(ptrRestraint);
@@ -451,29 +459,44 @@ ARestraint* GetRestraint(char* Str, int& NumChars, GlobalMasterFreeEnergy& CFE) 
   // VO 2013 : strange : only the last group is read by default code
   // VO 2013 : adding the rest of groups
   // VO 2013 : modifying AddAtoms to allow reading indices from PDB file
+DebugM(1,"GetRestraint : Reading restraint definitions\n");
   switch (Restraint) {
     case kDihe:  case kDiheBound:  case kDihePMF:
+DebugM(1,"GetRestraint : Reading group for dihedral restraint\n");
       Str += AddAtoms(Group1, Str, CFE);
       Str += AddAtoms(Group2, Str, CFE);
       Str += AddAtoms(Group3, Str, CFE);
       Str += AddAtoms(Group4, Str, CFE);
+      break;
     case kAngle: case kAngleBound: case kAnglePMF:
+DebugM(1,"GetRestraint : Reading groups for angle restraint\n");
       Str += AddAtoms(Group1, Str, CFE);
       Str += AddAtoms(Group2, Str, CFE);
       Str += AddAtoms(Group3, Str, CFE);
+      break;
     case kDist:  case kDistBound:  case kDistPMF:
+DebugM(1,"GetRestraint : Reading groups for distance restraint\n");
+      Str += AddAtoms(Group1, Str, CFE);
+      Str += AddAtoms(Group2, Str, CFE);
+      break;
 #ifdef FE_RESTRAINT_RMSD_FORTRAN
     case kRMSD:  case kRMSDBound:  case kRMSDPMF: // the two groups are orientation and forcing atoms
+DebugM(1,"GetRestraint : Reading orientation group for RMSD restraint\n");
       Str += AddAtoms(Group1, Str, CFE);
-      if (Group1.GetSize() < 2) ProblemParsing("Orientation set cannot have fewer than two atoms. Abort", Str);
+      if (Group1.GetSize() < 2) ProblemParsing("Orientation set cannot have fewer than two atoms. Abort.", Str);
+DebugM(1,"GetRestraint : Reading forcing group for RMSD restraint\n");
       Str += AddAtoms(Group2, Str, CFE);
-      if (Group2.GetSize() < 1) ProblemParsing("Forcing set cannot have fewer than one atom. Abort", Str);
+      if (Group2.GetSize() < 1) ProblemParsing("Forcing set cannot have fewer than one atom. Abort.", Str);
+      break;
 #endif
     case kPosi:  case kPosiBound:  case kPosiPMF:
+DebugM(1,"GetRestraint : Reading group for positional restraint\n");
       Str += AddAtoms(Group1, Str, CFE);
+      break;
     default: ;
   }
   //
+DebugM(1,"GetRestraint : Reading restraint parameters\n");
   // for dihedrals, allow keywords of "barr=", "gap=", OR "kf="
   // for other restraints, just allow "kf="
   TempStr = Str;
@@ -493,6 +516,7 @@ ARestraint* GetRestraint(char* Str, int& NumChars, GlobalMasterFreeEnergy& CFE) 
   }
   // get the Kf value
   Str += ReadAValue(Str, Kf,          kPrintErrMsg);
+DebugM(1,"GetRestraint : Restraint force constant is "<<Kf<<"\n");
 
   // read the reference positions, distances or angles
   switch (Restraint) {
@@ -520,8 +544,11 @@ ARestraint* GetRestraint(char* Str, int& NumChars, GlobalMasterFreeEnergy& CFE) 
       Str += ReadWord(Str, "ref",    kPrintErrMsg);
       Str += ReadChar(Str, '=');
       Str += ReadAValue(Str, D,       kPrintErrMsg);
+DebugM(1,"GetRestraint : Reference RMSD value is "<<D<<"\n");
 // read separate reference positions from file (if specified)
+DebugM(1,"GetRestraint : Reading RMSD restraint coordinates\n");
       Str += ReadRMSDCoords(Str, Group1, Group2, CFE);
+DebugM(1,"GetRestraint : RMSD restraint coordinates read\n");
       break;
 #endif
     case kPosiBound:
@@ -911,7 +938,7 @@ int ReadWord(const char* Str, const char* Word, Bool_t ErrMsg) {
 }
 
 
-restr_t ReadNextRestraintType(char* Str, int& NumChars) {
+restr_t ReadRestraintType(char* Str, int& NumChars) {
 //----------------------------------------------------------------------------
 // Str should start with the next restraint type (no leading white space),
 // namely one of:
@@ -931,22 +958,21 @@ restr_t ReadNextRestraintType(char* Str, int& NumChars) {
 // are all recognized.
 //----------------------------------------------------------------------------
   restr_t  RestraintType=kUnknownRestr;
-  char*    FullString=Str;
+  char*    IniString=Str;
+
+  NumChars = 0;
 
   // check if Str starts with "pos", "dist", "angl", or "dihe"
-  if (strncmp(Str,"pos", 3)==0)  {RestraintType=kPosi;  goto GotIt;}
-  if (strncmp(Str,"dist",4)==0)  {RestraintType=kDist;  goto GotIt;}
-  if (strncmp(Str,"angl",4)==0)  {RestraintType=kAngle; goto GotIt;}
-  if (strncmp(Str,"dihe",4)==0)  {RestraintType=kDihe;  goto GotIt;}
+  if      (strncmp(Str,"pos", 3)==0)  {RestraintType=kPosi;  }
+  else if (strncmp(Str,"dist",4)==0)  {RestraintType=kDist;  }
+  else if (strncmp(Str,"angl",4)==0)  {RestraintType=kAngle; }
+  else if (strncmp(Str,"dihe",4)==0)  {RestraintType=kDihe;  }
 #ifdef FE_RESTRAINT_RMSD_FORTRAN
-  if (strncmp(Str,"rmsd",4)==0)  {RestraintType=kRMSD;  goto GotIt;}
+  else if (strncmp(Str,"rmsd",4)==0)  {RestraintType=kRMSD;  }
 #endif
-  NumChars = 0;
-  return(RestraintType);
+  else { return(RestraintType); }
 
   // skip to the end of the white space following this word
-GotIt:
-  Str += 3;
   Str += ReadAlphaNum(Str);
   Str += ReadWhite(Str);
 
@@ -984,7 +1010,7 @@ GotIt:
 
   // skip past trailing white space, calcuate num chars string has been advanced
   Str += ReadWhite(Str);
-  NumChars = Str-FullString;
+  NumChars = Str-IniString;
   return(RestraintType);
 }
 
@@ -1006,7 +1032,9 @@ int AddAtoms(AGroup& Group, char* Str, GlobalMasterFreeEnergy& CFE) {
   Bool_t  AtomList =  kFalse;
   Bool_t  Finished =  kFalse;
   char*   SavePtr = 0;
-
+//
+  DebugM(1,"AddAtoms : Adding atoms to group\n");
+//
   while (!Finished) {
     switch(ReadNextItem(Str, NumChars)) {
       case kStartGroup:
@@ -1043,14 +1071,14 @@ int AddAtoms(AGroup& Group, char* Str, GlobalMasterFreeEnergy& CFE) {
         if (GroupMode) {
          AddAtomsFromPDB(Group, Str, CFE);
         } else {
-         ProblemParsing("Error in group specification", Str); // make sure "group {" is present
+         ProblemParsing("Error in group specification", Str); // make sure "group " is present
         }
         break;
       default:
         Finished = kTrue;
         ProblemParsing("Can't Read Atoms", Str);
         break;
-    }
+    } //switch
     Str += NumChars;
     RetNumChars += NumChars;
   }
@@ -1077,19 +1105,22 @@ int AddAtomsFromPDB(AGroup& Group, char* str, GlobalMasterFreeEnergy& CFE) {
  strncpy(fname,str,count);
  fname[count]='\0';
 //
+DebugM(1, "AddAtomsFromPDB : file name :"<<fname<<"\n");
+//
  PDB fepdb(fname);
  int numatoms = fepdb.num_atoms();
- if (numatoms < 1) { ProblemParsing("No atoms found in Free Energy PDB File", str); }
+ if (numatoms < 1) { ProblemParsing("No atoms found in Free Energy PDB File.", str); }
  else if (numatoms != CFE.getMoleculeSize() ) {
-    ProblemParsing("The number of atoms in Free Energy File must be equal to the total number of atoms in the structure", str);
+    ProblemParsing("The number of atoms in Free Energy File must be equal to the total number of atoms in the structure.", str);
  }
 // determine which column to take files from
  str+=count ; //skip file name
  str+=ReadWhite(str); // skip to column spec
 //
  col_t col;
- if (strncmp(str,"beta",4)==0) { col=beta; }
- else if (strncmp(str,"occu",4)==0) { col=occu; }
+ if (strncmp(str,"beta",4)==0) { col=beta;}
+ else if (strncmp(str,"occu",4)==0) { col=occu;}
+ str+=ReadAlpha(str);// skip "beta" or "occupancy"
 
  double val;
  str+=ReadWhite(str);
@@ -1116,7 +1147,7 @@ int AddAtomsFromPDB(AGroup& Group, char* str, GlobalMasterFreeEnergy& CFE) {
    }//if
   }//for
  } else {
-  ProblemParsing("PDB column not specified.",str);
+  ProblemParsing("PDB column not specified",str);
  }//if
 }
 
@@ -1362,14 +1393,14 @@ item_t ReadNextItem(char* Str, int& NumChars) {
   int     Num;
   item_t  RetVal=kUnknownItem;
 
-  Num=IsStartGroup(Str);     if (Num)  {RetVal=kStartGroup;   goto Found;}
-  Num=IsEndGroup(Str);       if (Num)  {RetVal=kEndGroup;     goto Found;}
-  Num=IsAtomName(Str);       if (Num)  {RetVal=kAtomName;     goto Found;}
-  Num=IsAtomNameList(Str);   if (Num)  {RetVal=kAtomNameList; goto Found;}
-  Num=IsAtom(Str);           if (Num)  {RetVal=kAtom;         goto Found;}
-  Num=IsResidue(Str);        if (Num)  {RetVal=kResidue;      goto Found;}
-  Num=IsResidueRange(Str);   if (Num)  {RetVal=kResidueRange; goto Found;}
-  Num=IsPDBFile(Str);        if (Num)  {RetVal=kPDBFile;      goto Found;}
+  Num=IsStartGroup(Str);     if (Num)  {RetVal=kStartGroup;   DebugM(1,"Read kStartGroup\n");   goto Found;}
+  Num=IsEndGroup(Str);       if (Num)  {RetVal=kEndGroup;     DebugM(1,"Read kEndGroup\n");     goto Found;}
+  Num=IsAtomName(Str);       if (Num)  {RetVal=kAtomName;     DebugM(1,"Read kAtomName\n");     goto Found;}
+  Num=IsAtomNameList(Str);   if (Num)  {RetVal=kAtomNameList; DebugM(1,"Read kAtomNameList\n"); goto Found;}
+  Num=IsAtom(Str);           if (Num)  {RetVal=kAtom;         DebugM(1,"Read kAtom\n");         goto Found;}
+  Num=IsResidue(Str);        if (Num)  {RetVal=kResidue;      DebugM(1,"Read kResidue\n");      goto Found;}
+  Num=IsResidueRange(Str);   if (Num)  {RetVal=kResidueRange; DebugM(1,"Read ResidueRange\n");  goto Found;}
+  Num=IsPDBFile(Str);        if (Num)  {RetVal=kPDBFile;      DebugM(1,"Read kPDBFile\n");      goto Found;}
 
   // add the white-space after the item to the length of the item.
 Found:
@@ -1536,24 +1567,33 @@ int IsPDBFile(char* Str) {
  char* IniStr=Str;
  int count;
  double val;
+DebugM(1,"IsPDBFile : Checking for PDB file spec in input\n");
  if (strncmp(Str, "file", 4) == 0) {
+DebugM(1,"IsPDBFile : 'file'\n" );
   Str+=4;
   Str+=ReadWhite(Str);
   if (Str[0]=='=') {
+DebugM(1,"IsPDBFile : '='\n" );
    Str+=1;
+DebugM(1,"IsPDBFile : Removing white space\n" );
    Str+=ReadWhite(Str);
+DebugM(1,"IsPDBFile : Reading file name\n" );
    count=ReadFileName(Str);
+DebugM(1,"IsPDBFile : File name size " <<count<<"\n" );
    if (count) {
+DebugM(1,"IsPDBFile : PDB File Name : "<<std::string(Str, count)<<"\n" );
     Str+=count;
     Str+=ReadWhite(Str);
     count=ReadAlpha(Str);
     if ( ( strncmp(Str, "beta", 4) == 0 ) || ( strncmp(Str, "occu", 4) == 0 ) ) {
+DebugM(1,"IsPDBFile : Column "<<std::string(Str, count)<<"\n" );
      Str+=count;
      Str+=ReadWhite(Str);
      if (Str[0]=='=') {
       Str+=1;
       Str+=ReadWhite(Str);
       count=ReadAValue(Str,val,kFalse);
+DebugM(1,"IsPDBFile : Value "<<val<<"\n" );
       if (count) {
        Str+=count;
        return (Str-IniStr);
@@ -1683,13 +1723,12 @@ int ReadFileName(const char* Str) {
 // determine the number of characters in a filename, assuming the string begins with such
 //-------------------------------------------------------------------
   int  i=0;
-
   while (1) {
     if (isalnum(Str[i]) || Str[i]=='\'' || Str[i]=='\"' || 
                            Str[i]=='.' || Str[i]=='/' || Str[i]=='~' || Str[i]=='!' || Str[i]=='-' || Str[i]=='_' ||
                            Str[i]=='?' || Str[i]=='$' || Str[i]=='%' || Str[i]=='^' || Str[i]=='&' || Str[i]=='#' ||
                            Str[i]=='@' || Str[i]=='<' || Str[i]=='>' || Str[i]=='{' || Str[i]=='}' || Str[i]=='[' ||
-                           Str[i]==']' || Str[i]=='(' || Str[i]==')' || Str[i]=='+' || Str[i]=='='
+                           Str[i]==']' || Str[i]=='(' || Str[i]==')' || Str[i]=='+' || Str[i]=='=' 
                            ) {
       i++;
     }
@@ -1697,6 +1736,7 @@ int ReadFileName(const char* Str) {
       break;
     }
   }
+DebugM(1, "ReadFileName : Read '"<<std::string(Str,i)<<"'\n")
   return(i);
 }
 
@@ -1741,9 +1781,8 @@ int ReadWhite(const char* Str) {
          (Str[i] == 32)  ||      // space
          (Str[i] == ',') ||      // comma
          (Str[i] == ';')         // semi-colon
-//         (Str[i] == '.')         // period  (took this out in case of =.4, eg)
        )
-    {    
+    {
       i++;
     }
     else {
@@ -1768,33 +1807,43 @@ int ReadRMSDCoords(char *Str, AGroup& Group1, AGroup& Group2, GlobalMasterFreeEn
 // read reference RMSD coordinates (orientation and forcing)
   char* IniStr=Str;
   Bool_t kPrintErrMsg = (Bool_t) !( Group1.HaveCoords() && Group2.HaveCoords() );  //complain if filename missing UNLESS coords are already set
-  Str += ReadWord(Str,"reffile", kPrintErrMsg);
-  Str += ReadChar(Str, '=');
-  int Count=ReadFileName(Str);
-  char fname[Count+1] ; //accommodate extra null char
-  strncpy(fname,Str,Count);
-  fname[Count]='\0';
-  PDB fepdb(fname);
-  int numatoms = fepdb.num_atoms();
-  if (numatoms < 1) { ProblemParsing("No atoms found in free energy PDB File",Str); }
-  else if (numatoms != CFE.getMoleculeSize() ) {
-  ProblemParsing("The number of atoms in free energy file must be equal to the total number of atoms in the structure.",Str);
-  } // numatoms
-  Str+=Count ; //skip file name
-  ReadWhite(Str); // skip whitespace
-// read coordinates from file
-  PDBAtom* atom;
-// this restraint has two groups (orientation and forcing)
-  AGroup* groups[2];
-  groups[0] = &Group1; //orientation group
-  groups[1] = &Group2; //forcing group
 //
-  for (int j=0; j<2 ; j++) { // over the two groups
-   const int* inds=groups[j]->GetInds();
-   for (int i=0; i < groups[j]->GetSize() ; i++) {
-    atom=fepdb.atom( inds[i] );
-    groups[j]->SetCoords(i, atom->xcoor(), atom->ycoor(), atom->zcoor());
-   }
+DebugM(1,"ReadRMSDCoords : Coordinates defined before: "<<( Group1.HaveCoords() && Group2.HaveCoords() )<<"\n" );
+//
+  int Count= ReadWord(Str,"reffile", kPrintErrMsg);
+  if (Count) { // "reffile" specified
+   Str +=Count; // skip "reffile"
+   Str +=ReadChar(Str, '=');
+   Count=ReadFileName(Str);
+   char fname[Count+1] ; //accommodate extra null char
+   strncpy(fname,Str,Count);
+   fname[Count]='\0';
+DebugM(1,"ReadRMSDCoords : Reading coordinates from file "<<fname<<"\n");
+   PDB fepdb(fname);
+   int numatoms = fepdb.num_atoms();
+DebugM(1,"ReadRMSDCoords : File contains "<<numatoms<<" atoms\n");
+   if (numatoms < 1) { ProblemParsing("No atoms found in free energy PDB File",Str); }
+   else if (numatoms != CFE.getMoleculeSize() ) {
+    ProblemParsing("The number of atoms in free energy file must be equal to the total number of atoms in the structure.",Str);
+   } // numatoms
+   Str+=Count ; //skip file name
+   Str+=ReadWhite(Str); // skip whitespace
+// read coordinates from file
+   PDBAtom* atom;
+// this restraint has two groups (orientation and forcing)
+   AGroup* groups[2];
+   groups[0] = &Group1; //orientation group
+   groups[1] = &Group2; //forcing group
+//
+   for (int j=0; j<2 ; j++) { // over the two groups
+    const int* inds=groups[j]->GetInds();
+    for (int i=0; i < groups[j]->GetSize() ; i++) {
+     atom=fepdb.atom( inds[i] );
+     groups[j]->SetCoords(i, atom->xcoor(), atom->ycoor(), atom->zcoor());
+DebugM(1,"ReadRMSDCoords : Setting reference coordinates for AtomId "<<i<<" in group "<<j\
+         <<" to ("<<atom->xcoor()<<", "<<atom->ycoor()<<", "<<atom->zcoor()<<")\n");
+    }
+   }//j
   }
   return (Str-IniStr);
 }
