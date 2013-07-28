@@ -58,13 +58,13 @@ public:
   void    SetGroup(AGroup& Group, int GroupIndex);
 //the four functions below should really be in the derived classes (which know how many groups they need)
   void    SetGroups(AGroup& Group1);
-  void    SetGroups(AGroup& Group1, AGroup& Group2);
+  virtual void SetGroups(AGroup& Group1, AGroup& Group2);
   void    SetGroups(AGroup& Group1, AGroup& Group2, AGroup& Group3);
   void    SetGroups(AGroup& Group1, AGroup& Group2, AGroup& Group3, AGroup& Group4);
 //---------------------------------------------//
 
   // (pure) virtual functions
-  virtual void     ApplyForce(GlobalMasterFreeEnergy& CFE)=0; // all ugly details hidden inside this function(s)
+  virtual void     ApplyForce(GlobalMasterFreeEnergy& CFE, bool test_fd=0, double dh=0.00001)=0; // apply forces; test analytical forces against FD
   virtual double   GetEnergy() = 0;
   virtual void     GetStr(char* Str) = 0;
   virtual void     PrintInfo() = 0;
@@ -91,8 +91,8 @@ public:
   void    SetRefPos(Vector Pos) {m_RefPos=Pos;}
   double  GetDistance()          { return  (m_RefPos - m_pCOMs[0]).length() ;}
   Vector  GetPosTarget()          { return(m_RefPos);}
-  void    ApplyForce(GlobalMasterFreeEnergy& CFE);
 protected:
+  void    ApplyForce(GlobalMasterFreeEnergy& CFE, bool fd, double dh);
   double  GetE(Vector RefPos, double LambdaKf=1.0);
   Vector GetGrad(int WhichGroup, Vector RefPos, double LambdaKf=1.0);
   Vector virtual GetGradient(int)=0;
@@ -176,8 +176,8 @@ public:
   void    PrintInfo();
   void    SetRefDist(double Dist)  {m_RefDist=Dist;}
   double  GetDistTarget()          {return(m_RefDist);}
-  void    ApplyForce(GlobalMasterFreeEnergy& CFE);
 protected:
+  void    ApplyForce(GlobalMasterFreeEnergy& CFE, bool fd, double dh);
   double  GetE(double RefDist, double LambdaKf=1.0);
   Vector GetGrad(int WhichGroup, double RefDist, double LambdaKf=1.0);
   Vector virtual GetGradient(int)=0;
@@ -254,8 +254,8 @@ public:
   void    PrintInfo();
   void    SetRefAngle(double Angle)  {m_RefAngle=Angle;}
   double  GetAngleTarget()           {return(m_RefAngle);}
-  void    ApplyForce(GlobalMasterFreeEnergy& CFE);
 protected:
+  void    ApplyForce(GlobalMasterFreeEnergy& CFE, bool fd, double dh);
   double  GetE(double RefAngle, double LambdaKf=1.0);
   Vector GetGrad(int WhichGroup, double RefAngle, double LambdaKf=1.0);
   double  GetAngle(Vector& A, Vector& B, Vector& C);
@@ -335,8 +335,8 @@ public:
   Bool_t  TwoTargets()      {return(kFalse);}
   double  GetDiheTarget1()  {return(m_RefAngle);}
   double  GetDiheTarget2()  {return(0);}
-  void    ApplyForce(GlobalMasterFreeEnergy& CFE);
 protected:
+  void    ApplyForce(GlobalMasterFreeEnergy& CFE, bool fd, double dh);
   double  GetE(double RefDihe, double Const);
   Vector GetGrad(int WhichGroup, double RefDihe, double Const);
   Vector gradU(Vector& P1P2P3, Vector& P4P5P6,
@@ -441,11 +441,10 @@ public:
 //  double  GetRMSD() {return instRMSD;} // RMSD to target structure
 //  double  GetRMSDTarget() {return refRMSD;} // desired RMSD to target structure
   void    qDiffRotCheck(); // Compute qdiffrot
+  void    SetGroups(AGroup&, AGroup&);
 protected:
+  void    ApplyForce(GlobalMasterFreeEnergy& CFE, bool fd, double dh);
   virtual double ComputeForcePrefactor()=0;
-  void    ApplyForce(GlobalMasterFreeEnergy& CFE);
-//protected:
-//  void    Compute(); // Compute important quantities (e.g. rmsd and gradients)
 };
 //****************************************************************************
 //  Derived classes : AFixedRMSDRestraint, ABoundRMSDRestraint, AMovingRMSDRestraint:
@@ -461,8 +460,6 @@ protected:
    double pref = m_Kf * (1.0 - refRMSD/RMS);
    return pref;
   }
-//protected:
-//  void    ApplyForce(GlobalMasterFreeEnergy& CFE);
 };
 
 class ABoundRMSDRestraint : public AnRMSDRestraint {
@@ -483,8 +480,6 @@ protected:
    if (m_Bound==kUpper) return ( dRMSD > 0. ? m_Kf * dRMSD/RMS : 0.0); //Upper bonud
                         return ( dRMSD < 0. ? m_Kf * dRMSD/RMS : 0.0); //Lower bound
   }
-//protected:
-//  void    ApplyForce(GlobalMasterFreeEnergy& CFE);
 };
 
 class AMovingRMSDRestraint : public AnRMSDRestraint {

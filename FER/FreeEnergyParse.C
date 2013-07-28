@@ -696,7 +696,6 @@ DebugM(1,"GetRestraint : RMSD restraint coordinates read\n");
 DebugM(1, "GetRestraint : set Kf in RMSD restraint to "<<pRestraint->GetKf()<<"\n");
       pRestraint->SetGroups(Group1, Group2);
       pRestraint->SetRefRMSD(D); // target RMS distance
-      pRestraint->qDiffRotCheck(); // compute qdiffrot
       ptrRestraint=pRestraint;
       break;
      }
@@ -751,7 +750,6 @@ DebugM(1, "GetRestraint : set Kf in RMSD restraint to "<<pRestraint->GetKf()<<"\
       pRestraint->SetGroups(Group1, Group2);
       pRestraint->SetRefRMSD(D);   // target RMS distance
       pRestraint->SetBound(Bound); // bound beyond which to apply restraint force
-      pRestraint->qDiffRotCheck();
       ptrRestraint=pRestraint;
       break;
      }
@@ -804,7 +802,6 @@ DebugM(1, "GetRestraint : set Kf in RMSD restraint to "<<pRestraint->GetKf()<<"\
       pRestraint->SetGroups(Group1, Group2);
       pRestraint->SetStartRMSD(D0); // starting target RMS distance
       pRestraint->SetStopRMSD(D1);  // final target RMS distance
-      pRestraint->qDiffRotCheck();
       ptrRestraint=pRestraint;
       break;
      }

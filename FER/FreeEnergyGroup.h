@@ -44,7 +44,7 @@ public:
   int     GetSize() { return(size); }
   void    List(int NumToList=-1);
   double const * GetWeights();
-  double const * GetCoords();
+  double * GetCoords();
   void SetCoords(int, double*);
   void SetCoords(int, double, double, double);
   int const * GetInds();

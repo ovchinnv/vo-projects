@@ -165,8 +165,8 @@ double const * AGroup::GetWeights() {
   return (double const *) normWeights;
 }
 
-double const * AGroup::GetCoords() {
- return (double const *) r;
+double * AGroup::GetCoords() {
+ return r;
 }
 
 int const * AGroup::GetInds() {

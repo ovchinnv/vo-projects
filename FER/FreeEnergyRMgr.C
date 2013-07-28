@@ -24,6 +24,9 @@
 #include "GlobalMaster.h"
 #include "GlobalMasterFreeEnergy.h"
 
+#define DEBUGM
+#include "Debug.h"
+
 ARestraintManager::ARestraintManager() {
 //------------------------------------------------------------------------
 // allocate space for restraint POINTERS
@@ -87,7 +90,11 @@ void ARestraintManager::AddForces(GlobalMasterFreeEnergy& CFE) {
 //---------------------------------------------------------------------------
 // each restraint is responsible for all steps of force computation (VO: 2013)
 //---------------------------------------------------------------------------
+#ifdef DEBUGM
+  for (int i=0; i<m_NumRestraints; i++) { m_ppRestraints[i]->ApplyForce(CFE, 1, 0.00001); } // run an finite difference test at each calculation
+#else
   for (int i=0; i<m_NumRestraints; i++) { m_ppRestraints[i]->ApplyForce(CFE); }
+#endif
 }
 
 double ARestraintManager::Sum_dU_dLambdas() {
