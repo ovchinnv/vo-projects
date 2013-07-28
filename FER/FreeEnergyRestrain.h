@@ -6,9 +6,8 @@
 //
 // written by David Hurwitz, March to May 1998.
 //
-// modifications by Victor Ovchinnikov to increase generality + add RMSD restraints June-July 2013
+// modifications by Victor Ovchinnikov 2013
 //
-
 #if !defined(RESTRAINT_HPP)
   #define RESTRAINT_HPP
 
@@ -430,7 +429,7 @@ protected:
   double instRMSD;  //instantaneous RMS distance
   double u[9];
   double* ugrad;    // derivatives of rotation matrix
-  bool qorient;     // whether RMSD is to be computed after best-fit orientation
+  bool qorient  ;   // whether RMSD is to be computed after best-fit orientation
   bool qdiffrot ;   // whether orientation atoms are the same as Moving (RMSD) atoms
                     // if yes, gradient computation does not require rotation matrix derivatives (simpler)
 public:
@@ -460,6 +459,7 @@ protected:
   double ComputeForcePrefactor() {
    double RMS = __MAX(instRMSD, kALittle); //  prevent divide overflow
    double pref = m_Kf * (1.0 - refRMSD/RMS);
+   return pref;
   }
 //protected:
 //  void    ApplyForce(GlobalMasterFreeEnergy& CFE);
@@ -508,6 +508,7 @@ protected:
   double ComputeForcePrefactor() {
    double RMS = __MAX(instRMSD, kALittle); //  prevent divide overflow
    double pref = m_Kf * (1.0 - refRMSD/RMS);
+   return pref;
   }
 };
 #endif //RMSD

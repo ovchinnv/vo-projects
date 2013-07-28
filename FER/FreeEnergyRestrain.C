@@ -1054,6 +1054,7 @@ AnRMSDRestraint::AnRMSDRestraint() {
   m_pCOMs = new Vector[1] ; // there is only one center-of-mass :  that of the orientation group (1)
   ugrad=NULL;
   qdiffrot=1;
+  qorient=1;
   u[0]=1.;
   u[1]=0.;
   u[2]=0.;
@@ -1121,10 +1122,11 @@ void AnRMSDRestraint::ApplyForce(GlobalMasterFreeEnergy &CFE) {
  const double* forcedWeights = m_pGroups[1].GetWeights();
  const double* orientWeights = NULL;
 // reference coordinates
- const double* rtarget_f= m_pGroups[0].GetCoords();                            //orientation coordinates of the target structure
+ const double* rtarget_f= m_pGroups[1].GetCoords();                            //orientation coordinates of the target structure
  const double* rtarget_o= NULL;
  double* rtarget_rot_f=NULL;
 //
+DebugM(9, "RMSD Force calculation : qdiffrot, qorient: "<<qdiffrot<<" "<<qorient<<"\n");
 //
  if (qdiffrot) {
   iatom_o = m_pGroups[0].GetInds() ; //forced index array
@@ -1161,6 +1163,7 @@ void AnRMSDRestraint::ApplyForce(GlobalMasterFreeEnergy &CFE) {
   if (qdiffrot) { // also subtract COM from forced coordinates
    for (i=0;i<3*nforced;){rcurrent_f[i++]-=COM[0];rcurrent_f[i++]-=COM[1];rcurrent_f[i++]-=COM[2]; }
   }
+DebugM(9, "RMSD Force calculation : COM: "<<COM[0]<<" "<<COM[1]<<" "<<COM[2]<<"\n");
   free(COM);
  }
 //
@@ -1246,12 +1249,15 @@ void AnRMSDRestraint::ApplyForce(GlobalMasterFreeEnergy &CFE) {
  for (j=0, k=0; j<nforced; j++) {
   double w = forcedWeights[j];
   forces_f[k] = w * ( rcurrent_f[k] - rtarget_rot_f[k] ) ; k++ ;
+  forces_f[k] = w * ( rcurrent_f[k] - rtarget_rot_f[k] ) ; k++ ;
+  forces_f[k] = w * ( rcurrent_f[k] - rtarget_rot_f[k] ) ; k++ ;
  } // for
 //  compute RMSD
  instRMSD = rmsd(rcurrent_f, rtarget_rot_f, forcedWeights, nforced, qswapdim);
 //  if ( refRMSD == -1.0 ) refRMSD = instRMSD; // compute target RMS from first coordinate
 //  force prefactor
  double pref = ComputeForcePrefactor(); // overloaded in derived classes
+  DebugM(9,"Force prefactor is "<<pref<<" (force constant was "<<m_Kf<<")\n");
 //
 // send forces to the CFE object
 // forcing atoms

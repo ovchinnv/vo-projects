@@ -693,6 +693,7 @@ DebugM(1,"GetRestraint : RMSD restraint coordinates read\n");
      {
       AFixedRMSDRestraint* pRestraint = new AFixedRMSDRestraint;
       pRestraint->SetKf(Kf);
+DebugM(1, "GetRestraint : set Kf in RMSD restraint to "<<pRestraint->GetKf()<<"\n");
       pRestraint->SetGroups(Group1, Group2);
       pRestraint->SetRefRMSD(D); // target RMS distance
       pRestraint->qDiffRotCheck(); // compute qdiffrot
