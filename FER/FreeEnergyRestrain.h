@@ -58,7 +58,7 @@ public:
   void    SetGroup(AGroup& Group, int GroupIndex);
 //the four functions below should really be in the derived classes (which know how many groups they need)
   void    SetGroups(AGroup& Group1);
-  virtual void SetGroups(AGroup& Group1, AGroup& Group2);
+  void    SetGroups(AGroup& Group1, AGroup& Group2);
   void    SetGroups(AGroup& Group1, AGroup& Group2, AGroup& Group3);
   void    SetGroups(AGroup& Group1, AGroup& Group2, AGroup& Group3, AGroup& Group4);
 //---------------------------------------------//
@@ -434,6 +434,7 @@ protected:
                     // if yes, gradient computation does not require rotation matrix derivatives (simpler)
 public:
   AnRMSDRestraint();
+  AnRMSDRestraint(AGroup&, AGroup&);
   ~AnRMSDRestraint(); // modified constructor to free ugrad
   void    PrintInfo();
   void    SetRefRMSD(double v)  {refRMSD=v;}
@@ -452,6 +453,9 @@ protected:
 class AFixedRMSDRestraint : public AnRMSDRestraint {
 //-------------------------------------------------------------------
 public:
+  AFixedRMSDRestraint() : AnRMSDRestraint() {;}
+  AFixedRMSDRestraint(AGroup& g1, AGroup& g2) : AnRMSDRestraint(g1, g2) {;}
+//
   double  GetEnergy() { double e = (instRMSD - refRMSD); return ( 0.5 * m_Kf * e * e ); }
   void    GetStr(char* Str) { strcpy(Str, "Fixed RMSD Restraint"); }
 protected:
@@ -469,6 +473,8 @@ class ABoundRMSDRestraint : public AnRMSDRestraint {
 private:
   Bound_t m_Bound;
 public:
+  ABoundRMSDRestraint() : AnRMSDRestraint() { m_Bound = kUpper ;}
+  ABoundRMSDRestraint(AGroup& g1, AGroup& g2) : AnRMSDRestraint(g1, g2) { m_Bound = kUpper ;}
   void    SetBound(Bound_t Bound)  {m_Bound=Bound;}
   Bound_t GetBound()               {return(m_Bound);}
   double  GetEnergy() { double e = (instRMSD - refRMSD); if (m_Bound==kLower) e = -e; return ( e>0. ? 0.5 * m_Kf * e * e :  0.0 ); }
@@ -490,6 +496,8 @@ private:
   double  startRMSD;
   double  stopRMSD;
 public:
+  AMovingRMSDRestraint() : AnRMSDRestraint() {;}
+  AMovingRMSDRestraint(AGroup& g1, AGroup& g2) : AnRMSDRestraint(g1, g2) {;}
   void    SetStartRMSD(double v)      {startRMSD=v;}
   void    SetStopRMSD(double v)       {stopRMSD =v;}
   double  GetStartRMSD()              {return(startRMSD);}

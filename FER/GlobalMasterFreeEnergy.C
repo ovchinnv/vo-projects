@@ -107,8 +107,9 @@ void GlobalMasterFreeEnergy::user_initialize() {
 // read all the input from config
 //-----------------------------------------------------------------
 
-  iout << iINFO << "  FREE ENERGY CONFIG SRIPT\n"; 
-  iout << iINFO << "=============================\n"; 
+  iout << iINFO << "=================================================\n"; 
+  iout << iINFO << "  FREE ENERGY CONFIG SCRIPT (COMMENTS STRIPPED)\n"; 
+  iout << iINFO << "=================================================\n"; 
   int config_len = strlen(config);
   if ( config_len < 10000 ) {
     iout << config;
@@ -120,8 +121,8 @@ void GlobalMasterFreeEnergy::user_initialize() {
     iout << new_config;
     delete [] new_config;
   }
-  iout << iINFO << "===============================\n" << endi; 
-
+  iout << iINFO << "=================================================\n"<<endi; 
+//
   ReadInput(config, m_RestraintManager, m_LambdaManager, *this, simParams->dt);
 
   // exit if there aren't enough steps to complete all pmf & mcti blocks
@@ -180,42 +181,60 @@ void GlobalMasterFreeEnergy::initialize() {
 
   config = new char[1];
   config[0] = '\0';
-
+ //
+ // functionality to remove comments: (VO 2013)
+  int comlen = 2;
+  const char* (comment[comlen]);
+  comment[0]="#"; comment[1]="//";
+//
   for ( ; script; script = script->next) {
-    if ( strstr(script->data,"\n") ) {
-      size_t add_len = strlen(script->data);
-      size_t config_len = 0;
-      config_len = strlen(config);
-      char *new_config = new char[config_len + add_len + 2];
-      strcpy(new_config,config);
-      strcat(new_config,script->data);
-      strcat(new_config,"\n");  // just to be safe
-      delete [] config;
-      config = new_config;
-    } else {
+    char* filescript=NULL;
+    char* istr = script->data; // beginning
+    char* eol = strstr(istr,"\n"); // check for newlines in script
+//============================================= external file script ================================
+    if (!eol) { // no newlines found above -- will assume this is a filename spec
       FILE *infile = fopen(script->data,"r");
       if ( ! infile ) {
 	char errmsg[256];
 	sprintf(errmsg,"Error trying to read file %s!\n",script->data);
 	NAMD_die(errmsg);
       }
-      fseek(infile,0,SEEK_END);
-      size_t add_len = ftell(infile);
+      fseek(infile,0,SEEK_END); // go to end of file
+      size_t filesize = ftell(infile); // get position in the file (bytes)
+      filescript = new char[filesize + 2];
+      rewind(infile);
+      fread(filescript,sizeof(char),filesize,infile);
+      filescript[filesize++] = '\n';
+      filescript[filesize]   = '\0';
+      fclose(infile);
+      istr=filescript;
+    }
+//============================================= embedded script =====================================
+    while (char* eol = strstr(istr,"\n")) { // proceed until there are no more endlines
+// check for comments
+     char* estr = eol; // start assuming there are no comments
+     for (int j = 0 ; j < comlen ; j++) {
+      char* comm = strstr( istr, comment[j] );
+      if (comm) { //found comment
+       if ( ( estr - comm ) > 0 ) estr=comm; // comment occurs before current end of command
+      }
+     } // all comment marks
+     int datalen = estr - istr;
+     if (datalen>0) { // do not bother with blank or all-comment lines
+      size_t add_len = datalen;
       size_t config_len = 0;
       config_len = strlen(config);
-      char *new_config = new char[config_len + add_len + 3];
+      char *new_config = new char[config_len + add_len + 2]; // include null
       strcpy(new_config,config);
+      strncat(new_config,istr, datalen);
+      strcat(new_config,"\n");
       delete [] config;
       config = new_config;
-      new_config += config_len;
-      rewind(infile);
-      fread(new_config,sizeof(char),add_len,infile);
-      new_config += add_len;
-      new_config[0] = '\n';
-      new_config[1] = '\0';
-      fclose(infile);
-    }
-  }
+     }
+     istr=eol+1;  //skip to end of line and skip newline char
+    } // while
+    if (filescript) delete[] filescript;
+  } //for
 
   // iout << iDEBUG << "Free energy perturbation - initialize()\n" << endi; 
   user_initialize();

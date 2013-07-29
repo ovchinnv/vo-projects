@@ -1066,6 +1066,26 @@ AnRMSDRestraint::AnRMSDRestraint() {
   u[8]=1.;
 }
 //
+AnRMSDRestraint::AnRMSDRestraint(AGroup &group1, AGroup &group2) {
+//
+  m_NumGroups=2; // orientation group and Moving group
+  m_pGroups = new AGroup[m_NumGroups];
+  m_pCOMs = new Vector[1] ; // there is only one center-of-mass :  that of the orientation group (1)
+  ugrad=NULL;
+  qdiffrot=1;
+  qorient=1;
+  u[0]=1.;
+  u[1]=0.;
+  u[2]=0.;
+  u[3]=0.;
+  u[4]=1.;
+  u[5]=0.;
+  u[6]=0.;
+  u[7]=0.;
+  u[8]=1.;
+  SetGroups(group1, group2);
+}
+//
 AnRMSDRestraint::~AnRMSDRestraint() {
 //derived class destructor
   if (ugrad !=NULL) delete []ugrad;
@@ -1118,16 +1138,19 @@ void AnRMSDRestraint::SetGroups(AGroup& Group1, AGroup& Group2) {
  if (qorient) {
   bool qswapdim=1;
   const int norient = m_pGroups[0].GetSize();                              //number of orientation atoms
-  const double* orientWeights = m_pGroups[0].GetWeights() ;
+  const int nforced = m_pGroups[1].GetSize();                             //number of forced atoms
   double* rtarget_o= m_pGroups[0].GetCoords();
+  const double* orientWeights = m_pGroups[0].GetWeights() ;
   double* COM = (double*) com(rtarget_o,orientWeights,norient,qswapdim);
-  for (int i=0;i<3*norient;){rtarget_o[i++]-=COM[0];rtarget_o[i++]-=COM[1];rtarget_o[i++]-=COM[2]; }
+// remove COM from forcing group
+  double* rtarget_f= m_pGroups[1].GetCoords();
 //
-  if (qdiffrot) {
-   const int nforced = m_pGroups[1].GetSize();                             //number of forced atoms
-   double* rtarget_f= m_pGroups[1].GetCoords();
-   for (int i=0;i<3*nforced;){rtarget_f[i++]-=COM[0];rtarget_f[i++]-=COM[1];rtarget_f[i++]-=COM[2]; }
-  }
+  for (int i=0;i<3*nforced;){rtarget_f[i++]-=COM[0];rtarget_f[i++]-=COM[1];rtarget_f[i++]-=COM[2]; }
+// remove COM from orientation group (optional if !qdiffrot)
+//  if (qdiffrot) {
+// remove COM from orientation group
+   for (int i=0;i<3*norient;){rtarget_o[i++]-=COM[0];rtarget_o[i++]-=COM[1];rtarget_o[i++]-=COM[2]; }
+//  }
 DebugM(1, "Add RMSD groups : Removed COM from target atoms: "<<COM[0]<<" "<<COM[1]<<" "<<COM[2]<<"\n");
   free(COM);
  }
@@ -1173,6 +1196,7 @@ DebugM(9, "RMSD Force calculation : qdiffrot, qorient: "<<qdiffrot<<" "<<qorient
  }
 //
 //      load coordinates
+DebugM(1,"RMSD force :  loading forced atom coordinatess\n");
  for (i=0, j=0 ; i<nforced ; i++) {// forced
   aid=iatom_f[i];
   Vector pos = CFE.positions[aid];
@@ -1180,6 +1204,7 @@ DebugM(9, "RMSD Force calculation : qdiffrot, qorient: "<<qdiffrot<<" "<<qorient
  };
 //
  if (qorient && qdiffrot) { // orientation
+DebugM(1,"RMSD force :  loading orientation atom coordinates\n");
   for (i=0, j=0 ; i<norient ; i++) {
    aid=iatom_o[i];
    Vector pos = CFE.positions[aid];
@@ -1187,12 +1212,22 @@ DebugM(9, "RMSD Force calculation : qdiffrot, qorient: "<<qdiffrot<<" "<<qorient
   };
  }
 //
- if (qorient) {
+// aa -- debug
+ DebugM(1,rcurrent_f<< " "<< rcurrent_o <<" "<<norient<<" "<<nforced<<" "<<qdiffrot<<" "<<qorient<<"\n"); 
+ for (i=0;i<3*nforced;) { 
+  DebugM(1,"RF : "<<rcurrent_f[i] << " : "<<rcurrent_f[i+1] << " : "<<rcurrent_f[i+2] <<"\n");
+  DebugM(1,"RO : "<<rcurrent_o[i] << " : "<<rcurrent_o[i+1] << " : "<<rcurrent_o[i+2] <<"\n");
+  i+=3;
+ }
+ double* COM = (double*) com(rtarget_o,orientWeights,norient,qswapdim);
+ DebugM(1, "RMSD Force calculation : TCOM: "<<COM[0]<<" "<<COM[1]<<" "<<COM[2]<<"\n");free(COM);
+
+ if (qorient) { // subtract COM from forced coordinates
   double* COM = (double*) com(rcurrent_o,orientWeights,norient,qswapdim);   // pointer returned is of type void, cast to double
+  for (i=0;i<3*nforced;){rcurrent_f[i++]-=COM[0];rcurrent_f[i++]-=COM[1];rcurrent_f[i++]-=COM[2]; }
 //  for (i=0;i<3*norient;){rcurrent_o[i++]-=COM[0];rcurrent_o[i++]-=COM[1];rcurrent_o[i++]-=COM[2]; } // not needed
-  if (qdiffrot) { // also subtract COM from forced coordinates
-   for (i=0;i<3*nforced;){rcurrent_f[i++]-=COM[0];rcurrent_f[i++]-=COM[1];rcurrent_f[i++]-=COM[2]; }
-  }
+//  if (qdiffrot) { 
+//  }
 DebugM(9, "RMSD Force calculation : COM: "<<COM[0]<<" "<<COM[1]<<" "<<COM[2]<<"\n");
   free(COM);
  }
@@ -1271,7 +1306,7 @@ DebugM(9, "RMSD Force calculation : COM: "<<COM[0]<<" "<<COM[1]<<" "<<COM[2]<<"\
      rtarget_rot_f=(double*) matmul(u, rtarget_f, 3, 3, nforced); // will deallocate below
   } //qdiffrot
  } else { // not qorient
-     rtarget_rot_f = (double*) rtarget_f;
+     rtarget_rot_f=(double*) rtarget_f;
  } // qorient
 //
 //   add forces on the forcing atoms:
@@ -1294,6 +1329,7 @@ DebugM(9, "RMSD Force calculation : COM: "<<COM[0]<<" "<<COM[1]<<" "<<COM[2]<<"\
 //========== finite difference test v (if requested); putting this test here is the simplest (though inelegant) solution
  if (fdtest) {
   double oriRMSD = instRMSD; // save correct rmsd
+//
   std::map<int, Vector> fmap;      // maps aid to forces
   std::map<int, std::vector<int> > imap; // maps aid to o/f atom indices
   double* f=forces_f;
@@ -1354,6 +1390,10 @@ DebugM(9, "RMSD Force calculation : COM: "<<COM[0]<<" "<<COM[1]<<" "<<COM[2]<<"\
      if (rf) rf[k] = saved ;
      if (ro) ro[k] = saved ;
     } //l
+
+DebugM(1, "Index: "<< (i->second[0])<<" analytical : " << pref * fc-> second[k]<< "  FD: "<< de/(2.*dh)<<"\n") ;
+//    fc->second[k] = pref * (fc->second[k]) ;
+
     err = fabs ( pref * fc->second[k] - de/(2.*dh) ) ; // analytical derivative minus the finite difference
     if ( err  > maxerr ) maxerr=err;
    } // over components (k)

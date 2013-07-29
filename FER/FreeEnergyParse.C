@@ -691,10 +691,9 @@ DebugM(1,"GetRestraint : RMSD restraint coordinates read\n");
 #ifdef FE_RESTRAINT_RMSD_FORTRAN
     case kRMSD:
      {
-      AFixedRMSDRestraint* pRestraint = new AFixedRMSDRestraint;
+      AFixedRMSDRestraint* pRestraint = new AFixedRMSDRestraint(Group1, Group2);
       pRestraint->SetKf(Kf);
 DebugM(1, "GetRestraint : set Kf in RMSD restraint to "<<pRestraint->GetKf()<<"\n");
-      pRestraint->SetGroups(Group1, Group2);
       pRestraint->SetRefRMSD(D); // target RMS distance
       ptrRestraint=pRestraint;
       break;
