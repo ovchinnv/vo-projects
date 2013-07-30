@@ -86,17 +86,22 @@ void ARestraintManager::Add(ARestraint* pRestraint) {
 
 // void ARestraintManager::UpdateCOMs(GlobalMasterFreeEnergy& CFE) // deleted (VO 2013; logically belongs at the lower level of ind. restraint)
 
-void ARestraintManager::AddForces(GlobalMasterFreeEnergy& CFE) {
+double ARestraintManager::AddForces(GlobalMasterFreeEnergy& CFE) {
 //---------------------------------------------------------------------------
 // each restraint is responsible for all steps of force computation (VO: 2013)
 //---------------------------------------------------------------------------
+  double total_energy=0.;
+  for (int i=0; i<m_NumRestraints; i++) { 
 #ifdef DEBUGM
-  for (int i=0; i<m_NumRestraints; i++) { m_ppRestraints[i]->ApplyForce(CFE, 1, 0.00001); } // run an finite difference test at each calculation
+   m_ppRestraints[i]->ApplyForce(CFE, 1, 0.00001); // run an finite difference test at each calculation
 #else
-  for (int i=0; i<m_NumRestraints; i++) { m_ppRestraints[i]->ApplyForce(CFE); }
+   m_ppRestraints[i]->ApplyForce(CFE);
 #endif
+   total_energy += m_ppRestraints[i]->GetEnergy();
+   return total_energy;
+  }
 }
-
+//
 double ARestraintManager::Sum_dU_dLambdas() {
 //---------------------------------------------------------------------------
 // sum up dU/dLambda from each forcing restraint

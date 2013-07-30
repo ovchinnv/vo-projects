@@ -16,6 +16,7 @@
 
 class Molecule;
 class SimParameters;
+class SubmitReduction;
 
 class GlobalMasterFreeEnergy : public GlobalMaster {
  public:
@@ -28,6 +29,8 @@ class GlobalMasterFreeEnergy : public GlobalMaster {
   Molecule *molecule;
   SimParameters *simParams;
   char *config;
+  SubmitReduction *reduction;
+//
   ARestraintManager  m_RestraintManager;
   ALambdaManager     m_LambdaManager;
 // VO 2013 : store a map of positions indexed by atomid

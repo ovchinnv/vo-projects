@@ -61,7 +61,7 @@ void GlobalMasterFreeEnergy::calculate() {
 // fetch all positions (I actually think this should be done at the GlobalMaster level)
    fetchPositions();
 // restraint manager calls individual restraints to add their forces
-   m_RestraintManager.AddForces(*this);
+   double total_restraint_energy = m_RestraintManager.AddForces(*this);
 
    if (LambdasActive) {
     if (m_LambdaManager.IsTimeToClearAccumulator()) {
@@ -97,7 +97,9 @@ void GlobalMasterFreeEnergy::calculate() {
       }
     }
    }
-
+// add restraint energy to MISC column
+   reduction->item(REDUCTION_MISC_ENERGY) += total_restraint_energy;
+   reduction->submit();
   } // numRestraints > 0
 }
 
@@ -148,21 +150,12 @@ int GlobalMasterFreeEnergy::requestAtom(int atomid)
   return 0;  // success
 }
 
-// no need for this v (VO 2013)
-/*int GlobalMasterFreeEnergy::addForce(int atomid, Force force)
-{
-  DebugM(2,"Forcing "<<atomid<<" with "<<force<<"\n");
-  if ( atomid < 0 || atomid >= molecule->numAtoms ) return -1;  // failure
-  modifyForcedAtoms().add(atomid);
-  modifyAppliedForces().add(force);
-  return 0;  // success
-}
-*/
 
 GlobalMasterFreeEnergy::GlobalMasterFreeEnergy() : GlobalMaster() {
   DebugM(3,"Constructing GlobalMasterFreeEnergy\n");
   molecule = Node::Object()->molecule;
   simParams = Node::Object()->simParameters;
+  reduction = ReductionMgr::Object()->willSubmit(REDUCTIONS_BASIC);
   // now set up the free energy stuff
   initialize();
 }
@@ -170,6 +163,7 @@ GlobalMasterFreeEnergy::GlobalMasterFreeEnergy() : GlobalMaster() {
 GlobalMasterFreeEnergy::~GlobalMasterFreeEnergy() {
   DebugM(3,"Destructing GlobalMasterFreeEnergy\n");
   delete config;
+  delete reduction;
 }
 
 

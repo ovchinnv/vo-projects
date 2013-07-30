@@ -33,7 +33,7 @@ public:
   ARestraint*  operator[] (int Index);
   void   Add(ARestraint* pRestraint);
   int    GetNumRestraints() {return(m_NumRestraints);}
-  void   AddForces(GlobalMasterFreeEnergy& CFE);
+  double   AddForces(GlobalMasterFreeEnergy& CFE); // returns energy
   void   PrintEnergyInfo();
   void   PrintRestraintInfo();
   void   Print_dU_dLambda_Info();

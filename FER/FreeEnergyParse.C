@@ -1837,7 +1837,7 @@ DebugM(1,"ReadRMSDCoords : File contains "<<numatoms<<" atoms\n");
     for (int i=0; i < groups[j]->GetSize() ; i++) {
      atom=fepdb.atom( inds[i] );
      groups[j]->SetCoords(i, atom->xcoor(), atom->ycoor(), atom->zcoor());
-DebugM(1,"ReadRMSDCoords : Setting reference coordinates for AtomId "<<i<<" in group "<<j\
+DebugM(1,"ReadRMSDCoords : Setting reference coordinates for atom "<<i<<" in group "<<j\
          <<" to ("<<atom->xcoor()<<", "<<atom->ycoor()<<", "<<atom->zcoor()<<")\n");
     }
    }//j
