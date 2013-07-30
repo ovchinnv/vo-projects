@@ -37,7 +37,7 @@ extern "C" {
 #include "GlobalMasterFreeEnergy.h"
 #include "Molecule.h"
 //
-#define DEBUGM
+//#define DEBUGM
 #define MIN_DEBUG_LEVEL 1
 #define MAX_DEBUG_LEVEL 10
 #include "Debug.h"

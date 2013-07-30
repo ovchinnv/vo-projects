@@ -54,7 +54,7 @@ bestfit.h : bestfit.H $(LOCALDEPS) $(GLOBALDEPS)
 	$(FPP) $(FPPFLAGS) -D__BINDC -U__CHARMM $(GLOBALMACROS) $(LOCALMACROS) -P $< > $@
 
 ctest :: ctest.o shared force_look
-	$(LD) $(LDFLAGS) -Bdynamic ctest.o $(LIBS) $(MPI_LIBS) $(CLIB) -o  ctest
+	$(CC) -Bdynamic ctest.o $(LIBS) $(MPI_LIBS) $(CLIB) $(FLIBS) -o  ctest
 	echo "==================================================="
 	echo "Running C test :"
 	echo "==================================================="
