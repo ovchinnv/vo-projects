@@ -31,7 +31,8 @@ __CHARMM_ONLY##IF NEWBESTFIT
        bool, private :: qdebug=__DEBUG
        bool, private :: qcheckdet=__CHKDET
        bool, private :: qdetfailtrace=__DETFAILTRACE
-       bool, private :: qiter_refine=__REFINE ! iterative refinement
+       bool, private :: qiter_refine_eval=.false.
+       bool, private :: qiter_refine_evec=.false.
       !
       !parameters
        float, parameter :: zero=0d0
@@ -90,7 +91,8 @@ __CHARMM_ONLY##IF NEWBESTFIT
       !###############################################################
        function veccross3(v1,v2)
        __IMPNONE
-       float :: v1(3), v2(3), veccross3(3)
+       float, intent(in) :: v1(3), v2(3)
+       float :: veccross3(3)
        veccross3=(/v1(2)*v2(3)-v1(3)*v2(2),                             &
      &             v1(3)*v2(1)-v1(1)*v2(3),                             &
      &             v1(1)*v2(2)-v1(2)*v2(1)/)
@@ -218,7 +220,7 @@ __DBGCOMM        __DEBUG_OUT(*, ' Det(M) [must be >=0] : ', dummy)
 ! ad hoc : try to refine eigenvalues using Newton-Raphson
 ! for most cases, turns out that the correction is already machine precision, so no improvement is possible
 !      __DBGCOMM write(0,*) 'EVAL:', eval
-       if (qiter_refine) then
+       if (qiter_refine_eval) then
         do j=1,3
          d=eval(j)
          do k=1,2
@@ -281,9 +283,12 @@ __DBGCOMM        __DEBUG_OUT(*, ' Det(M) [must be >=0] : ', dummy)
          endif
         else
          ! otherwise there is a vector with z = 0 try setting x=1
-         if     (abs(b) .gt. errtol_) then; v=unit3((/one, -a/b, zero/)) __DBGCOMM;write(0,*) 216, b
-         elseif (abs(e) .gt. errtol_) then; v=unit3((/one, -d/e, zero/)) __DBGCOMM;write(0,*) 217, e
-         elseif (abs(h) .gt. errtol_) then; v=unit3((/one, -g/h, zero/)) __DBGCOMM;write(0,*) 218, h
+!         if     (abs(b) .gt. errtol_ .and. abs(a) .gt. errtol_ ) then; v=unit3((/one, -a/b, zero/)) __DBGCOMM;write(0,*) 216, b
+!         elseif (abs(e) .gt. errtol_ .and. abs(d) .gt. errtol_ ) then; v=unit3((/one, -d/e, zero/)) __DBGCOMM;write(0,*) 217, e
+!         elseif (abs(h) .gt. errtol_ .and. abs(g) .gt. errtol_ ) then; v=unit3((/one, -g/h, zero/)) __DBGCOMM;write(0,*) 218, h
+         if     (abs(b) .gt. errtol_  ) then; v=unit3((/one, -a/b, zero/)) __DBGCOMM;write(0,*) 216, b
+         elseif (abs(e) .gt. errtol_  ) then; v=unit3((/one, -d/e, zero/)) __DBGCOMM;write(0,*) 217, e
+         elseif (abs(h) .gt. errtol_  ) then; v=unit3((/one, -g/h, zero/)) __DBGCOMM;write(0,*) 218, h
          else ! Q=0 this should not be possible because P Q R are checked above !
            v=(/zero, one, zero/)                                         __DBGCOMM;write(0,*) 220
          endif
@@ -305,7 +310,7 @@ __DBGCOMM if (qdebug)  __DEBUG_OUT(*, " < ev1|ev2 > / errtol : ", dot_product(ev
 !
 __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
 !          return
-          exit ! quit do loop to skip j=3 iteration, but do not return (multiple returns unfriendly to inlining)
+          exit ! quit do loop to skip j=3 iteration, but do not return
          endif
         endif
        enddo ! j-loop
@@ -325,13 +330,13 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
         endif
        endif
 !
-! optional power iterations to improve pesky eigenvectors
-       if (qiter_refine) then
+! optional power iterations to improve pesky eigenvectors (not recommended -- in nearly singular cases make things worse)
+       if (qiter_refine_evec) then
 ! first eigenvalue/vector pair
         if (abs(eval(1)).gt.errtol_) then
          a=evec(1,1); b=evec(2,1); c=evec(3,1)
          dummy=one/eval(1)
-         do j=1,2
+         do j=1,1
           d = a11*a + a12*b + a13*c; e = a21*a + a22*b + a23*c; f = a31*a + a32*b + a33*c; a=d*dummy ; b=e*dummy ; c=f*dummy
          enddo
          v=unit3((/a,b,c/)) ; evec(:,1)=v ;
@@ -340,7 +345,7 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
           a=evec(1,1); b=evec(2,1); c=evec(3,1)
           d=evec(1,2); e=evec(2,2); f=evec(3,2)
           theta=one/eval(2)
-          do j=1,3
+          do j=1,2
            dummy=a*d+b*e+c*f;
            d=d-dummy*a ; e=e-dummy*b ; f=f-dummy*c
            g = a11*d + a12*e + a13*f; h = a21*d + a22*e + a23*f; i = a31*d + a32*e + a33*f; d=g*theta ; e=h*theta ; f=i*theta
@@ -380,7 +385,7 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
        float, intent(in), target :: x0(:,:), y0(:,:), w(:)
        float, intent(out) :: u(3,3)
        int, optional, intent(in) :: ibeg_, iend_
-       float, optional :: gradu(:,:,:,:) ! gradient of rotation matrix wrt x0
+       float, optional, intent(out) :: gradu(:,:,:,:) ! gradient of rotation matrix wrt x0
        float, optional, intent(out) :: eigval(3) ! eigenvalues
 !
        float, pointer, dimension(:) :: x1, x2, x3, y1, y2, y3
@@ -409,9 +414,7 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
 !
        if (qdebug) then ; __DEBUG_OUT(*, whoami, ' ERRTOL:= ', errtol_) ; endif
 !
-       qgrad=(present(gradu).and.present(ibeg_).and.present(iend_))
        if (present(qdimswap_)) then ; qdimswap=qdimswap ; else ; qdimswap=.false. ; endif
-!
        xcom=com(x0,w,qdimswap) ;  ycom=com(y0,w,qdimswap)
 !
 ! initialize
@@ -468,10 +471,18 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
         enddo
        endif ! qdimswap
 !
+       if (present(gradu)) then
+        qgrad=.true.
+        if (present(ibeg_)) then ; ibeg=max(1,ibeg_) ; else ; ibeg=1 ; endif
+        if (present(iend_)) then ; iend=min(n,iend_) ; else ; iend=n ; endif
+       else ; qgrad = .false.
+       endif
+!
        r=RESHAPE( (/r11,r21,r31,r12,r22,r32,r13,r23,r33/),(/3,3/))
        rr=matmul(transpose(r),r) ! r`r
       ! diagonalize rr
        call eig3s(rr, mu, a) ! mu -- evalues a -- evectors
+       mu=max(mu,zero) ; ! prevent small negative values
 !
        if (qdebug) then
         __DEBUG_OUT(*, whoami, '> RR matrix:')
@@ -493,12 +504,12 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
 !
 !      handle three zero eigenvalues (single point)
 !      note that the eigenvalues are sorted in decreasing order
-       if     (abs(mu(1)) .lt. errtol_) then 
+       if     (mu(1) .lt. errtol_) then 
         b=Kd; oomu=one; roomu=one; rmu=zero
         if (qgrad) then ; gradu(:,:,:,ibeg:iend)=zero ; qgrad=.false.; endif ! derivatives are ill-defined
 !*********************************************************************
 !      handle two zero eigenvalues (line)
-       elseif (abs(mu(2)) .lt. errtol_) then
+       elseif (mu(2) .lt. errtol_) then
         rmu(1)=sqrt(mu(1)); roomu(1)=one/rmu(1); oomu(1)=roomu(1)**2;
         b(:,1)=b0(:,1)*roomu(1)
         oomu(2)=one; roomu(2)=one; rmu(2)=zero
@@ -520,12 +531,13 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
         b(:,2)=b0(:,2)*roomu(2)
        endif
 !    note : the third eigenvalue is not explicitly used in the rotation calculation
-       if (abs(mu(3)).lt.errtol_) then; rmu(3)=zero;
-                                  else; rmu(3)=sqrt(mu(3)); endif
+       if (mu(3).lt.errtol_) then; rmu(3)=zero;
+                             else; rmu(3)=sqrt(mu(3)); endif
 !    third vector is determined by the first two
        b(:,3)=veccross3(b(:,1),b(:,2))
 !
        u=matmul(b, transpose(a)) ! this is the rotation matrix; apply using: x_new = U . x_old
+       u(:,3)=veccross3(u(:,1),u(:,2))
 !
        if (qcheckdet) then
         detr=                                                           &
@@ -542,14 +554,14 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
            __DEBUG_OUT(*, whoami, '> E-VECTORS:')
            __DEBUG_OUT('(3E22.15)', a)
 !     verify directly that matrix orthonormal:
-           __DEBUG_OUT(*, whoami, '> U x U^T (should be I):')
+           __DEBUG_OUT(*, whoami, '> Ev x Ev^T (should be I):')
            __DEBUG_OUT('(3E22.15)', matmul(a,transpose(a)) ) ! aa
 !     verify directly that diagonalization is correct:
            b0(:,1)=mu(1)*a(:,1);b0(:,2)=mu(2)*a(:,2);b0(:,3)=mu(3)*a(:,3)! aa
-           __DEBUG_OUT(*, whoami, '> RR - U x M x U^T (should be 0):')
+           __DEBUG_OUT(*, whoami, '> RR - Ev x M x Ev^T (should be 0):')
            __DEBUG_OUT('(3E22.15)', matmul(b0,transpose(a))-rr) ! aa
-!     verify directly that teh ROTATION matrix is orthonormal:
-           __DEBUG_OUT(*, whoami, '> A x A^T (should be I):')
+!     verify directly that the ROTATION matrix is orthonormal:
+           __DEBUG_OUT(*, whoami, '> U x U^T (should be I):')
            __DEBUG_OUT('(3E22.15)', matmul(u,transpose(u)) ) ! aa
            if (qgrad) then ; gradu(:,:,:,ibeg:iend)=zero ; qgrad=.false.; endif ! skip derivatives
          endif !qdetfailtrace
@@ -575,8 +587,6 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
        endif
 !    compute gradient
        if (qgrad) then
-        ibeg = max(1,ibeg_)
-        iend = min(n,iend_)
         if (qdimswap) then
          x1=>x0(1,:); x2=>x0(2,:); x3=>x0(3,:);
          y1=>y0(1,:); y2=>y0(2,:); y3=>y0(3,:);
