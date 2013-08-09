@@ -87,7 +87,7 @@ void ReadInput(char* Str, ARestraintManager& RMgr,
   int             Count;
   int             ind;
   char*           OldStr=NULL;   //make sure it's not equal Str to start
-  ALambdaControl  PmfBlock, OldPmfBlock;
+  ALambdaControl  PmfBlock ; //, OldPmfBlock;
   // Bool_t          Terminate;
 
   // read from Str until can't read anymore
@@ -105,10 +105,9 @@ void ReadInput(char* Str, ARestraintManager& RMgr,
       // add it to the Lambda manger
       ind = LMgr.Add(PmfBlock);
       // initialize the default parameters of the next PmfBlock
-      OldPmfBlock = PmfBlock;
-      PmfBlock.Init(OldPmfBlock); // VO 2013 :  this makes no sense to me whatsoever since pmfblock is destroyed on exit
-// aa
-DebugM(1, "ReadInput : PmfBlock.LambdaRef "<< LMgr[ind].LambdaRef<<" \n");
+//      OldPmfBlock = PmfBlock;
+//      PmfBlock.Init(OldPmfBlock); // VO 2013 : this makes little sense because OldPmfBLock = PmfBlock !!!
+//DebugM(1, "ReadInput : PmfBlock.LambdaRef "<< LMgr[ind].LambdaRef<<" \n");
     }
   }
   Str += ReadWhite(Str);

@@ -33,7 +33,7 @@ public:
   int     GetNumObjects() {return(m_NumObjects);}
   Bool_t  GetLambdas(double& LambdaKf, double& LambdaRef);
   Bool_t  IsTimeToPrint();
-  Bool_t  IsFirstStep();
+  bool    IsFirstStep();
   Bool_t  IsTimeToPrint_dU_dLambda();
   Bool_t  IsTimeToClearAccumulator();
   Bool_t  IsEndOf_MCTI_Step();
@@ -41,7 +41,6 @@ public:
   int     GetNumStepsSoFar();
   int     GetNumAccumStepsSoFar();
   void    PrintHeader(double dT);
-  void    PrintLambdaHeader(double dT);
   void    Print_dU_dLambda_Summary(double Sum_dU_dLambdas);
   void    PrintSomeSpaces();
   void    Print_MCTI_Integration();

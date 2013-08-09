@@ -89,7 +89,7 @@ void ALambdaManager::ZeroAccumulator() {
 }
 
 
-Bool_t ALambdaManager::IsFirstStep() {
+bool ALambdaManager::IsFirstStep() {
 //------------------------------------------------------------------------
 // ASSUMING that the m_ActiveIndex'th LambdaControl is active,
 // decide if it's time to print restraint information
@@ -138,7 +138,6 @@ Bool_t ALambdaManager::IsEndOf_MCTI_Step() {
   return((*this)[m_ActiveIndex].IsEndOf_MCTI_Step());
 }
 
-
 Bool_t ALambdaManager::IsEndOf_MCTI() {
 //------------------------------------------------------------------------
 // ASSUMING that the m_ActiveIndex'th LambdaControl is active,
@@ -147,16 +146,6 @@ Bool_t ALambdaManager::IsEndOf_MCTI() {
   ASSERT((*this)[m_ActiveIndex].IsActive());
   return((*this)[m_ActiveIndex].IsEndOf_MCTI());
 }
-
-
-void ALambdaManager::PrintLambdaHeader(double dT) {
-//------------------------------------------------------------------------
-// print header for a new lambda control object
-//------------------------------------------------------------------------
-  ASSERT((*this)[m_ActiveIndex].IsActive());
-  (*this)[m_ActiveIndex].PrintLambdaHeader(dT);
-}
-
 
 void ALambdaManager::PrintHeader(double dT) {
 //------------------------------------------------------------------------
@@ -184,38 +173,18 @@ int ALambdaManager::GetNumAccumStepsSoFar() {
   return((*this)[m_ActiveIndex].GetNumAccumStepsSoFar());
 }
 
-
-void ALambdaManager::PrintSomeSpaces() {
-//------------------------------------------------------------------------
-// some stuff to make the output look nice
-//------------------------------------------------------------------------
-#if !defined(_VERBOSE_PMF)
-  iout << "                    ";
-#endif
-}
-
-
 void ALambdaManager::Print_dU_dLambda_Summary(double Sum_dU_dLambdas) {
 //------------------------------------------------------------------------
 // print sum of dU/dLambda's for current time-step and
 // the accumulation of the above.
 //------------------------------------------------------------------------
-  char  Str[100];
-
-#if defined(_VERBOSE_PMF)
-  iout << "FreeEnergy: ";
+  iout << "#FreeEnergy: ";
   iout << "For all forcing restraints, dU/dLambda  = ";
   iout << Sum_dU_dLambdas << std::endl << endi;
-  iout << "FreeEnergy: ";
+  iout << "#FreeEnergy: ";
   iout << "For all forcing restraints, Free Energy = ";
   iout << GetAccumulation();
   iout << " for " << GetNum_dU_dLambda() << " steps" << std::endl << endi;
-#else
-  sprintf(Str, "%10.2e", GetAccumulation());
-  iout << Str << "  ";
-  sprintf(Str, "%6d", GetNum_dU_dLambda());
-  iout << Str << "  ";
-#endif
 }
 
 
@@ -223,7 +192,7 @@ void ALambdaManager::Print_MCTI_Integration() {
 //------------------------------------------------------------------------
 // print the integral of: <dU/dLambda> * dLambda
 //------------------------------------------------------------------------
-  iout << "FreeEnergy: ";
+  iout << "#FreeEnergy: ";
   iout << "For MCTI, Free Energy Integral = ";
   iout << GetIntegration();
   iout << " for " << GetNumAccumStepsSoFar() << " steps" << std::endl << endi;
@@ -313,7 +282,7 @@ int ALambdaManager::GetTotalNumSteps() {
 // pmf and mcti blocks
 //------------------------------------------------------------------------
   int  Total, i;
-  
+//
   Total = 0;
   for (i=0; i<m_NumObjects; i++) {
     Total += m_pPmfBlocks[i].GetNumSteps();

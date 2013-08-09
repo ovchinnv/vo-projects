@@ -35,9 +35,9 @@ public:
   void    Init(ALambdaControl& PriorBlock);
   double  GetLambdaKf();
   double  GetLambdaRef();
-  Bool_t  IsActive();
+  bool    IsActive() { return ( (CurrStep>=StartStep) && (CurrStep<=GetLastStep()) ) ; } 
   Bool_t  IsTimeToPrint();
-  Bool_t  IsFirstStep();
+  bool    IsFirstStep()               { return ( CurrStep == StartStep ); }
   Bool_t  IsTimeToPrint_dU_dLambda();
   Bool_t  IsTimeToClearAccumulator();
   Bool_t  IsEndOf_MCTI_Step();
@@ -57,8 +57,8 @@ public:
     Num_dU_dLambda = 0;
   }
 
-  int    GetNumSteps();
-  int    GetNumStepsSoFar()            {return(CurrStep-StartStep);}
+  int    GetNumSteps()                 {return( (GetLastStep() - StartStep + 1) );}
+  int    GetNumStepsSoFar()            {return( CurrStep - StartStep + 1);}
   int    GetNumAccumStepsSoFar();
   int    GetNum_dU_dLambda()           {return(Num_dU_dLambda);}
   void   SetNumSteps(int Steps)        {NumSteps=Steps;}
@@ -74,7 +74,7 @@ public:
   feptask_t GetTask()                     {return(Task);}
 
 private:
-  Bool_t IsLastStep();
+  bool   IsLastStep() { return (CurrStep==GetLastStep()); }
   int    GetLastStep();
 };
 

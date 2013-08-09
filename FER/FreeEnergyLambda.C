@@ -68,7 +68,7 @@ void ALambdaControl::Init(ALambdaControl& PriorBlock) {
     default:        ASSERT(kFalse); break;  //should never get here
 
   }
-  StartStep = PriorBlock.GetLastStep();
+  StartStep = PriorBlock.GetLastStep() + 1 ; //VO 2013 add +1 (inclusive count)
 }
 
 
@@ -200,58 +200,29 @@ int ALambdaControl::GetNumAccumStepsSoFar() {
   return(Count);
 }
 
-
-int ALambdaControl::GetNumSteps() {
-//------------------------------------------------------------------------
-// get the number of steps needed for this pmf or mcti block
-//------------------------------------------------------------------------
-  // make sure StopStep is calculated
-  GetLastStep();
-  
-  return( (StopStep - StartStep) + 1 );
-}
-
-
-Bool_t ALambdaControl::IsLastStep() {
-//------------------------------------------------------------------------
-// return true if we're on the last step of this pmf or mcti block
-//------------------------------------------------------------------------
-	if (CurrStep == GetLastStep()) {
-    return(kTrue);
-  }
-  else {
-    return(kFalse);
-  }
-}
-
-
 int ALambdaControl::GetLastStep() {
 //------------------------------------------------------------------------
 // get the last step of this task
 //------------------------------------------------------------------------
   // if it's already calculated, just return it
-  if (StopStep > 0) {
-    return(StopStep);
-  }
-  // otherwise calculate it
-  switch (Task) {
+  if (StopStep < 0) {
+   switch (Task) {
     case kStepUp:
     case kStepDown:
     case kStepGrow:
     case kStepFade:
-      StopStep = StartStep +
-                  (NumAccumSteps+NumEquilSteps) * NumRepeats;
+      StopStep = StartStep + (NumAccumSteps+NumEquilSteps) * NumRepeats - 1; //VO 2013 inclusive
       break;
     default:
-      StopStep = StartStep + NumSteps;
+      StopStep = StartStep + NumSteps - 1 ; //VO 2013 inclusive
       break;
   }
-  // and return it
-  return(StopStep);
+ }
+ return(StopStep);
 }
 
 
-void ALambdaControl::GetPaddedTaskStr(char* Str) {
+void ALambdaControl::GetTaskStr(char* Str) {
 //------------------------------------------------------------------------
 // get a string that describes this task
 //------------------------------------------------------------------------
@@ -269,27 +240,6 @@ void ALambdaControl::GetPaddedTaskStr(char* Str) {
     default:         strcpy(Str, "Bug Alert!!!");  break;
   }
 }
-
-
-void ALambdaControl::GetTaskStr(char* Str) {
-//------------------------------------------------------------------------
-// get a string that describes this task
-//------------------------------------------------------------------------
-  switch (Task) {
-    case kUp:        strcpy(Str, "Up");            break;
-    case kDown:      strcpy(Str, "Down");          break;
-    case kStop:      strcpy(Str, "Stop");          break;
-    case kGrow:      strcpy(Str, "Grow");          break;
-    case kFade:      strcpy(Str, "Fade");          break;
-    case kNoGrow:    strcpy(Str, "NoGrow");        break;
-    case kStepUp:    strcpy(Str, "StepUp");        break;
-    case kStepDown:  strcpy(Str, "StepDown");      break;
-    case kStepGrow:  strcpy(Str, "StepGrow");      break;
-    case kStepFade:  strcpy(Str, "StepFade");      break;
-    default:         strcpy(Str, "Bug Alert!!!");  break;
-  }
-}
-
 
 Bool_t ALambdaControl::IsTimeToClearAccumulator() {
 //------------------------------------------------------------------------
@@ -321,21 +271,6 @@ Bool_t ALambdaControl::IsTimeToClearAccumulator() {
   }
   return(RetVal);
 }
-
-
-Bool_t ALambdaControl::IsFirstStep() {
-//------------------------------------------------------------------------
-// ASSUMING that this object is currently active, decide if it's the
-// first step of the control object.
-//------------------------------------------------------------------------
-  Bool_t  RetVal=kFalse;
-
-  if (CurrStep == (StartStep+1)) {
-    RetVal = kTrue;
-  }
-  return(RetVal);
-}
-
 
 Bool_t ALambdaControl::IsTimeToPrint() {
 //------------------------------------------------------------------------
@@ -428,81 +363,32 @@ Bool_t ALambdaControl::IsTimeToPrint_dU_dLambda() {
 }
 
 
-void ALambdaControl::PrintLambdaHeader(double dT) {
-//----------------------------------------------------------------------------
-// ASSUMING that this object is currently active, write out the header for
-// a new lambda control object
-//----------------------------------------------------------------------------
-  // double Time;
-  
-  // calculate current time in femto-seconds
-  // Time = (double)CurrStep * dT;
-
-iout << "FreeEnergy: ";
-#if !defined(_VERBOSE_PMF)
-  iout << "nstep  time(ps)  ";
-  iout << "    task  lambdaKf  lambdaRef     delta-G  #steps  n*{value  target |}" << std::endl;
-  iout << "FreeEnergy: -----  --------  ";
-  iout << "--------  --------  ---------  ----------  ------  -------------------" << std::endl;
-  iout << endi;
-#endif
-}
-
-
 void ALambdaControl::PrintHeader(double dT) {
 //----------------------------------------------------------------------------
 // ASSUMING that this object is currently active, write out the current time
 //----------------------------------------------------------------------------
   double  Time;
   char    Str[100], Str2[100];
-
+//header
+  iout << "==============================================================" << std::endl;
+  iout << "#FreeEnergy: nstep  time(ps)      task  lambdaKf  lambdaRef   " << std::endl;
+  iout << endi;
+  //
   // calculate current time in femto-seconds
   Time = (double)CurrStep * dT;
 
-#if defined(_VERBOSE_PMF)
-  iout << "FreeEnergy: " << std::endl << endi;
-  iout << "FreeEnergy: ";
-  iout << "Time Step = "  << CurrStep            <<    ",  ";
-  iout << "Time = ";
-  // write out time in ps
-  iout << Time/1000.0     << " ps,  ";
-  iout << "Lambda_Kf = "  << LambdaKf            <<    ",  ";
-  iout << "Lambda_Ref = " << LambdaRef           <<     "  ";
-  GetTaskStr(Str);
-  iout << "(" << Str << ")";
-  iout << std::endl << endi;
-  iout << "FreeEnergy: ";
-  iout << "------------------------------------------------";
-  iout << "-------------------";
-  iout << std::endl << endi;
-#else
   sprintf(Str, "%5d", CurrStep);
   // write out time in ps
   sprintf(Str2, "%8.3f", Time/1000.0);
-  iout << "FreeEnergy: ";
+  iout << "#FreeEnergy: ";
   iout << Str << "  " << Str2 << "  ";
-  GetPaddedTaskStr(Str);
+  GetTaskStr(Str);
   iout << Str << "  ";
   sprintf(Str, "%8.5f", LambdaKf);
   iout << Str << "  ";
   sprintf(Str, "%9.5f", LambdaRef);
-  iout << Str << "  ";
-#endif
+  iout << Str << "\n";
 }
-
-
-Bool_t ALambdaControl::IsActive() {
-//------------------------------------------------------------------------
-// determine if this object is currently active
-//------------------------------------------------------------------------
-  if ( (CurrStep>=StartStep) && (CurrStep<=GetLastStep()) ) {
-    return(kTrue);
-  }
-  else {
-    return(kFalse);
-  }
-}
-
 
 double ALambdaControl::GetLambdaKf() {
 //------------------------------------------------------------------------

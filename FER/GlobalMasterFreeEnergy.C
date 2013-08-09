@@ -76,9 +76,6 @@ void GlobalMasterFreeEnergy::calculate() {
     }
 
     // stuff that's done when it's time to print
-    if (m_LambdaManager.IsFirstStep()) {
-      m_LambdaManager.PrintLambdaHeader(simParams->dt);
-    }
     if (m_LambdaManager.IsTimeToPrint()) {
       m_LambdaManager.PrintHeader(simParams->dt);
       if (m_LambdaManager.IsTimeToPrint_dU_dLambda()) {
@@ -86,9 +83,6 @@ void GlobalMasterFreeEnergy::calculate() {
         if (m_RestraintManager.ThereIsAForcingRestraint()) {
           m_LambdaManager.Print_dU_dLambda_Summary(Sum_dU_dLambdas);
         }
-      }
-      else {
-        m_LambdaManager.PrintSomeSpaces();
       }
       m_RestraintManager.PrintRestraintInfo();
       if (m_LambdaManager.IsEndOf_MCTI()) {

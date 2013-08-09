@@ -128,11 +128,12 @@ void ARestraintManager::PrintRestraintInfo() {
   char  Str[100];
   for (int i=0; i<NumRestraints; i++) {
     Restraints[i]->GetStr(Str);
-    iout << "Free Energy Restraint #" << i+1 << " ("<< Str << "): ";
+    iout << "#Free Energy Restraint #" << i+1 << " ("<< Str << "): ";
     Restraints[i]->PrintInfo();
     iout<< " Energy= "<< Restraints[i]->GetEnergy();
     iout << std::endl << endi;
   }
+  iout << "==============================================================" << std::endl;
 }
 
 void ARestraintManager::Print_dU_dLambda() {
