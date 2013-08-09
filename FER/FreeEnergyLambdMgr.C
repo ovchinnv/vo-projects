@@ -273,7 +273,7 @@ void ALambdaManager::Clear() {
 int ALambdaManager::Add(ALambdaControl& PmfBlock) {
 //------------------------------------------------------------------------
 // add an object to the list.  if there's not enough room, make room.
-// return an index to the added oject.
+// return an index to the added object.
 //------------------------------------------------------------------------
   ALambdaControl*  pPmfBlocks;
 

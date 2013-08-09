@@ -44,16 +44,16 @@ extern "C" {
 
 // initialize static member variables
 // (lambda is the same for all Moving restraints)
-double  ARestraint::m_LambdaKf  = 1.0;
-double  ARestraint::m_LambdaRef = 0.0;
+double  ARestraint::LambdaKf  = 1.0;
+double  ARestraint::LambdaRef = 0.0;
 
 ARestraint::ARestraint() {
 //-----------------------------------------------------------------
 // constructor for base class
 //-----------------------------------------------------------------
-  m_pGroups = NULL;
-  m_pCOMs = NULL;
-  m_NumGroups = 0;
+  Groups = NULL;
+  COMs = NULL;
+  NumGroups = 0;
 }
 
 
@@ -61,10 +61,10 @@ ARestraint::~ARestraint() {
 //-----------------------------------------------------------------
 // free space that may have been allocated for Groups and COM's
 //-----------------------------------------------------------------
-  if (m_pGroups != NULL) {
-    ASSERT(m_pCOMs != NULL);
-    delete []m_pGroups;
-    delete []m_pCOMs;
+  if (Groups != NULL) {
+    ASSERT(COMs != NULL);
+    delete []Groups;
+    delete []COMs;
   }
 }
 
@@ -92,50 +92,17 @@ void ARestraint::SetGroup(AGroup& Group, int GroupIndex) {
 //-----------------------------------------------------------------
 // set one group of atoms
 //-----------------------------------------------------------------
-  ASSERT( (GroupIndex>=0) && (GroupIndex<m_NumGroups) );
-  m_pGroups[GroupIndex] = Group;
+  ASSERT( (GroupIndex>=0) && (GroupIndex<NumGroups) );
+  Groups[GroupIndex] = Group;
 }
 
 
-void ARestraint::SetGroups(AGroup& Group1) {
+void ARestraint::SetGroups(AGroup* groups, int n) {
 //-----------------------------------------------------------------
-// set one group of atoms
+// set groups
 //-----------------------------------------------------------------
-  ASSERT(m_NumGroups >= 1);
-  m_pGroups[0] = Group1;
-}
-
-
-void ARestraint::SetGroups(AGroup& Group1, AGroup& Group2) {
-//-----------------------------------------------------------------
-// set two groups of atoms
-//-----------------------------------------------------------------
-  ASSERT(m_NumGroups >= 2);
-  m_pGroups[0] = Group1;
-  m_pGroups[1] = Group2;
-}
-
-
-void ARestraint::SetGroups(AGroup& Group1, AGroup& Group2, AGroup& Group3) {
-//-----------------------------------------------------------------
-// set three groups of atoms
-//-----------------------------------------------------------------
-  ASSERT(m_NumGroups >= 3);
-  m_pGroups[0] = Group1;
-  m_pGroups[1] = Group2;
-  m_pGroups[2] = Group3;
-}
-
-
-void ARestraint::SetGroups(AGroup& Group1, AGroup& Group2, AGroup& Group3, AGroup& Group4) {
-//-----------------------------------------------------------------
-// set four groups of atoms
-//-----------------------------------------------------------------
-  ASSERT(m_NumGroups >= 4);
-  m_pGroups[0] = Group1;
-  m_pGroups[1] = Group2;
-  m_pGroups[2] = Group3;
-  m_pGroups[3] = Group4;
+  ASSERT(NumGroups >= n);
+  for (int i=0; i < n ; i++) { Groups[i] = groups[i] ; }
 }
 
 void ARestraint::DistributeForce(int WhichGroup, Force force,
@@ -143,20 +110,20 @@ void ARestraint::DistributeForce(int WhichGroup, Force force,
 //----------------------------------------------------------------------
 // Distribute Force among the group of atoms specified by WhichGroup
 //
-// note:  m_pGroups points to an array of Groups
-//        m_pGroups[WhichGroup] references one of the Groups
-//        m_pGroups[WhichGroup][i] returns an AtomID from the Group
+// note:  Groups points to an array of Groups
+//        Groups[WhichGroup] references one of the Groups
+//        Groups[WhichGroup][i] returns an AtomID from the Group
 //        (operator[] is defined to return an item from the Group)
 //----------------------------------------------------------------------
-  ASSERT( (WhichGroup>=0) && (WhichGroup<m_NumGroups) );
+  ASSERT( (WhichGroup>=0) && (WhichGroup<NumGroups) );
 
-  int NumAtoms = m_pGroups[WhichGroup].GetSize();
-  double const* Weights=m_pGroups[WhichGroup].GetWeights();
+  int NumAtoms = Groups[WhichGroup].GetSize();
+  double const* Weights=Groups[WhichGroup].GetWeights();
   double weight;
 
   // distribute Force according to mass of each atom in the group
   for (int i=0; i<NumAtoms; i++) {
-    int aid = m_pGroups[WhichGroup][i];
+    int aid = Groups[WhichGroup][i];
 
     Vector scaledforce = Weights[i] * force ;
 //
@@ -174,9 +141,9 @@ void ARestraint::UpdateCOMs(GlobalMasterFreeEnergy& CFE) {
 //-----------------------------------------------------------------
 // calculate the center-of-mass of each group of atoms
 //
-// note:  m_pGroups points to an array of Groups
-//        m_pGroups[i] references one of the Groups
-//        m_pGroups[i][j] returns an AtomID from the Group
+// note:  Groups points to an array of Groups
+//        Groups[i] references one of the Groups
+//        Groups[i][j] returns an AtomID from the Group
 //        (operator[] is defined to return an item from the Group)
 //-----------------------------------------------------------------
   int      i, j, aid;
@@ -184,20 +151,20 @@ void ARestraint::UpdateCOMs(GlobalMasterFreeEnergy& CFE) {
   double const* Weights;
   double Weight;
 //
-  ASSERT(m_NumGroups > 0);
+  ASSERT(NumGroups > 0);
 // fetch positions
   // for each group of atoms
-  for (i=0; i<m_NumGroups; i++) {
-    Weights=m_pGroups[i].GetWeights();
+  for (i=0; i<NumGroups; i++) {
+    Weights=Groups[i].GetWeights();
     Vector COM(0.,0.,0) ;
     // for each atom in the group
-    for (j=0; j<m_pGroups[i].GetSize(); j++) {
-      aid = m_pGroups[i][j]; // get atom ID
+    for (j=0; j<Groups[i].GetSize(); j++) {
+      aid = Groups[i][j]; // get atom ID
       Vector pos=CFE.positions[aid]; // fetch from map
       Weight = Weights[j];
       COM += pos * Weight;
     }
-    m_pCOMs[i] = COM;
+    COMs[i] = COM;
   }
 }
 
@@ -205,7 +172,7 @@ void APosRestraint::ApplyForce(GlobalMasterFreeEnergy& CFE, bool qfdtest, double
 // for each center-of-mass
  Force force; // force vector
 //
- for (int j=0; j<m_NumGroups; j++) {
+ for (int j=0; j<NumGroups; j++) {
   // update centers of mass
   UpdateCOMs(CFE);
   // apply restraining force in direction opposite to the gradient vector
@@ -218,83 +185,49 @@ APosRestraint::APosRestraint() {
 //-----------------------------------------------------------------
 // each APosRestraint restrains 1 group of atoms to a location
 //-----------------------------------------------------------------
-  m_NumGroups = 1;
-  m_pGroups = new AGroup[m_NumGroups];
-  m_pCOMs = new Vector[m_NumGroups];
+  NumGroups = 1;
+  Groups = new AGroup[NumGroups];
+  COMs = new Vector[NumGroups];
 }
 
-
 void APosRestraint::PrintInfo() {
-//--------------------------------------------------------------------
-// print the position for this position restraint
-//--------------------------------------------------------------------
-//
-#if defined(_VERBOSE_PMF)
-  iout << "Position = " << m_pCOMs[0];
-  iout << "  Target = " << GetPosTarget();
-  iout << "  Distance = " << GetDistance();
-  iout << std::endl << endi;
-#else
-  iout<<"("<<m_pCOMs[0]<<")"<< GetPosTarget()<< "  "<<GetDistance()<< " | ";
-#endif
+  iout << " Position= " << COMs[0];
+  iout << " Target= "   << GetPosTarget();
+  iout << " Distance= " << GetDistance();
 }
 
 double APosRestraint::GetE(Vector RefPos, double LambdaKf) {
 //--------------------------------------------------------------------
-// calculate and return the Energy for this position restraint.
-//
 //     E = (Kf/2) * (|ri - rref|)**2
-//
 // where |ri - rref| is the distance between a) the center-of-mass
 // of the restrained atoms and b) the reference position.
-//
 // Note:  COM is calculated before this routine is called.
 //--------------------------------------------------------------------
-  return( ((m_Kf*LambdaKf)/2.0) * (m_pCOMs[0] - RefPos).length2() );
+  return( ((Kf*LambdaKf)/2.0) * (COMs[0] - RefPos).length2() );
 }
 
 
 Vector APosRestraint::GetGrad(int /* WhichGroup */, Vector RefPos, double LambdaKf) {
 //-------------------------------------------------------------------------
-// calculate and return the gradient for this position restraint.
 //     E = (Kf/2) * (|ri - rref|)**2
 // return:  grad(E)
-// Notes: COM is calculated before this routine is called.
 //-------------------------------------------------------------------------
-  return ( m_pCOMs[0] - RefPos ) * m_Kf * LambdaKf ;
+  return ( COMs[0] - RefPos ) * Kf * LambdaKf ;
 }
 
-double AFixedPosRestraint::GetEnergy() {
-//--------------------------------------------------------------------
-// return the Energy for this fixed position restraint.
-//--------------------------------------------------------------------
-  return(GetE(m_RefPos));
-}
-
-
-Vector AFixedPosRestraint::GetGradient(int WhichGroup) {
-//-------------------------------------------------------------------------
-// return the Gradient for this fixed position restraint.
-//-------------------------------------------------------------------------
-  return(GetGrad(WhichGroup, m_RefPos));
-}
+double AFixedPosRestraint::GetEnergy() {return(GetE(RefPos));}
+Vector AFixedPosRestraint::GetGradient(int WhichGroup) { return(GetGrad(WhichGroup, RefPos));}
 
 
 double ABoundPosRestraint::GetEnergy() {
-//--------------------------------------------------------------------
-// calculate and return the Energy for this bound position restraint.
-//
-// Note:  This is an exception because the form for the E term is
-//        different from the other postion restraints.
-//--------------------------------------------------------------------
   double  E, Dist, Diff;
 
   E = 0.0;
-  Dist = (m_pCOMs[0] - (m_RefPos)).length();
-  if (((m_Bound==kUpper) && (Dist>m_RefDist)) ||
-      ((m_Bound==kLower) && (Dist<m_RefDist))) {
-    Diff = Dist - m_RefDist;
-    E = (m_Kf/2.0) * (Diff*Diff);
+  Dist = (COMs[0] - (RefPos)).length();
+  if (((Bound==kUpper) && (Dist>RefDist)) ||
+      ((Bound==kLower) && (Dist<RefDist))) {
+    Diff = Dist - RefDist;
+    E = (Kf/2.0) * (Diff*Diff);
   }
   return(E);
 }
@@ -310,10 +243,10 @@ Vector ABoundPosRestraint::GetGradient(int /* WhichGroup */) {
   Vector Vec(0.,0.,0.);   // Vec is initialized to (0,0,0)
 
   // WhichGroup = 0;  // don't care -- there's only 1 atom restrained
-  Dist = (m_pCOMs[0]-m_RefPos).length();
-  if (((m_Bound==kUpper) && (Dist>m_RefDist)) ||
-      ((m_Bound==kLower) && (Dist<m_RefDist))) {
-    Vec = (m_pCOMs[0]- m_RefPos) * m_Kf * (Dist - m_RefDist) / __MAX(Dist, kALittle); //  prevent divide overflow
+  Dist = (COMs[0]-RefPos).length();
+  if (((Bound==kUpper) && (Dist>RefDist)) ||
+      ((Bound==kLower) && (Dist<RefDist))) {
+    Vec = (COMs[0]- RefPos) * Kf * (Dist - RefDist) / __MAX(Dist, kALittle); //  prevent divide overflow
   }
   return(Vec);
 }
@@ -328,8 +261,8 @@ double AMovingPosRestraint::GetEnergy() {
 //--------------------------------------------------------------------
   Vector  RefPos;
 
-  RefPos = m_StopPos*m_LambdaRef + m_StartPos*(1.0-m_LambdaRef);
-  return(GetE(RefPos, m_LambdaKf));
+  RefPos = StopPos*LambdaRef + StartPos*(1.0-LambdaRef);
+  return(GetE(RefPos, LambdaKf));
 }
 
 
@@ -342,8 +275,8 @@ Vector AMovingPosRestraint::GetGradient(int WhichGroup) {
 //---------------------------------------------------------------------------
   Vector  RefPos;
 
-  RefPos = m_StopPos*m_LambdaRef + m_StartPos*(1.0-m_LambdaRef);
-  return(GetGrad(WhichGroup, RefPos, m_LambdaKf));
+  RefPos = StopPos*LambdaRef + StartPos*(1.0-LambdaRef);
+  return(GetGrad(WhichGroup, RefPos, LambdaKf));
 }
 
 
@@ -354,12 +287,12 @@ double AMovingPosRestraint::Get_dU_dLambda() {
   Vector  RefPos;
 //  double   T1, T2, T3;
 
-  RefPos = m_StopPos*m_LambdaRef + m_StartPos*(1.0-m_LambdaRef);
-//  T1 = (m_pCOMs[0][0] - RefPos[0]) * (m_StartPos[0] - m_StopPos[0]);
-//  T2 = (m_pCOMs[0][1] - RefPos[1]) * (m_StartPos[1] - m_StopPos[1]);
-//  T3 = (m_pCOMs[0][2] - RefPos[2]) * (m_StartPos[2] - m_StopPos[2]);
-//  return( m_Kf * m_LambdaKf * (T1+T2+T3) );
-    return m_Kf * m_LambdaKf * ( (m_pCOMs[0] - RefPos) * (m_StartPos - m_StopPos) );// replaced above by a scalar (dot) product
+  RefPos = StopPos*LambdaRef + StartPos*(1.0-LambdaRef);
+//  T1 = (COMs[0][0] - RefPos[0]) * (StartPos[0] - StopPos[0]);
+//  T2 = (COMs[0][1] - RefPos[1]) * (StartPos[1] - StopPos[1]);
+//  T3 = (COMs[0][2] - RefPos[2]) * (StartPos[2] - StopPos[2]);
+//  return( Kf * LambdaKf * (T1+T2+T3) );
+    return Kf * LambdaKf * ( (COMs[0] - RefPos) * (StartPos - StopPos) );// replaced above by a scalar (dot) product
 }
 
 
@@ -367,9 +300,9 @@ ADistRestraint::ADistRestraint() {
 //-----------------------------------------------------------------------
 // each ADistRestraint restrains the distance between 2 groups of atoms
 //-----------------------------------------------------------------------
-  m_NumGroups = 2;
-  m_pGroups = new AGroup[m_NumGroups];
-  m_pCOMs = new Vector[m_NumGroups];
+  NumGroups = 2;
+  Groups = new AGroup[NumGroups];
+  COMs = new Vector[NumGroups];
 }
 
 
@@ -377,13 +310,8 @@ void ADistRestraint::PrintInfo() {
 //--------------------------------------------------------------------
 // print the distance for this distance restraint
 //--------------------------------------------------------------------
-#if defined(_VERBOSE_PMF)
-  iout << "Distance = "<< (m_pCOMs[0]-m_pCOMs[1]).length();
-  iout << "  Target = ";<< GetDistTarget();
-  iout << std::endl << endi;
-#else
-  iout <<(m_pCOMs[0]-m_pCOMs[1]).length()<< " "<< GetDistTarget()<< " | ";
-#endif
+  iout << " Distance= "<< (COMs[0]-COMs[1]).length();
+  iout << " Target= "<< GetDistTarget();
 }
 
 
@@ -399,9 +327,9 @@ double ADistRestraint::GetE(double RefDist, double LambdaKf) {
 //---------------------------------------------------------------------------
   double Dist, Diff;
 
-  Dist = (m_pCOMs[0]-m_pCOMs[1]).length();
+  Dist = (COMs[0]-COMs[1]).length();
   Diff = Dist - RefDist;
-  return( ((m_Kf*LambdaKf)/2.0) * (Diff*Diff) );
+  return( ((Kf*LambdaKf)/2.0) * (Diff*Diff) );
 }
 
 
@@ -415,20 +343,20 @@ Vector ADistRestraint::GetGrad(int WhichGroup,
 // return:  grad(E)
 //
 // Notes: COM is calculated before this routine is called.
-//        m_pCOMS[0 & 1] reference the COM's of each group of atoms
+//        COMS[0 & 1] reference the COM's of each group of atoms
 //---------------------------------------------------------------------------
   ASSERT( (WhichGroup==0) || (WhichGroup==1) );
 //
-  Vector Vec = m_pCOMs[1] - m_pCOMs[0];
+  Vector Vec = COMs[1] - COMs[0];
   double Dist = Vec.length();
-  return  (WhichGroup * 2. - 1.) * (  Vec * m_Kf * LambdaKf * (Dist - RefDist)/__MAX(Dist, kALittle) );// WG=0 => prefix=-1 ; WG=1=> prefix=+1
+  return  (WhichGroup * 2. - 1.) * (  Vec * Kf * LambdaKf * (Dist - RefDist)/__MAX(Dist, kALittle) );// WG=0 => prefix=-1 ; WG=1=> prefix=+1
 }
 
 double AFixedDistRestraint::GetEnergy() {
 //---------------------------------------------------------------------------
 // return the Energy for this fixed distance restraint.
 //---------------------------------------------------------------------------
-  return(GetE(m_RefDist));
+  return(GetE(RefDist));
 }
 
 
@@ -436,7 +364,7 @@ Vector AFixedDistRestraint::GetGradient(int WhichGroup) {
 //---------------------------------------------------------------------------
 // return the gradient for this fixed distance restraint.
 //---------------------------------------------------------------------------
-  return(GetGrad(WhichGroup, m_RefDist));
+  return(GetGrad(WhichGroup, RefDist));
 }
 
 double ABoundDistRestraint::GetEnergy() {
@@ -446,10 +374,10 @@ double ABoundDistRestraint::GetEnergy() {
   double Dist, E;
 //
   E = 0.0;
-  Dist = (m_pCOMs[0] - m_pCOMs[1]).length();
-  if (((m_Bound==kUpper) && (Dist>m_RefDist)) ||
-      ((m_Bound==kLower) && (Dist<m_RefDist))) {
-    E = GetE(m_RefDist);
+  Dist = (COMs[0] - COMs[1]).length();
+  if (((Bound==kUpper) && (Dist>RefDist)) ||
+      ((Bound==kLower) && (Dist<RefDist))) {
+    E = GetE(RefDist);
   }
   return(E);
 }
@@ -461,10 +389,10 @@ Vector ABoundDistRestraint::GetGradient(int WhichGroup) {
   double  Dist;
   Vector Vec;
 
-  Dist = (m_pCOMs[0] - m_pCOMs[1]).length();
-  if (((m_Bound==kUpper) && (Dist>m_RefDist)) ||
-      ((m_Bound==kLower) && (Dist<m_RefDist))) {
-    Vec = GetGrad(WhichGroup, m_RefDist);
+  Dist = (COMs[0] - COMs[1]).length();
+  if (((Bound==kUpper) && (Dist>RefDist)) ||
+      ((Bound==kLower) && (Dist<RefDist))) {
+    Vec = GetGrad(WhichGroup, RefDist);
   }
   return(Vec);
 }
@@ -476,8 +404,8 @@ double AMovingDistRestraint::GetEnergy() {
 //---------------------------------------------------------------------------
   double  RefDist;
 
-  RefDist = m_StopDist*m_LambdaRef + m_StartDist*(1.0-m_LambdaRef);
-  return(GetE(RefDist, m_LambdaKf));
+  RefDist = StopDist*LambdaRef + StartDist*(1.0-LambdaRef);
+  return(GetE(RefDist, LambdaKf));
 }
 
 
@@ -487,8 +415,8 @@ Vector AMovingDistRestraint::GetGradient(int WhichGroup) {
 //---------------------------------------------------------------------------
   double  RefDist;
   
-  RefDist = m_StopDist*m_LambdaRef + m_StartDist*(1.0-m_LambdaRef);
-  return(GetGrad(WhichGroup, RefDist, m_LambdaKf));
+  RefDist = StopDist*LambdaRef + StartDist*(1.0-LambdaRef);
+  return(GetGrad(WhichGroup, RefDist, LambdaKf));
 }
 
 
@@ -499,15 +427,15 @@ double AMovingDistRestraint::Get_dU_dLambda() {
   double  Dist;
   double  RefDist;
 //
-  Dist = (m_pCOMs[0] - m_pCOMs[1]).length();
-  RefDist = m_StopDist*m_LambdaRef + m_StartDist*(1.0-m_LambdaRef);
-  return( m_Kf * m_LambdaKf * (Dist-RefDist)*(m_StartDist-m_StopDist) );
+  Dist = (COMs[0] - COMs[1]).length();
+  RefDist = StopDist*LambdaRef + StartDist*(1.0-LambdaRef);
+  return( Kf * LambdaKf * (Dist-RefDist)*(StartDist-StopDist) );
 }
 
 void ADistRestraint::ApplyForce(GlobalMasterFreeEnergy& CFE, bool qfdtest, double dh) {
 // for each center-of-mass
  Vector Force;
- for (int j=0; j<m_NumGroups; j++) {
+ for (int j=0; j<NumGroups; j++) {
   // update centers of mass
   UpdateCOMs(CFE);
   // apply restraining force in opposite direction from gradient
@@ -520,42 +448,30 @@ AnAngleRestraint::AnAngleRestraint() {
 //-----------------------------------------------------------------------
 // each AnAngleRestraint restrains the angle between 3 groups of atoms
 //-----------------------------------------------------------------------
-  m_NumGroups = 3;
-  m_pGroups = new AGroup[m_NumGroups];
-  m_pCOMs = new Vector[m_NumGroups];
+  NumGroups = 3;
+  Groups = new AGroup[NumGroups];
+  COMs = new Vector[NumGroups];
 }
 
 void AnAngleRestraint::PrintInfo() {
-//--------------------------------------------------------------------
-// print the angle for this angle restraint
-//--------------------------------------------------------------------
-  double  Angle = GetAngle(m_pCOMs[0], m_pCOMs[1], m_pCOMs[2]) * (180/kPi);
-#if defined(_VERBOSE_PMF)
-  iout << "Angle = "<<Angle<< " degrees";
-  iout << "  Target = "<<GetAngleTarget()*180/kPi<< " degrees"<< std::endl << endi;
-#else
-  iout <<Angle<<" "<<GetAngleTarget()*180/kPi<< " | ";
-#endif
+  double  Angle = GetAngle(COMs[0], COMs[1], COMs[2]) * (180/kPi);
+  iout << " Angle(deg)= "<<Angle;
+  iout << " Target= "<<GetAngleTarget()*180/kPi;
 }
 
 
 double AnAngleRestraint::GetE(double RefAngle, double LambdaKf) {
-//---------------------------------------------------------------------------
-// calculate and return the Energy for this angle restraint.
-//
 //     E = (Kf/2) * (Theta-ThetaRef)**2
 //
 // where Theta is the angle between 3 centers-of-mass of restrained atoms,
-// m_pCOMs[0] -- m_pCOMs[1] -- m_pCOMs[2].
+// COMs[0] -- COMs[1] -- COMs[2].
 // ThetaRef is the reference angle.
-//
-// Note:  COM's are calculated before this routine is called.
 //---------------------------------------------------------------------------
   double Angle, Diff;
 
-  Angle = GetAngle(m_pCOMs[0], m_pCOMs[1], m_pCOMs[2]);
+  Angle = GetAngle(COMs[0], COMs[1], COMs[2]);
   Diff = Angle - RefAngle;
-  return( ((m_Kf*LambdaKf)/2.0) * (Diff*Diff) );
+  return( ((Kf*LambdaKf)/2.0) * (Diff*Diff) );
 }
 
 double AnAngleRestraint::GetAngle(Vector& A, Vector& B, Vector& C) {
@@ -576,14 +492,8 @@ double AnAngleRestraint::GetAngle(Vector& A, Vector& B, Vector& C) {
 
 Vector AnAngleRestraint::GetGrad(int WhichGroup,
                                   double RefAngle, double LambdaKf) {
-//---------------------------------------------------------------------------
-// calculate and return the gradient for this angle restraint.
-//
 //     E = (Kf/2) * (Theta-ThetaRef)**2
-//
 // return:  grad(E)
-//
-// Notes: COM's are calculated before this routine is called.
 //---------------------------------------------------------------------------
   Vector A, B, C;
   double  Angle;
@@ -593,9 +503,9 @@ Vector AnAngleRestraint::GetGrad(int WhichGroup,
   Vector Vec1, Vec2;
 
   ASSERT( (WhichGroup==0) || (WhichGroup==1) || (WhichGroup==2) );
-  A = m_pCOMs[0];
-  B = m_pCOMs[1];
-  C = m_pCOMs[2];
+  A = COMs[0];
+  B = COMs[1];
+  C = COMs[2];
 
   a = (B-C).length();
   b = (A-C).length();
@@ -609,7 +519,7 @@ Vector AnAngleRestraint::GetGrad(int WhichGroup,
   Angle = acos(u);
 
   Const1 = -1.0 / sqrt(1.0 - u*u);
-  Const2 = m_Kf * LambdaKf * (Angle-RefAngle) * Const1;
+  Const2 = Kf * LambdaKf * (Angle-RefAngle) * Const1;
 
   Const3 = -a/(2.0*c*c) + 1.0/(a+a) + (b*b)/(2.0*a*c*c);
   Const4 = -c/(2.0*a*a) + 1.0/(c+c) + (b*b)/(2.0*c*a*a);
@@ -633,7 +543,7 @@ Vector AnAngleRestraint::GetGrad(int WhichGroup,
 void AnAngleRestraint::ApplyForce(GlobalMasterFreeEnergy& CFE, bool qfdtest, double dh) {
 // for each center-of-mass
  Vector Force;
- for (int j=0; j<m_NumGroups; j++) {
+ for (int j=0; j<NumGroups; j++) {
   // update centers of mass
   UpdateCOMs(CFE);
   // apply restraining force in opposite direction from gradient
@@ -642,31 +552,17 @@ void AnAngleRestraint::ApplyForce(GlobalMasterFreeEnergy& CFE, bool qfdtest, dou
  }
 }
 
-double AFixedAngleRestraint::GetEnergy() {
-//---------------------------------------------------------------------------
-// return the Energy for this fixed angle restraint.
-//---------------------------------------------------------------------------
-  return(GetE(m_RefAngle));
-}
-
-Vector AFixedAngleRestraint::GetGradient(int WhichGroup) {
-//---------------------------------------------------------------------------
-// return the gradient for this fixed angle restraint.
-//---------------------------------------------------------------------------
-  return(GetGrad(WhichGroup, m_RefAngle));
-}
+double AFixedAngleRestraint::GetEnergy() {return(GetE(RefAngle));}
+Vector AFixedAngleRestraint::GetGradient(int WhichGroup) {return(GetGrad(WhichGroup, RefAngle));}
 
 double ABoundAngleRestraint::GetEnergy() {
-//---------------------------------------------------------------------------
-// return the Energy for this bound angle restraint.
-//---------------------------------------------------------------------------
   double  E, Angle;
 
   E = 0.0;
-  Angle = GetAngle(m_pCOMs[0], m_pCOMs[1], m_pCOMs[2]);
-  if (((m_Bound==kUpper) && (Angle>m_RefAngle)) ||
-      ((m_Bound==kLower) && (Angle<m_RefAngle))) {
-    E = GetE(m_RefAngle);
+  Angle = GetAngle(COMs[0], COMs[1], COMs[2]);
+  if (((Bound==kUpper) && (Angle>RefAngle)) ||
+      ((Bound==kLower) && (Angle<RefAngle))) {
+    E = GetE(RefAngle);
   }
   return(E);
 }
@@ -678,10 +574,10 @@ Vector ABoundAngleRestraint::GetGradient(int WhichGroup) {
   double  Angle;
   Vector Vec;
 
-  Angle = GetAngle(m_pCOMs[0], m_pCOMs[1], m_pCOMs[2]);
-  if (((m_Bound==kUpper) && (Angle>m_RefAngle)) ||
-      ((m_Bound==kLower) && (Angle<m_RefAngle))) {
-    Vec = GetGrad(WhichGroup, m_RefAngle);
+  Angle = GetAngle(COMs[0], COMs[1], COMs[2]);
+  if (((Bound==kUpper) && (Angle>RefAngle)) ||
+      ((Bound==kLower) && (Angle<RefAngle))) {
+    Vec = GetGrad(WhichGroup, RefAngle);
   }
   return(Vec);
 }
@@ -693,8 +589,8 @@ double AMovingAngleRestraint::GetEnergy() {
 //---------------------------------------------------------------------------
   double  RefAngle;
 
-  RefAngle = m_StopAngle*m_LambdaRef + m_StartAngle*(1.0-m_LambdaRef);
-  return(GetE(RefAngle, m_LambdaKf));
+  RefAngle = StopAngle*LambdaRef + StartAngle*(1.0-LambdaRef);
+  return(GetE(RefAngle, LambdaKf));
 }
 
 
@@ -704,8 +600,8 @@ Vector AMovingAngleRestraint::GetGradient(int WhichGroup) {
 //---------------------------------------------------------------------------
   double  RefAngle;
 
-  RefAngle = m_StopAngle*m_LambdaRef + m_StartAngle*(1.0-m_LambdaRef);
-  return(GetGrad(WhichGroup, RefAngle, m_LambdaKf));
+  RefAngle = StopAngle*LambdaRef + StartAngle*(1.0-LambdaRef);
+  return(GetGrad(WhichGroup, RefAngle, LambdaKf));
 }
 
 
@@ -716,9 +612,9 @@ double AMovingAngleRestraint::Get_dU_dLambda() {
   double  Angle;
   double  RefAngle;
 
-  Angle = GetAngle(m_pCOMs[0], m_pCOMs[1], m_pCOMs[2]);
-  RefAngle = m_StopAngle*m_LambdaRef + m_StartAngle*(1.0-m_LambdaRef);
-  return( m_Kf * m_LambdaKf * (Angle-RefAngle)*(m_StartAngle-m_StopAngle) );
+  Angle = GetAngle(COMs[0], COMs[1], COMs[2]);
+  RefAngle = StopAngle*LambdaRef + StartAngle*(1.0-LambdaRef);
+  return( Kf * LambdaKf * (Angle-RefAngle)*(StartAngle-StopAngle) );
 }
 
 
@@ -726,9 +622,9 @@ ADiheRestraint::ADiheRestraint() {
 //----------------------------------------------------------------------------
 // each ADiheRestraint restrains the dihedral angle between 4 groups of atoms
 //----------------------------------------------------------------------------
-  m_NumGroups = 4;
-  m_pGroups = new AGroup[m_NumGroups];
-  m_pCOMs = new Vector[m_NumGroups];
+  NumGroups = 4;
+  Groups = new AGroup[NumGroups];
+  COMs = new Vector[NumGroups];
 }
 
 
@@ -737,73 +633,48 @@ void ADiheRestraint::PrintInfo() {
 // print the dihedral angle for this dihedral restraint
 //--------------------------------------------------------------------
   double  Dihedral;
-
-  Dihedral = GetDihe(m_pCOMs[0], m_pCOMs[1], m_pCOMs[2], m_pCOMs[3]) * (180/kPi);
-  Dihedral = GetDiheTarget1() * (180/kPi);
-  Dihedral = GetDiheTarget2() * (180/kPi);
-
-#if defined(_VERBOSE_PMF)
-  iout << "Dihedral = "<<Dihedral<< " degrees"<<"  Target = "<<GetDiheTarget1() * (180/kPi)<< " degrees";
-  if (TwoTargets()) {
-    iout <<" to "<<GetDiheTarget2() * (180/kPi)<< " degrees";
-  }
-  iout<< std::endl << endi;
-#else
-  iout << Dihedral <<"  "<<GetDiheTarget1() * (180/kPi);
-  if (TwoTargets()) {
-    iout << ", "<<GetDiheTarget2() * (180/kPi);
-  }
-  iout << " | ";
-#endif
+  Dihedral = GetDihe(COMs[0], COMs[1], COMs[2], COMs[3]) * (180/kPi);
+//
+  iout << " Dihedral(deg)= "<<Dihedral;
+  iout << " Target= "<<GetDiheTarget1() * (180/kPi);
+  if (TwoTargets()) iout <<" to "<<GetDiheTarget2() * (180/kPi);
 }
 
-
 double ADiheRestraint::GetE(double RefAngle, double Const) {
-//---------------------------------------------------------------------------
-// calculate and return the Energy for this angle restraint.
-//
 //    E = (E0/2) * (1 - cos(Chi - ChiRef))
 //
 // where Chi is the dihedral angle between 4 centers-of-mass of restrained atoms,
-// m_pCOMs[0] -- m_pCOMs[1] -- m_pCOMs[2] -- m_pCOMs[3].
+// COMs[0] -- COMs[1] -- COMs[2] -- COMs[3].
 // ChiRef is the reference angle.
-//
-// Note:  COM's are calculated before this routine is called.
 //---------------------------------------------------------------------------
   double  Angle;
 
-  Angle = GetDihe(m_pCOMs[0], m_pCOMs[1], m_pCOMs[2], m_pCOMs[3]);
+  Angle = GetDihe(COMs[0], COMs[1], COMs[2], COMs[3]);
   return( (Const/2.0) * (1.0 - cos(Angle-RefAngle)) );
 }
 
-
 Vector ADiheRestraint::GetGrad(int WhichGroup,
                                 double RefAngle, double Const) {
-//---------------------------------------------------------------------------
-// calculate and return the gradient for this dihedral angle restraint.
-//
 //    E = (E0/2) * (1 - cos(Chi - ChiRef))
 //
 // return:  grad(E)
-//
-// Notes: COM's are calculated before this routine is called.
 //---------------------------------------------------------------------------
   Vector A, B, C, D;
 
   ASSERT((WhichGroup==0)||(WhichGroup==1)||(WhichGroup==2)||(WhichGroup==3));
 
   if ((WhichGroup==0) || (WhichGroup==1)) {
-    A = m_pCOMs[0];
-    B = m_pCOMs[1];
-    C = m_pCOMs[2];
-    D = m_pCOMs[3];
+    A = COMs[0];
+    B = COMs[1];
+    C = COMs[2];
+    D = COMs[3];
   }
   // re-state the problem so the gradient is solved for either atoms 0 or 1
   else {
-    A = m_pCOMs[3];
-    B = m_pCOMs[2];
-    C = m_pCOMs[1];
-    D = m_pCOMs[0];
+    A = COMs[3];
+    B = COMs[2];
+    C = COMs[1];
+    D = COMs[0];
     if (WhichGroup==3) {WhichGroup=0;}
     if (WhichGroup==2) {WhichGroup=1;}
   }
@@ -937,7 +808,7 @@ double ADiheRestraint::GetDihe(Vector& A, Vector& B, Vector& C, Vector& D) {
 void ADiheRestraint::ApplyForce(GlobalMasterFreeEnergy& CFE, bool qfdtest, double dh) {
 // for each center-of-mass
  Vector Force;
- for (int j=0; j<m_NumGroups; j++) {
+ for (int j=0; j<NumGroups; j++) {
   // update centers of mass
   UpdateCOMs(CFE);
   // apply restraining force in opposite direction from gradient
@@ -950,7 +821,7 @@ double AFixedDiheRestraint::GetEnergy() {
 //---------------------------------------------------------------------------
 // return the Energy for this fixed dihedral angle restraint.
 //---------------------------------------------------------------------------
-  return(GetE(m_RefAngle, m_Kf));
+  return(GetE(RefAngle, Kf));
 }
 
 
@@ -958,7 +829,7 @@ Vector AFixedDiheRestraint::GetGradient(int WhichGroup) {
 //---------------------------------------------------------------------------
 // return the gradient for this fixed dihedral angle restraint.
 //---------------------------------------------------------------------------
-  return(GetGrad(WhichGroup, m_RefAngle, m_Kf));
+  return(GetGrad(WhichGroup, RefAngle, Kf));
 }
 
 
@@ -968,19 +839,19 @@ double ABoundDiheRestraint::GetEnergy() {
 //---------------------------------------------------------------------------
   double  E, Dihe, Const;
 
-  Const = m_Kf / (1.0 - cos(m_IntervalAngle));
-  Dihe = GetDihe(m_pCOMs[0], m_pCOMs[1], m_pCOMs[2], m_pCOMs[3]);
+  Const = Kf / (1.0 - cos(IntervalAngle));
+  Dihe = GetDihe(COMs[0], COMs[1], COMs[2], COMs[3]);
   // dihedral angle is between LowerAngle and UpperAngle
-  if ( (Dihe>m_LowerAngle) && (Dihe<m_UpperAngle) ) {
+  if ( (Dihe>LowerAngle) && (Dihe<UpperAngle) ) {
     E = 0.0;
   }
   // dihedral angle is between LowerAngle and LowerAngle-IntervalAngle
-  else if ( (Dihe<m_LowerAngle) && (Dihe>(m_LowerAngle-m_IntervalAngle)) ) {
-    E = GetE(m_LowerAngle, Const);
+  else if ( (Dihe<LowerAngle) && (Dihe>(LowerAngle-IntervalAngle)) ) {
+    E = GetE(LowerAngle, Const);
   }
   // dihedral angle is between UpperAngle and UpperAngle+IntervalAngle
-  else if ( (Dihe>m_UpperAngle) && (Dihe<(m_UpperAngle+m_IntervalAngle)) ) {
-    E = GetE(m_UpperAngle, Const);
+  else if ( (Dihe>UpperAngle) && (Dihe<(UpperAngle+IntervalAngle)) ) {
+    E = GetE(UpperAngle, Const);
   }
   // dihedral angle is more than UpperAngle or less than LowerAngle
   else {
@@ -997,15 +868,15 @@ Vector ABoundDiheRestraint::GetGradient(int WhichGroup) {
   Vector Vec;
   double  Dihe, Const;
 
-  Const = m_Kf / (1.0 - cos(m_IntervalAngle));
-  Dihe = GetDihe(m_pCOMs[0], m_pCOMs[1], m_pCOMs[2], m_pCOMs[3]);
+  Const = Kf / (1.0 - cos(IntervalAngle));
+  Dihe = GetDihe(COMs[0], COMs[1], COMs[2], COMs[3]);
   // dihedral angle is between LowerAngle and LowerAngle-IntervalAngle
-  if ( (Dihe<m_LowerAngle) && (Dihe>(m_LowerAngle-m_IntervalAngle)) ) {
-    Vec = GetGrad(WhichGroup, m_LowerAngle, Const);
+  if ( (Dihe<LowerAngle) && (Dihe>(LowerAngle-IntervalAngle)) ) {
+    Vec = GetGrad(WhichGroup, LowerAngle, Const);
   }
   // dihedral angle is between UpperAngle and UpperAngle+IntervalAngle
-  else if ( (Dihe>m_UpperAngle) && (Dihe<(m_UpperAngle+m_IntervalAngle)) ) {
-    Vec = GetGrad(WhichGroup, m_UpperAngle, Const);
+  else if ( (Dihe>UpperAngle) && (Dihe<(UpperAngle+IntervalAngle)) ) {
+    Vec = GetGrad(WhichGroup, UpperAngle, Const);
   }
   return(Vec);
 }
@@ -1017,8 +888,8 @@ double AMovingDiheRestraint::GetEnergy() {
 //---------------------------------------------------------------------------
   double  RefDihe;
 
-  RefDihe = m_StopAngle*m_LambdaRef + m_StartAngle*(1.0-m_LambdaRef);
-  return(GetE(RefDihe, m_Kf*m_LambdaKf));
+  RefDihe = StopAngle*LambdaRef + StartAngle*(1.0-LambdaRef);
+  return(GetE(RefDihe, Kf*LambdaKf));
 }
 
 
@@ -1028,8 +899,8 @@ Vector AMovingDiheRestraint::GetGradient(int WhichGroup) {
 //---------------------------------------------------------------------------
   double  RefDihe;
   
-  RefDihe = m_StopAngle*m_LambdaRef + m_StartAngle*(1.0-m_LambdaRef);
-  return(GetGrad(WhichGroup, RefDihe, m_Kf*m_LambdaKf));
+  RefDihe = StopAngle*LambdaRef + StartAngle*(1.0-LambdaRef);
+  return(GetGrad(WhichGroup, RefDihe, Kf*LambdaKf));
 }
 
 
@@ -1040,18 +911,18 @@ double AMovingDiheRestraint::Get_dU_dLambda() {
   double  Dihe;
   double  RefDihe;
 //
-  Dihe = GetDihe(m_pCOMs[0], m_pCOMs[1], m_pCOMs[2], m_pCOMs[3]);
-  RefDihe = m_StopAngle*m_LambdaRef + m_StartAngle*(1.0-m_LambdaRef);
-  return((m_Kf/2)*m_LambdaKf * sin(Dihe-RefDihe) * (m_StartAngle-m_StopAngle));
+  Dihe = GetDihe(COMs[0], COMs[1], COMs[2], COMs[3]);
+  RefDihe = StopAngle*LambdaRef + StartAngle*(1.0-LambdaRef);
+  return((Kf/2)*LambdaKf * sin(Dihe-RefDihe) * (StartAngle-StopAngle));
 }
 //-------------------------------------------------------------------------
 #ifdef FE_RESTRAINT_RMSD_FORTRAN
 //------------------------RMSD Classes-------------------------------------
 AnRMSDRestraint::AnRMSDRestraint() {
 //
-  m_NumGroups=2; // orientation group and Moving group
-  m_pGroups = new AGroup[m_NumGroups];
-  m_pCOMs = new Vector[1] ; // there is only one center-of-mass :  that of the orientation group (1)
+  NumGroups=2; // orientation group and Moving group
+  Groups = new AGroup[NumGroups];
+  COMs = new Vector[1] ; // there is only one center-of-mass :  that of the orientation group (1)
   ugrad=NULL;
   qdiffrot=1;
   qorient=1;
@@ -1064,26 +935,6 @@ AnRMSDRestraint::AnRMSDRestraint() {
   u[6]=0.;
   u[7]=0.;
   u[8]=1.;
-}
-//
-AnRMSDRestraint::AnRMSDRestraint(AGroup &group1, AGroup &group2) {
-//
-  m_NumGroups=2; // orientation group and Moving group
-  m_pGroups = new AGroup[m_NumGroups];
-  m_pCOMs = new Vector[0] ; // do not need this
-  ugrad=NULL;
-  qdiffrot=1;
-  qorient=1;
-  u[0]=1.;
-  u[1]=0.;
-  u[2]=0.;
-  u[3]=0.;
-  u[4]=1.;
-  u[5]=0.;
-  u[6]=0.;
-  u[7]=0.;
-  u[8]=1.;
-  SetGroups(group1, group2);
 }
 //
 AnRMSDRestraint::~AnRMSDRestraint() {
@@ -1092,22 +943,19 @@ AnRMSDRestraint::~AnRMSDRestraint() {
 }
 //
 void AnRMSDRestraint::PrintInfo() {
-#if defined(_VERBOSE_PMF)
-  iout << "RMS Distance = "<<instRMSD<<"    Target = "<<refRMSD<< std::endl << endi;
-#else
-  iout << instRMSD << "  " << refRMSD << " | ";
-#endif
+  iout << " RMS Distance= "<<instRMSD;
+  iout << " Target= "<<refRMSD;
 }
 //
 void AnRMSDRestraint::qDiffRotCheck() {
 //
  qdiffrot = 1;
 //
- if (m_NumGroups==2) {
-  int norient = m_pGroups[0].GetSize();
-  int nforced = m_pGroups[1].GetSize();
-  int const *iatom_o=m_pGroups[0].GetInds();
-  int const *iatom_f=m_pGroups[1].GetInds();
+ if (NumGroups==2) {
+  int norient = Groups[0].GetSize();
+  int nforced = Groups[1].GetSize();
+  int const *iatom_o=Groups[0].GetInds();
+  int const *iatom_f=Groups[1].GetInds();
 //
   if (norient==nforced) {
    qdiffrot=0 ; // assume that the indices are the same, check below
@@ -1142,26 +990,26 @@ the orientation group must contain the forcing group. Aborting.");
  }
 }
 
-void AnRMSDRestraint::SetGroups(AGroup& Group1, AGroup& Group2) {
+void AnRMSDRestraint::SetGroups(AGroup* groups, int n) {
 //-----------------------------------------------------------------
 // set two groups of atoms
 //-----------------------------------------------------------------
-  ASSERT(m_NumGroups >= 2);
-  m_pGroups[0] = Group1;
-  m_pGroups[1] = Group2;
+  ASSERT(n >= 2);
+  Groups[0] = groups[0];
+  Groups[1] = groups[1];
   qDiffRotCheck();
 //
 // remove COM from target atoms if needed
 //
  if (qorient) {
   bool qswapdim=1;
-  const int norient = m_pGroups[0].GetSize();                              //number of orientation atoms
-  const int nforced = m_pGroups[1].GetSize();                             //number of forced atoms
-  double* rtarget_o= m_pGroups[0].GetCoords();
-  const double* orientWeights = m_pGroups[0].GetWeights() ;
+  const int norient = Groups[0].GetSize();                              //number of orientation atoms
+  const int nforced = Groups[1].GetSize();                             //number of forced atoms
+  double* rtarget_o= Groups[0].GetCoords();
+  const double* orientWeights = Groups[0].GetWeights() ;
   double* COM = (double*) com(rtarget_o,orientWeights,norient,qswapdim);
 // remove COM from forcing group
-  double* rtarget_f= m_pGroups[1].GetCoords();
+  double* rtarget_f= Groups[1].GetCoords();
   for (int i=0;i<3*nforced;){rtarget_f[i++]-=COM[0];rtarget_f[i++]-=COM[1];rtarget_f[i++]-=COM[2]; }
 // from orientation group (optional)
   for (int i=0;i<3*norient;){rtarget_o[i++]-=COM[0];rtarget_o[i++]-=COM[1];rtarget_o[i++]-=COM[2]; }
@@ -1176,9 +1024,9 @@ void AnRMSDRestraint::ApplyForce(GlobalMasterFreeEnergy &CFE, bool fdtest, doubl
  int i, j, k, p, q, aid ;
 //
  const _Bool qswapdim=1; // fortran-compatible boolean
- const int norient = m_pGroups[0].GetSize();                            //number of orientation atoms
- const int nforced = m_pGroups[1].GetSize();                            //number of forced atoms
- const int* iatom_f = m_pGroups[1].GetInds();                           //forced index array
+ const int norient = Groups[0].GetSize();                            //number of orientation atoms
+ const int nforced = Groups[1].GetSize();                            //number of forced atoms
+ const int* iatom_f = Groups[1].GetInds();                           //forced index array
  const int* iatom_o = NULL;//orientation index array
 //
  double* rcurrent_f= (double*) malloc(3*nforced*sizeof(double)); __MEMOK(rcurrent_f)   ;    // forced coordinates
@@ -1186,10 +1034,10 @@ void AnRMSDRestraint::ApplyForce(GlobalMasterFreeEnergy &CFE, bool fdtest, doubl
  double* rcurrent_o=NULL;
  double* forces_o=NULL;
 //
- const double* forcedWeights = m_pGroups[1].GetWeights();
+ const double* forcedWeights = Groups[1].GetWeights();
  const double* orientWeights = NULL;
 // reference coordinates
- const double* rtarget_f= m_pGroups[1].GetCoords();                            //forced coordinates of the target structure
+ const double* rtarget_f= Groups[1].GetCoords();                            //forced coordinates of the target structure
  const double* rtarget_o= NULL;
  double* rtarget_rot_f=NULL;
  double* COM=NULL;
@@ -1198,11 +1046,11 @@ DebugM(9, "RMSD Force calculation : qdiffrot, qorient: "<<qdiffrot<<" "<<qorient
 DebugM(9, "RMSD Force calculation : nforced, norient: "<<nforced<<" "<<norient<<"\n");
 //
  if (qdiffrot) {
-  iatom_o = m_pGroups[0].GetInds() ; //orientation index array
+  iatom_o = Groups[0].GetInds() ; //orientation index array
   rcurrent_o = (double*) malloc(3*norient*sizeof(double)) ;__MEMOK(rcurrent_o) ;
   forces_o = (double*) malloc(3*norient*sizeof(double)) ; __MEMOK(forces_o)  ;
-  orientWeights = m_pGroups[0].GetWeights() ;
-  rtarget_o= m_pGroups[0].GetCoords();  //orientation coordinates of the target structure
+  orientWeights = Groups[0].GetWeights() ;
+  rtarget_o= Groups[0].GetCoords();  //orientation coordinates of the target structure
  } else { // point all orientation data to the forced data
   iatom_o = iatom_f;
   orientWeights=forcedWeights;
@@ -1336,11 +1184,14 @@ DebugM(9, "RMSD Force calculation : COM: "<<COM[0]<<" "<<COM[1]<<" "<<COM[2]<<"\
 //======== done with gradient computation ^ ; note that gradients may be in two parts corresponding to orientation & forcing terms
 //  compute RMSD
  instRMSD = rmsd(rcurrent_f, rtarget_rot_f, forcedWeights, nforced, qswapdim);
+ ComputeRefRMSD(); // does (almost) nothing for fixed restraint; needed for moving restraint
+//
  DebugM(1,"Current RMSD : "<<instRMSD<<" : Reference RMSD : "<<refRMSD<<"\n");
+ DebugM(1,"LambdaRef : "<<LambdaRef<<" : LambdaKf : "<<LambdaKf<<"\n");
 //
 //  force prefactor
  double pref = ComputeForcePrefactor(); // overloaded in derived classes
- DebugM(9,"Force prefactor is "<<pref<<" (force constant was "<<m_Kf<<")\n");
+ DebugM(9,"Force prefactor is "<<pref<<" (force constant was "<<Kf<<")\n");
 //
 //==================================================================================================================================
 //========== finite difference test v (if requested); putting this test here is the simplest (though inelegant) solution

@@ -11,7 +11,7 @@
 #if !defined(RMGR_HPP)
   #define RMGR_HPP
 
-typedef ARestraint* pRestr;
+//typedef ARestraint* pRestr;
 
 // to start, there's room for this number of restraint pointers
 // each time array size is exceeded, its size is increased by this many times.
@@ -22,30 +22,29 @@ class GlobalMasterFreeEnergy;
 
 class ARestraintManager {
 private:
-  ARestraint** m_ppRestraints; // list of restraint pointers
-  int  m_NumRestraints;        // number of pointers in the list
-  int  m_MaxNum;               // max num pointers without allocating more mem
-  AFixedPosRestraint  m_Dummy; // for setting ARestraint statics
+  ARestraint** Restraints; // list of restraint pointers
+  int  NumRestraints;        // number of pointers in the list
+  int  MaxNum;               // max num pointers without allocating more mem
+  AFixedPosRestraint  Dummy; // for setting ARestraint statics
 
 public:
   ARestraintManager();
   ~ARestraintManager();
   ARestraint*  operator[] (int Index);
   void   Add(ARestraint* pRestraint);
-  int    GetNumRestraints() {return(m_NumRestraints);}
+  int    GetNumRestraints() {return(NumRestraints);}
   double   AddForces(GlobalMasterFreeEnergy& CFE); // returns energy
-  void   PrintEnergyInfo();
   void   PrintRestraintInfo();
-  void   Print_dU_dLambda_Info();
+  void   Print_dU_dLambda();
   double Sum_dU_dLambdas();
   Bool_t ThereIsAForcingRestraint();
   void   PrintPreInfo(int Index);
-  void   SetLambdaKf(double LambdaKf)   {m_Dummy.SetLambdaKf(LambdaKf);}
-  void   SetLambdaRef(double LambdaRef) {m_Dummy.SetLambdaRef(LambdaRef);}
+  void   SetLambdaKf(double LambdaKf)   {Dummy.SetLambdaKf(LambdaKf);}
+  void   SetLambdaRef(double LambdaRef) {Dummy.SetLambdaRef(LambdaRef);}
   void   SetLambdas(double LambdaKf, double LambdaRef)
   {
-     m_Dummy.SetLambdaKf(LambdaKf);
-     m_Dummy.SetLambdaRef(LambdaRef);
+     Dummy.SetLambdaKf(LambdaKf);
+     Dummy.SetLambdaRef(LambdaRef);
   }
 };
 

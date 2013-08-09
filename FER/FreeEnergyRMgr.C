@@ -13,7 +13,6 @@
 #include "FreeEnergyEnums.h"
 #include "FreeEnergyAssert.h"
 #include "Vector.h"
-//#include "FreeEnergyVector.h"
 #include "FreeEnergyGroup.h"
 #include "FreeEnergyRestrain.h"
 #include "FreeEnergyRMgr.h"
@@ -31,9 +30,9 @@ ARestraintManager::ARestraintManager() {
 //------------------------------------------------------------------------
 // allocate space for restraint POINTERS
 //------------------------------------------------------------------------
-  m_ppRestraints = new pRestr[kNumToStart];
-  m_NumRestraints = 0;
-  m_MaxNum = kNumToStart;
+  Restraints = new ARestraint*[kNumToStart];
+  NumRestraints = 0;
+  MaxNum = kNumToStart;
 }
 
 
@@ -44,10 +43,10 @@ ARestraintManager::~ARestraintManager() {
 // (see: ARestraint* GetRestraint(char*, int&)
 // then, free the space that was allocated for the pointers
 //------------------------------------------------------------------------
-  for (int i=0; i<m_NumRestraints; i++) {
-    delete m_ppRestraints[i];
+  for (int i=0; i<NumRestraints; i++) {
+    delete Restraints[i];
   }
-  delete []m_ppRestraints;
+  delete []Restraints;
 }
 
 
@@ -55,8 +54,8 @@ ARestraint* ARestraintManager::operator[] (int Index) {
 //------------------------------------------------------------------------
 // get a pointer
 //------------------------------------------------------------------------
-  ASSERT( (Index>=0) && (Index<m_NumRestraints) );
-  return(m_ppRestraints[Index]);
+  ASSERT( (Index>=0) && (Index<NumRestraints) );
+  return(Restraints[Index]);
 }
 
 
@@ -64,40 +63,38 @@ void ARestraintManager::Add(ARestraint* pRestraint) {
 //------------------------------------------------------------------------
 // add a pointer to the list.  if there's not enough room, make room.
 //------------------------------------------------------------------------
-  ARestraint**  ppRestraints;
+  ARestraint**  newRestraints;
 
   // if there's no room for a new pointer
-  if (m_NumRestraints == m_MaxNum) {
+  if (NumRestraints == MaxNum) {
     // create an array with more space
-    m_MaxNum *= kMultiplier;
-    ppRestraints = new pRestr[m_MaxNum];
+    MaxNum *= kMultiplier;
+    newRestraints = new ARestraint*[MaxNum];
     // fast copy from the full array to the new one (memcpy(dest, src, bytes))
-    memcpy(ppRestraints, m_ppRestraints, sizeof(ARestraint*)*m_NumRestraints);
+    memcpy(newRestraints, Restraints, sizeof(ARestraint*)*NumRestraints);
     // return the space used for the full array
-    delete []m_ppRestraints;
+    delete []Restraints;
     // point to the bigger array
-    m_ppRestraints = ppRestraints;
+    Restraints = newRestraints;
   }
 
   // add the int to the int array
-  m_ppRestraints[m_NumRestraints] = pRestraint;
-  m_NumRestraints++;
+  Restraints[NumRestraints] = pRestraint;
+  NumRestraints++;
 }
-
-// void ARestraintManager::UpdateCOMs(GlobalMasterFreeEnergy& CFE) // deleted (VO 2013; logically belongs at the lower level of ind. restraint)
 
 double ARestraintManager::AddForces(GlobalMasterFreeEnergy& CFE) {
 //---------------------------------------------------------------------------
 // each restraint is responsible for all steps of force computation (VO: 2013)
 //---------------------------------------------------------------------------
   double total_energy=0.;
-  for (int i=0; i<m_NumRestraints; i++) { 
+  for (int i=0; i<NumRestraints; i++) { 
 #ifdef DEBUGM
-   m_ppRestraints[i]->ApplyForce(CFE, 1, 0.00001); // run an finite difference test at each calculation
+   Restraints[i]->ApplyForce(CFE, 1, 0.00001); // run an finite difference test at each calculation
 #else
-   m_ppRestraints[i]->ApplyForce(CFE);
+   Restraints[i]->ApplyForce(CFE);
 #endif
-   total_energy += m_ppRestraints[i]->GetEnergy();
+   total_energy += Restraints[i]->GetEnergy();
    return total_energy;
   }
 }
@@ -108,8 +105,8 @@ double ARestraintManager::Sum_dU_dLambdas() {
 //---------------------------------------------------------------------------
   double Sum=0;
 
-  for (int i=0; i<m_NumRestraints; i++) {
-    Sum += m_ppRestraints[i]->Get_dU_dLambda();
+  for (int i=0; i<NumRestraints; i++) {
+    Sum += Restraints[i]->Get_dU_dLambda();
   }
   return(Sum);
 }
@@ -119,71 +116,36 @@ Bool_t ARestraintManager::ThereIsAForcingRestraint() {
 //---------------------------------------------------------------------------
 // return kTrue if there's at least one forcing restraint
 //---------------------------------------------------------------------------
-  for (int i=0; i<m_NumRestraints; i++) {
-    if (m_ppRestraints[i]->IsMoving()) {
+  for (int i=0; i<NumRestraints; i++) {
+    if (Restraints[i]->IsMoving()) {
       return(kTrue);
     }
   }
   return(kFalse);
 }
 
-
-void ARestraintManager::PrintEnergyInfo() {
-//---------------------------------------------------------------------------
-// for a restraint, print restraint type and Energy.
-//---------------------------------------------------------------------------
-#if defined(_VERBOSE_PMF)
-  for (int i=0; i<m_NumRestraints; i++) {
-    PrintPreInfo(i);
-    iout << "Energy = ";
-    iout << m_ppRestraints[i]->GetEnergy() << std::endl << endi;
-  }
-#endif
-}
-
-
 void ARestraintManager::PrintRestraintInfo() {
-//---------------------------------------------------------------------------
-// for a restraint, print its position, distance, angle, or dihedral angle.
-//---------------------------------------------------------------------------
-  for (int i=0; i<m_NumRestraints; i++) {
-#if defined(_VERBOSE_PMF)
-    PrintPreInfo(i);
-#endif
-    m_ppRestraints[i]->PrintInfo();
+  char  Str[100];
+  for (int i=0; i<NumRestraints; i++) {
+    Restraints[i]->GetStr(Str);
+    iout << "Free Energy Restraint #" << i+1 << " ("<< Str << "): ";
+    Restraints[i]->PrintInfo();
+    iout<< " Energy= "<< Restraints[i]->GetEnergy();
+    iout << std::endl << endi;
   }
-#if !defined(_VERBOSE_PMF)
-  iout << std::endl << endi;
-#endif
 }
 
-
-void ARestraintManager::Print_dU_dLambda_Info() {
+void ARestraintManager::Print_dU_dLambda() {
 //---------------------------------------------------------------------------
 // if restraint is a forcing restraint, print dU/dLambda.
 //---------------------------------------------------------------------------
 #if defined(_VERBOSE_PMF)
-  for (int i=0; i<m_NumRestraints; i++) {
-    if (m_ppRestraints[i]->IsMoving()) {
+  for (int i=0; i<NumRestraints; i++) {
+    if (Restraints[i]->IsMoving()) {
       PrintPreInfo(i);
       iout << "dU/dLambda = ";
-      iout << m_ppRestraints[i]->Get_dU_dLambda() << std::endl << endi;
+      iout << Restraints[i]->Get_dU_dLambda() << std::endl << endi;
     }
   }
 #endif
 }
-
-
-void ARestraintManager::PrintPreInfo(int Index) {
-//---------------------------------------------------------------------------
-// print "Restraint xxx:  Type of Restraint:  "
-//---------------------------------------------------------------------------
-  char  Str[100];
-  char  NumStr[20];
-
-  sprintf(NumStr, "%3d", Index+1);
-  iout << "FreeEnergy: " << "Restraint " << NumStr << ":  ";
-  m_ppRestraints[Index]->GetStr(Str);
-  iout << Str << ":  ";
-}
-

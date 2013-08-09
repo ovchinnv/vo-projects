@@ -85,6 +85,7 @@ void ReadInput(char* Str, ARestraintManager& RMgr,
 // parse the input string.  Add restraints to RMgr.  Add PmfBlocks to LMgr.
 //----------------------------------------------------------------------------
   int             Count;
+  int             ind;
   char*           OldStr=NULL;   //make sure it's not equal Str to start
   ALambdaControl  PmfBlock, OldPmfBlock;
   // Bool_t          Terminate;
@@ -102,10 +103,12 @@ void ReadInput(char* Str, ARestraintManager& RMgr,
     if (Count) {
       Str += Count;
       // add it to the Lambda manger
-      LMgr.Add(PmfBlock);
+      ind = LMgr.Add(PmfBlock);
       // initialize the default parameters of the next PmfBlock
       OldPmfBlock = PmfBlock;
-      PmfBlock.Init(OldPmfBlock);
+      PmfBlock.Init(OldPmfBlock); // VO 2013 :  this makes no sense to me whatsoever since pmfblock is destroyed on exit
+// aa
+DebugM(1, "ReadInput : PmfBlock.LambdaRef "<< LMgr[ind].LambdaRef<<" \n");
     }
   }
   Str += ReadWhite(Str);
@@ -260,7 +263,7 @@ int ReadPmfBlock(char* Str, ALambdaControl& PmfBlock, double dT) {
       PmfBlock.SetLambdaKf(1.0);
       break;
   }
-  
+
   return(Str-FullString);
 }
 
@@ -425,7 +428,8 @@ ARestraint* GetRestraint(char* Str, int& NumChars, GlobalMasterFreeEnergy& CFE) 
 // return the number of characters to read past these specs.
 // return NumChars=0 for illegal restraint specs.
 //----------------------------------------------------------------------------
-  AGroup      Group1, Group2, Group3, Group4;
+  AGroup*     groups=NULL;
+  int         ngroup;
   ARestraint* ptrRestraint = NULL;
   restr_t     Restraint;
   Bound_t     Bound;
@@ -449,61 +453,47 @@ ARestraint* GetRestraint(char* Str, int& NumChars, GlobalMasterFreeEnergy& CFE) 
     ProblemParsing("Can't Read Restraint Type", Str);
     return(ptrRestraint);
   }
-
-  // skip past restraint type
+// skip past restraint type
   ASSERT(Restraint != kUnknownRestr);
   Str += Count;
-  //
-  // read in appropriate number of atoms or groups-of-atoms for
-  // this restraint type, put the atoms in Group1 thru Group4
-  // VO 2013 : strange : only the last group is read by default code
-  // VO 2013 : adding the rest of groups
-  // VO 2013 : modifying AddAtoms to allow reading indices from PDB file
+//
 DebugM(1,"GetRestraint : Reading restraint definitions\n");
   switch (Restraint) {
     case kDihe:  case kDiheBound:  case kDihePMF:
-DebugM(1,"GetRestraint : Reading group for dihedral restraint\n");
-      Str += AddAtoms(Group1, Str, CFE);
-      Str += AddAtoms(Group2, Str, CFE);
-      Str += AddAtoms(Group3, Str, CFE);
-      Str += AddAtoms(Group4, Str, CFE);
-      break;
+DebugM(1,"GetRestraint : Dihedral restraint\n");
+      ngroup=4;      break;
     case kAngle: case kAngleBound: case kAnglePMF:
-DebugM(1,"GetRestraint : Reading groups for angle restraint\n");
-      Str += AddAtoms(Group1, Str, CFE);
-      Str += AddAtoms(Group2, Str, CFE);
-      Str += AddAtoms(Group3, Str, CFE);
-      break;
+DebugM(1,"GetRestraint : Angle restraint\n");
+      ngroup=3;      break;
     case kDist:  case kDistBound:  case kDistPMF:
-DebugM(1,"GetRestraint : Reading groups for distance restraint\n");
-      Str += AddAtoms(Group1, Str, CFE);
-      Str += AddAtoms(Group2, Str, CFE);
-      break;
+DebugM(1,"GetRestraint : Distance restraint\n");
+      ngroup=2;      break;
 #ifdef FE_RESTRAINT_RMSD_FORTRAN
     case kRMSD:  case kRMSDBound:  case kRMSDPMF: // the two groups are orientation and forcing atoms
-DebugM(1,"GetRestraint : Reading orientation group for RMSD restraint\n");
-      Str += AddAtoms(Group1, Str, CFE);
-      if (Group1.GetSize() < 2) ProblemParsing("Orientation set cannot have fewer than two atoms. Abort.", Str);
-DebugM(1,"GetRestraint : Reading forcing group for RMSD restraint\n");
-      Str += AddAtoms(Group2, Str, CFE);
-      if (Group2.GetSize() < 1) ProblemParsing("Forcing set cannot have fewer than one atom. Abort.", Str);
-      break;
+DebugM(1,"GetRestraint : RMSD restraint\n");
+      ngroup=2;      break;
 #endif
     case kPosi:  case kPosiBound:  case kPosiPMF:
-DebugM(1,"GetRestraint : Reading group for positional restraint\n");
-      Str += AddAtoms(Group1, Str, CFE);
-      break;
-    default: ;
+      ngroup=1;      break;
+DebugM(1,"GetRestraint : Positional restraint\n");
   }
+//
+// read group definitions
+  groups = new AGroup[ngroup];
+  for (int i = 0; i< ngroup; i++) { Str += AddAtoms(groups[i], Str, CFE); }
+#ifdef FE_RESTRAINT_RMSD_FORTRAN
+  if (ngroup>=2) {
+   if (groups[0].GetSize() < 2) ProblemParsing("Orientation set cannot have fewer than two atoms. Abort.", Str);
+   if (groups[1].GetSize() < 1) ProblemParsing("Forcing set cannot have fewer than one atom. Abort.", Str);
+  }
+#endif
   //
 DebugM(1,"GetRestraint : Reading restraint parameters\n");
   // for dihedrals, allow keywords of "barr=", "gap=", OR "kf="
   // for other restraints, just allow "kf="
   TempStr = Str;
   switch(Restraint) {
-    case kDihe:
-    case kDiheBound:
-    case kDihePMF:
+    case kDihe: case kDiheBound: case kDihePMF:
       Str += ReadWord(Str, "barr");
       Str += ReadWord(Str, "gap");
     default:
@@ -547,7 +537,7 @@ DebugM(1,"GetRestraint : Restraint force constant is "<<Kf<<"\n");
 DebugM(1,"GetRestraint : Reference RMSD value is "<<D<<"\n");
 // read separate reference positions from file (if specified)
 DebugM(1,"GetRestraint : Reading RMSD restraint coordinates\n");
-      Str += ReadRMSDCoords(Str, Group1, Group2, CFE);
+      Str += ReadRMSDCoords(Str, groups, CFE);
 DebugM(1,"GetRestraint : RMSD restraint coordinates read\n");
       break;
 #endif
@@ -595,7 +585,7 @@ DebugM(1,"GetRestraint : RMSD restraint coordinates read\n");
       Str += ReadWord(Str, "hi");
       Str += ReadChar(Str, '=');
       Str += ReadAValue(Str, D,       kPrintErrMsg);
-      Str += ReadRMSDCoords(Str, Group1, Group2, CFE);
+      Str += ReadRMSDCoords(Str, groups, CFE);
       break;
 #endif
     case kPosiPMF:
@@ -635,10 +625,12 @@ DebugM(1,"GetRestraint : RMSD restraint coordinates read\n");
       Str += ReadWord(Str, "low",    kPrintErrMsg);
       Str += ReadChar(Str, '=');
       Str += ReadAValue(Str, D0,      kPrintErrMsg);
+DebugM(1,"GetRestraint : RMSD low value is "<<D0<<"\n");
       Str += ReadWord(Str, "hi",     kPrintErrMsg);
       Str += ReadChar(Str, '=');
       Str += ReadAValue(Str, D1,      kPrintErrMsg);
-      Str += ReadRMSDCoords(Str, Group1, Group2, CFE);
+DebugM(1,"GetRestraint : RMSD high value is "<<D1<<"\n");
+      Str += ReadRMSDCoords(Str, groups, CFE);
       break;
 #endif
     default: ;
@@ -655,8 +647,6 @@ DebugM(1,"GetRestraint : RMSD restraint coordinates read\n");
     case kPosi:
      {
       AFixedPosRestraint* pRestraint = new AFixedPosRestraint;
-      pRestraint->SetKf(Kf);
-      pRestraint->SetGroups(Group1);
       pRestraint->SetRefPos(Pos);
       ptrRestraint=pRestraint;
       break;
@@ -664,8 +654,6 @@ DebugM(1,"GetRestraint : RMSD restraint coordinates read\n");
     case kDist:
     {
       AFixedDistRestraint* pRestraint = new AFixedDistRestraint;
-      pRestraint->SetKf(Kf);
-      pRestraint->SetGroups(Group1, Group2);
       pRestraint->SetRefDist(D);
       ptrRestraint=pRestraint;
       break;
@@ -673,8 +661,6 @@ DebugM(1,"GetRestraint : RMSD restraint coordinates read\n");
     case kAngle:
      {
       AFixedAngleRestraint* pRestraint = new AFixedAngleRestraint;
-      pRestraint->SetKf(Kf);
-      pRestraint->SetGroups(Group1, Group2, Group3);
       pRestraint->SetRefAngle(A);
       ptrRestraint=pRestraint;
       break;
@@ -682,8 +668,6 @@ DebugM(1,"GetRestraint : RMSD restraint coordinates read\n");
     case kDihe:
      {
       AFixedDiheRestraint* pRestraint = new AFixedDiheRestraint;
-      pRestraint->SetKf(Kf);
-      pRestraint->SetGroups(Group1, Group2, Group3, Group4);
       pRestraint->SetRefAngle(A);
       ptrRestraint=pRestraint;
       break;
@@ -691,9 +675,7 @@ DebugM(1,"GetRestraint : RMSD restraint coordinates read\n");
 #ifdef FE_RESTRAINT_RMSD_FORTRAN
     case kRMSD:
      {
-      AFixedRMSDRestraint* pRestraint = new AFixedRMSDRestraint(Group1, Group2);
-      pRestraint->SetKf(Kf);
-DebugM(1, "GetRestraint : set Kf in RMSD restraint to "<<pRestraint->GetKf()<<"\n");
+      AFixedRMSDRestraint* pRestraint = new AFixedRMSDRestraint;
       pRestraint->SetRefRMSD(D); // target RMS distance
       ptrRestraint=pRestraint;
       break;
@@ -702,8 +684,6 @@ DebugM(1, "GetRestraint : set Kf in RMSD restraint to "<<pRestraint->GetKf()<<"\
     case kPosiBound:
      {
       ABoundPosRestraint* pRestraint = new ABoundPosRestraint;
-      pRestraint->SetKf(Kf);
-      pRestraint->SetGroups(Group1);
       pRestraint->SetRefPos(Pos);
       pRestraint->SetRefDist(D);
       pRestraint->SetBound(Bound);
@@ -713,8 +693,6 @@ DebugM(1, "GetRestraint : set Kf in RMSD restraint to "<<pRestraint->GetKf()<<"\
     case kDistBound:
      {
       ABoundDistRestraint* pRestraint = new ABoundDistRestraint;
-      pRestraint->SetKf(Kf);
-      pRestraint->SetGroups(Group1, Group2);
       pRestraint->SetRefDist(D);
       pRestraint->SetBound(Bound);
       ptrRestraint=pRestraint;
@@ -723,8 +701,6 @@ DebugM(1, "GetRestraint : set Kf in RMSD restraint to "<<pRestraint->GetKf()<<"\
     case kAngleBound:
      {
       ABoundAngleRestraint* pRestraint = new ABoundAngleRestraint;
-      pRestraint->SetKf(Kf);
-      pRestraint->SetGroups(Group1, Group2, Group3);
       pRestraint->SetRefAngle(A);
       pRestraint->SetBound(Bound);
       ptrRestraint=pRestraint;
@@ -733,8 +709,6 @@ DebugM(1, "GetRestraint : set Kf in RMSD restraint to "<<pRestraint->GetKf()<<"\
     case kDiheBound:
      {
       ABoundDiheRestraint* pRestraint = new ABoundDiheRestraint;
-      pRestraint->SetKf(Kf);
-      pRestraint->SetGroups(Group1, Group2, Group3, Group4);
       pRestraint->SetLowerAngle(A0);
       pRestraint->SetUpperAngle(A1);
       pRestraint->SetIntervalAngle(A2);
@@ -745,8 +719,6 @@ DebugM(1, "GetRestraint : set Kf in RMSD restraint to "<<pRestraint->GetKf()<<"\
     case kRMSDBound:
      {
       ABoundRMSDRestraint* pRestraint = new ABoundRMSDRestraint;
-      pRestraint->SetKf(Kf);
-      pRestraint->SetGroups(Group1, Group2);
       pRestraint->SetRefRMSD(D);   // target RMS distance
       pRestraint->SetBound(Bound); // bound beyond which to apply restraint force
       ptrRestraint=pRestraint;
@@ -756,8 +728,6 @@ DebugM(1, "GetRestraint : set Kf in RMSD restraint to "<<pRestraint->GetKf()<<"\
     case kPosiPMF:
      {
       AMovingPosRestraint* pRestraint = new AMovingPosRestraint;
-      pRestraint->SetKf(Kf);
-      pRestraint->SetGroups(Group1);
       pRestraint->SetStartPos(Pos0);
       pRestraint->SetStopPos(Pos1);
       ptrRestraint=pRestraint;
@@ -766,8 +736,6 @@ DebugM(1, "GetRestraint : set Kf in RMSD restraint to "<<pRestraint->GetKf()<<"\
     case kDistPMF:
      {
       AMovingDistRestraint* pRestraint = new AMovingDistRestraint;
-      pRestraint->SetKf(Kf);
-      pRestraint->SetGroups(Group1, Group2);
       pRestraint->SetStartDist(D0);
       pRestraint->SetStopDist(D1);
       ptrRestraint=pRestraint;
@@ -776,8 +744,6 @@ DebugM(1, "GetRestraint : set Kf in RMSD restraint to "<<pRestraint->GetKf()<<"\
     case kAnglePMF:
      {
       AMovingAngleRestraint* pRestraint = new AMovingAngleRestraint;
-      pRestraint->SetKf(Kf);
-      pRestraint->SetGroups(Group1, Group2, Group3);
       pRestraint->SetStartAngle(A0);
       pRestraint->SetStopAngle(A1);
       ptrRestraint=pRestraint;
@@ -786,8 +752,6 @@ DebugM(1, "GetRestraint : set Kf in RMSD restraint to "<<pRestraint->GetKf()<<"\
     case kDihePMF:
      {
       AMovingDiheRestraint* pRestraint = new AMovingDiheRestraint;
-      pRestraint->SetKf(Kf);
-      pRestraint->SetGroups(Group1, Group2, Group3, Group4);
       pRestraint->SetStartAngle(A0);
       pRestraint->SetStopAngle(A1);
       ptrRestraint=pRestraint;
@@ -797,8 +761,6 @@ DebugM(1, "GetRestraint : set Kf in RMSD restraint to "<<pRestraint->GetKf()<<"\
     case kRMSDPMF:
      {
       AMovingRMSDRestraint* pRestraint = new AMovingRMSDRestraint;
-      pRestraint->SetKf(Kf);
-      pRestraint->SetGroups(Group1, Group2);
       pRestraint->SetStartRMSD(D0); // starting target RMS distance
       pRestraint->SetStopRMSD(D1);  // final target RMS distance
       ptrRestraint=pRestraint;
@@ -807,8 +769,13 @@ DebugM(1, "GetRestraint : set Kf in RMSD restraint to "<<pRestraint->GetKf()<<"\
 #endif
     default: ;
   }
+  ptrRestraint->SetGroups(groups, ngroup);
+DebugM(1,"GetRestraint : Setting restraint force constant to "<<Kf<<"\n");
+  ptrRestraint->SetKf(Kf);
+
   // calc number of chars to read restraint specs
   NumChars = Str-FullStr;
+  if (groups!=NULL) delete[] groups;
   return(ptrRestraint);
 }
 
@@ -967,7 +934,7 @@ restr_t ReadRestraintType(char* Str, int& NumChars) {
 #ifdef FE_RESTRAINT_RMSD_FORTRAN
   else if (strncmp(Str,"rmsd",4)==0)  {RestraintType=kRMSD;  }
 #endif
-  else { return(RestraintType); }
+  else { return(RestraintType); } // unknown
 
   // skip to the end of the white space following this word
   Str += ReadAlphaNum(Str);
@@ -1800,12 +1767,12 @@ void ToLower(char* Str) {
 }
 
 #ifdef FE_RESTRAINT_RMSD_FORTRAN
-int ReadRMSDCoords(char *Str, AGroup& Group1, AGroup& Group2, GlobalMasterFreeEnergy& CFE) {
+int ReadRMSDCoords(char *Str, AGroup* groups, GlobalMasterFreeEnergy& CFE) {
 // read reference RMSD coordinates (orientation and forcing)
   char* IniStr=Str;
-  Bool_t kPrintErrMsg = (Bool_t) !( Group1.HaveCoords() && Group2.HaveCoords() );  //complain if filename missing UNLESS coords are already set
+  Bool_t kPrintErrMsg = (Bool_t) !( groups[0].HaveCoords() && groups[1].HaveCoords() );  //complain if filename missing UNLESS coords are already set
 //
-DebugM(1,"ReadRMSDCoords : Coordinates defined before: "<<( Group1.HaveCoords() && Group2.HaveCoords() )<<"\n" );
+DebugM(1,"ReadRMSDCoords : Coordinates defined before: "<<( groups[0].HaveCoords() && groups[1].HaveCoords() )<<"\n" );
 //
   int Count= ReadWord(Str,"reffile", kPrintErrMsg);
   if (Count) { // "reffile" specified
@@ -1828,15 +1795,11 @@ DebugM(1,"ReadRMSDCoords : File contains "<<numatoms<<" atoms\n");
 // read coordinates from file
    PDBAtom* atom;
 // this restraint has two groups (orientation and forcing)
-   AGroup* groups[2];
-   groups[0] = &Group1; //orientation group
-   groups[1] = &Group2; //forcing group
-//
    for (int j=0; j<2 ; j++) { // over the two groups
-    const int* inds=groups[j]->GetInds();
-    for (int i=0; i < groups[j]->GetSize() ; i++) {
+    const int* inds=groups[j].GetInds();
+    for (int i=0; i < groups[j].GetSize() ; i++) {
      atom=fepdb.atom( inds[i] );
-     groups[j]->SetCoords(i, atom->xcoor(), atom->ycoor(), atom->zcoor());
+     groups[j].SetCoords(i, atom->xcoor(), atom->ycoor(), atom->zcoor());
 DebugM(1,"ReadRMSDCoords : Setting reference coordinates for atom "<<i<<" in group "<<j\
          <<" to ("<<atom->xcoor()<<", "<<atom->ycoor()<<", "<<atom->zcoor()<<")\n");
     }

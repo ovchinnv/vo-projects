@@ -10,24 +10,25 @@
   #define LAMBDA_HPP
 
 class ALambdaControl {
-private:
+//private:
+public:
 
   // don't forget to change operator= if member variables change
-  int     m_NumSteps;         // for pmf block
-  int     m_NumEquilSteps;    // for mcti block
-  int     m_NumAccumSteps;    // "
-  int     m_NumRepeats;       // "
-  int     m_NumPrintSteps;    // for pmf & mcti blocks
-  int     m_StartStep;        // "
-  int     m_StopStep;         // "
-  double  m_LambdaKf;         // "
-  double  m_LambdaRef;        // "
-  feptask_t  m_Task;             // "
-  double  m_Sum_dU_dLambda;   // for accumulating dU/dLambda
-  int     m_Num_dU_dLambda;   // number averaged
-  double  m_MCTI_Integration; // for accumulating <dU/dLambda> * dLambda
+  int     NumSteps;         // for pmf block
+  int     NumEquilSteps;    // for mcti block
+  int     NumAccumSteps;    // "
+  int     NumRepeats;       // "
+  int     NumPrintSteps;    // for pmf & mcti blocks
+  int     StartStep;        // "
+  int     StopStep;         // "
+  double  LambdaKf;         // "
+  double  LambdaRef;        // "
+  feptask_t  Task;             // "
+  double  Sum_dU_dLambda;   // for accumulating dU/dLambda
+  int     Num_dU_dLambda;   // number averaged
+  double  MCTI_Integration; // for accumulating <dU/dLambda> * dLambda
 
-  static int  m_CurrStep;     // for all pmf & mcti blocks
+  static int  CurrStep;     // for all pmf & mcti blocks
 
 public:
   ALambdaControl();
@@ -43,7 +44,7 @@ public:
   Bool_t  IsEndOf_MCTI();
   void    PrintHeader(double dT);
   void    PrintLambdaHeader(double dT);
-  void    IncCurrStep() {m_CurrStep++;}
+  void    IncCurrStep() {CurrStep++;}
   ALambdaControl&  operator= (ALambdaControl& PmfBlock);
   void    GetTaskStr(char* Str);
   void    GetPaddedTaskStr(char* Str);
@@ -52,25 +53,25 @@ public:
   double  GetIntegration();
   double  GetAccumulation();
   void    ZeroAccumulator() {
-    m_Sum_dU_dLambda = 0.0;
-    m_Num_dU_dLambda = 0;
+    Sum_dU_dLambda = 0.0;
+    Num_dU_dLambda = 0;
   }
 
   int    GetNumSteps();
-  int    GetNumStepsSoFar()            {return(m_CurrStep-m_StartStep);}
+  int    GetNumStepsSoFar()            {return(CurrStep-StartStep);}
   int    GetNumAccumStepsSoFar();
-  int    GetNum_dU_dLambda()           {return(m_Num_dU_dLambda);}
-  void   SetNumSteps(int Steps)        {m_NumSteps=Steps;}
-  void   SetNumEquilSteps(int Steps)   {m_NumEquilSteps=Steps;}
-  void   SetNumAccumSteps(int Steps)   {m_NumAccumSteps=Steps;}
-  void   SetNumPrintSteps(int Steps)   {m_NumPrintSteps=Steps;}
-  void   SetNumRepeats(int Repeats)    {m_NumRepeats=Repeats;}
-  void   SetStartStep(int Step)        {m_StartStep=Step;}
-  void   SetStopStep(int Step)         {m_StopStep=Step;}
-  void   SetLambdaKf(double LambdaKf)  {m_LambdaKf=LambdaKf;}
-  void   SetLambdaRef(double LambdaRef){m_LambdaRef=LambdaRef;}
-  void   SetTask(feptask_t Task)          {m_Task=Task;}
-  feptask_t GetTask()                     {return(m_Task);}
+  int    GetNum_dU_dLambda()           {return(Num_dU_dLambda);}
+  void   SetNumSteps(int Steps)        {NumSteps=Steps;}
+  void   SetNumEquilSteps(int Steps)   {NumEquilSteps=Steps;}
+  void   SetNumAccumSteps(int Steps)   {NumAccumSteps=Steps;}
+  void   SetNumPrintSteps(int Steps)   {NumPrintSteps=Steps;}
+  void   SetNumRepeats(int Repeats)    {NumRepeats=Repeats;}
+  void   SetStartStep(int Step)        {StartStep=Step;}
+  void   SetStopStep(int Step)         {StopStep=Step;}
+  void   SetLambdaKf(double l)         {LambdaKf=l;}
+  void   SetLambdaRef(double l)        {LambdaRef=l;}
+  void   SetTask(feptask_t t)          {Task=t;}
+  feptask_t GetTask()                     {return(Task);}
 
 private:
   Bool_t IsLastStep();

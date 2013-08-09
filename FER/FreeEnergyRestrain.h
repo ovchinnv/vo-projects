@@ -36,34 +36,29 @@ class ARestraint {
 //                   AMovingDistRestraint               AMovingDiheRestraint
 //-----------------------------------------------------------------------------
 protected:
-  double    m_Kf;
-  int       m_NumGroups;
-  AGroup*   m_pGroups;
-  Vector*   m_pCOMs;
+  double    Kf;
+  int       NumGroups;
+  AGroup*   Groups;
+  Vector*   COMs;
 
   // lambda is the same for all Moving restraints
-  static double  m_LambdaKf;
-  static double  m_LambdaRef;
+  static double  LambdaKf;
+  static double  LambdaRef;
 
 public:
   ARestraint();
   virtual ~ARestraint();
-  int     GetNumGroups()    {return(m_NumGroups);}
-  void    SetKf(double Kf)  {m_Kf=Kf;}
-  double  GetKf()           {return(m_Kf);}
-  void    SetLambdaKf(double LambdaKf)   {m_LambdaKf=LambdaKf;}
-  void    SetLambdaRef(double LambdaRef) {m_LambdaRef=LambdaRef;}
-  double  GetLambdaKf()                  {return(m_LambdaKf);}
-  double  GetLambdaRef()                 {return(m_LambdaRef);}
-  void    SetGroup(AGroup& Group, int GroupIndex);
-//the four functions below should really be in the derived classes (which know how many groups they need)
-  void    SetGroups(AGroup& Group1);
-  void    SetGroups(AGroup& Group1, AGroup& Group2);
-  void    SetGroups(AGroup& Group1, AGroup& Group2, AGroup& Group3);
-  void    SetGroups(AGroup& Group1, AGroup& Group2, AGroup& Group3, AGroup& Group4);
+  int     GetNumGroups()    {return(NumGroups);}
+  void    SetKf(double k)  {Kf=k;}
+  double  GetKf()           {return(Kf);}
+  void    SetLambdaKf(double l)   {LambdaKf=l;}
+  void    SetLambdaRef(double l) {LambdaRef=l;}
+  double  GetLambdaKf()                  {return(LambdaKf);}
+  double  GetLambdaRef()                 {return(LambdaRef);}
+  virtual void    SetGroup(AGroup& Group, int GroupIndex);
+  virtual void    SetGroups(AGroup* groups, int ngroup);
 //---------------------------------------------//
-
-  // (pure) virtual functions
+  // pure virtual functions
   virtual void     ApplyForce(GlobalMasterFreeEnergy& CFE, bool test_fd=0, double dh=0.00001)=0; // apply forces; test analytical forces against FD
   virtual double   GetEnergy() = 0;
   virtual void     GetStr(char* Str) = 0;
@@ -84,13 +79,13 @@ class APosRestraint : public ARestraint {
 // this is a virtual class because it does not implement GetEnergy amd GetStr
 //---------------------------------------------------------------------------
 protected:
-  Vector m_RefPos;
+  Vector RefPos;
 public:
   APosRestraint();
   void    PrintInfo();
-  void    SetRefPos(Vector Pos) {m_RefPos=Pos;}
-  double  GetDistance()          { return  (m_RefPos - m_pCOMs[0]).length() ;}
-  Vector  GetPosTarget()          { return(m_RefPos);}
+  void    SetRefPos(Vector Pos) {RefPos=Pos;}
+  double  GetDistance()  { return  (RefPos - COMs[0]).length() ;}
+  Vector  GetPosTarget()  { return(RefPos);}
 protected:
   void    ApplyForce(GlobalMasterFreeEnergy& CFE, bool fd, double dh);
   double  GetE(Vector RefPos, double LambdaKf=1.0);
@@ -116,13 +111,13 @@ class ABoundPosRestraint : public APosRestraint {
 // ABoundPosRestraint is a derived class of APosRestraint
 //-------------------------------------------------------------------
 private:
-  double  m_RefDist;
-  Bound_t m_Bound;
+  double  RefDist;
+  Bound_t Bound;
 public:
-  void    SetRefDist(double Dist) {m_RefDist=Dist;}
-  void    SetBound(Bound_t Bound) {m_Bound=Bound;}
-  double  GetRefDist()            {return(m_RefDist);}
-  Bound_t GetBound()              {return(m_Bound);}
+  void    SetRefDist(double Dist) {RefDist=Dist;}
+  void    SetBound(Bound_t b) {Bound=b;}
+  double  GetRefDist()            {return(RefDist);}
+  Bound_t GetBound()              {return(Bound);}
   double  GetEnergy();
   void    GetStr(char* Str) {
     strcpy(Str, "Bound Position Restraint");
@@ -136,13 +131,13 @@ class AMovingPosRestraint : public APosRestraint {
 // AMovingPosRestraint is a derived class of APosRestraint
 //-------------------------------------------------------------------
 private:
-  Vector m_StartPos;
-  Vector m_StopPos;
+  Vector StartPos;
+  Vector StopPos;
 public:
-  void    SetStartPos(Vector Pos)       {m_StartPos=Pos;}
-  void    SetStopPos(Vector Pos)        {m_StopPos=Pos;}
-  Vector GetStartPos()                  {return(m_StartPos);}
-  Vector GetStopPos()                   {return(m_StopPos);}
+  void    SetStartPos(Vector Pos)       {StartPos=Pos;}
+  void    SetStopPos(Vector Pos)        {StopPos=Pos;}
+  Vector GetStartPos()                  {return(StartPos);}
+  Vector GetStopPos()                   {return(StopPos);}
   double  GetEnergy();
   double  Get_dU_dLambda();
   Bool_t  IsMoving() {return(kTrue);}
@@ -150,11 +145,11 @@ public:
     strcpy(Str, "Moving Position Restraint");
   }
   Vector GetPosTarget() {
-    return(m_StopPos*m_LambdaRef + m_StartPos*(1.0-m_LambdaRef));
+    return(StopPos*LambdaRef + StartPos*(1.0-LambdaRef));
   }
   double  GetDistance() {
-    Vector RefPos = m_StopPos*m_LambdaRef + m_StartPos*(1.0-m_LambdaRef);
-    return (RefPos-m_pCOMs[0]).length();
+    Vector RefPos = StopPos*LambdaRef + StartPos*(1.0-LambdaRef);
+    return (RefPos-COMs[0]).length();
   }
 protected:
   Vector GetGradient(int WhichGroup);
@@ -170,12 +165,12 @@ class ADistRestraint : public ARestraint {
 // this is an abstract class
 //-------------------------------------------------------------------
 protected:
-  double  m_RefDist;
+  double  RefDist;
 public:
   ADistRestraint();
   void    PrintInfo();
-  void    SetRefDist(double Dist)  {m_RefDist=Dist;}
-  double  GetDistTarget()          {return(m_RefDist);}
+  void    SetRefDist(double Dist)  {RefDist=Dist;}
+  double  GetDistTarget()          {return(RefDist);}
 protected:
   void    ApplyForce(GlobalMasterFreeEnergy& CFE, bool fd, double dh);
   double  GetE(double RefDist, double LambdaKf=1.0);
@@ -203,10 +198,10 @@ class ABoundDistRestraint : public ADistRestraint {
 // ABoundDistRestraint is a derived class of ADistRestraint
 //-------------------------------------------------------------------
 private:
-  Bound_t m_Bound;
+  Bound_t Bound;
 public:
-  void    SetBound(Bound_t Bound)  {m_Bound=Bound;}
-  Bound_t GetBound()               {return(m_Bound);}
+  void    SetBound(Bound_t b)  {Bound=b;}
+  Bound_t GetBound()           {return(Bound);}
   double  GetEnergy();
   void    GetStr(char* Str) {
     strcpy(Str, "Bound Distance Restraint");
@@ -220,13 +215,13 @@ class AMovingDistRestraint : public ADistRestraint {
 // AMovingDistRestraint is a derived class of ADistRestraint
 //-------------------------------------------------------------------
 private:
-  double  m_StartDist;
-  double  m_StopDist;
+  double  StartDist;
+  double  StopDist;
 public:
-  void    SetStartDist(double Dist)      {m_StartDist=Dist;}
-  void    SetStopDist(double Dist)       {m_StopDist=Dist;}
-  double  GetStartDist()                 {return(m_StartDist);}
-  double  GetStopDist()                  {return(m_StopDist);}
+  void    SetStartDist(double Dist)      {StartDist=Dist;}
+  void    SetStopDist(double Dist)       {StopDist=Dist;}
+  double  GetStartDist()                 {return(StartDist);}
+  double  GetStopDist()                  {return(StopDist);}
   double  GetEnergy();
   double  Get_dU_dLambda();
   Bool_t  IsMoving() {return(kTrue);}
@@ -234,7 +229,7 @@ public:
     strcpy(Str, "Moving Distance Restraint");
   }
   double  GetDistTarget() {
-    return(m_StopDist*m_LambdaRef + m_StartDist*(1.0-m_LambdaRef));
+    return(StopDist*LambdaRef + StartDist*(1.0-LambdaRef));
   }
 protected:
   Vector GetGradient(int WhichGroup);
@@ -248,12 +243,12 @@ class AnAngleRestraint : public ARestraint {
 // AnAngleRestraint is a derived class of ARestraint
 //-------------------------------------------------------------------
 protected:
-  double  m_RefAngle;     // in radians
+  double  RefAngle;     // in radians
 public:
   AnAngleRestraint();
   void    PrintInfo();
-  void    SetRefAngle(double Angle)  {m_RefAngle=Angle;}
-  double  GetAngleTarget()           {return(m_RefAngle);}
+  void    SetRefAngle(double Angle)  {RefAngle=Angle;}
+  double  GetAngleTarget()           {return(RefAngle);}
 protected:
   void    ApplyForce(GlobalMasterFreeEnergy& CFE, bool fd, double dh);
   double  GetE(double RefAngle, double LambdaKf=1.0);
@@ -281,12 +276,12 @@ class ABoundAngleRestraint : public AnAngleRestraint {
 // ABoundAngleRestraint is a derived class of AnAngleRestraint
 //-------------------------------------------------------------------
 private:
-  double  m_RefAngle;     // in radians
-  Bound_t m_Bound;
+  double  RefAngle;     // in radians
+  Bound_t Bound;
 public:
-  void    SetRefAngle(double Angle)  {m_RefAngle=Angle;}
-  void    SetBound(Bound_t Bound)    {m_Bound=Bound;}
-  Bound_t GetBound()                 {return(m_Bound);}
+  void    SetRefAngle(double Angle)  {RefAngle=Angle;}
+  void    SetBound(Bound_t b)    {Bound=b;}
+  Bound_t GetBound()                 {return(Bound);}
   double  GetEnergy();
   void    GetStr(char* Str) {
     strcpy(Str, "Bound Angle Restraint");
@@ -300,13 +295,13 @@ class AMovingAngleRestraint : public AnAngleRestraint {
 // AMovingAngleRestraint is a derived class of AnAngleRestraint
 //-------------------------------------------------------------------
 private:
-  double  m_StartAngle;     // in radians
-  double  m_StopAngle;      // in radians
+  double  StartAngle;     // in radians
+  double  StopAngle;      // in radians
 public:
-  void    SetStartAngle(double Angle)    {m_StartAngle=Angle;}
-  void    SetStopAngle(double Angle)     {m_StopAngle=Angle;}
-  double  GetStartAngle()                {return(m_StartAngle);}
-  double  GetStopAngle()                 {return(m_StopAngle);}
+  void    SetStartAngle(double Angle)    {StartAngle=Angle;}
+  void    SetStopAngle(double Angle)     {StopAngle=Angle;}
+  double  GetStartAngle()                {return(StartAngle);}
+  double  GetStopAngle()                 {return(StopAngle);}
   double  GetEnergy();
   double  Get_dU_dLambda();
   Bool_t  IsMoving() {return(kTrue);}
@@ -314,7 +309,7 @@ public:
     strcpy(Str, "Moving Angle Restraint");
   }
   double  GetAngleTarget() {
-    return(m_StopAngle*m_LambdaRef + m_StartAngle*(1.0-m_LambdaRef));
+    return(StopAngle*LambdaRef + StartAngle*(1.0-LambdaRef));
   }
 protected:
   Vector GetGradient(int WhichGroup);
@@ -328,12 +323,12 @@ class ADiheRestraint : public ARestraint {
 // ADiheRestraint is a derived class of ARestraint
 //-------------------------------------------------------------------
 protected:
-  double  m_RefAngle;     // in radians
+  double  RefAngle;     // in radians
 public:
   ADiheRestraint();
   void    PrintInfo();
   Bool_t  TwoTargets()      {return(kFalse);}
-  double  GetDiheTarget1()  {return(m_RefAngle);}
+  double  GetDiheTarget1()  {return(RefAngle);}
   double  GetDiheTarget2()  {return(0);}
 protected:
   void    ApplyForce(GlobalMasterFreeEnergy& CFE, bool fd, double dh);
@@ -354,7 +349,7 @@ class AFixedDiheRestraint : public ADiheRestraint {
 // AFixedDiheRestraint is a derived class of ADiheRestraint
 //-------------------------------------------------------------------
 public:
-  void    SetRefAngle(double Angle)  {m_RefAngle=Angle;}
+  void    SetRefAngle(double Angle)  {RefAngle=Angle;}
   double  GetEnergy();
   void    GetStr(char* Str) {
     strcpy(Str, "Fixed   Dihedral Restraint");
@@ -368,23 +363,23 @@ class ABoundDiheRestraint : public ADiheRestraint {
 // ABoundDiheRestraint is a derived class of ADiheRestraint
 //-------------------------------------------------------------------
 private:
-  double  m_LowerAngle;     // radians (between 0 and 2pi)
-  double  m_UpperAngle;     // radians (between 0 and 2pi)
-  double  m_IntervalAngle;  // radians
+  double  LowerAngle;     // radians (between 0 and 2pi)
+  double  UpperAngle;     // radians (between 0 and 2pi)
+  double  IntervalAngle;  // radians
 public:
-  void    SetLowerAngle(double Angle)     {m_LowerAngle=Angle;}
-  void    SetUpperAngle(double Angle)     {m_UpperAngle=Angle;}
-  void    SetIntervalAngle(double Angle)  {m_IntervalAngle=Angle;}
+  void    SetLowerAngle(double Angle)     {LowerAngle=Angle;}
+  void    SetUpperAngle(double Angle)     {UpperAngle=Angle;}
+  void    SetIntervalAngle(double Angle)  {IntervalAngle=Angle;}
   double  GetLowerAngle()                 {return(GetDiheTarget1());} // not used -- remove ?
   double  GetUpperAngle()                 {return(GetDiheTarget2());} // not used -- remove ?
-  double  GetIntervalAngle()              {return(m_IntervalAngle);}
+  double  GetIntervalAngle()              {return(IntervalAngle);}
   double  GetEnergy();
   void    GetStr(char* Str) {
     strcpy(Str, "Bound Dihedral Restraint");
   }
   Bool_t  TwoTargets()      {return(kTrue);}
-  double  GetDiheTarget1()  {return(m_LowerAngle);}
-  double  GetDiheTarget2()  {return(m_UpperAngle);}
+  double  GetDiheTarget1()  {return(LowerAngle);}
+  double  GetDiheTarget2()  {return(UpperAngle);}
 //
 protected:
   Vector GetGradient(int WhichGroup);
@@ -395,13 +390,13 @@ class AMovingDiheRestraint : public ADiheRestraint {
 // AMovingDiheRestraint is a derived class of ADiheRestraint
 //-------------------------------------------------------------------
 private:
-  double  m_StartAngle;
-  double  m_StopAngle;
+  double  StartAngle;
+  double  StopAngle;
 public:
-  void    SetStartAngle(double Angle)    {m_StartAngle=Angle;}
-  void    SetStopAngle(double Angle)     {m_StopAngle=Angle;}
-  double  GetStartAngle()                {return(m_StartAngle);}
-  double  GetStopAngle()                 {return(m_StopAngle);}
+  void    SetStartAngle(double Angle)    {StartAngle=Angle;}
+  void    SetStopAngle(double Angle)     {StopAngle=Angle;}
+  double  GetStartAngle()                {return(StartAngle);}
+  double  GetStopAngle()                 {return(StopAngle);}
   double  GetEnergy();
   double  Get_dU_dLambda();
   Bool_t  IsMoving() {return(kTrue);}
@@ -410,7 +405,7 @@ public:
   }
   Bool_t  TwoTargets()     {return(kFalse);}
   double  GetDiheTarget1() {
-    return(m_StopAngle*m_LambdaRef + m_StartAngle*(1.0-m_LambdaRef));
+    return(StopAngle*LambdaRef + StartAngle*(1.0-LambdaRef));
   }
 protected:
   Vector GetGradient(int WhichGroup);
@@ -434,15 +429,19 @@ protected:
                     // if yes, gradient computation does not require rotation matrix derivatives (simpler)
 public:
   AnRMSDRestraint();
-  AnRMSDRestraint(AGroup&, AGroup&);
   ~AnRMSDRestraint(); // modified constructor to free ugrad
   void    PrintInfo();
   void    SetRefRMSD(double v)  {refRMSD=v;}
-  void    ComputeRefRMSD() {;} // nothing: restraint is fixed by default
+  virtual void    ComputeRefRMSD() {
+   if ( refRMSD < 0.0 ) { // this may be useful if one does not care to specify the initial RMSD
+//   DebugM(1,"Setting Reference RMSD to : "<<instRMSD<<"\n");
+    refRMSD = instRMSD; // assuming instRMSD has been computed
+   }
+  }
 //  double  GetRMSD() {return instRMSD;} // RMSD to target structure
 //  double  GetRMSDTarget() {return refRMSD;} // desired RMSD to target structure
   void    qDiffRotCheck(); // Compute qdiffrot
-  void    SetGroups(AGroup&, AGroup&);
+  void    SetGroups(AGroup *, int );
 protected:
   void    ApplyForce(GlobalMasterFreeEnergy& CFE, bool fd, double dh);
   virtual double ComputeForcePrefactor()=0;
@@ -454,14 +453,13 @@ class AFixedRMSDRestraint : public AnRMSDRestraint {
 //-------------------------------------------------------------------
 public:
   AFixedRMSDRestraint() : AnRMSDRestraint() {;}
-  AFixedRMSDRestraint(AGroup& g1, AGroup& g2) : AnRMSDRestraint(g1, g2) {;}
 //
-  double  GetEnergy() { double e = (instRMSD - refRMSD); return ( 0.5 * m_Kf * e * e ); }
+  double  GetEnergy() { double e = (instRMSD - refRMSD); return ( 0.5 * Kf * e * e ); }
   void    GetStr(char* Str) { strcpy(Str, "Fixed RMSD Restraint"); }
 protected:
   double ComputeForcePrefactor() {
    double RMS = __MAX(instRMSD, kALittle); //  prevent divide overflow
-   double pref = m_Kf * (1.0 - refRMSD/RMS);
+   double pref = Kf * (1.0 - refRMSD/RMS);
    return pref;
   }
 };
@@ -471,20 +469,19 @@ class ABoundRMSDRestraint : public AnRMSDRestraint {
 // ABoundDistRestraint is a derived class of ADistRestraint
 //-------------------------------------------------------------------
 private:
-  Bound_t m_Bound;
+  Bound_t Bound;
 public:
-  ABoundRMSDRestraint() : AnRMSDRestraint() { m_Bound = kUpper ;}
-  ABoundRMSDRestraint(AGroup& g1, AGroup& g2) : AnRMSDRestraint(g1, g2) { m_Bound = kUpper ;}
-  void    SetBound(Bound_t Bound)  {m_Bound=Bound;}
-  Bound_t GetBound()               {return(m_Bound);}
-  double  GetEnergy() { double e = (instRMSD - refRMSD); if (m_Bound==kLower) e = -e; return ( e>0. ? 0.5 * m_Kf * e * e :  0.0 ); }
+  ABoundRMSDRestraint() : AnRMSDRestraint() { Bound = kUpper ;}
+  void    SetBound(Bound_t b)  {Bound=b;}
+  Bound_t GetBound()               {return(Bound);}
+  double  GetEnergy() { double e = (instRMSD - refRMSD); if (Bound==kLower) e = -e; return ( e>0. ? 0.5 * Kf * e * e :  0.0 ); }
   void    GetStr(char* Str) {  strcpy(Str, "Bound RMSD Restraint"); }
 protected:
   double ComputeForcePrefactor() {
    double dRMSD = (instRMSD - refRMSD); 
    double RMS = __MAX(instRMSD, kALittle); //  prevent divide overflow
-   if (m_Bound==kUpper) return ( dRMSD > 0. ? m_Kf * dRMSD/RMS : 0.0); //Upper bonud
-                        return ( dRMSD < 0. ? m_Kf * dRMSD/RMS : 0.0); //Lower bound
+   if (Bound==kUpper) return ( dRMSD > 0. ? Kf * dRMSD/RMS : 0.0); //Upper bonud
+                      return ( dRMSD < 0. ? Kf * dRMSD/RMS : 0.0); //Lower bound
   }
 };
 
@@ -497,20 +494,22 @@ private:
   double  stopRMSD;
 public:
   AMovingRMSDRestraint() : AnRMSDRestraint() {;}
-  AMovingRMSDRestraint(AGroup& g1, AGroup& g2) : AnRMSDRestraint(g1, g2) {;}
   void    SetStartRMSD(double v)      {startRMSD=v;}
   void    SetStopRMSD(double v)       {stopRMSD =v;}
   double  GetStartRMSD()              {return(startRMSD);}
   double  GetStopRMSD()               {return(stopRMSD);}
-  double  GetEnergy() { double e = (instRMSD - refRMSD); return ( 0.5 * m_Kf * e * e ); }
-  void    ComputeRefRMSD() { refRMSD = stopRMSD*m_LambdaRef + startRMSD*(1.0-m_LambdaRef); }
-  double  Get_dU_dLambda() { return ( m_Kf * (instRMSD - refRMSD) * (stopRMSD - startRMSD) ) ; }
+  double  GetEnergy() { double e = (instRMSD - refRMSD); return ( 0.5 * Kf * e * e ); }
+  virtual void ComputeRefRMSD() {
+   if ( startRMSD < 0.0 ) startRMSD = instRMSD;
+   refRMSD = stopRMSD*LambdaRef + startRMSD*(1.0-LambdaRef);
+  }
+  double  Get_dU_dLambda() { return ( Kf * (instRMSD - refRMSD) * (stopRMSD - startRMSD) ) ; }
   Bool_t  IsMoving() {return(kTrue);}
   void    GetStr(char* Str) { strcpy(Str, "Moving RMSD Restraint"); }
 protected:
   double ComputeForcePrefactor() {
    double RMS = __MAX(instRMSD, kALittle); //  prevent divide overflow
-   double pref = m_Kf * (1.0 - refRMSD/RMS);
+   double pref = Kf * (1.0 - refRMSD/RMS);
    return pref;
   }
 };

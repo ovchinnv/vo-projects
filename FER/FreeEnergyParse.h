@@ -66,7 +66,7 @@ int     ReadBound(char* Str, Bound_t& Bound);
 item_t  ReadNextItem(char* Str, int& NumChars);
 restr_t ReadRestraintType(char* Str, int& NumChars);
 int     ReadFileName(const char* Str) ; // VO 2013
-int     ReadRMSDCoords(char *Str, AGroup& Group1, AGroup& Group2, GlobalMasterFreeEnergy& CFE); // VO 2013
+int     ReadRMSDCoords(char *Str, AGroup* groups, GlobalMasterFreeEnergy& CFE); // VO 2013
 
 // functions for putting the specified atoms into Group's
 int  AddAtoms(AGroup& Group, char* Str, GlobalMasterFreeEnergy& CFE);

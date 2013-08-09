@@ -82,7 +82,7 @@ void GlobalMasterFreeEnergy::calculate() {
     if (m_LambdaManager.IsTimeToPrint()) {
       m_LambdaManager.PrintHeader(simParams->dt);
       if (m_LambdaManager.IsTimeToPrint_dU_dLambda()) {
-        m_RestraintManager.Print_dU_dLambda_Info();
+        m_RestraintManager.Print_dU_dLambda();
         if (m_RestraintManager.ThereIsAForcingRestraint()) {
           m_LambdaManager.Print_dU_dLambda_Summary(Sum_dU_dLambdas);
         }
@@ -90,7 +90,6 @@ void GlobalMasterFreeEnergy::calculate() {
       else {
         m_LambdaManager.PrintSomeSpaces();
       }
-      m_RestraintManager.PrintEnergyInfo();
       m_RestraintManager.PrintRestraintInfo();
       if (m_LambdaManager.IsEndOf_MCTI()) {
         m_LambdaManager.Print_MCTI_Integration();
@@ -110,7 +109,7 @@ void GlobalMasterFreeEnergy::user_initialize() {
 //-----------------------------------------------------------------
 
   iout << iINFO << "=================================================\n"; 
-  iout << iINFO << "  FREE ENERGY CONFIG SCRIPT (COMMENTS STRIPPED)\n"; 
+  iout << iINFO << "  FREE ENERGY CONFIG SCRIPT (COMMENTS REMOVED)\n"; 
   iout << iINFO << "=================================================\n"; 
   int config_len = strlen(config);
   if ( config_len < 10000 ) {
@@ -130,10 +129,13 @@ void GlobalMasterFreeEnergy::user_initialize() {
   // exit if there aren't enough steps to complete all pmf & mcti blocks
   int Total = m_LambdaManager.GetTotalNumSteps();
   if (Total > simParams->N) {
-    iout << "FreeEnergy: Not enough steps to complete pfm & mcti blocks" << std::endl;
-    iout << "FreeEnergy:   Num Steps Needed =    " << Total << std::endl;
-    iout << "FreeEnergy:   Num Steps Requested = " << simParams->N << std::endl << endi;
-    NAMD_die("FreeEnergy: Fatal Run-Time Error");
+    iout << "===================================================================" << std::endl;
+    iout << "FreeEnergy: WARNING : Not enough steps to complete PMF/MCTI blocks" << std::endl;
+    iout << "FreeEnergy:   Steps Needed   : "<< Total << std::endl;
+    iout << "FreeEnergy:   Steps Available: "<< simParams->N << std::endl << endi;
+    iout << "===================================================================" << std::endl;
+// continue anyway : maybe user wants to accumulate stats for as long as possible 
+//    NAMD_die("FreeEnergy: Fatal Run-Time Error");
   }
 }
 //---------------------------------------------------------------------
