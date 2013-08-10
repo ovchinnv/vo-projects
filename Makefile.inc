@@ -158,7 +158,7 @@ mod:
 modules: $(OBJS) mod
 	for d in $(DIRS); do (cd $$d; $(MAKE) modules); done
 # LIBRARIES
-linklibs: libs
+linklibs: libs mod
 	/bin/sh -c 'for file in `ls *.a *.so 2>/dev/null`; do  ln -fs `pwd`/$$file ${ROOT}/lib/$$file; done'
 libs : libraries
 libraries: $(ROOT)/$(NAME).stamp
