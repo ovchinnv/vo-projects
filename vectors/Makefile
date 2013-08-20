@@ -12,17 +12,17 @@ CHARMM_SOURCES=ivector.src ivector_list.src
 #####################################################
 ivector.o: ivector.F90
 ivector.F90: vector_template.ftn
-	$(FPP) $(FPPFLAGS) -D'__DATANAME=i' -D'__DATATYPE=int' -D'__TYPENAME=int' $(MSG) $< >$@
+	$(FPP) $(FPPFLAGS) $(DEFS) -U int -D'__DATANAME=i' -D'__DATATYPE=int' -D'__TYPENAME=int' $(MSG) $< >$@
 rvector.o: rvector.F90
 rvector.F90: vector_template.ftn
-	$(FPP) $(FPPFLAGS) -D'__DATANAME=r' -D'__DATATYPE=float' -D'__TYPENAME=real' $(MSG) $< >$@
+	$(FPP) $(FPPFLAGS) $(DEFS) -D'__DATANAME=r' -D'__DATATYPE=float' -D'__TYPENAME=real' $(MSG) $< >$@
 ####################################################
 ivector_list.o: ivector.o ivector_list.F90
 ivector_list.F90: vector_list_template.ftn
-	$(FPP) $(FPPFLAGS) -P -D'__DATANAME=i' -D'__DATATYPE=int' -D'__TYPENAME=int' $(MSG) $< >$@
+	$(FPP) $(FPPFLAGS) $(DEFS) -U int -P -D'__DATANAME=i' -D'__DATATYPE=int' -D'__TYPENAME=int' $(MSG) $< >$@
 rvector_list.o: rvector.o rvector_list.F90
 rvector_list.F90: vector_list_template.ftn
-	$(FPP) $(FPPFLAGS) -P -D'__DATANAME=r' -D'__DATATYPE=float' -D'__TYPENAME=real' $(MSG) $< >$@
+	$(FPP) $(FPPFLAGS) $(DEFS) -P -D'__DATANAME=r' -D'__DATATYPE=float' -D'__TYPENAME=real' $(MSG) $< >$@
 ####################################################
 clean::
 	rm -f *.mod *.o *.a ivector.F90 rvector.F90 ivector_list.F90 rvector_list.F90 $(CHARMM_SOURCES) *.tmp \
