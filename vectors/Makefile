@@ -7,7 +7,7 @@ OBJS=$(VECTORS) $(VECTORLISTS)
 include $(ROOT)/Makefile.inc
 
 LOCALDEFS=-D'__CHARMM_ONLY=!'
-CHARMM_SOURCES=ivector.src ivector_list.src
+CHARMM_SOURCES=ivector.src ivector_list.src rvector.src rvector_list.src 
 
 #####################################################
 ivector.o: ivector.F90
@@ -35,3 +35,7 @@ ivector.tmp: vector_template.ftn
 	$(FPP) $(FPPFLAGS) -D'__DATANAME=i' -D'__DATATYPE=int' -D'__TYPENAME=int' $(MSG) -D__CHARMM $< >$@
 ivector_list.tmp: vector_list_template.ftn
 	$(FPP) $(FPPFLAGS) -P -D'__DATANAME=i' -D'__DATATYPE=int' -D'__TYPENAME=int' $(MSG) -D__CHARMM $< >$@
+rvector.tmp: vector_template.ftn
+	$(FPP) $(FPPFLAGS) -D'__DATANAME=r' -D'__DATATYPE=float' -D'__TYPENAME=real' $(MSG) -D__CHARMM $< >$@
+rvector_list.tmp: vector_list_template.ftn
+	$(FPP) $(FPPFLAGS) -P -D'__DATANAME=r' -D'__DATATYPE=float' -D'__TYPENAME=real' $(MSG) -D__CHARMM $< >$@
