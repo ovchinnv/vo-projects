@@ -182,15 +182,6 @@ __CHARMM_ONLY##IF STRINGM
 !ccccccccccccccc PARSE OTHER DYNAMICS OPTIONS
        voronoi_hist_on=(__INDX_RM(comlyn,comlen,'VORO').gt.0)
        if (voronoi_hist_on) then
-        voro_cut=-999d0
-        if (__INDX(comlyn, comlen, 'VCUT',4).gt.0) then
-         voro_cut=__GET_RM_F(comlyn,comlen,'VCUT',0d0)
-         if (voro_cut.le.0d0) then
-          __WRN(whoami,'VCUT MUST BE POSITIVE. NOT SET.')
-         else
-          call cv_common_voronoi_set_cutoff(voro_cut)
-         endif
-        endif
         voronoi_allow_cross=(__INDX_RM(comlyn,comlen, 'VCRS').gt.0)
         if (voronoi_allow_cross) then
          voronoi_update_freq=__GET_RM_I(comlyn,comlen,'VCRF',0)
@@ -581,10 +572,34 @@ __CHARMM_ONLY##IF STRINGM
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 !ccccccccccccccccccc ADDITIONAL VORONOI OPTIONS (nowhere else to put them)
       elseif (__STRNCMP(keyword,'VORO',4)) then
-!    get voronoi command
-       keyword=__NEXTA(comlyn,comlen)
-       if (__STRNCMP(keyword,'VMAP',4)) then
-        if (__INDX_RM(comlyn, comlen, 'CALC').gt.0) then
+!*****************************************************************************************
+       if (__INDX(comlyn, comlen, 'VCUT', 4).gt.0) then
+        voro_cut=__GET_RM_F(comlyn, comlen, 'VCUT', zero)
+! replica spec
+        irep=__GET_RM_I(comlyn, comlen, 'REP', -1)
+        if (voro_cut.le.zero) then
+          __WRN(whoami, 'VCUT MUST BE POSITIVE. NOT SET.')
+        else
+         if (irep.lt.0.or.irep.ge.nstring) then
+          if (qprint) then ; write(_MSGBUF, 6779) whoami, whoami, voro_cut ; __PRINT(_MSGBUF) ; endif
+          call cv_common_voronoi_set_cutoff(voro_cut)
+         else
+          if (qprint) then ; write(_MSGBUF, 6780) whoami, irep, voro_cut ; __PRINT(_MSGBUF) ; endif
+          if (mestring.eq.irep) call cv_common_voronoi_set_cutoff(voro_cut)
+         endif ! irep
+ 6779 format(A,' REPLICA NUMBER INVALID OR UNSPECIFIED.',/A,' WILL SET VORONOI TUBE CUTOFF ', &
+     & '  TO ',F7.3,' ON ALL REPLICAS.')
+ 6780 format(A,' WILL SET VORONOI TUBE CUTOFF ON REPLICA ',I5,' TO ',F7.3,'.')
+        endif ! voro_cut > 0
+!
+       endif ! VCUT
+! process other voronoi commands
+! get command
+       if (comlen .ge. 4) then ! process additional commands
+        keyword=__NEXTA(comlyn,comlen)
+!    voronoi map commands cccccccccccccccccccccccccccccccccccccccccccccccccc
+        if (__STRNCMP(keyword,'VMAP',4)) then
+         if (__INDX_RM(comlyn, comlen, 'CALC').gt.0) then
           if (qprint) then ; write(_MSGBUF,6010) whoami ; __PRINT(_MSGBUF) ; endif
  6010 format(A,' WILL CALCULATE VORONOI MAP FROM MAIN COORDINATES.')
           call smcv_voronoi_whereami(__X,__Y,__Z,__MASS)
@@ -604,8 +619,8 @@ __CHARMM_ONLY##IF STRINGM
 #endif
 !
           endif
-!    print cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-        elseif (__INDX_RM(comlyn, comlen, 'PRIN').gt.0) then
+!    print map cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+         elseif (__INDX_RM(comlyn, comlen, 'PRIN').gt.0) then
           ifile=__GET_RM_I(comlyn,comlen,'UNIT',-1)
           __GET_RM_A(COMLYN,COMLEN,'NAME',4,FNAME,80,FLEN)
 !        note: FNAME will be UPPER CASE
@@ -622,8 +637,8 @@ __CHARMM_ONLY##IF STRINGM
             __WRN(whoami,'FILE NAME NOT SPECIFIED. NOTHING DONE.')
            endif ! flen
           endif ! qroot
-!    read ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-        elseif (__INDX_RM(comlyn, comlen, 'READ').gt.0) then
+!    read map ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+         elseif (__INDX_RM(comlyn, comlen, 'READ').gt.0) then
           ifile=__GET_RM_I(comlyn,comlen,'UNIT',-1)
           __GET_RM_A(COMLYN,COMLEN,'NAME',4,FNAME,80,FLEN)
 !        note: FNAME will be UPPER CASE
@@ -639,12 +654,12 @@ __CHARMM_ONLY##IF STRINGM
           else
             __WRN(whoami,'FILE NAME NOT SPECIFIED. NOTHING DONE.')
           endif ! flen
-!cccccccccccccccccccccccccccccccc reset cccccccccccccccccccccccccccccccccc
-        elseif (__INDX_RM(comlyn, comlen, 'CLEA').gt.0) then
-           if (associated(cv%voronoi_map)) cv%voronoi_map=-ione
-        endif ! 'CALC'
-!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       elseif (__STRNCMP(keyword,'READ',4)) then
+!ccc reset map cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+         elseif (__INDX_RM(comlyn, comlen, 'CLEA').gt.0) then
+          if (associated(cv%voronoi_map)) cv%voronoi_map=-ione
+         endif ! 'CALC'
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+        elseif (__STRNCMP(keyword,'READ',4)) then
 !    read "restart" file that contains (1) crossing_attempt (2) crossing_accepts (3) occupancy
          ifile=__GET_RM_I(comlyn,comlen,'UNIT',-1)
          __GET_RM_A(COMLYN,COMLEN,'NAME',4,FNAME,80,FLEN)
@@ -661,7 +676,7 @@ __CHARMM_ONLY##IF STRINGM
           __WRN(whoami,'FILE NAME NOT SPECIFIED. NOTHING DONE.')
          endif ! flen
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       elseif (__STRNCMP(keyword,'PRIN',4)) then
+        elseif (__STRNCMP(keyword,'PRIN',4)) then
          ifile=__GET_RM_I(comlyn,comlen,'UNIT',-1)
          __GET_RM_A(COMLYN,COMLEN,'NAME',4,FNAME,80,FLEN)
 !        note: FNAME will be UPPER CASE
@@ -676,7 +691,8 @@ __CHARMM_ONLY##IF STRINGM
          else
             __WRN(whoami,'FILE NAME NOT SPECIFIED. NOTHING DONE.')
          endif ! flen
-       endif ! VMAP
+        endif ! VMAP
+       endif ! VCUT
 !cccccccccccccccccccc FRAMES PARSER ccccccccccccccccccccccccccccccccccccc
       elseif (__STRNCMP(keyword,'FRAM',4)) then ! frames parser
 !    get frames command
