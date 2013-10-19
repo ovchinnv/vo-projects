@@ -1035,26 +1035,30 @@ __CHARMM_ONLY##IF STRINGM
            __WRN(whoami,'ORIENTATION ATOMS SELECTION ERROR')
            RETURN
           ENDIF
-          norient=count( iselct.gt.0 )
 #elif defined(__DMOL)
 #include "../../dmol_select_macro.def"
           if (associated(iselct)) then ; norient=size(iselct) ; else ; norient=0 ; endif
 #endif
+! deallocate existing orientation arrays
+!
+          if (qdiffrot) then; if (associated(r_o)) deallocate(r_o)
+                              if(associated(iatom_o)) deallocate(iatom_o)
+          else              ; nullify(r_o) ; nullify(iatom_o)
+          endif
+          if (associated(orientWeights)) deallocate(orientWeights)
 !
 ! currently we require at least three atoms for orientation
 !
+          norient=count( iselct.gt.0 )
           if (norient.lt.3) then
-           __WRN(whoami,' FEWER THAN THREE ATOMS SELECTED FOR ORIENTATION. ABORT.')
+           __WRN(whoami,' FEWER THAN THREE ATOMS SELECTED FOR ORIENTATION. WILL NOT ORIENT.')
+           norient=0
+           qorient=.false.
+           qdiffrot=.true.
            return
           endif
 !
           qorient=.true.
-!
-          if (qdiffrot) then; if (associated(r_o)) deallocate(r_o)
-                             if(associated(iatom_o)) deallocate(iatom_o)
-          else              ; nullify(r_o) ; nullify(iatom_o)
-          endif
-          if (associated(orientWeights)) deallocate(orientWeights)
 !
           allocate(iatom_o(norient)); iatom_o=0
           allocate(orientWeights(norient));
@@ -2047,7 +2051,7 @@ __CHARMM_ONLY##IF STRINGM
 !
       r_f(:,:,left_old:right_old)=r_f(:,:,left:right)
       r_f(:,:,center_new)=r_f(:,:,center)
-      if (qdiffrot) then
+      if (qorient.and.qdiffrot) then
        r_o(:,:,left_old:right_old)=r_o(:,:,left:right)
        r_o(:,:,center_new)=r_o(:,:,center)
       endif
@@ -2791,7 +2795,7 @@ __CHARMM_ONLY##IF STRINGM
       r3=0d0; stringatoms=0
 !
       stringatoms(iatom_f)=1
-      if (qdiffrot) stringatoms(iatom_o)=1
+      if (qorient.and.qdiffrot) stringatoms(iatom_o)=1
 !      k=sum(stringatoms)
 !
       call ftsm_update_overlap_coor(ione)
@@ -2799,7 +2803,7 @@ __CHARMM_ONLY##IF STRINGM
        ind=iatom_f(j);   r3(ind,:)=r_f(j,:,c)
       enddo
 !
-      if (qdiffrot) then
+      if (qorient.and.qdiffrot) then
        do j=1, norient
         ind=iatom_o(j);   r3(ind,:)=r_o(j,:,c)
        enddo
@@ -2877,7 +2881,7 @@ __CHARMM_ONLY##IF STRINGM
       r3=0d0; stringatoms=0
 !
       stringatoms(iatom_f)=1
-      if (qdiffrot) stringatoms(iatom_o)=1
+      if (qorient.and.qdiffrot) stringatoms(iatom_o)=1
 !      k=sum(stringatoms)
 !    call reader
 !    formatted coor card files
@@ -2907,7 +2911,7 @@ __CHARMM_ONLY##IF STRINGM
          ind=iatom_f(j);   r_f(j,:,c)=r3(ind,:)
       enddo
 !
-      if (qdiffrot) then
+      if (qorient.and.qdiffrot) then
         do j=1, norient
           ind=iatom_o(j);  r_o(j,:,c)=r3(ind,:)
         enddo
@@ -3317,7 +3321,7 @@ __CHARMM_ONLY##IF STRINGM
 !ccccccccccccccccc process Jacobian output options ccccccccccccccccc
       if (__INDX_RM(comlyn, comlen, 'JACO').gt.0) then
 !
-        __GET_RM_A(COMLYN,COMLEN,'JNAM',4,M_fname,80,M_flen)
+        __GET_RM_A(COMLYN,COMLEN,'JNAM',4,J_fname,80,J_flen)
         if (J_flen.gt.0) then
          output_J=.true.
          if (qprint) then ; write(_MSGBUF,6628) whoami,J_fname(1:J_flen) ; __PRINT(_MSGBUF) ; endif
@@ -3736,7 +3740,7 @@ __CHARMM_ONLY##IF STRINGM
 !
          if (SIZE_STRNG.gt.1) then
           call MPI_GATHER(Jacobian(2),i,mpifloat,  & ! gather on root for output
-     &                    M_all,      i,mpifloat,  &
+     &                    J_all,      i,mpifloat,  &
      &                    0,MPI_COMM_STRNG, ierror)
          else
           Jacobian(1)=Jacobian(2);
@@ -4250,13 +4254,13 @@ __CHARMM_ONLY##IF STRINGM
 !
       if (me.eq.1) then
        r_f(:,:,left)=r_f(:,:,center)
-       if (qdiffrot) then
+       if (qsend_o) then
         r_o(:,:,left)=r_o(:,:,center)
        endif
 !
       elseif (me.eq.nstring) then
        r_f(:,:,right)=r_f(:,:,center)
-       if (qdiffrot) then
+       if (qsend_o) then
         r_o(:,:,right)=r_o(:,:,center)
        endif
       endif
