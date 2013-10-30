@@ -62,11 +62,9 @@ __CHARMM_ONLY##IF STRINGM
       int :: iteration ! MD iteration
 !     locals
       float :: s
-      character(len=11) :: whoami
       bool :: qgrp
       int :: i, ierror, qfac
-!
-      data whoami /' SMCV_MAIN>'/
+      __IAM(SMCV_MAIN)
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       qgrp=(MPI_COMM_LOCAL.ne.MPI_COMM_NULL)                            &
      & .and.(SIZE_LOCAL.gt.1)
@@ -133,30 +131,35 @@ __CHARMM_ONLY##IF STRINGM
 !                                                    indicating whether to update running averages
         endif
        endif
-!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!===================== EVOLUTION ========================
        if (evolve_cv_on.and.evolve_freq.gt.0) then
         if (mod(iteration,evolve_freq).eq.0) then ! evolve string
          if (.not.string_noprint) then
           write(_MSGBUF,'(2A)') whoami,' EVOLVING STRING.' ; __PRINTL(_MSGBUF,3)
          endif
+!=================== take care of M tensor statistics
+!    need to add contributions to M, if running in parallel (reduce short-term average)
+          if (qgrp.and.calc_Mtensor_para) then
+!    will broadcast all rows, but only num_cv columns
+           call MPI_ALLREDUCE(cv%M(1,1,1),cv%M(1,1,2),max_cv_common*cv%num_cv, &
+     &          mpifloat, MPI_SUM, MPI_COMM_LOCAL, ierror)
+          else ! just copy
+           cv%M(1:cv%num_cv,1:cv%num_cv,2)=cv%M(1:cv%num_cv,1:cv%num_cv,1)
+          endif ! qgrp
+!
+!========== type of of evolution
+!===== EXPONENTIAL
          if (evolve_expo_on) then ! exponential averaging
            call cv_common_evolve_expo(evolve_expo_mem, evolve_nskip)
+!====== AVERAGE
          elseif (evolve_aver_on) then ! just add the current theta values to the running average
            num_ave_cv_samples=num_ave_cv_samples + 1
-           call cv_common_evolve_expo( 1d0-1d0/num_ave_cv_samples,        &
-     &                              evolve_nskip )
+           call cv_common_evolve_expo( 1d0-1d0/num_ave_cv_samples, evolve_nskip )
+!===== SMOOTHED PATH
          elseif (evolve_smooth_on) then
            call cv_common_smooth_hist(evolve_smooth_d, evolve_nskip) ! evolve by unrestrained dynamics
-         else ! regular smcv
-!    need to add contributions to M, if running in parallel (reduce)
-          if (qgrp.and.calc_Mtensor_para) then
-       call MPI_ALLREDUCE(cv%M(1,1,1),cv%M(1,1,2),max_cv_common*cv%num_cv,& ! will broadcast all rows, but only num_cv columns
-     &          mpifloat, MPI_SUM, MPI_COMM_LOCAL, ierror)
-          else ! qgrp
-         cv%M(1:cv%num_cv,1:cv%num_cv,2)=cv%M(1:cv%num_cv,1:cv%num_cv,1)
-          endif ! qgrp
-! compute M inverse
-          call cv_common_compute_Minv()
+!===== DEFAULT IS REGULAR SMCV
+         else
           call cv_common_evolve_smcv(evolve_step) ! Euler string evolution
          endif
          if (unrestrained_on) then ! unrestrained dynamics
@@ -166,12 +169,15 @@ __CHARMM_ONLY##IF STRINGM
 !       call cv_common_compute_wgt() ! compute weight from M
 !      update Voronoi cell centers
 !       write(6,*) 'ITERATION' ,iteration
-         if (cv_common_voronoi_initialized)                               &
-     &    call smcv_voronoi_smart_update(x, y, z, xcomp, ycomp, zcomp,  &
+         if (cv_common_voronoi_initialized) then
+! recompute M inverse (which together with path centers defines the cells)
+          call cv_common_compute_Minv()
+          call smcv_voronoi_smart_update(x, y, z, xcomp, ycomp, zcomp,  &
      &                                   mass, iteration)
 !     &   call smcv_voronoi_smart_update(xcomp, ycomp, zcomp,
 !     &                                  dx, dy, dz, mass, iteration)
-        endif
+         endif ! voronoi_initialized
+        endif ! evolve_freq
        endif ! evolve_cv_on
 !
        if (repa_on.and.repa_freq.gt.0) then
@@ -535,6 +541,7 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_OUTPUT
       __DEP_MULTICOM
       __DEP_CONST
+      __DEP_NUMBER
       __DEP_MPI
       __IMPNONE
 !
@@ -545,10 +552,10 @@ __CHARMM_ONLY##IF STRINGM
       float :: u, v, t, t1, dot_pr
       bool :: deriv, calctheta, qgrp, qgrp1
       float, allocatable :: gradi(:), gradj(:)
-      float cvlist(cv%num_cv) ! for new M tensor computation
+      float cvlist(cv%num_cv) ! for fast M tensor computation
       int :: cvlistsize, ii, jj
-      character(len=15) :: whoami
-      data whoami /' SMCV_ADD_HIST>'/
+      __IAM(SMCV_ADD_HIST)
+      float, allocatable :: M(:,:)
 !
       qgrp=(MPI_COMM_LOCAL.ne.MPI_COMM_NULL)                            &
      &  .and.(SIZE_LOCAL.gt.1)
@@ -742,7 +749,7 @@ __CHARMM_ONLY##IF STRINGM
 ! the speedup compared to the simple code depends on the number of CV that make use of a particular atom;
 ! the code is ideal if there are many cv, but each depends on a couple of atoms only;
 ! this way, cvlistsize will be small, and the two inner loops will be fast
-       cv%M(1:cv%num_cv,1:cv%num_cv,4)=0d0;
+       allocate(M(cv%num_cv,cv%num_cv)); M=zero
 !      do k=1, imap
        do k=kbeg, kend
         cvlistsize=cv%amap%v(k)%last
@@ -751,20 +758,21 @@ __CHARMM_ONLY##IF STRINGM
          jj=cvlist(j)
          do i=1, j
           ii=cvlist(i)
-          cv%M(ii,jj,4)=cv%M(ii,jj,4)+                                  &
-     &                 cv%gradx(jj,k,2)*cv%gradx(ii,k,2) +              &
-     &                 cv%grady(jj,k,2)*cv%grady(ii,k,2) +              &
-     &                 cv%gradz(jj,k,2)*cv%gradz(ii,k,2)
+          M(ii,jj)=M(ii,jj)+                                  &
+     &             cv%gradx(jj,k,2)*cv%gradx(ii,k,2) +        &
+     &             cv%grady(jj,k,2)*cv%grady(ii,k,2) +        &
+     &             cv%gradz(jj,k,2)*cv%gradz(ii,k,2)
          enddo ! i
         enddo ! j
        enddo ! k
 !
        do j=1,cv%num_cv
         do i=1,j
-         cv%M(i,j,1)=t1*cv%M(i,j,1) + t*cv%M(i,j,4)
-         cv%M(j,i,1)=cv%M(i,j,1) ! note: grad(:,:,2) is scaled by mass,
+         cv%M(i,j,1)= t1 * cv%M(i,j,1) + t * M(i,j)
+         cv%M(j,i,1)= cv%M(i,j,1) ! note: grad(:,:,2) is scaled by mass,
         enddo
        enddo
+       deallocate(M)
       endif
 !
 !      write(600+ME_GLOBAL,'(2F15.10)') cv%M(1:cv%num_cv,1:cv%num_cv,1)
@@ -1948,7 +1956,7 @@ __CHARMM_ONLY##IF STRINGM
       float :: x(:), y(:), z(:), mass(:) ! mass(size(x,1))
 !
       if (.not. cv_common_Minv_initialized)                               &
-     &       call smcv_compute_M(x,y,z,mass,.true.) ! compute M and M inverse
+     &  call smcv_compute_M(x,y,z,mass,.true.) ! compute M and M inverse
       call cv_common_compute_wgt() ! compute weights from M inverse
 !
       end subroutine smcv_compute_wgt
@@ -1981,7 +1989,9 @@ __CHARMM_ONLY##IF STRINGM
       else
        cv%M(1:cv%num_cv,1:cv%num_cv,2)=cv%M(1:cv%num_cv,1:cv%num_cv,1)
       endif
-!    compute M inverse; assume that M is regular
+!    set the M long-term average to the same thing
+       cv%M(1:cv%num_cv,1:cv%num_cv,4)=cv%M(1:cv%num_cv,1:cv%num_cv,2)
+!    compute M inverse (from long term average) ; assume that M is regular
       if (inverse) call cv_common_compute_Minv(inverse_LU)
 !    clean up !
       call cv_common_clear_hist() ! clear history

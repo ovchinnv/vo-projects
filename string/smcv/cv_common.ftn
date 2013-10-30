@@ -145,8 +145,12 @@ __CHARMM_ONLY##IF STRINGM
       public cv_common_print_rex_map  ! print replica map
       public cv_common_print_rex_log  ! print replica exchange log
 
-      ! variables
+!    variables
       type (cv_base), public, save :: cv
+!
+      int, public :: max_cv_common=200
+      int, parameter :: max_hist_base=1000
+!
       bool, public, save ::     cv_common_initialized=.false.,            &
      &                          cv_common_voronoi_initialized=.false.,    &
      &                          cv_common_voronoi_wrong_cell=.false.,     &
@@ -163,7 +167,6 @@ __CHARMM_ONLY##IF STRINGM
      &                      cv_common_fixed_1_bc=0                       ! last point fixed (not simulated)
 !
       ! parameters
-      int, parameter, public :: max_cv_common=200,max_hist_base=1000
 !     define indices into r array:
       int, parameter, public :: main=1,                             & ! current z
      &                              comp=2,                             & ! previous z
@@ -185,19 +188,28 @@ __CHARMM_ONLY##IF STRINGM
 !
       contains
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       subroutine cv_common_init()
+       subroutine cv_common_init(max_cv)
        use sm_var, only: nstring, smcv_initialized
       __DEP_NUMBER 
       __DEP_MULTICOM
 !
       __IMPNONE
 !
+       int, optional :: max_cv
        int :: nrep ! number of total replicas
        int :: i
+!
+      interface
+       subroutine smcv_init(maxcv)
+        __IMPNONE
+        int, optional :: maxcv
+       end subroutine smcv_init
+      end interface
 !
        if (.not.smcv_initialized) call smcv_init() ! defines nstring
 !
        if (.not.cv_common_initialized) then
+        if (present(max_cv)) max_cv_common=max_cv
 !
         nrep=nstring+cv_common_fixed_0_bc+cv_common_fixed_1_bc
         cv%num_cv=0
@@ -215,7 +227,12 @@ __CHARMM_ONLY##IF STRINGM
          cv%r_bc_1=__NAN
         endif
 !
-        allocate(cv%M(max_cv_common,max_cv_common,4))
+! metric M tensor : 1 -- running average in current averaging window (i.e. a short-time average)
+!                   2 -- reduced M from all slave processors (in parallel); think of as scratch
+!                   3 -- inverse of M ; by default, computed from M(4) -- see below
+!                   4 -- long-time average of M. In smcv evolution M(4)=M(1); expo evolution M(4) has long memory
+        allocate(cv%M(max_cv_common,max_cv_common,4)) 
+!
         allocate(cv%priv(max_cv_common)) ! allocate pointer array
         do i=1, max_cv_common
          nullify(cv%priv(i)%p) ! initialize pointer array
@@ -321,8 +338,7 @@ __CHARMM_ONLY##IF STRINGM
 !      locals
        int j
        int cv_common_add ! returns index into cv array
-       character(len=13) :: whoami
-       data whoami /' CV_BASE_ADD>'/
+       __IAM(CV_BASE_ADD)
 !      do work
        if (.not.cv_common_initialized) call cv_common_init()
        j=cv%num_cv + 1
@@ -414,21 +430,23 @@ __CHARMM_ONLY##IF STRINGM
        cv_common_grad_initialized=.true.
        end subroutine cv_common_grad_init
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       subroutine cv_common_compute_Minv(inverse_LU)
+       subroutine cv_common_compute_Minv(inverse_LU, ind)
        use lu, only: inv_lu  ! matrix inverse by LU decomposition
        use multidiag, only: inv_mdiag
        __IMPNONE
-       int :: bug
-       bool, optional :: inverse_LU
+       bool, optional, intent(in) :: inverse_LU
+       int, optional, intent(in) :: ind
        bool :: qLU=.true.
+       int :: bug, Mind
        if (present(inverse_LU)) then ; qLU=inverse_LU; endif
+       if (present(ind)) then ; Mind=ind; else ; Mind=4 ; endif
 !    assume matrix M is regular
 !    if using multidiag, also assume it has nonzero diagonals
        if (qLU) then
-        call inv_lu(cv%M(1:cv%num_cv,1:cv%num_cv,2),                    &
-     &            cv%M(1:cv%num_cv,1:cv%num_cv,3), cv%num_cv, bug) ! M inverse in M(,,3)
+        call inv_lu(cv%M(1:cv%num_cv,1:cv%num_cv,Mind),                    &
+     &            cv%M(1:cv%num_cv,1:cv%num_cv,3), cv%num_cv, bug) ! M inverse in M(3)
        else
-        call inv_mdiag(cv%M(1:cv%num_cv,1:cv%num_cv,2),                 &
+        call inv_mdiag(cv%M(1:cv%num_cv,1:cv%num_cv,Mind),                 &
      &            cv%M(1:cv%num_cv,1:cv%num_cv,3), cv%num_cv, bug)
        endif
 !
@@ -453,8 +471,7 @@ __CHARMM_ONLY##IF STRINGM
        bool :: qroot
 !
        float :: Mave(max_cv_common, cv%num_cv)
-       character(len=21) :: whoami
-       data whoami /' CV_BASE_COMPUTE_WGT>'/
+       __IAM(CV_BASE_COMPUTE_WGT)
 !
        qroot=(MPI_COMM_STRNG.ne.MPI_COMM_NULL)
        if (qroot) then
@@ -516,8 +533,7 @@ __CHARMM_ONLY##IF STRINGM
 #include "../../mpitype.def" 
 !
        int iunit, ierror
-       character(len=18) :: whoami
-       data whoami /' CV_BASE_READ_WGT>'/
+       __IAM(CV_BASE_READ_WGT)
 !
        if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then
         if (ME_STRNG.eq.0) then
@@ -547,8 +563,7 @@ __CHARMM_ONLY##IF STRINGM
        __DEP_OUTPUT
        __IMPNONE
        int :: i
-       character(len=20) :: whoami
-       data whoami /' CV_BASE_COMPUTE_K>'/
+       __IAM(CV_BASE_COMPUTE_K)
 !
        if (cv_common_weights_initialized) then
         if (cv_common_kpara_initialized) then
@@ -680,8 +695,7 @@ __CHARMM_ONLY##ENDIF
        int :: interp_method, iterations, ierror
        float, optional :: dst_c
        float :: def
-       character(len=14) :: whoami
-       data whoami /' CV_BASE_REPA>'/
+       __IAM(CV_BASE_REPA)
 !
 !      interfaces to reparameterization routine
 !      needed because of the keyword calls
@@ -840,8 +854,7 @@ __CHARMM_ONLY##ENDIF
        float :: dummy
        int :: i
        float :: delt
-       character(len=21) :: whoami
-       data whoami /' CV_BASE_EVOLVE_SMCV>'/
+       __IAM(CV_BASE_EVOLVE_SMCV)
 !      do work
        cv%r(:,comp)=cv%r(:,main) ! save current as "old" coordinates in column 2
        if (present(dt)) then; delt=dt; else ; delt=cv%dt; endif
@@ -943,14 +956,142 @@ __CHARMM_ONLY##ENDIF
        cv%num_run_ave=0
 !
        end subroutine cv_common_evolve_sd
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       subroutine cv_common_evolve_expo(a,nskip)
+!      evolve CV using equation: z(n+1)=a * z(n) + (1-a) * <theta(x)>
+      __DEP_OUTPUT
+      __DEP_CONST 
+!
+      __IMPNONE
+       float :: a, a1
+       int, optional :: nskip
+!      locals
+       float :: dummy, u, v
+       int :: numskip, i, j, k, n, k1, k2, k3, k4
+       __IAM(CV_BASE_EVOLVE_EXPO)
+       float :: temp(max_hist_base)=0.0d0
+!
+!      do work
+!      only valid for 0 <= a <= 1
+       if (a.lt.0.or.a.gt.1) then
+        __WRN( whoami,'MEMORY PARAMETER MUST BE BETWEEN 0 AND 1')
+        return
+       endif
+       if (present(nskip)) then ; numskip=nskip; else; numskip=0; endif
+       if (numskip.ge.cv%num_hist) then
+        __WRN( whoami,'SKIPPED ALL ELEMENTS. NOTHING DONE')
+        return
+       endif
+       if (cv%num_run_ave.lt.1) then
+        __WRN( whoami,'NO SLICES IN THE AVERAGE. NOTHING DONE')
+        return
+       endif
+!     12.08.08: made modifications: 1) compute forces 2) evolve using runave
+!     from Euler evolve:
+!    compute average F.E. gradient and dump into force set
+!    assuming that the runnung average has been computed
+       do i=1, cv%num_cv
+!
+        select case(cv%type(i))
+        case(dihe_com);
+          dummy=(cv%r(i,main) - cv%r(i,runave))
+          dummy=modulo(dummy,TWOPI)
+          if (dummy.gt.PI) dummy=dummy-TWOPI;
+        case(angle_com); ! cannot tell between theta/-theta
+          dummy=(abs(cv%r(i,main)) - cv%r(i,runave))
+        case default
+          dummy=(cv%r(i,main) - cv%r(i,runave))
+        end select
+!    compute forces in case that we are running restrained dynamics
+        cv%r(i,forces)=cv%k(i)*dummy
+       enddo
+!    compute free energy ( uses cv%r(:,forces) )
+       call cv_common_compute_fe_fd()
+!    add fe to the fe running average
+       call cv_common_update_fe_ave()
+!
+!       cv%r(:,:,comp)=cv%r(:,:,main) ! save current as "old" coordinates in column 2
+!     precompute indices for faster copying
+       k1=cv%beg_hist+main_offset
+       k2=max_hist_base+main_offset
+       k3=main_offset+1
+       k4=k1-1
+!cc
+       a1=1d0-a
+       n=cv%num_hist-numskip ! number of elements
+       do i=1, cv%num_cv
+        temp=(/ (cv%r(i,k),k=k1,k2),(cv%r(i,k),k=k3,k4) /)  ! 'unwrap' history
+!c     need CV coordinates that are consistent with the current theta(x): simply take the last slice from above:
+!        cv%r(i,comp)=temp(cv%num_hist)
+!        (?) replace above line with :
+!        cv%r(i,comp)=cv%r(i,instant) ! this is better for alternating restrained/unrestrained equilibration
+        cv%r(i,comp)=cv%r(i,main) ! better for restraints
+!===== evolve i_th cv ======
+!c        cv%r(i,main)=       a  * cv%r(i,main) +
+!c     &                      a1 * sum(temp(numskip+1:cv%num_hist))/n
+
+! VO 3.24.09: angle correction
+        u=cv%r(i,main)
+        v=u-cv%r(i,runave)
+!
+        select case(cv%type(i));
+         case(dihe_com, angle_com, anglvec);
+          v=modulo(v,TWOPI)
+          if (v.gt.PI) v=v-TWOPI
+        end select
+!
+        cv%r(i,main)=       u -                                         &
+     &                      a1 * v
+!cccccc from Euler evolve cccccccccccc
+!    compute average F.E. gradient and dump into force set
+!    assuming that the runnung average has been computed
+!    not clear what to do with M in this evolution scheme : 
+!    on the one hand, M should be reset and recomputed when the cv's change
+!    on the other, in fts-voronoi, I think we want to have a slowly varying M that includes
+!    a long-term average, otherwise the CVs (path) could converge, but not M, because it is reset !
+!    thus, store a long-term average in M(4)
+!      M:
+        do j=1,i
+         cv%M(i,j,4) = a * cv%M(i,j,4) + a1 * cv%M(i,j,2);
+         cv%M(j,i,4) = cv%M(i,j,4)
+        enddo ! j
+       enddo ! i
+!c      reset history (necessary)
+       call cv_common_clear_hist()
+       cv%num_run_ave=0
+!      update voronoi cells
+!     call moved to smcv_master
+!       if (cv_common_voronoi_initialized) call cv_common_voronoi_update() ! update V.cell nodes
+       end subroutine cv_common_evolve_expo
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       subroutine cv_common_set_bc(first,last)
+!      tells the module whether collective string operations include
+!      virtual fixed CV sets; virtual because the CV are not updated;
+!      can be viewed as boundary conditions on the string
+       __IMPNONE
+       bool first, last
+!      clean up first
+       call cv_common_done()
+!
+       if (first) then
+        cv_common_fixed_0_bc=1
+       else
+        cv_common_fixed_0_bc=0
+       endif
+!
+       if (last) then
+        cv_common_fixed_1_bc=1
+       else
+        cv_common_fixed_1_bc=0
+       endif
+       end subroutine cv_common_set_bc
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        function cv_common_add_hist()
        __DEP_OUTPUT
        __IMPNONE
        int :: cv_common_add_hist
        float :: t
-       character(len=18) :: whoami
-       data whoami /' CV_BASE_ADD_HIST>'/
+       __IAM(CV_BASE_ADD_HIST)
 !      returns index into cv%r array; the addition is done elsewhere
        if (cv%num_cv.eq.0) then
          __WRN( whoami,'NO CV DEFINED. NOTHING DONE');
@@ -985,8 +1126,7 @@ __CHARMM_ONLY##ENDIF
        int :: numskip, i, j, k, n, k1, k2, k3, k4
        float :: t(max_hist_base)=(/(1.0d0*i,i=1,max_hist_base)/)
        float :: temp(max_hist_base)=0.0d0, u ! for smoothing
-       character(len=21) :: whoami
-       data whoami /' CV_BASE_SMOOTH_HIST>'/
+       __IAM(CV_BASE_SMOOTH_HIST)
 !      interface to smooth2
 !
        interface
@@ -1037,8 +1177,9 @@ __CHARMM_ONLY##ENDIF
         cv%r(i,main)=temp(n) ! set the restraint value (z) to the
         cv%r(i,comp)=temp(n) ! the theta(x) are roughly consistent with these CV
 !      M: what to do about M in this case is unclear
+!         for now, setting the long-term average to the short-term evarage
         do j=1,i
-          cv%M(i,j,2)=cv%M(i,j,1); cv%M(j,i,2)=cv%M(i,j,1)
+          cv%M(i,j,4)=cv%M(i,j,2); cv%M(j,i,4)=cv%M(i,j,2)
         enddo
        enddo
 !      reset history (necessary)
@@ -1055,8 +1196,7 @@ __CHARMM_ONLY##ENDIF
 !      locals
        int :: i, j, k, kbeg, kend, numskip
        character(len=80) :: fmt
-       character(len=20) :: whoami
-       data whoami /' CV_BASE_PRINT_HIST>'/
+       __IAM(CV_BASE_PRINT_HIST)
 
 !      do work
        if (present(nskip)) then ; numskip=nskip; else; numskip=0; endif
@@ -1146,128 +1286,6 @@ __CHARMM_ONLY##ENDIF
        __IMPNONE
        cv%num_hist=0; cv%beg_hist=1; cv%end_hist=0
        end subroutine cv_common_clear_hist
-!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       subroutine cv_common_evolve_expo(a,nskip)
-!      evolve CV using equation: z(n+1)=a * z(n) + (1-a) * <theta(x)>
-      __DEP_OUTPUT
-      __DEP_CONST 
-!
-      __IMPNONE
-       float :: a, a1
-       int, optional :: nskip
-!      locals
-       float :: dummy, u, v
-       int :: numskip, i, j, k, n, k1, k2, k3, k4
-       character(len=21) :: whoami
-       data whoami /' CV_BASE_EVOLVE_EXPO>'/
-       float :: temp(max_hist_base)=0.0d0
-!
-!      do work
-!      only valid for 0 <= a <= 1
-       if (a.lt.0.or.a.gt.1) then
-        __WRN( whoami,'MEMORY PARAMETER MUST BE BETWEEN 0 AND 1')
-        return
-       endif
-       if (present(nskip)) then ; numskip=nskip; else; numskip=0; endif
-       if (numskip.ge.cv%num_hist) then
-        __WRN( whoami,'SKIPPED ALL ELEMENTS. NOTHING DONE')
-        return
-       endif
-!     12.08.08: made modifications: 1) compute forces 2) evolve using runave
-!     from Euler evolve:
-!    compute average F.E. gradient and dump into force set
-!    assuming that the runnung average has been computed
-       do i=1, cv%num_cv
-!
-        select case(cv%type(i))
-        case(dihe_com);
-          dummy=(cv%r(i,main) - cv%r(i,runave))
-          dummy=modulo(dummy,TWOPI)
-          if (dummy.gt.PI) dummy=dummy-TWOPI;
-        case(angle_com); ! cannot tell between theta/-theta
-          dummy=(abs(cv%r(i,main)) - cv%r(i,runave))
-        case default
-          dummy=(cv%r(i,main) - cv%r(i,runave))
-        end select
-!    compute forces in case that we are running restrained dynamics
-        cv%r(i,forces)=cv%k(i)*dummy
-       enddo
-!    compute free energy ( uses cv%r(:,forces) )
-       call cv_common_compute_fe_fd()
-!    add fe to the fe running average
-       call cv_common_update_fe_ave()
-!
-!       cv%r(:,:,comp)=cv%r(:,:,main) ! save current as "old" coordinates in column 2
-!     precompute indices for faster copying
-       k1=cv%beg_hist+main_offset
-       k2=max_hist_base+main_offset
-       k3=main_offset+1
-       k4=k1-1
-!cc
-       a1=1d0-a
-       n=cv%num_hist-numskip ! number of elements
-       do i=1, cv%num_cv
-        temp=(/ (cv%r(i,k),k=k1,k2),(cv%r(i,k),k=k3,k4) /)  ! 'unwrap' history
-!c     need CV coordinates that are consistent with the current theta(x): simply take the last slice from above:
-        cv%r(i,comp)=temp(cv%num_hist)
-!        (?) replace above line with :
-!        cv%r(i,comp)=cv%r(i,instant) ! this is better for alternating restrained/unrestrained equilibration
-!        cv%r(i,comp)=cv%r(i,main) ! this is better for planar sampling
-!===== evolve i_th cv ======
-!c        cv%r(i,main)=       a  * cv%r(i,main) +
-!c     &                      a1 * sum(temp(numskip+1:cv%num_hist))/n
-
-! VO 3.24.09: angle correction
-        u=cv%r(i,main)
-        v=u-cv%r(i,runave)
-!
-        select case(cv%type(i));
-         case(dihe_com, angle_com, anglvec);
-          v=modulo(v,TWOPI)
-          if (v.gt.PI) v=v-TWOPI
-        end select
-!
-        cv%r(i,main)=       u -                                         &
-     &                      a1 * v
-!cccccc from Euler evolve cccccccccccc
-!    compute average F.E. gradient and dump into force set
-!    assuming that the runnung average has been computed
-!    not clear what to do with M in this evolution scheme
-!      M:
-        do j=1,i
-         cv%M(i,j,2)=a * cv%M(i,j,2) + a1 * cv%M(i,j,1);
-         cv%M(j,i,2)=cv%M(i,j,2)
-        enddo ! j
-       enddo ! i
-!c      reset history (necessary)
-       call cv_common_clear_hist()
-       cv%num_run_ave=0
-!      update voronoi cells
-!     call moved to smcv_master
-!       if (cv_common_voronoi_initialized) call cv_common_voronoi_update() ! update V.cell nodes
-       end subroutine cv_common_evolve_expo
-!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       subroutine cv_common_set_bc(first,last)
-!      tells the module whether collective string operations include
-!      virtual fixed CV sets; virtual because the CV are not updated;
-!      can be viewed as boundary conditions on the string
-       __IMPNONE
-       bool first, last
-!      clean up first
-       call cv_common_done()
-!
-       if (first) then
-        cv_common_fixed_0_bc=1
-       else
-        cv_common_fixed_0_bc=0
-       endif
-!
-       if (last) then
-        cv_common_fixed_1_bc=1
-       else
-        cv_common_fixed_1_bc=0
-       endif
-       end subroutine cv_common_set_bc
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_print_local(iunit,col)
 !      assume that unit is prepared
@@ -2271,8 +2289,7 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
 !
        int :: i
        character(len=80) :: frm
-       character(len=24) :: whoami
-       data whoami /' CV_BASE_PRINT_VORO_MAP>'/
+       __IAM(CV_BASE_PRINT_VORO_MAP)
 !      begin
        if (.not.cv_common_voronoi_initialized) call cv_common_voronoi_init()
 !
@@ -2302,8 +2319,7 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
 #include "../../mpitype.def"
 !
        int :: iunit, ierror
-       character(len=23) :: whoami
-       data whoami /' CV_BASE_READ_VORO_MAP>'/
+       __IAM(CV_BASE_READ_VORO_MAP)
 !      begin
        if (.not.cv_common_voronoi_initialized) then
         call cv_common_voronoi_init()
@@ -2340,8 +2356,10 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
 #include "../../mpitype.def"
 !
 !      locals
+       __IAM(CV_COMMON_VORONOI_UPDATE)
        int :: ierror
        float, pointer :: M(:,:)
+       bool :: qroot
 !      begin
        if (.not. smcv_initialized) call smcv_init()
        if (.not.cv_common_voronoi_initialized) then
@@ -2373,14 +2391,20 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
         cv_common_voronoi_initialized=.true.
        endif
 !      gather all main coordinate sets (same code as in print_global)
-       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.SIZE_STRNG.gt.1) then
+       qroot=(MPI_COMM_STRNG.ne.MPI_COMM_NULL)
+!
+       if (qroot.and.SIZE_STRNG.gt.1) then
         call MPI_ALLGATHER(cv%r,cv%num_cv,mpifloat,         &
      &   cv%rall,cv%num_cv,mpifloat,MPI_COMM_STRNG,         &
      &   ierror)
 !      gather all M^-1 matrices
-       M => cv%M(1:cv%num_cv,1:cv%num_cv,3) ! for use in MPI call
 !
-       call MPI_ALLGATHER(M,                                            &! cv%M(1:cv%num_cv,1:cv%num_cv,3),
+        if (.not.cv_common_Minv_initialized) then
+         __WRN( whoami, 'TENSOR M^-1 HAS NOT BEEN SET.')
+        endif
+        M => cv%M(1:cv%num_cv,1:cv%num_cv,3) ! for use in MPI call
+!
+        call MPI_ALLGATHER(M,                                            &! cv%M(1:cv%num_cv,1:cv%num_cv,3),
      &   cv%num_cv**2,mpifloat,                             &
      &   cv%Mall,cv%num_cv**2,mpifloat,MPI_COMM_STRNG,      &
      &   ierror)
@@ -2420,7 +2444,7 @@ __CHARMM_ONLY##ENDIF
 #include "../../mpitype.def"
 !
        float :: rnew(cv%num_cv) ! current CV values (theta(x))
-       float :: rold(cv%num_cv) ! new reflected CV values (theta(xcomp))
+       float :: rold(cv%num_cv) ! new (possibly reflected) CV values (theta(xcomp))
        int, optional :: m_iter
 !      locals
        float, pointer :: M(:,:)
@@ -2434,10 +2458,9 @@ __CHARMM_ONLY##ENDIF
        int, parameter :: default_iter=15
        float :: dummy
        int :: i, j, which(1), ierror, me
-       character(len=30) :: whoami
        bool :: qroot
 !
-       data whoami /' CV_BASE_VORONOI_SMART_UPDATE>'/
+       __IAM(CV_BASE_VORONOI_SMART_UPDATE)
 !
 !      begin
 !
@@ -2448,7 +2471,7 @@ __CHARMM_ONLY##ENDIF
 !
        qroot=(MPI_COMM_STRNG.ne.MPI_COMM_NULL)
 !
-        if (qroot.and.SIZE_STRNG.gt.1) then
+       if (qroot.and.SIZE_STRNG.gt.1) then
 !      gather all main cv coordinate sets
          call MPI_ALLGATHER(cv%r,cv%num_cv,mpifloat,        &
      &    rall_new,cv%num_cv,mpifloat,MPI_COMM_STRNG,       &
@@ -2510,10 +2533,13 @@ __CHARMM_ONLY##ENDIF
          if  (correct_cell_me.eq.0) then
 !      if old set is outside cell, it means that we just crossed into a
 !                   neighbor cell; in this case, test rnew, not rold
-!                   repeat as above:
+!                   (repeat as above).
           rold=rnew
           correct_cell_me=cv_common_voronoi_check_aux                     &
      &           (rold, cv%rall, cv%num_cv, nstring, cv%Mall, me)
+!      even if correct_cell is true now, the reversed momenta might not place the replica
+!      into the cell corresponding to the _evolved_ centers, so it may be best not to evolve this particular
+!      cell; this matter in any case is particular to charmm at this stage, so will think on it.-VO.
          endif ! .not. correct_cell_me
 
 !     pool all results
@@ -3035,7 +3061,7 @@ __CHARMM_ONLY##ENDIF
        float :: M_all(cv%num_cv, cv%num_cv, nstring)
        float :: M_me(cv%num_cv, cv%num_cv)
 !
-       if (present(ind)) then ; Mind=ind ; else ; Mind=2 ; endif
+       if (present(ind)) then ; Mind=ind ; else ; Mind=4 ; endif
 !
        if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then
 !
@@ -3060,7 +3086,9 @@ __CHARMM_ONLY##ENDIF
 !
        cv%M(1:cv%num_cv, 1:cv%num_cv, Mind)=M_me
 !
-       if (Mind.eq.2) then
+       if (Mind.eq.4) then
+!    set the short-time average to the long-time average
+        cv%M(1:cv%num_cv, 1:cv%num_cv, 2)=M_me
         call cv_common_compute_Minv()
        elseif (Mind.eq.3) then
         cv_common_Minv_initialized=.true.
@@ -3070,7 +3098,7 @@ __CHARMM_ONLY##ENDIF
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_print_M_global(ifile, ind)
        use sm_var, only: nstring
-!     print mass matrix; assume that cv%m(:,:,2) has what the user wants
+!     print mass matrix; assume that cv%m(:,:,4) has what the user wants (long-term average)
 !
       __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
       __DEP_MPI  ! deal with other platforms later
@@ -3088,7 +3116,7 @@ __CHARMM_ONLY##ENDIF
 !
        if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then
 !
-        if (present(ind)) then ; Mind=ind ; else ; Mind=2 ; endif
+        if (present(ind)) then ; Mind=ind ; else ; Mind=4 ; endif
 !
         isizeM=cv%num_cv;
         M_me=cv%M(1:isizeM, 1:isizeM, Mind)

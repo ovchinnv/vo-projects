@@ -68,9 +68,8 @@ __CHARMM_ONLY##IF STRINGM
       int :: flen
       bool :: ok
       character(len=20) :: fixbc
-      character(len=6) :: whoami
       int4mpi, allocatable, dimension(:) :: temp1, temp2 ! for MPI_GRAD_TYPE (alt)
-      int :: me
+      int :: me, maxcv
 !
 ! for interpolation
 !
@@ -108,7 +107,7 @@ __CHARMM_ONLY##IF STRINGM
 !     interface to frames_align_string routine (needed since routine is not in a module and I use optional args
       interface
        subroutine frames_align_string(x,y,z,mass,min_rmsd,ind)
-      __DEP_OUTPUT
+        __DEP_OUTPUT
         __IMPNONE
         float :: x(:), y(:), z(:), mass(:)
         bool, optional :: min_rmsd
@@ -116,21 +115,27 @@ __CHARMM_ONLY##IF STRINGM
        end subroutine frames_align_string
 !
        subroutine frame_align_rmsd(x,y,z,mass,ind)
-      __DEP_OUTPUT
+        __DEP_OUTPUT
         __IMPNONE
         float :: x(:), y(:), z(:), mass(:)
         int, optional :: ind ! frame index
        end subroutine frame_align_rmsd
 !
        subroutine frame_align_voro(x,y,z,mass,ind)
-      __DEP_OUTPUT
+        __DEP_OUTPUT
         __IMPNONE
         float :: x(:), y(:), z(:), mass(:)
         int, optional :: ind ! frame index
        end subroutine frame_align_voro
+!
+       subroutine smcv_init(maxcv)
+        __IMPNONE
+        int, optional :: maxcv
+       end subroutine smcv_init
+!
       end interface
 !
-      data whoami /' SMCV>'/
+      __IAM(SMCV)
 !
       keyword=__NEXTA(comlyn,comlen)
 !
@@ -141,7 +146,8 @@ __CHARMM_ONLY##IF STRINGM
       if (SIZE_STRNG.gt.1) call MPI_BARRIER(MPI_COMM_STRNG,ierror)    !__CHARMM_ONLY##MPI
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       if (__STRNCMP(keyword,'INIT',4)) then
-        call smcv_init()
+        maxcv=__GET_RM_I(comlyn, comlen, 'MAXCV',-999)
+        if (maxcv.eq.-999 ) then ;  call smcv_init() ; else ; call smcv_init(maxcv) ; endif
         return
       endif
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -451,11 +457,6 @@ __CHARMM_ONLY##IF STRINGM
  603  format(A, ' WILL DISALLOW CROSSING DURING THE INITIAL ',/,A,I6,   &
      &       ' ITERATIONS.')
          endif
-         if (voro_cut.gt.0d0) then 
-          write(_MSGBUF,'(2A,/2A,F11.7,A)')            &
-     & whoami,' STRING WILL BE RESTRICTED TO STAY WITHIN ',             &
-     & whoami,' THE WEIGHTED DISTANCE ',voro_cut,' OF THE CELL CENTERS.' ; __PRINT(_MSGBUF)
-         endif
          if (restrained_on.or.unrestrained_on) then 
           write(_MSGBUF,'(2A,/2A)')   &
      &      whoami, ' STRING DYNAMICS SHOULD BE USED WITH CAUTION',     &
@@ -464,8 +465,10 @@ __CHARMM_ONLY##IF STRINGM
          if (evolve_cv_on.or.repa_on) then
           if (.not.voronoi_allow_cross) then
            write(_MSGBUF,'(2A,/2A)')                                       &
-     &    whoami, ' STRING EVOLUTION AND REPARAMETRIZATION SHOULD',     &
-     &    whoami, ' BE USED WITH CAUTION DURING VORONOI FE COMPUTATION.' ; __PRINT(_MSGBUF)
+     &    whoami, ' PERFORMING STRING EVOLUTION / REPARAMETRIZATION ',     &
+     &    whoami, ' DURING VORONOI FE TESSELLATION IS AN EXTENSION ' ,     &
+     &    whoami, ' TO THE STRING METHOD BECAUSE THE M TENSOR IS NOT ',    &
+     &    whoami, ' COMPUTED AT THE STRING IMAGE. YOU HAVE BEEN WARNED.'    ; __PRINT(_MSGBUF)
           else
            write(_MSGBUF,'(2A,/2A,/2A)')                                   &
      &    whoami, ' STRING EVOLUTION AND REPARAMETRIZATION CANNOT',     &
@@ -587,6 +590,12 @@ __CHARMM_ONLY##IF STRINGM
           if (qprint) then ; write(_MSGBUF, 6780) whoami, irep, voro_cut ; __PRINT(_MSGBUF) ; endif
           if (mestring.eq.irep) call cv_common_voronoi_set_cutoff(voro_cut)
          endif ! irep
+         if (qprint) then 
+          write(_MSGBUF,'(2A,/2A,F11.7,A)')                                                        &
+     &     whoami,' STRING WILL BE RESTRICTED TO STAY WITHIN THE WEIGHTED',                        &
+     &     whoami,' DISTANCE ',voro_cut,' OF THE CELL CENTERS DURING DYNAMICS.' ; __PRINT(_MSGBUF)
+         endif
+!
  6779 format(A,' REPLICA NUMBER INVALID OR UNSPECIFIED.',/A,' WILL SET VORONOI TUBE CUTOFF ', &
      & '  TO ',F7.3,' ON ALL REPLICAS.')
  6780 format(A,' WILL SET VORONOI TUBE CUTOFF ON REPLICA ',I5,' TO ',F7.3,'.')
@@ -1513,7 +1522,7 @@ __CHARMM_ONLY##IF STRINGM
       elseif (__STRNCMP(keyword,'MMAT',4)) then
         if (__INDX_RM(comlyn, comlen, 'CALC').gt.0) then
           if (qprint) then ; write(_MSGBUF,6854) whoami ; __PRINT(_MSGBUF) ; endif
- 6854 format(A,' COMPUTING M(X) FROM ATOMIC COORDINATES.')
+ 6854 format(A,' COMPUTING INSTANTANEOUS M(X) FROM ATOMIC COORDINATES.')
           call smcv_compute_M(__X,__Y,__Z,__MASS,.true.) ! compute M and M inverse
 !    print
         elseif (__INDX_RM(comlyn, comlen, 'PRIN').gt.0) then
@@ -1530,7 +1539,7 @@ __CHARMM_ONLY##IF STRINGM
             keyword='INVERSE '; klen=8
             call cv_common_compute_Minv(inverse_LU)
           else
-            ind=2
+            ind=4 ! long-term average 
             keyword=' '; klen=0
           endif
 !
@@ -1544,8 +1553,8 @@ __CHARMM_ONLY##IF STRINGM
              write(_MSGBUF,6859) whoami, keyword(1:klen), fname(1:flen)
              __PRINT(_MSGBUF)
             endif
- 6859 format(A,' WRITING M MATRIX ',A,'TO FILE ',A,'.')
-            call cv_common_print_M_global(ifile, ind)
+ 6859 format(A,' WRITING M TENSOR (LONG-TERM AVERAGE) ',A,'TO FILE ',A,'.')
+            call cv_common_print_M_global(ifile, IND=ind)
             __CLOSE_FILE(ifile,'KEEP',ierror)
            else
             __WRN(whoami,'FILE NAME NOT SPECIFIED. NOTHING DONE.')
@@ -1558,7 +1567,7 @@ __CHARMM_ONLY##IF STRINGM
             ind=3
             keyword='INVERSE '; klen=8
           else
-            ind=2
+            ind=4 ! long-term average
             keyword=' '; klen=0
           endif
 !
@@ -1571,7 +1580,7 @@ __CHARMM_ONLY##IF STRINGM
              write(_MSGBUF,6858) whoami, keyword(1:klen), fname(1:flen)
              __PRINT(_MSGBUF)
             endif
- 6858 format(A,' READING M MATRIX ',A,'FROM FILE ',A,'.')
+ 6858 format(A,' READING M TENSOR (LONG- & SHORT-TERM AVERAGE) ',A,'FROM FILE ',A,'.')
             call cv_common_read_M_global(ifile, ind)
             if (qprint) then ; __CLOSE_FILE(ifile,'KEEP',ierror) ; endif
            else
@@ -1596,7 +1605,7 @@ __CHARMM_ONLY##IF STRINGM
       elseif (__STRNCMP(keyword,'WEIG',4)) then
         if (__INDX_RM(comlyn, comlen, 'CALC').gt.0) then
           if (qprint) then ; write(_MSGBUF,6754) whoami ; __PRINT(_MSGBUF) ; endif
- 6754 format(A,' COMPUTING CV WEIGHTS FROM M(X).')
+ 6754 format(A,' COMPUTING CV WEIGHTS FROM METRIC TENSOR M(X).')
           call smcv_compute_wgt(__X,__Y,__Z,__MASS)
 !    print
         elseif (__INDX_RM(comlyn, comlen, 'PRIN').gt.0) then
@@ -2090,7 +2099,7 @@ __CHARMM_ONLY##IF STRINGM
       endif
       end subroutine smcv
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-      subroutine smcv_init()
+      subroutine smcv_init(maxcv)
       use sm_var
       use sm_config
       use cv_common, only: cv_common_initialized, cv_common_init, main,       &
@@ -2112,11 +2121,11 @@ __CHARMM_ONLY##IF STRINGM
       int4mpi :: ierror
       bool :: qroot, qslave
       int4mpi :: temp1(3), temp2(3) ! for communication
-      character(len=11) :: whoami
+      int, optional :: maxcv
 !
       integer(kind=MPI_ADDRESS_KIND) :: lb, extent
 !
-      data whoami /' SMCV_INIT>'/
+      __IAM(SMCV_INIT)
 !
 !      do a basic communicator check:
       if (ME_LOCAL.eq.0.and.ME_STRNG.eq.MPI_UNDEFINED) then
@@ -2178,7 +2187,23 @@ __CHARMM_ONLY##IF STRINGM
 !
       smcv_initialized=.true.
 !
-      if (.not.cv_common_initialized) call cv_common_init()
+      if (.not.cv_common_initialized) then 
+       if (present(maxcv)) then
+        if (maxcv.gt.0) then
+         if (qroot.and.ME_STRNG.eq.0) then
+          write(_MSGBUF,'(2A,I5, A)') &
+     &     whoami, ' WILL INITIALIZE SMCV WITH STORAGE FOR AT MOST ',maxcv,' CV.' 
+          __PRINT(_MSGBUF)
+         endif ! root prints
+         call cv_common_init(maxcv)
+        else
+         __WRN(whoami, 'NEGATIVE NUMBER OF CV REQUESTED, USING PREVIOUS VALUE (OR DEFAULTS).')
+         call cv_common_init() ! default
+        endif
+       else ! present maxcv
+        call cv_common_init() ! default
+       endif
+      endif
 !    allocate index arrays for cv index limits (parallelization)
       allocate(cv_send_displ(SIZE_LOCAL),                               & ! cv
      &         cv_send_count(SIZE_LOCAL))
@@ -2295,10 +2320,9 @@ __CHARMM_ONLY##IF STRINGM
 !
  __DECLARE_MSGBUF
 !
-      character(len=11) :: whoami
       int4mpi :: ierror
 !
-      data whoami /' SMCV_DONE>'/
+      __IAM(SMCV_DONE)
 !
       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.ME_STRNG.eq.0) then
         write(_MSGBUF,'(2A,I5, A)') whoami, ' CLEANING UP.' ; __PRINT(_MSGBUF)
@@ -2977,7 +3001,7 @@ __CHARMM_ONLY##IF STRINGM
         else
          __WRN(whoami,'NO FILE NAME GIVEN. WILL NOT WRITE M TENSOR.')
         endif
- 6626 format(A,' WILL WRITE TENSOR M TO FILE ',A,'.')
+ 6626 format(A,' WILL WRITE SHORT-TERM AVERAGED TENSOR M TO FILE ',A,'.')
       endif
 !
 #ifdef __CHARMM
@@ -3009,10 +3033,16 @@ __CHARMM_ONLY##IF STRINGM
       character(len=8) :: dummy, work_tags(nstring)
       character(len=80) :: fmt, fmt_real, fmt_int ! format strings for output
       int :: oldiol
-      character(len=11) :: whoami
-      data whoami/' SMCV_STAT>'/
+      __IAM(SMCV_STAT)
 !
       bool :: qroot, qprint, qgrp
+!
+      interface
+       subroutine smcv_init(maxcv)
+        __IMPNONE
+        int, optional :: maxcv
+       end subroutine smcv_init
+      end interface
 !
       qroot=MPI_COMM_STRNG.ne.MPI_COMM_NULL
       qprint=qroot.and.ME_STRNG.eq.0
@@ -3355,12 +3385,13 @@ __CHARMM_ONLY##IF STRINGM
       if (output_M) then
 !    if running in parallel, combine partial M entries
        if (qgrp.and.calc_Mtensor_para) then
-!       call MPI_ALLREDUCE(cv%M(1,1,1),cv%M(1,1,2),max_cv_common*cv%num_cv, ! will broadcast all rows, but only num_cv columns
-!     &          mpifloat, MPI_SUM, MPI_COMM_LOCAL, ierror)
-       call MPI_REDUCE(cv%M(1,1,1),cv%M(1,1,2),max_cv_common*cv%num_cv,   & ! will broadcast all rows, but only num_cv columns
-     &          mpifloat, MPI_SUM, 0, MPI_COMM_LOCAL, ierror)
+!
+! print the short-term average (gather on root)
+! broadcast all rows, but only num_cv columns
+        call MPI_REDUCE(cv%M(1,1,1),cv%M(1,1,2),max_cv_common*cv%num_cv, &
+     &                  mpifloat, MPI_SUM, 0, MPI_COMM_LOCAL, ierror)
        else ! qgrp
-         cv%M(1:cv%num_cv,1:cv%num_cv,2)=cv%M(1:cv%num_cv,1:cv%num_cv,1)
+        cv%M(1:cv%num_cv,1:cv%num_cv,2)=cv%M(1:cv%num_cv,1:cv%num_cv,1)
        endif ! qgrp
 !
        if (qroot) then
@@ -3369,7 +3400,7 @@ __CHARMM_ONLY##IF STRINGM
         else
          ifile=-1
          __OPEN_FILE(ifile, M_fname(1:M_flen), 'FORMATTED', 'WRITE')
-         call cv_common_print_M_global(ifile)
+         call cv_common_print_M_global(ifile,IND=2) ! print the short-term average (long-term average by default)
          __CLOSE_FILE(ifile,'KEEP',ierror)
         endif ! M_flen
        endif ! qroot
