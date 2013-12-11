@@ -62,7 +62,7 @@ GLOBALDEPS=$(ROOT)/source.defs $(ROOT)/source.msg
 
 MPI_INCLUDE=-I $(MPI_HOME)/include -I $(MPI_HOME)
 MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lpthread -lmpich -lmpichf90 -lmpl # -lmpi -lmpi_f90 -lmpi_f77 # mpich
-MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lpthread -lmpi -lmpi_f90 -lmpi_f77 # openmpi
+#MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lpthread -lmpi -lmpi_f90 -lmpi_f77 # openmpi
 #MPI_LIBS=
 
 INCLUDES+=-I $(ROOT)/include

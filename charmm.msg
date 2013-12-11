@@ -1,1 +1,1 @@
-/home/surgeon/projects/source.msg
+source.msg
