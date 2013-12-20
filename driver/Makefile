@@ -1,7 +1,7 @@
 ROOT=..
 OBJS=driver.o
 NAME=driver
-DEPS=parser multicom output parser files timer continua
+DEPS=parser multicom output parser files timer continua dynamol
 EXE=muphen
 
 # take all object found in object directory
