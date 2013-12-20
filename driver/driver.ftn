@@ -39,10 +39,10 @@ PROGRAM MUPHEN ! MUlti-PHysics-ENvironment
 !
   __IMPNONE
 !======================= variables
-  character(len=11) :: whoami='MPE Manager'
+  __IAM(MPE Manager)
   int :: i
-  int :: numarg 
-  character(len=80) :: filename, fname, keyword
+  int :: numarg
+  character(len=80) :: filename, fname
   int :: flen
   int :: fid=-1 
 !
@@ -66,6 +66,10 @@ PROGRAM MUPHEN ! MUlti-PHysics-ENvironment
 !
 ! initialize multicom; the first communicator is mpi_comm_world
   call multicom_init()      ! basic initializtion of multicom before parsing input file(s)
+  _MSGBUF(1)='SET GLOBAL 1'
+  i=len_trim(_MSGBUF(1))
+  call multicom_main(_MSGBUF(1), i) ! set global communicator to world
+!
   _MSGBUF(1)='PARSE WORLD'  ! set parser communicator to global ;  this means that every node will have the same parser list
   i=len_trim(_MSGBUF(1))
   call multicom_main( _MSGBUF(1),i)
@@ -106,12 +110,19 @@ PROGRAM MUPHEN ! MUlti-PHysics-ENvironment
 !
   if (__ME.le.0) call files_close(fid)
 ! *********************************************************************************************************
+! now that the input has been parsed, we first see if output parameters changed
+  if (existtag_nocase('minwarnlev',__OUTCTX))    call set_minwarnlev   (atoi(getval('minwarnlev',__OUTCTX)))
+  if (existtag_nocase('minmessagelev',__OUTCTX)) call set_minmessagelev(atoi(getval('minmessagelev',__OUTCTX)))
+  if (existtag_nocase('minerrorlev',__OUTCTX))   call set_minerrorlev  (atoi(getval('minerrorlev',__OUTCTX)))
+!
+! *********************************************************************************************************
 #ifdef __TIMER 
   time(2)=timer_stamp(mpe_timer) ! parsing time
 #endif
 #ifdef __PARALLEL
 !======= now call multicom to set up various communicators before going further
-  call multicom_exec()
+  call message(whoami, 'RUNNING MULTICOM EXECUTION STACK', __DBGLEV)
+  __EXEC(multicom)
 !
 #ifdef __TIMER
   time(3)=timer_stamp(mpe_timer)
@@ -122,8 +133,11 @@ PROGRAM MUPHEN ! MUlti-PHysics-ENvironment
 #endif
 ! misc. initialization
 !
+  call message(whoami, 'INITIALIZING SIZE', __DBGLEV)
  __INIT(size)
+  call message(whoami, 'INITIALIZING GRID', __DBGLEV)
  __INIT(grid)
+  call message(whoami, 'INITIALIZING STATE', __DBGLEV)
  __INIT(state)
 !
 !====== now initialize slave codes by scanning the context list
@@ -132,6 +146,7 @@ PROGRAM MUPHEN ! MUlti-PHysics-ENvironment
   time(4)=timer_stamp(mpe_timer)
 #endif
 !====== launch codes
+  call message(whoami, 'RUNNING CHES EXECUTION STACK', __DBGLEV)
   __EXEC(ches)
 !  __EXEC(eddie)
 !
@@ -158,6 +173,7 @@ PROGRAM MUPHEN ! MUlti-PHysics-ENvironment
 
 #ifdef __PARALLEL
 !======= now call multicom to set up various communicators before going further
+  call message(whoami, 'FINALIZING MULTICOM', __DBGLEV)
   call multicom_cleanup() ! NOTE : multicom will not call mpi_finalize (will only call mpi_init if needed)
 !
 #ifdef __TIMER
@@ -170,6 +186,7 @@ PROGRAM MUPHEN ! MUlti-PHysics-ENvironment
 
 !====== stop timer
 #ifdef __TIMER
+  call message(whoami, 'FINALIZING TIMER', __DBGLEV)
   call timer_done()
 #endif
 !
@@ -189,6 +206,7 @@ PROGRAM MUPHEN ! MUlti-PHysics-ENvironment
 #endif
 !
 #ifdef __PARALLEL
+ call message(whoami, 'FINALIZING MPI (IF NEEDED)', __DBGLEV)
  call mpi_initialized(mpiinit,i)
  if (mpiinit) call mpi_finalize(i)
 #endif

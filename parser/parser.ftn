@@ -43,7 +43,7 @@
       character(len=200), parameter :: allowed=upper//lower//digits//decimal//underscore//hyphen//slash//tilde
       character(len=5), parameter :: exec_start='exec:'
       character(len=18), parameter :: exec_msg='Execution stack +='
-      character(len=4), parameter :: maincontext_name='MAIN'
+      character(len=4), parameter, public :: maincontext_name='MAIN'
       int, parameter :: maincontext_namelen=4
 !
       int, parameter, private :: context_incr=1  ! expand increment for contexts
@@ -267,10 +267,10 @@
        character(len=*), intent(in) :: atag
        character(len=*), intent(in), optional :: ctx
        int :: ictx
+       __IAM(GETVAL)
        ictx=1 ; if (present(ctx)) ictx=max(1,parser_find_context(ctx))
-!
        value=params_getval(context%context_params(ictx),atag)
-       if (len_trim(value).eq.0) call warning('GETVAL','Parameter "'//trim(atag)//'" not found.',-1)
+       if (len_trim(value).eq.0) call warning(whoami,'Parameter "'//trim(atag)//'" not found in context "'//trim(context%context_name(ictx))//'"',-1)
        getval=value
 !
        end function getval
@@ -280,10 +280,10 @@
        character(len=vartaglen) :: value
        character(len=*), intent(in) :: atag
        character(len=*), intent(in), optional :: ctx ; int :: ictx
+       __IAM(GETVAL_NOCASE)
        ictx=1 ; if (present(ctx)) ictx=max(1,parser_find_context(ctx))
-!
        value=params_getval_nocase(context%context_params(ictx),atag)
-       if (len_trim(value).eq.0) call warning('GETVAL_NOCASE','Parameter "'//trim(atag)//'" not found.',-1)
+       if (len_trim(value).eq.0) call warning(whoami,'Parameter "'//trim(atag)//'" not found in context "'//trim(context%context_name(ictx))//'"',-1)
        getval_nocase=value
 !
        end function getval_nocase
@@ -293,10 +293,10 @@
        character(len=vartaglen) :: value
        character(len=*), intent(in) :: atag
        character(len=*), intent(in), optional :: ctx ; int :: ictx
+       __IAM(GETVAL_NOCASE_UPPER)
        ictx=1 ; if (present(ctx)) ictx=max(1,parser_find_context(ctx))
-!
        value=params_getval_nocase(context%context_params(ictx),atag)
-       if (len_trim(value).eq.0) call warning('GETVAL_NOCASE_UPPER','Parameter "'//trim(atag)//'" not found.',-1)
+       if (len_trim(value).eq.0) call warning(whoami,'Parameter "'//trim(atag)//'" not found in context "'//trim(context%context_name(ictx))//'"',-1)
        call toupper(value)
        getval_nocase_upper=value
 !
@@ -338,6 +338,7 @@
        character(len=*), intent(in), optional :: ctx
        type (commands), pointer :: c
        int :: ictx
+       __IAM(NOEXEC)
        noexec=.true.
        if (.not.parser_initialized) call parser_init()
        ictx=1 ; if (present(ctx)) ictx=parser_find_context(ctx)
@@ -347,6 +348,16 @@
          if (c%current.le.c%last) noexec=.false.
         endif !c%initialized
        endif ! ictx
+!
+#ifdef __DEBUG
+       if (noexec) then
+         call message(whoami,'CONTEXT IS EMPTY',__DBGLEV);
+       else
+         call message(whoami,'CONTEXT INDEX :'//&
+    &    itoa(ictx), __DBGLEV );
+         call message(whoami,'CONTEXT IS NOT EMPTY',__DBGLEV);
+       endif
+#endif
        end function noexec
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        function existtag(atag,ctx)
@@ -399,9 +410,9 @@
 !
        int :: fid ! input file handle
        int :: i, j
-       character(len=10), parameter :: whoami = 'PARSE_FILE'
+       __IAM(PARSE_FILE)
 !
-       int :: allowed_len, lower_len, upper_len, digits_len
+       int :: allowed_len
        character :: allowed2(200),c
        bool :: qtag, qeq, qval, qexec, qerror ! active : tag, equals, value, executable line, error flag
        bool :: qvector ! flag that is active when we are reading a vector (certain default behavior is overridden)
@@ -917,10 +928,10 @@
        int :: atoi4, i, l, j, k, sgn, base, missing
        character(len=*), intent(in) :: a
        character(len=len(a)) :: b
-       character(len=4), parameter :: whoami = 'ATOI'
+       __IAM(ATOI)
        int :: flag(10)
 ! convert string to int
-       missing=invalid
+       missing=INT(invalid)
        i=0
 !
        b=a
@@ -959,10 +970,10 @@
        int :: atoi8, i, l, j, k, sgn, base, missing
        character(len=*), intent(in) :: a
        character(len=len(a)) :: b
-       character(len=4), parameter :: whoami = 'ATOI'
+       __IAM(ATOI)
        int :: flag(10)
 ! convert string to int
-       missing=invalid
+       missing=INT(invalid)
        i=0
 !
        b=a
@@ -1068,7 +1079,7 @@
        float, optional, intent(in) :: invalid
        float :: atof, missing
        float :: f 
-       int :: i, l, j, k, sgn, base
+       int :: l, j, k, sgn, base
        character(len=*) :: a
        character(len=len(a)) :: b
        character(len=4), parameter :: whoami = 'ATOF'
@@ -1140,7 +1151,7 @@
        elseif (i.ne.n) then 
         call warning(whoami,' Vector dimension mismatch',-1)
        endif
-       i=min(i,n)
+       i=INT(min(i,n))
        atofv4=unknownf
        allocate(b(i))
        read(a,*) b
@@ -1168,7 +1179,7 @@
        elseif (i.ne.n) then 
         call warning(whoami,' Vector dimension mismatch',-1)
        endif
-       i=min(i,n)
+       i=INT(min(i,n))
        atofv8=unknownf
        allocate(b(i))
        read(a,*) b
@@ -1322,7 +1333,7 @@
 !
    l=len_trim(a);
    n=0
-   if (l.eq.0.or.any(a(1:l).eq.space2)) return ! this is string comparison: any applies to space2
+   if (l.eq.0.or.any(a(1:l).eq.space2)) then ; numword=n; return ; endif ! this is string comparison: any applies to space2
    j=1
    i=1
    do while (j.gt.0)
@@ -1403,6 +1414,7 @@
   character(len=2), parameter :: space = ' '//tab
   character, parameter :: space2(2) = (/' ',tab/)
 !
+  j=0
   copy=tag; call adjustleft(copy,space2); ltag=len_trim(copy)
   if (present(n)) a(max(0,n)+1:)=''        ! erase string beyond length n
   call adjustleft(a,space2); l=len_trim(a);

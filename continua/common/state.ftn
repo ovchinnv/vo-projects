@@ -43,7 +43,7 @@ module state
 !*******************************************************************
   subroutine state_initialize()
 !
-  character(len=:), parameter :: whoami='STATE_INITIALIZE'
+  __IAM(STATE_INITIALIZE)
   int :: i, j
   type(varray3df), pointer :: v
 !
@@ -112,7 +112,7 @@ module state
   int4mpi :: me
 #endif
 !
-  character(len=:), parameter :: whoami='STATE_ADD3DF'
+  __IAM(STATE_ADD3DF)
   character(len=varnamelen) :: vname
   character(len=contextnamelen):: vcontext
 !
@@ -225,20 +225,20 @@ module state
 ! check if initialization is specified
   var%vinit=.false.
   l=len_trim(var%vname)
-  select case(getval_nocase_upper(var%vname(1:l)//'INIT'))
+  select case(getval_nocase_upper(var%vname(1:l)//'INIT',vcontext(1:m)))
    case('CONST','CONSTANT')
-    if (existtag_nocase(var%vname(1:l)//'CONSTANT')) then
-     var%v=atof(getval_nocase(var%vname(1:l)//'CONSTANT'))
+    if (existtag_nocase(var%vname(1:l)//'CONSTANT',vcontext(1:m))) then
+     var%v=atof(getval_nocase(var%vname(1:l)//'CONSTANT',vcontext(1:m)))
      var%vinit=.true.
-    elseif (existtag_nocase(var%vname(1:l)//'CONST')) then
-     var%v=atof(getval_nocase(var%vname(1:l)//'CONST'))
+    elseif (existtag_nocase(var%vname(1:l)//'CONST',vcontext(1:m))) then
+     var%v=atof(getval_nocase(var%vname(1:l)//'CONST',vcontext(1:m)))
      var%vinit=.true.
     else
      call warning(whoami, 'Initialization constant for variable "'//var%vname(1:l)//'" not specified',warnlev-1)
     endif
    case('FILE')
-    if (existtag_nocase(var%vname(1:l)//'FILE')) then
-     filename=getval_nocase(var%vname(1:l)//'FILE')
+    if (existtag_nocase(var%vname(1:l)//'FILE',vcontext(1:m))) then
+     filename=getval_nocase(var%vname(1:l)//'FILE',vcontext(1:m))
      call adjustleft(filename)
      k=len_trim(filename)
      call message(whoami, 'Will initialize variable "'//var%vname(1:l)//'" from file "'//filename(1:k)//'"',warnlev)
@@ -246,8 +246,8 @@ module state
      call warning(whoami, 'Initialization file for variable "'//var%vname(1:l)//'" not specified',warnlev-1)
     endif
 !
-    if (existtag_nocase(var%vname(1:l)//'_MODE')) then
-     file_mode=getval_nocase_upper(var%vname(1:l)//'_MODE')
+    if (existtag_nocase(var%vname(1:l)//'_MODE',vcontext(1:m))) then
+     file_mode=getval_nocase_upper(var%vname(1:l)//'_MODE',vcontext(1:m))
      select case(file_mode);
       case('BINARY', 'BIN');      call message(whoami,'Using binary mode');  qbin=.true.
       case('ASCII', 'TEXT');      call message(whoami,'Using ASCII mode');   qbin=.false.
@@ -258,8 +258,8 @@ module state
     endif
 !
     ifmt=chest ! default format
-    if (existtag_nocase(var%vname(1:l)//'_FORMAT')) then
-     file_format=getval_nocase_upper(var%vname(1:l)//'_FORMAT');
+    if (existtag_nocase(var%vname(1:l)//'_FORMAT',vcontext(1:m))) then
+     file_format=getval_nocase_upper(var%vname(1:l)//'_FORMAT',vcontext(1:m));
      ifmt=-999
      do j=1,num_fmt
       if (file_format.eq.format_name(j)) then 
@@ -308,7 +308,7 @@ module state
   character(len=contextnamelen):: vcontext
   int :: i, l, m
   float, dimension(:,:,:), pointer :: state_get3df
-  character(len=:), parameter :: whoami='STATE_GET3DF'
+  __IAM(STATE_GET3DF)
   nullify(state_get3df)
 !
   if (.not.state_initialized) call state_initialize()
@@ -318,7 +318,7 @@ module state
   call toupper(vname)
 !
   if (present(vcontext_)) then
-   vcontext=vcontext_; l=len(vname);
+   vcontext=vcontext_; m=len(vcontext);
    __TRIMA(vcontext,m)
    call toupper(vcontext)
   else
@@ -373,8 +373,8 @@ module state
   type(varray3df), pointer :: v ! dummy pointer
   float, pointer :: v3df(:,:,:), vbcd(:,:)
 !
-  character(len=:), parameter :: whoami='STATE_BC_ADD3DF'
-  character(len=80) :: filename
+  __IAM(STATE_BC_ADD3DF)
+  character(len=vartaglen) :: filename
   character(len=20) :: keyword
   character(len=varnamelen+len(bc_names(1))+1) :: bcname
   int :: i, k, ii, jj, bcsize, bcsizei, bcsizej, l, m
@@ -385,6 +385,19 @@ module state
 !
 #ifdef __PARALLEL
   int :: bug
+#endif
+!
+  if (present(vcontext_)) then
+   vcontext=vcontext_; m=len(vcontext);
+   __TRIMA(vcontext,m)
+   call toupper(vcontext)
+  else
+   vcontext='MAIN';m=4
+  endif
+!
+#if __DEBUG
+  call message(whoami,'SETTING BOUNDARY CONDITIONS FOR VARIABLE "'//trim(vname_)//'" IN CONTEXT "'//trim(vcontext)//'".',&
+  &__DBGLEV)
 #endif
 !
   warnlev=get_minmessagelev()
@@ -404,7 +417,7 @@ module state
 !
 ! basic checks:
 ! find variable
-  if (present(vcontext_)) then ; v3df=>state_get3df(vname_, vcontext_, i) ; else ; v3df=>state_get3df(vname_, IND=i) ; endif
+  v3df=>state_get3df(vname_, vcontext, i)
   if (i .lt. 0) return ! variable not found; warning issued by _get3df
   v=>vars3df(i)
 !
@@ -446,7 +459,7 @@ module state
   bcname=v%vname(1:len_trim(v%vname))//'_'//bc_names(ibc)
   l=len_trim(bcname)
 !
-  keyword=trim(getval_nocase_upper(bcname))
+  keyword=trim(getval_nocase_upper(bcname, vcontext))
   select case(keyword)
    case('DIRICHLET');                               !   Dirichlet applied between grid nodes
     v%vbc_type(ibc)=dirichlet;  v%vbc_wgt(ibc)=two
@@ -476,13 +489,13 @@ module state
 &     v%vbc_type(ibc).eq.neumann)       & ! others can potentially be added below, such as convective (for pressure)
 &        then
 !
-   if (existtag_nocase(bcname(1:l)//'_CONSTANT')) then
-    vbcd=atof(getval_nocase(bcname(1:l)//'_CONSTANT'))
-   elseif (existtag_nocase(bcname(1:l)//'_CONST')) then
-    vbcd=atof(getval_nocase(bcname(1:l)//'_CONST'))
-   elseif (existtag_nocase(bcname(1:l)//'_FILE')) then
+   if (existtag_nocase(bcname(1:l)//'_CONSTANT', vcontext)) then
+    vbcd=atof(getval_nocase(bcname(1:l)//'_CONSTANT', vcontext))
+   elseif (existtag_nocase(bcname(1:l)//'_CONST', vcontext)) then
+    vbcd=atof(getval_nocase(bcname(1:l)//'_CONST', vcontext))
+   elseif (existtag_nocase(bcname(1:l)//'_FILE', vcontext)) then
 ! open and read boundary condition file
-    filename=getval_nocase(bcname(1:l)//'_FILE')
+    filename=getval_nocase(bcname(1:l)//'_FILE', vcontext)
     call adjustleft(filename)
     m=len_trim(filename)
 !
