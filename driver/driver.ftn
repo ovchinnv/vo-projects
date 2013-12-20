@@ -11,6 +11,11 @@
 #define _COMMA
 #endif
 #define __QPRINT qprint=(__ME.eq.0)
+#ifdef __TIMER
+#define __TIMESTAMP(__DESCRIPTION) itime=itime+1; time(itime)=timer_stamp(mpe_timer) ; task(itime)=__STRING(__DESCRIPTION);
+#else
+#define __TIMESTAMP(__DESCRIPTION)
+#endif
 !
 !
 PROGRAM MUPHEN ! MUlti-PHysics-ENvironment
@@ -47,20 +52,23 @@ PROGRAM MUPHEN ! MUlti-PHysics-ENvironment
   int :: fid=-1 
 !
 #ifdef __TIMER
-  int :: mpe_timer
-  float :: time(10)
+  int, parameter :: ntimes=10
+  int :: mpe_timer, itime=0
+  float :: time(ntimes)
+  character(len=vartaglen) :: task(ntimes)
 #endif
-!
-
 #ifdef __PARALLEL
   bool :: mpiinit
   __DECLARE_MSGBUF
-
+#endif
+!
 #ifdef __TIMER
   call timer_init()
   mpe_timer=timer_start()
 #endif
+  time=0
 !
+#ifdef __PARALLEL
   call mpi_initialized(mpiinit,i)
   if (.not.mpiinit) call mpi_init(i)
 !
@@ -74,15 +82,9 @@ PROGRAM MUPHEN ! MUlti-PHysics-ENvironment
   i=len_trim(_MSGBUF(1))
   call multicom_main( _MSGBUF(1),i)
 !
-#ifdef __TIMER 
-  time(1)=timer_stamp(mpe_timer)
 #endif
 !
-#else
-#ifdef __TIMER 
-  time(1)=0
-#endif
-#endif
+  __TIMESTAMP(Parallel initialization time)
 ! qprint must be execute after the communicator is known (so that __ME is defined)
  __QPRINT
 ! parse input file
@@ -116,99 +118,86 @@ PROGRAM MUPHEN ! MUlti-PHysics-ENvironment
   if (existtag_nocase('minerrorlev',__OUTCTX))   call set_minerrorlev  (atoi(getval('minerrorlev',__OUTCTX)))
 !
 ! *********************************************************************************************************
-#ifdef __TIMER 
-  time(2)=timer_stamp(mpe_timer) ! parsing time
-#endif
+  __TIMESTAMP(Parsing time)
+!
 #ifdef __PARALLEL
 !======= now call multicom to set up various communicators before going further
+#if __DEBUG
   call message(whoami, 'RUNNING MULTICOM EXECUTION STACK', __DBGLEV)
+#endif
   __EXEC(multicom)
 !
-#ifdef __TIMER
-  time(3)=timer_stamp(mpe_timer)
-#endif
-!
-#else
-  time(3)=0
+  __TIMESTAMP(Multicom execution time)
 #endif
 ! misc. initialization
 !
+#if __DEBUG
   call message(whoami, 'INITIALIZING SIZE', __DBGLEV)
+#endif
  __INIT(size)
+#if __DEBUG
   call message(whoami, 'INITIALIZING GRID', __DBGLEV)
+#endif
  __INIT(grid)
+#if __DEBUG
   call message(whoami, 'INITIALIZING STATE', __DBGLEV)
+#endif
  __INIT(state)
 !
 !====== now initialize slave codes by scanning the context list
 !  call muphen_init_codes()
-#ifdef __TIMER 
-  time(4)=timer_stamp(mpe_timer)
-#endif
+  __TIMESTAMP(Basic variable initialization time)
 !====== launch codes
+#if __DEBUG
   call message(whoami, 'RUNNING CHES EXECUTION STACK', __DBGLEV)
+#endif
   __EXEC(ches)
 !  __EXEC(eddie)
 !
 !
-#ifdef __TIMER
-  time(5)=timer_stamp(mpe_timer)
-#endif
+  __TIMESTAMP(Other code execution time)
 
-!
-!====== cleanup
+!====== cleanup : not sure how to do this, and whether this is necessary
 !  call muphen_cleanup_codes()
-#ifdef __TIMER
-  time(6)=timer_stamp(mpe_timer)
-#endif
+!#ifdef __TIMER
+!  time(6)=timer_stamp(mpe_timer)
+!#endif
 !
-
-
 !       call state_done() ! should be done elsewhere ...
 !       call grid_done()
 !       call files_done() ! close all units
 !       call parser_done()
-
-
+!
 
 #ifdef __PARALLEL
 !======= now call multicom to set up various communicators before going further
+#if __DEBUG
   call message(whoami, 'FINALIZING MULTICOM', __DBGLEV)
+#endif
   call multicom_cleanup() ! NOTE : multicom will not call mpi_finalize (will only call mpi_init if needed)
 !
-#ifdef __TIMER
-  time(7)=timer_stamp(mpe_timer)
-#endif
-!
-#else
-  time(7)=0
+  __TIMESTAMP(Parallel finalization time)
 #endif
 
+#ifdef __TIMER
+ call message(whoami,'============= TIMING INFORMATION ==============')
+ do i=1, itime ; call message(whoami,trim(task(i))//char(9)//': '//ftoa(time(i))) ; enddo
+ call message(whoami,'Total time'//char(9)//': '//ftoa(timer_elapsed_total(mpe_timer)));
+ call message(whoami,'===============================================')
+#endif
+!
+#ifdef __PARALLEL
+#if __DEBUG
+ call message(whoami, 'FINALIZING MPI (IF NEEDED)', __DBGLEV)
+#endif
+ call mpi_initialized(mpiinit,i)
+ if (mpiinit) call mpi_finalize(i)
+#endif
 !====== stop timer
 #ifdef __TIMER
   call message(whoami, 'FINALIZING TIMER', __DBGLEV)
   call timer_done()
 #endif
 !
-#ifdef __TIMER
- call message(whoami,'============= TIMING INFORMATION ==============')
-#ifdef __PARALLEL
- call message(whoami,' : '//ftoa(time(1)))
-#endif
- call message(whoami,' : '//ftoa(time(2)))
-#ifdef __PARALLEL
- call message(whoami,' : '//ftoa(time(3)))
-#endif
- call message(whoami,' : '//ftoa(time(4)))
- call message(whoami,' : '//ftoa(time(5)))
- call message(whoami,' : '//ftoa(time(6)))
- call message(whoami,'===============================================')
-#endif
-!
-#ifdef __PARALLEL
- call message(whoami, 'FINALIZING MPI (IF NEEDED)', __DBGLEV)
- call mpi_initialized(mpiinit,i)
- if (mpiinit) call mpi_finalize(i)
-#endif
 !
 end ! MUPHEN
