@@ -21,7 +21,6 @@
   int :: nx, ny, nz 
   float :: q(nx,ny,nz)
   int :: mx, my, mz
-  int :: nblock
   bool :: qbin
 #ifdef __PARALLEL
   int4mpi :: communicator, ierror, me, ncpu
@@ -35,7 +34,6 @@
   bool :: bin
   bool :: q3d
 ! 
-  int :: i, j, k
   integer :: ioerr
 !
   character(len=*) :: filename
@@ -115,13 +113,13 @@
 !
   if (.not.fatal_warning(__COMM)) then 
    if (bin) then ; if (me.eq.0) call message(whoami, 'Binary scalar file "'//fname(1:flen)//'" read.')
-   else          ; if (me.eq.0) call message(whoami,  'ASCII scalar file "'//fname(1:flen)//'" read.')
+   else          ; if (me.eq.0) call message(whoami, 'ASCII scalar file "'//fname(1:flen)//'" read.')
    endif
-#ifdef PARALLEL
+#ifdef __PARALLEL
    call mpi_comm_size(communicator, ncpu, ierror)
    if (ncpu.gt.1) then
-    if (q3d) then ; MPI_BCAST(q,nx*ny*nz,mpi_float,0,communicator,bug)
-    else call MPI_BCAST(q(:,:,2),nx*ny,mpi_float,0,communicator,bug)
+    if (q3d) then ; call MPI_BCAST(q,       nx*ny*nz,mpi_float,0,communicator,ierror)
+    else          ; call MPI_BCAST(q(:,:,2),nx*ny,   mpi_float,0,communicator,ierror)
     endif ! q3d
    endif ! ncpu
 #endif
@@ -129,3 +127,113 @@
   endif ! fatal_warning
 !
   end subroutine chest_read_scalar
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+  subroutine chest_write_scalar(filename,q,nx,ny,nz,qbin &
+#ifdef __PARALLEL
+& , communicator &
+#endif
+&  )
+#ifdef __PARALLEL
+  __DEP_MPI
+#endif
+!
+  __DEP_OUTPUT
+  use files
+  __DEP_PARSER
+  __IMPNONE
+!
+  int :: nx, ny, nz 
+  float :: q(nx,ny,nz)
+  int :: mx, my, mz
+  bool :: qbin
+#ifdef __PARALLEL
+  int4mpi :: communicator, ierror, me ! , ncpu
+#else
+ int :: me
+#endif
+!
+  character(len=11) :: fmt
+  __IAM(CHEST_WRITE_SCALAR)
+!
+  bool :: bin
+  bool :: q3d
+! 
+  integer :: ioerr
+!
+  character(len=*) :: filename
+  character(len=80) :: fname
+  int :: flen, fid=-1
+!
+#ifdef __PARALLEL
+   call mpi_comm_rank(communicator, me, ierror)
+#else
+   me=0
+#endif
+!
+  bin=qbin
+  if (bin) then; fmt='UNFORMATTED'; else ; fmt='FORMATTED'; endif
+!
+  fname=filename
+  call adjustleft(fname)
+  flen=len_trim(fname)
+  if (flen.gt.0) then
+   if (me.eq.0) then 
+    call files_open(fid, name_=fname(1:flen), form_=fmt, action_='WRITE')
+    if (fid.lt.0) then
+     call warning(whoami, 'Cannot open output file. Abort.',-1)
+    endif
+   endif
+!
+   if (fatal_warning(__COMM)) return
+!
+  else ! flen > 0
+   if (me.eq.0) call warning(whoami, 'Input file name not specified. Abort.',0)
+   return
+  endif
+!
+  q3d=(nz.gt.3)
+  mx=nx; my=ny; mz=nz ! initialize
+!
+  if (me.eq.0) then
+!************** header *******
+   if (bin) then 
+    if (q3d) then 
+     write(fid, IOSTAT=ioerr) mx, my, mz
+    else
+     write(fid, IOSTAT=ioerr) mx, my
+    endif ! q3d
+   else ! qbin
+    if (q3d) then 
+     write(fid,*, IOSTAT=ioerr) mx, my, mz
+    else
+     write(fid,*, IOSTAT=ioerr) mx, my
+    endif ! q3d
+   endif ! qbin
+!
+   if (ioerr.ne.0) then 
+    call warning(whoami, 'Error encountered while writing file "'//fname(1:flen)//'.',-1)
+   else
+!********* write scalar data *******
+    if (q3d) then 
+     if (qbin) then  ; write(fid, IOSTAT=ioerr) q ; else ; write(fid,*, IOSTAT=ioerr) q ; endif
+    else
+     if (qbin) then  ; write(fid, IOSTAT=ioerr) q(:,:,2) ; else ; write(fid,*, IOSTAT=ioerr) q(:,:,2) ; endif
+    endif
+    if (ioerr.ne.0) call warning(whoami, 'Error encountered while writing file "'//fname(1:flen)//'.',-1)
+   endif ! ioerr
+!
+   call files_close(fid)
+!
+  endif ! me.eq.0
+!
+  if (.not.fatal_warning(__COMM)) then 
+   if (bin) then ; if (me.eq.0) call message(whoami, 'Binary scalar file "'//fname(1:flen)//'" written.')
+   else          ; if (me.eq.0) call message(whoami, 'ASCII scalar file "'//fname(1:flen)//'" written.')
+   endif
+#ifdef __PARALLEL
+! not yet clear what to do in parallel
+#endif
+!
+  endif ! fatal_warning
+!
+  end subroutine chest_write_scalar

@@ -8,6 +8,8 @@ ascii=true;
 gridname='xy_test.xyz';
 dataname='solution.dat';
 %dataname='uexact_test.dat';
+dataname='rhs_test.dat';
+dataname='rhs.dat';
 
 if ~exist('read')
  read=1;
@@ -34,7 +36,7 @@ if (q3d)
 else
  nz=1;
  nz2=1; 
- i=3; i2=3; i2=7 ; %last one for plot3d
+ i=3; i2=3; %i2=7 ; %last one for plot3d
 end
 %
 if ( (nx~=nx2) || (ny~=ny2) || (nz~=nz2) )
