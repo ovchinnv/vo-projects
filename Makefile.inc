@@ -3,20 +3,20 @@ SHELL=/bin/sh
 CC=gcc
 CFLAGS =-O3 -fno-math-errno -g -c
 #---INTEL
-#FC=ifort
+FC=ifort
 #FFLAGS=-O2 -c
-#FFLAGS=-O3 -fast -finline -fp-model fast=2 -xhost -ipo -fno-math-errno -no-inline-factor -no-inline-min-size -c
-#FFLAGS= -O2 -c -g -check all -no-ipo #-fast -fno-math-errno -finline -fp-model fast=2 -xhost -no-ipo #-ipo 
-#FFLAGS= -O3 -c -extend-source -fast -fno-math-errno -finline -fp-model fast=2 -xSSE3 -ipo # -no-inline-factor -no-inline-min-size #-ipo 
+FFLAGS=-O3 -fast -finline -fp-model fast=2 -xhost -ipo -fno-math-errno -no-inline-factor -no-inline-min-size -c
+#FFLAGS= -O0 -c -g -check all -debug extended -debug-parameters all -traceback -no-ipo #-fast -fno-math-errno -finline -fp-model fast=2 -xhost -no-ipo #-ipo 
+#FFLAGS= -O3 -c -extend-source -fast -fno-math-errno -finline -fp-model fast=2 -xSSE3 -ipo # -no-inline-factor -no-inline-min-size #-ipo #xSSE3 for pentium
 #FFLAGS= -O2 -c -fast -fno-math-errno -finline -fp-model fast=2 -xhost -no-ipo # -no-inline-factor -no-inline-min-size #-ipo 
-#MPI_HOME=/usr/local/mpich2-intel
+MPI_HOME=/usr/local/mpich2-intel
 #---GNU
-FC=gfortran
+#FC=gfortran
 #FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  -Wall  #-fopenmp 
-FFLAGS=-O0 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  -Wall  #-fopenmp 
+#FFLAGS=-O0 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  -Wall  #-fopenmp 
 #FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno #-fbounds-check -frange-check 
 #MPI_HOME=/usr/local/mpich2-gnu
-MPI_HOME=/usr/lib/openmpi
+#MPI_HOME=/usr/lib/openmpi
 #---PATHSCALE
 #FC=pathf95
 #FFLAGS=-Ofast -fno-math-errno -extend-source -INLINE -c -ipa
@@ -42,15 +42,16 @@ DEFS+=-Dint=integer -Dfloat=real*8 -Dbool=logical -Dmpiint=MPI_INTEGER -Dmpifloa
 # -C flag preserves comments
 
 AR=xiar
-AR=ar
+#AR=ar
 AFLAGS=rvcs
 
 LD=$(FC)
-LDFLAGS=-no-ipo #-static -Bstatic -ipo
-LDFLAGS=-dynamic -Bdynamic # -no-ipo
+#LDFLAGS=-no-ipo #-static -Bstatic -ipo
+LDFLAGS=-static -Bstatic -ipo
+#LDFLAGS=-dynamic -Bdynamic # -no-ipo
 #LDFLAGS=-static -ipa
 
-FLIBS+=-lgfortran
+#FLIBS+=-lgfortran
 # extra libs for ifort
 #FLIBS+=-lirc -limf -lifcore -ldl
 
@@ -63,7 +64,7 @@ GLOBALDEPS=$(ROOT)/source.defs $(ROOT)/source.msg
 
 MPI_INCLUDE=-I $(MPI_HOME)/include -I $(MPI_HOME)
 MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lpthread -lmpich -lmpichf90 -lmpl # -lmpi -lmpi_f90 -lmpi_f77 # mpich
-MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lpthread -lmpi -lmpi_f90 -lmpi_f77 # openmpi
+#MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lpthread -lmpi -lmpi_f90 -lmpi_f77 # openmpi
 #MPI_LIBS=
 
 INCLUDES+=-I $(ROOT)/include
