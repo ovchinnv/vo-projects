@@ -11,6 +11,8 @@ $(DIRS) :: $(DISTRIB)
 	(cd $@ ; $(MAKE))
 $(DISTRIB) :
 	if [ ! -d $@ ] ; then mkdir $@ ; fi
+exe :: $(DISTRIB)
+	(cd driver ; $(MAKE) exe)
 charmm :
 		for d in $(DIRS); do (cd $$d; $(MAKE) charmm); done
 .SILENT : charmm
