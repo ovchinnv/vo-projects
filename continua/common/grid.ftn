@@ -28,7 +28,9 @@
 !
 !      private grid_hyperbolictan ! generate hyperbolic tan grid
 !      private grid_htan ! generate hyperbolic tan grid
-!      
+!
+#define __CTX __GRIDCTX
+!
       float, pointer, public, save, dimension(:) :: &
      &                                    xcor,xcen,& ! x-corner, x-center
      &                                    ycor,ycen,&
@@ -50,9 +52,9 @@
        use state, only: state_initialized, state_initialize
        __IMPNONE
 !
-       character(len=vartaglen) :: xgrid_file, ygrid_file, zgrid_file, fmt
+       character(len=vartaglen) :: xgrid_file, ygrid_file, zgrid_file, fmt, keyword
        integer :: iostatus=0
-       int :: i=0, j=0, k=0
+       int :: i=0, j=0, k=0, l
        int :: bug
        float :: x, y, z
        float :: x0, x1, y0, y1, z0, z1, xstretch, ystretch, zstretch
@@ -84,169 +86,48 @@
 !
 !    generate/read grids
 !
+#define __CONTEXT __CTX
+!
        if (__ME.le.0) then ! only root node does this, then broadcasts to the other nodes
 !
-! x-grid
-!
-       xgrid_file=getval_nocase('XGRID') ! query parser module for grid filename 
+!========================================= x-grid
+       xgrid_file=getval_nocase('XGRID',__CTX) ! query parser module for grid filename 
 !     check for missing value to avoid crash
        if (len_trim(xgrid_file).le.0) then
         call warning(whoami, '"XGRID" is missing.',-1)
        endif
 !
        select case(xgrid_file)
-        case('exponential', 'EXPONENTIAL', 'EXP', 'exp', 'EXPO', 'expo');
-!    generate exponential grid: get parameters, then call routine
-         x0=atof(getval_nocase('X0')); x1=atof(getval_nocase('X1')); xstretch=atof(getval_nocase('XSTRETCH'));
-         xcor=>grid_exponential(x0,x1,nx-1,xstretch)
-        case('hyperbolictan','HYPERBOLICTAN','HTAN','htan');
-         x0=atof(getval_nocase('X0')); x1=atof(getval_nocase('X1')); xstretch=atof(getval_nocase('XSTRETCH')); ! will support in the future
-!         xcor=>grid_hyperbolictan(x0,x1,xstretch)
-!
-!    generate grid based on the object:
-        case('object', 'OBJECT');
-         qxgridobject=.true.
-         call message(whoami,'X-grid will be generated from object') 
-         if (existtag_nocase('DXMIN')) then ; dxmin=atof(getval_nocase('DXMIN'));
-         else 
-         call message(whoami, 'DXMIN not specified. Defaulting to '//ftoa(dmin_default)) ; dxmin=dmin_default; endif
-!
-         if (existtag_nocase('XSTRETCH')) then ; xstretch=atof(getval_nocase('XSTRETCH'));
-         else ; 
-         call message(whoami, 'XSTRETCH not specified. Defaulting to '//ftoa(stretch_default)) ; xstretch=stretch_default; endif
-         if (existtag_nocase('XSTRETCHFIX')) then ; xstretchfix=atol(getval_nocase('XSTRETCHFIX')); endif ! do not allow changes to stretching factor
-!
-         if (existtag_nocase('XBUFFER')) then ; x1=atof(getval_nocase('XBUFFER'));
-         else ;
-         call message(whoami, 'XBUFFER not specified. Defaulting to '//ftoa(buffer_default)) ; x1=buffer_default; endif
-!
-        case('','NONE','none'); ! nothing
-        case default ! assume XGRID is set to a file name
-!
-! to do: need to catch io exception
-         iostatus=0
-         open(unit=100, file=xgrid_file, form='FORMATTED', status='OLD', IOSTAT=iostatus)
-         i=0
-         read(100, *) x
-         allocate(xcor(nx))
-         do while (iostatus.ge.0)
-          i=i+1
-          if (i.le.nx) xcor(i)=x
-         enddo
-         close(100)
-!
-         if (i.gt.nx) then 
-          call warning(whoami, 'X-GRID FILE HAS MORE LINES THAN EXPECTED.', 0)
-         elseif (i.lt.nx) then 
-          call warning(whoami, 'X-GRID FILE DOES NOT CONTAIN ENOUGH ENTRIES. ABORT.', -1)
-         endif
-!
+#define __dim x
+#define __DIM X
+#include "gridopts.def"
        end select
 !
-! y-grid
-!
-       ygrid_file=getval_nocase('YGRID') ! query parser module for grid filename 
+!========================================== y-grid
+       ygrid_file=getval_nocase('YGRID',__CTX) ! query parser module for grid filename 
 !     check for missing value to avoid crash
        if (len_trim(ygrid_file).le.0) then
         call warning(whoami, '"YGRID" is missing.',-1)
        endif
        select case(ygrid_file)
-        case('exponential', 'EXPONENTIAL', 'EXP', 'exp', 'EXPO', 'expo');
-!    generate exponential grid: get parameters, then call routine
-         y0=atof(getval_nocase('Y0')); y1=atof(getval_nocase('Y1')); ystretch=atof(getval_nocase('YSTRETCH'));
-         ycor=>grid_exponential(y0,y1,ny-1,ystretch)
-        case('hyperbolictan','HYPERBOLICTAN','HTAN','htan');
-         y0=atof(getval_nocase('Y0')); y1=atof(getval_nocase('Y1')); ystretch=atof(getval_nocase('YSTRETCH')); ! will support in the future
-!         ycor=>grid_hyperbolictan(y0,y1,ystretch)
-        case('object','OBJECT');
-         qygridobject=.true.
-         call message(whoami,'Y-grid will be generated from object') 
-         if (existtag_nocase('DYMIN')) then ; dymin=atof(getval_nocase('DYMIN'));
-         else ; 
-         call message(whoami, 'DYMIN not specified. Defaulting to '//ftoa(dmin_default)) ; dymin=dmin_default; endif
-!
-         if (existtag_nocase('YSTRETCH')) then ; ystretch=atof(getval_nocase('YSTRETCH'));
-         else ;
-         call message(whoami, 'YSTRETCH not specified. Defaulting to '//ftoa(stretch_default)) ; ystretch=stretch_default; endif
-         if (existtag_nocase('YSTRETCHFIX')) then ; ystretchfix=atol(getval_nocase('YSTRETCHFIX')); endif
-!
-         if (existtag_nocase('YBUFFER')) then ; y1=atof(getval_nocase('YBUFFER'));
-         else ;
-         call message(whoami, 'YBUFFER not specified. Defaulting to '//ftoa(buffer_default)) ; y1=buffer_default; endif
-!
-        case(''); ! nothing
-        case default ! assume YGRID is set to a file name
-!
-         iostatus=0
-         open(unit=100, file=ygrid_file, form='FORMATTED', status='OLD', IOSTAT=iostatus)
-         j=0
-         read(100, *) y
-         allocate(ycor(ny))
-         do while (iostatus.ge.0)
-          j=j+1
-          if (j.le.ny) ycor(j)=y
-         enddo
-         close(100)
-!
-         if (j.gt.ny) then 
-          call warning(whoami, 'Y-GRID FILE HAS MORE LINES THAN EXPECTED.', 0)
-         elseif (j.lt.ny) then 
-          call warning(whoami, 'Y-GRID FILE DOES NOT CONTAIN ENOUGH ENTRIES. ABORT.', -1)
-         endif
-!
+#define __dim y
+#define __DIM Y
+#include "gridopts.def"
        end select
-! z-grid
+!========================================== z-grid
        if (q3d) then ! 3D 
-        zgrid_file=getval_nocase('ZGRID') ! query parser module for grid filename 
+        zgrid_file=getval_nocase('ZGRID',__CTX) ! query parser module for grid filename 
 !     check for missing value to avoid crash
         if (len_trim(zgrid_file).le.0) then
          call warning(whoami, '"ZGRID" is missing.',-1)
         endif
         select case(zgrid_file)
-         case('exponential', 'EXPONENTIAL', 'EXP', 'exp', 'EXPO', 'expo');
-!    generate exponential grid: get parameters, then call routine
-          z0=atof(getval_nocase('Z0')); z1=atof(getval_nocase('Z1')); zstretch=atof(getval_nocase('ZSTRETCH'));
-          zcor=>grid_exponential(z0,z1,nz-1,zstretch)
-         case('hyperbolictan','HYPERBOLICTAN','HTAN','htan');
-          z0=atof(getval_nocase('Z0')); z1=atof(getval_nocase('Z1')); zstretch=atof(getval_nocase('ZSTRETCH'));
-!         zcor=>grid_hyperbolictan(z0,z1,zstretch)
-         case('object','OBJECT');
-          qzgridobject=.true.
-          call message(whoami,'Z-grid will be generated from object') 
-          if (existtag_nocase('DZMIN')) then ; dzmin=atof(getval_nocase('DZMIN'));
-          else ;
-          call message(whoami, 'DZMIN not specified. Defaulting to '//ftoa(dmin_default)) ; dzmin=dmin_default; endif
-!
-          if (existtag_nocase('ZSTRETCH')) then ; zstretch=atof(getval_nocase('ZSTRETCH'));
-          else ;
-          call message(whoami, 'ZSTRETCH not specified. Defaulting to '//ftoa(stretch_default)) ; zstretch=stretch_default; endif
-          if (existtag_nocase('ZSTRETCHFIX')) then ; zstretchfix=atol(getval_nocase('ZSTRETCHFIX')); endif
-!
-          if (existtag_nocase('ZBUFFER')) then ; z1=atof(getval_nocase('ZBUFFER'));
-          else ;
-          call message(whoami, 'ZBUFFER not specified. Defaulting to '//ftoa(buffer_default)) ; z1=buffer_default; endif
-!
          case(''); ! do nothing; allow to skip z-grid for 2D problems
-         case default ! assume ZGRID is set to a file name
-!
-          iostatus=0
-          open(unit=100, file=zgrid_file, form='FORMATTED', status='OLD', IOSTAT=iostatus)
-          k=0
-          read(100, *) z
-          allocate(zcor(nz))
-          do while (iostatus.ge.0)
-           k=k+1
-           if (k.le.nz) zcor(k)=z
-          enddo
-          close(100)
-!
-          if (k.gt.nz) then 
-           call warning(whoami, 'Z-GRID FILE HAS MORE LINES THAN EXPECTED.', 0)
-          elseif (k.lt.nz) then 
-           call warning(whoami, 'Z-GRID FILE DOES NOT CONTAIN ENOUGH ENTRIES. ABORT.', -1)
-          endif
-!
+#define __dim z
+#define __DIM Z
+#include "gridopts.def"
         end select
+!
        else ! 2D
         if (existtag_nocase('ZGRID')) then 
          call warning(whoami, '"ZGRID" will be ignored in 2D configuration.',0)
@@ -333,7 +214,7 @@
        if (qygridobject) then 
 #if __PARALLEL
        if (__NCPU.gt.1) call MPI_BCAST(nny,1,mpiint,0,__COMM,bug)
-#endif       
+#endif
 ! hack into SIZE module
         ny=nny
        endif

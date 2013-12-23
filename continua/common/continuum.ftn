@@ -1,0 +1,152 @@
+#define __COMMUNICATOR __CONTCOMM
+#include "setcomm.def"
+#define __QPRINT qprint=(__ME.eq.0)
+module continuum
+ use SIZE
+ use grid
+ use output
+#ifdef __PARALLEL
+ __DEP_MULTICOM
+ use multicom
+ use mpi
+#endif
+!
+ __IMPNONE
+!
+ private
+ bool, save :: continuum_initialized=.false.
+!
+ public continuum_initialize
+ public continuum_exec
+ public continuum_done
+!
+ contains
+  subroutine continuum_initialize()
+  __IAM(CONTINUUM_INITIALIZE)
+  if (continuum_initialized) then ! already initialized
+   call message(whoami,' Already initialized. Nothing done.')
+  else
+!
+#if __DEBUG
+   call message(whoami, 'INITIALIZING SIZE', __DBGLEV)
+#endif
+   call size_initialize()
+#if __DEBUG
+   call message(whoami, 'INITIALIZING GRID', __DBGLEV)
+#endif
+   call grid_initialize()
+!
+   if (fatal_warning(__COMM)) then 
+    call terminate(whoami)
+   else
+    continuum_initialized=.true.
+   endif
+  endif ! if initialized
+!
+  end subroutine continuum_initialize
+!===================================================
+  subroutine continuum_exec()  ! execute command block
+       __DEP_PARSER
+       __IAM(CONTINUUM_EXEC)
+       character(len=maxlinelen), pointer :: command
+       int :: l
+!
+       if (noexec(__CONTCTX)) return
+!
+__NULL_COMM_STOP
+__QPRINT
+       call message(whoami,'Executing commands within context "'//&
+     & trim(__CONTCTX)//'"')
+!
+       do
+        command=>get_next_command(__CONTCTX)
+        if (.not.associated(command)) exit
+        call toupper(command)
+        l=len_trim(command)
+!
+        call message(whoami, ' =====> "'//command(1:l)//'"');
+!
+        select case(command(1:l))
+         case('INIT','INITIALIZE') ; call continuum_initialize()
+         case('OUTPUT') ;            call continuum_output()
+!         case('DONE','STOP','END') ; call continuum_done() ! disable to avoid prematurely deallocating grids, etc
+         case default; call warning(whoami, 'Unknown command. Skipping.',-1)
+        end select
+!
+        if (fatal_warning(__COMM)) return
+!
+        deallocate(command)
+       enddo
+!
+  end subroutine continuum_exec
+!===================================================
+  subroutine continuum_done()
+   call grid_done()
+   call size_done()
+   continuum_initialized=.false.
+  end subroutine continuum_done
+!===================================================
+  subroutine continuum_output()
+! only grid output currently available
+! much code taken from ches_output
+       __DEP_PARSER
+       use formats
+!
+       __IAM(CONTINUUM_OUTPUT)
+       int :: ifmt=plot3d
+       bool :: qbin ! whether binary output is used
+       int :: i
+!
+       character(len=vartaglen) :: filename, output_format, output_mode
+!
+ __NULL_COMM_STOP
+ __QPRINT
+!
+       if (existtag_nocase('output_format', __CONTCTX)) then 
+        output_format=getval_nocase_upper('output_format', __CONTCTX);
+        ifmt=-999
+        do i=1,num_fmt
+         if (output_format.eq.format_name(i)) then 
+          ifmt=i
+          exit
+         endif
+        enddo
+       endif
+!
+       if (ifmt.gt.0) then
+        call message(whoami,trim(format_name(ifmt))//' format will be used for output');
+       else
+        call warning(whoami,'Format "'//trim(output_format)//'" is not recognized',0)
+        return
+       endif
+!
+       if (existtag_nocase('output_mode', __CONTCTX)) then
+        output_mode=getval_nocase('output_mode', __CONTCTX)
+        select case(output_mode);
+         case('BINARY', 'BIN', 'binary', 'bin'); 
+          call message(whoami,'Using binary mode');
+          qbin=.true.
+         case('ASCII', 'TEXT', 'ascii', 'text'); 
+          call message(whoami,'Using ASCII mode');
+          qbin=.false.
+         case default
+          call warning(whoami,'Unknown output mode "'//trim(output_mode)//'". Will use ASCII',0);
+          qbin=.false.
+        end select
+       else
+        call message(whoami,'Using ASCII mode');
+        qbin=.false.
+       endif
+!
+       if (existtag_nocase('gridoutput', __CONTCTX)) then
+        filename=getval_nocase('gridoutput', __CONTCTX)
+        call message(whoami,'Writing grid to file "'//filename(1:len_trim(filename))//'"');
+        select case(ifmt)
+         case(plot3d); call plot3Dwrite_grid(filename,xcen,ycen,zcen,nx,ny,nz,1,qbin _COMMA __COMM)
+         case(chest);  call chest_write_grid(filename,xcen,ycen,zcen,nx,ny,nz,qbin _COMMA __COMM)
+        end select
+       endif
+!
+  end subroutine continuum_output
+!
+end module continuum
