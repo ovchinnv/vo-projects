@@ -4,16 +4,19 @@ module system
  use ch_param
  use psf
  use files
+ use datatypes
+ use state
 #ifdef __PARALLEL
  __DEP_MULTICOM
 #endif
+ __IMPNONE
 
  private
- 
+
  int, public, save :: natom =-1
  int, public, parameter :: ndim=3                 ! number of dimensions
 
- float, public, pointer, save, dimension(:,:) :: r, vr, fr    ! positions, velocities, forces 
+ float, public, pointer, save, dimension(:,:) :: r, vr, fr    ! positions, velocities, forces (note : initialize in state)
 #ifdef __RCOMP
  float, public, pointer, save, dimension(:,:) :: rcomp        ! auxiliary position set
 #endif
@@ -32,7 +35,6 @@ module system
  public system_list_parameters
  public system_read_structure
  public system_check
- public system_center           ! bring molecule to the center (of geometry, since masses are not, generally, available)
  public system_get_vw_radius  ! populate radius array (above) from nonbonded parameters
  public system_printe
  public system_read_coordinates
@@ -47,7 +49,10 @@ module system
  public system_done
  
  contains
- 
+!
+ subroutine system_initialize()
+ end subroutine system_initialize
+
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
  subroutine system_read_parameters(filename) ! read parameter file
  __IMPNONE
@@ -94,9 +99,8 @@ module system
  end subroutine system_read_parameters 
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
  subroutine system_list_parameters()
- __IMPNONE
  character(len=10) :: paramtype
- character(len=22) , parameter :: whoami='SYSTEM_LIST_PARAMETERS'
+ __IAM(SYSTEM_LIST_PARAMETERS)
 !
  paramtype=getval('paramtype')
  call toupper(paramtype)
@@ -114,12 +118,11 @@ module system
  end subroutine system_list_parameters 
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
  subroutine system_read_structure(filename)
- use files
- __IMPNONE
+ __DEP_FILES
  character(len=*), intent(in) :: filename
  character(len=len(filename)) :: fname
  character(len=10) :: paramtype
- character(len=21) , parameter :: whoami='SYSTEM_READ_STRUCTURE'
+ __IAM(SYSTEM_READ_STRUCTURE)
  int :: flen
  int :: fid=-1
 !
@@ -186,7 +189,6 @@ module system
 #ifdef __PARALLEL
  __DEP_MULTICOM
 #endif
- __IMPNONE
 !
 #ifdef __PARALLEL
  int :: ierror
@@ -195,10 +197,9 @@ module system
  character(len=*), intent(in) :: filename
  character(len=len(filename)) :: fname
  character(len=10) :: coortype
- character(len=23), parameter :: whoami='SYSTEM_READ_COORDINATES'
  int :: flen
  int :: fid=-1
- float :: unknown = -99999999
+ __IAM(SYSTEM_READ_COORDINATES)
 !
 #include "multicom_def.src"
 !
@@ -279,14 +280,13 @@ module system
 #ifdef __PARALLEL
  __DEP_MULTICOM
 #endif
- __IMPNONE
 !
  character(len=*) :: filename
  character(len=*), optional :: which
  character(len=20) :: which2
  character(len=80) :: fname, tag
  character(len=10) :: coortype
- character(len=24) , parameter :: whoami='SYSTEM_WRITE_COORDINATES'
+ __IAM(SYSTEM_WRITE_COORDINATES)
  int :: flen
  int :: fid=-1, l
  float, pointer :: rout(:,:)
@@ -355,10 +355,9 @@ module system
 #ifdef __PARALLEL
  __DEP_MULTICOM
 #endif
- __IMPNONE
  int :: fid
  bool :: addheader
- character(len=16), parameter :: whoami='SYSTEM_WRITE_DCD'
+ __IAM(SYSTEM_WRITE_DCD)
 !
 #include "multicom_def.src"
 !
@@ -367,18 +366,16 @@ module system
  if (me.le.0) call dcd_write_frame(fid,r,addheader)
  end subroutine
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
- subroutine system_read_velocities(fname) 
- __IMPNONE
+ subroutine system_read_velocities(fname)
  character(len=*) :: fname
  end subroutine system_read_velocities 
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
  subroutine system_init_velocities() 
  use rng
- use output
+ __DEP_OUTPUT
  use mol_formats
  __DEP_CONST
- __IMPNONE
- character(len=22), parameter :: whoami='SYSTEM_INIT_VELOCITIES'
+ __IAM(SYSTEM_INIT_VELOCITIES)
  character(len=20) :: keyword
  float :: itemp
  int :: i, l
@@ -389,9 +386,9 @@ module system
   return
  endif
 !    call parser
- if (existtag('init_temp')) then
+ if (existtag('init_temp')) then ! NOTE : velocities initialization should be done ala variable initialization in ches
   keyword=getval('init_temp')
- elseif (existtag('temperature')) then
+ elseif (existtag('init_temperature')) then
   keyword=getval('temperature')
  else
   call warning(whoami, 'INITIALIZATION TEMPERATURE NOT SPECIFIED. ABORT.',0)
@@ -420,7 +417,6 @@ module system
 #ifdef __PARALLEL
  __DEP_MULTICOM
 #endif
- __IMPNONE
 #ifdef __PARALLEL
  int :: ierror
 #endif
@@ -428,9 +424,9 @@ module system
  float, pointer :: otemp(:), btemp(:), rtemp(:,:)
  character(len=*), intent(in) :: tag
  character(len=len(tag)) :: tag2
- character(len=400) :: filename, file_format
+ character(len=vartaglen) :: filename, file_format
  character(len=20) :: column
- character(len=22), parameter :: whoami='SYSTEM_INIT_MOL_SCALAR'
+ __IAM(SYSTEM_INIT_MOL_SCALAR)
  int :: l, flen, j, ifmt, icol=-1, fid
 !
 !
@@ -594,21 +590,21 @@ module system
    end select
  else ! tag was not found
   call warning(whoami, 'Parameter "'//tag2(1:l)//'" not found',-1)
- endif 
+ endif
 !
  end function system_init_mol_scalar_nocase
-!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
+!==============================================================================
 ! NOTE: need to take into account generic params (Z)
  subroutine system_check()
  use ivector
  use tlist
  use psfatom, only: unknown
- __IMPNONE
+!
  character(len=8) :: a1, a2, a3, a4
  int :: i, j, i1, i2, i3, i4, j1, j2, j3, j4, k, l
  int, pointer :: jj(:)
  int, parameter :: five=5
- character(len=12) , parameter :: whoami='SYSTEM_CHECK'
+ __IAM(SYSTEM_CHECK)
 !
  if (.not.system_parameters_initialized) then
    call warning(whoami, 'Parameters not initialized. Cannot proceed.',-1)
@@ -790,10 +786,9 @@ module system
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  subroutine system_get_vw_radius() ! set radius to the VW radii in parameter file
  use psfatom, only: unknown
- __IMPNONE
  int :: i, j, i1
 !
- character(len=20) , parameter :: whoami='SYSTEM_GET_VW_RADIUS'
+ __IAM(SYSTEM_GET_VW_RADIUS)
 !
  if (.not.system_parameters_initialized) then
    call warning(whoami, 'Parameters not initialized. Cannot proceed.',-1)
@@ -833,15 +828,14 @@ module system
  end subroutine system_get_vw_radius
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
  subroutine system_compute(forces) 
- __IMPNONE
  bool, optional :: forces
  bool :: f
- character(len=14) , parameter :: whoami='SYSTEM_COMPUTE'
+ __IAM(SYSTEM_COMPUTE)
 !
  include 'interface.h'
 !
  if (.not.system_ok) then
-   call warning(whoami, 'SYSTEM NOT INITIALIZED. ABORT.',0)
+   call warning(whoami, 'System not initialized. Abort.',0)
   return
  endif
 !
@@ -862,7 +856,7 @@ module system
  end subroutine system_compute
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
  subroutine system_done()
- __IMPNONE
+!
  character(len=10) :: paramtype
  system_ok=.false.
 ! 
@@ -909,10 +903,9 @@ module system
 #ifdef __PARALLEL
  __DEP_MULTICOM
 #endif
- __IMPNONE
  __DECLARE_MSGBUF
 !
- character(len=13) , parameter :: whoami='SYSTEM_PRINTE'
+ __IAM(SYSTEM_PRINTE)
 !
 #include "multicom_def.src"
 !
@@ -933,7 +926,6 @@ module system
  function system_getind(selection) result(ind)
  __DEP_OUTPUT
  __DEP_PARSER
- __IMPNONE
 !
  character(len=*), intent(in) :: selection
  int, pointer :: ind(:)
