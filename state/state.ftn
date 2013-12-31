@@ -14,7 +14,6 @@ module state
  __DEP_PARSER
   use fieldbcdef
   use datatypes
-  use SIZE, only: nx, ny, nz, size_initialized
 #ifdef __PARALLEL
  __DEP_MPI
  __DEP_MULTICOM
@@ -24,7 +23,7 @@ module state
 !
  private
 !
- type(varray3df), pointer, public :: vars3df(:) ! holds all field arrays 
+ type(varray3df), pointer, public :: vars3df(:) ! holds all arrays 
  int :: warnlev=0
 !================================================================
  int, parameter :: expand_increment=8
@@ -50,14 +49,9 @@ module state
   if (__ME.eq.0) then ; warnlev=-1  ; else ; warnlev=get_minmessagelev()+2 ; endif ! produce output only on root node
 !
   if (state_initialized) call state_done()
-  if (.not. size_initialized) then
-   call warning(whoami, 'Size not initialized. Nothing done.', warnlev)
-   return
-  else ! allocate space on pointer stack (no actual variables defined)
-! (1) 3D field arrays
-   nvar3df=izero
-   allocate(vars3df(expand_increment))
-   do i=1, expand_increment
+  nvar3df=izero
+  allocate(vars3df(expand_increment))
+  do i=1, expand_increment
     v=>vars3df(i)
     v%v=>null()
     v%vname='UNDEFINED';
@@ -69,9 +63,8 @@ module state
     v%vbc_type(:)=undefined
     v%vbc_wgt(:)=zero
     do j=1,numbc ;  v%vbcs(j)%d=>null() ; enddo
-   enddo
-
-  endif
+  enddo
+!
   state_initialized=.true.
 !
   end subroutine state_initialize
@@ -93,20 +86,21 @@ module state
 !
   end subroutine state_done
 !******************************************************************
-  subroutine state_add3df(vname_, vdescription, &
+  subroutine state_add3df(vname_, vdescription, vdim, &
 ! if vcomm_ is provided, parallel communication will be used for initialization
 #ifdef __PARALLEL
 &  vcomm, &
 #endif
-&  vcontext_, nx_, ny_, nz_, vptr)
+&  vcontext_, vptr, qinit_)
 !
   use files
   use formats
 !
   character(len=*) :: vname_, vdescription
-  int, optional, intent(in) :: nx_, ny_, nz_
+  int, intent(in) :: vdim(:)
   character(len=*), optional, intent(in) :: vcontext_
   type(varray3df), pointer, optional, intent(out) :: vptr
+  bool, optional :: qinit_  ! whether to look for initialization options in parser
 #ifdef __PARALLEL
   int4mpi, intent(in) :: vcomm
   int4mpi :: me
@@ -115,9 +109,9 @@ module state
   __IAM(STATE_ADD3DF)
   character(len=varnamelen) :: vname
   character(len=contextnamelen):: vcontext
+  bool :: qinit
 !
   int :: i, j, k, l, m, ifmt
-  int :: mx, my, mz
   bool :: qbin
   type(varray3df), pointer :: var, vars3df_bkp(:) ! dummy pointers
   character(len=vartaglen) :: filename, file_mode, file_format
@@ -169,38 +163,10 @@ module state
    enddo ! i
   endif ! vname
 !
-  if (present(nx_)) then 
-   if (nx_.ne.nx) then 
-    call warning(whoami, 'Custom x-dimension size specified: '//itoa(nx_),warnlev)
-    if (nx_.lt.0) then 
-     call warning(whoami, 'Custom x-dimension cannot be negative. Nothing done.',warnlev)
-     return
-    endif
-   endif
-   mx=nx_
-  else ;   mx=nx ;  endif ! present (nx_)
-!
-  if (present(ny_)) then 
-   if (ny_.ne.ny) then 
-    call warning(whoami, 'Custom y-dimension size specified: '//itoa(ny_),warnlev)
-    if (ny_.lt.0) then 
-     call warning(whoami, 'Custom y-dimension cannot be negative. Nothing done.',warnlev)
-     return
-    endif
-   endif
-   my=ny_
-  else ;   my=ny ;  endif ! present (ny_)
-!
-  if (present(nz_)) then 
-   if (nz_.ne.nz) then 
-    call warning(whoami, 'Custom z-dimension size specified: '//itoa(nz_),warnlev)
-    if (nz_.lt.0) then 
-     call warning(whoami, 'Custom z-dimension cannot be negative. Nothing done.',warnlev)
-     return
-    endif
-   endif
-   mz=nz_
-  else ;   mz=nz ;  endif ! present (nz_)
+  do i=1,3
+   call message(whoami, 'Dimension '//itoa(i)//' size: '//itoa(vdim(i)), warnlev)
+   if (vdim(i).lt.0) then ;  call warning(whoami, 'Dimension '//itoa(i)//' cannot be negative. Nothing done.',warnlev) ; return ; endif
+  enddo
 !
 ! check size
   if (nvar3df.eq.size(vars3df)) then ! reallocate
@@ -211,7 +177,7 @@ module state
 !
   nvar3df=nvar3df+1
   var=>vars3df(nvar3df)
-  allocate(var%v(mx,my,mz))
+  allocate(var%v(vdim(1),vdim(2), vdim(3)))
   var%vname=vname
   var%vdescription=vdescription
   var%vcontext=vcontext
@@ -221,81 +187,85 @@ module state
 ! check for assignments to variable (at present, this probably conflicts with 'molecule.src', in that you cannot use both assignments)
 ! note that the boundary points are read, too; this is necessary because interpolated (e.g.) epsilon & kappa values are needed at cell boundaries
 !
-! check if initialization is specified
-  var%vinit=.false.
-  l=len_trim(var%vname)
-  select case(getval_nocase_upper(var%vname(1:l)//'INIT',vcontext(1:m)))
-   case('CONST','CONSTANT')
-    if (existtag_nocase(var%vname(1:l)//'CONSTANT',vcontext(1:m))) then
-     var%v=atof(getval_nocase(var%vname(1:l)//'CONSTANT',vcontext(1:m)))
-     var%vinit=.true.
-    elseif (existtag_nocase(var%vname(1:l)//'CONST',vcontext(1:m))) then
-     var%v=atof(getval_nocase(var%vname(1:l)//'CONST',vcontext(1:m)))
-     var%vinit=.true.
-    else
-     call warning(whoami, 'Initialization constant for variable "'//var%vname(1:l)//'" not specified',warnlev-1)
-    endif
-   case('FILE')
-    if (existtag_nocase(var%vname(1:l)//'FILE',vcontext(1:m))) then
-     filename=getval_nocase(var%vname(1:l)//'FILE',vcontext(1:m))
-     call adjustleft(filename)
-     k=len_trim(filename)
-     call message(whoami, 'Will initialize variable "'//var%vname(1:l)//'" from file "'//filename(1:k)//'"',warnlev)
-    else
-     call warning(whoami, 'Initialization file for variable "'//var%vname(1:l)//'" not specified',warnlev-1)
-    endif
+  if (present(qinit_)) then ; qinit=qinit_ ; else ; qinit=.true. ; endif
+  if (qinit) then
+! check for initialization options
+   var%vinit=.false.
+   l=len_trim(var%vname)
+   select case(getval_nocase_upper(var%vname(1:l)//'INIT',vcontext(1:m)))
+    case('CONST','CONSTANT')
+     if (existtag_nocase(var%vname(1:l)//'CONSTANT',vcontext(1:m))) then
+      var%v=atof(getval_nocase(var%vname(1:l)//'CONSTANT',vcontext(1:m)))
+      var%vinit=.true.
+     elseif (existtag_nocase(var%vname(1:l)//'CONST',vcontext(1:m))) then
+      var%v=atof(getval_nocase(var%vname(1:l)//'CONST',vcontext(1:m)))
+      var%vinit=.true.
+     else
+      call warning(whoami, 'Initialization constant for variable "'//var%vname(1:l)//'" not specified',warnlev-1)
+     endif
+    case('FILE')
+     if (existtag_nocase(var%vname(1:l)//'FILE',vcontext(1:m))) then
+      filename=getval_nocase(var%vname(1:l)//'FILE',vcontext(1:m))
+      call adjustleft(filename)
+      k=len_trim(filename)
+      call message(whoami, 'Will initialize variable "'//var%vname(1:l)//'" from file "'//filename(1:k)//'"',warnlev)
+     else
+      call warning(whoami, 'Initialization file for variable "'//var%vname(1:l)//'" not specified',warnlev-1)
+     endif
 !
-    if (existtag_nocase(var%vname(1:l)//'_MODE',vcontext(1:m))) then
-     file_mode=getval_nocase_upper(var%vname(1:l)//'_MODE',vcontext(1:m))
-     select case(file_mode);
-      case('BINARY', 'BIN');      call message(whoami,'Using binary mode');  qbin=.true.
-      case('ASCII', 'TEXT');      call message(whoami,'Using ASCII mode');   qbin=.false.
-      case default ;  call warning(whoami,'Unknown output mode "'//file_mode(1:len_trim(file_mode))//'" requested',warnlev-1); qbin=.false.
-     end select
-    else
-     qbin=.true.
-    endif
+     if (existtag_nocase(var%vname(1:l)//'_MODE',vcontext(1:m))) then
+      file_mode=getval_nocase_upper(var%vname(1:l)//'_MODE',vcontext(1:m))
+      select case(file_mode);
+       case('BINARY', 'BIN');      call message(whoami,'Using binary mode');  qbin=.true.
+       case('ASCII', 'TEXT');      call message(whoami,'Using ASCII mode');   qbin=.false.
+       case default ;  call warning(whoami,'Unknown output mode "'//file_mode(1:len_trim(file_mode))//'" requested',warnlev-1); qbin=.false.
+      end select
+     else
+      qbin=.true.
+     endif
 !
-    ifmt=chest ! default format
-    if (existtag_nocase(var%vname(1:l)//'_FORMAT',vcontext(1:m))) then
-     file_format=getval_nocase_upper(var%vname(1:l)//'_FORMAT',vcontext(1:m));
-     ifmt=-999
-     do j=1,num_fmt
-      if (file_format.eq.format_name(j)) then 
-       ifmt=j
-       exit
-      endif
-     enddo
-    endif
+     ifmt=chest ! default format
+     if (existtag_nocase(var%vname(1:l)//'_FORMAT',vcontext(1:m))) then
+      file_format=getval_nocase_upper(var%vname(1:l)//'_FORMAT',vcontext(1:m));
+      ifmt=-999
+      do j=1,num_fmt
+       if (file_format.eq.format_name(j)) then 
+        ifmt=j
+        exit
+       endif
+      enddo
+     endif
 !
-    if (ifmt.gt.0) then
-     call message(whoami,format_name(ifmt)(1:len_trim(format_name(ifmt)))//' format will be used',warnlev);
-    else
-     call warning(whoami,'Format "'//file_format(1:len_trim(file_format))//'" is not recognized',warnlev-1)
-    endif
+     if (ifmt.gt.0) then
+      call message(whoami,format_name(ifmt)(1:len_trim(format_name(ifmt)))//' format will be used',warnlev);
+     else
+      call warning(whoami,'Format "'//file_format(1:len_trim(file_format))//'" is not recognized',warnlev-1)
+     endif
 !
 !      if (me.le.0) &
 !       call message(whoami, 'Reading data for variable "'//var%vname(1:l)//'" from file '//filename(1:k),warnlev)
 #ifdef __PARALLEL
-    select case(ifmt)
-     case(plot3d); call plot3Dread_scalar(filename,var%v,mx,my,mz,1,qbin,vcomm)
-     case(chest);  call chest_read_scalar(filename,var%v,mx,my,mz,qbin,vcomm)
-     end select
-    if (.not.fatal_warning(vcomm)) var%vinit=.true.
+     select case(ifmt)
+      case(plot3d); call plot3Dread_scalar(filename,var%v,vdim(1),vdim(2),vdim(3),1,qbin,vcomm)
+      case(chest);  call chest_read_scalar(filename,var%v,vdim(1),vdim(2),vdim(3),qbin,vcomm)
+      end select
+     if (.not.fatal_warning(vcomm)) var%vinit=.true.
 #else
-    select case(ifmt)
-     case(plot3d); call plot3Dread_scalar(filename,var%v,mx,my,mz,1,qbin)
-     case(chest);  call chest_read_scalar(filename,var%v,mx,my,mz,qbin)
-    end select
-    if (.not.fatal_warning()) var%vinit=.true.
+     select case(ifmt)
+      case(plot3d); call plot3Dread_scalar(filename,var%v,vdim(1),vdim(2),vdim(3),1,qbin)
+      case(chest);  call chest_read_scalar(filename,var%v,vdim(1),vdim(2),vdim(3),qbin)
+     end select
+     if (.not.fatal_warning()) var%vinit=.true.
 #endif
 !
-   case('OBJECT') ! do nothing : expect that object_grid_parameters will take care of correct initialization
+   case('OBJECT') ! do nothing here : object_grid_parameters will take care of correct initialization, but it is not clear yet how to do this well
     call message(whoami, 'Initialization for variable "'//var%vname(1:l)//'" will be computed from object',warnlev)
     var%vinit=.true.
     case default
      call warning(whoami, 'Initialization option for variable "'//var%vname(1:l)//'" not recognized',warnlev-1)
-  end select
+   end select
+!
+  endif ! qinit
 !
   end subroutine state_add3df
 !******************************************************************
@@ -348,12 +318,12 @@ module state
   end function state_get3df
 !******************************************************************
 ! boundary condition routines for 3D fields
-  subroutine state_bc_add3df(vname_, &
+  subroutine state_bc_add3df(vname_, ibc, &
 ! if vcomm_ is provided, parallel communication will be used for initialization
 #ifdef __PARALLEL
  &  vcomm, &
 #endif
- & vcontext_, ibc, nx_, ny_)
+ & vcontext_, vdim_)
 !
   use files
 !
@@ -363,20 +333,21 @@ module state
   int4mpi :: me, ncpu
 #endif
   character(len=*), optional, intent(in) :: vcontext_
-  int, optional :: nx_, ny_
+  int, optional :: vdim_(:)
   character(len=contextnamelen):: vcontext
 !
   int :: ibc ! boundary number (see fieldbcdef)
 !
   type(varray3df), pointer :: v ! dummy pointer
   float, pointer :: v3df(:,:,:), vbcd(:,:)
+  int :: vdim(2)
 !
   __IAM(STATE_BC_ADD3DF)
   character(len=vartaglen) :: filename
   character(len=20) :: keyword
   character(len=varnamelen+len(bc_names(1))+1) :: bcname
   int :: i, k, ii, jj, bcsize, bcsizei, bcsizej, l, m
-  int :: mx, my, i1, i2
+  int :: i1, i2
   int :: fid
   integer :: iostatus
   float :: value
@@ -429,29 +400,20 @@ module state
      call warning(whoami, 'Unknown boundary type "'//itoa(ibc)//'". Nothing done', warnlev)
      return
   end select
-  mx=size(v%v,i1) ; my=size(v%v,i2) 
+  vdim=(/ size(v%v,i1), size(v%v,i2) /)
 !
-  if (present(nx_)) then 
-   if (nx_.ne.mx) then 
-    call warning(whoami, 'Custom boundary 1-dimension size specified (hope you know what you are doing): '//itoa(nx_), warnlev)
-    if (nx_.lt.0) then 
-     call warning(whoami, 'Custom boundary 1-dimension cannot be negative. Nothing done.', warnlev)
-     return
+  if (present(vdim_)) then
+   do i=1,2
+    if (vdim(i).ne.vdim_(i)) then 
+     call warning(whoami, 'Incorrect boundary dimension '//itoa(i)//' specified (hope you know what you are doing): '//itoa(vdim_(i)), warnlev)
+     if (vdim_(i).lt.0) then
+      call warning(whoami, 'Boundary dimension '//itoa(i)//' cannot be negative. Nothing done.', warnlev)
+      return
+     endif
     endif
-   endif
-   mx=nx_
-  endif ! present (nx_)
-!
-  if (present(ny_)) then 
-   if (ny_.ne.my) then 
-    call warning(whoami, 'Custom boundary 2-dimension size specified (hope you know what you are doing): '//itoa(ny_), warnlev)
-    if (ny_.lt.0) then 
-     call warning(whoami, 'Custom boundary 2-dimension cannot be negative. Nothing done.', warnlev)
-     return
-    endif
-   endif
-   my=ny_
-  endif ! present (ny_)
+   enddo
+   vdim=vdim_
+  endif
 !
 ! parse BC-spec from input file
   bcname=v%vname(1:len_trim(v%vname))//'_'//bc_names(ibc)
@@ -479,7 +441,7 @@ module state
    call warning(whoami, 'Data for boundary "'//bcname(1:l)//'" already allocated (this should not happen). Abort.', warnlev)
    return
   endif
-  allocate(v%vbcs(ibc)%d(mx,my))
+  allocate(v%vbcs(ibc)%d(vdim(1),vdim(2)))
   vbcd=>v%vbcs(ibc)%d
 
   if (v%vbc_type(ibc).eq.dirichlet .or. &
@@ -497,8 +459,8 @@ module state
     call adjustleft(filename)
     m=len_trim(filename)
 !
-    bcsizei=mx-2; ! size of first dimension (inner pts only)
-    bcsizej=my-2; ! size of second dimension (inner pts only)
+    bcsizei=vdim(1)-2; ! size of first dimension (inner pts only)
+    bcsizej=vdim(2)-2; ! size of second dimension (inner pts only)
     bcsize=bcsizei*bcsizej;     ! total inner size
 !
     if (me.le.0) then
