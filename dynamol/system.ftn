@@ -1,22 +1,28 @@
 #define __CTX __MOLCTX
+#define __DEFPARFMT __STRING(CHARMM)
 module system
  __DEP_PARSER
  __DEP_OUTPUT
  use ch_param
  __DEP_PSF
  __DEP_FILES
-! use datatypes
+ use datatypes
 ! use state
 #ifdef __PARALLEL
  __DEP_MULTICOM
 #endif
+#include "multicom_def.src"
  __IMPNONE
 
  private
 
  int, public, save :: natom =-1
- int, public, parameter :: ndim=3                 ! number of dimensions
-
+ int, public, parameter :: ndim=3                                      ! number of dimensions
+!
+! type(atomic2f), pointer, save :: r=>NULL(), vr=>NULL(), fr=>NULL()    ! positions, velocities, forces
+! type(atomic2f), pointer, save :: rcomp=>NULL()                        ! auxiliary position set
+! type(atomic1f), pointer, save, dimension(:) ::   m=>NULL(), q=>NULL(), radius=>NULL() ! mass, charges & radii
+! type(atomic1f), pointer, save, dimension(:) ::   bfactor=>NULL(), occupancy=>NULL()
  float, public, pointer, save, dimension(:,:) :: r, vr, fr    ! positions, velocities, forces (note : initialize in state)
 #ifdef __RCOMP
  float, public, pointer, save, dimension(:,:) :: rcomp        ! auxiliary position set
@@ -34,11 +40,13 @@ module system
  bool, public :: system_charges_initialized=.false.
  bool, public :: system_PDB_initialized=.false. ! poor man`s structure file (insufficient for energy calculations)
  bool, public :: system_ok=.false.
-
-! public system_read_parameters
-! public system_list_parameters
-! public system_read_structure
-! public sustem_PDB_init
+ bool, public :: system_initialized=.false.
+!
+ public system_read_parameters
+ public system_list_parameters
+ public system_read_structure
+ public system_PDB_init
+!
  public system_check
  public system_get_vw_radius  ! populate radius array (above) from nonbonded parameters
  public system_printe
@@ -58,12 +66,12 @@ module system
  subroutine system_initialize()
   __IAM(SYSTEM_INITIALIZE)
 !
-  character(len=vartaglen) :: param_type, struct_type, charge_type, radius_type
-  character(len=vartaglen) :: column ! specifies from which column (occupancy or B) charge/radius data are read
+  character(len=vartaglen) :: param_type, struct_type
+  character(len=vartaglen) :: parmfilename, structfilename, coorfilename
   character(len=vartaglen) :: keyword
-  character(len=vartaglen) :: parmfilename, structfilename, coorfilename, chargefilename, radiusfilename
 !
-  float, pointer :: p=>NULL()
+  float, pointer :: p(:)=>NULL() ! auxiliary pointer
+  int :: i, l
 !================================================================================
   if (system_initialized) then
    call warning(whoami, 'System already initialized. Use "done" to finalize.',0)
@@ -77,13 +85,13 @@ module system
 #define __NAME	Structure file format
 #define __TAG	structype
 #define __DEFAULT
-#define __DEFAULT_VAL CHARMM
+#define __DEFAULT_VAL 'CHARMM'
 #define __CHAR
 #include "parser/parser_macro1.src"
 !
 #undef __DEFAULT
 #define __WARNIFMISSING
-#define __VAR	structurefilename
+#define __VAR	structfilename
 #define __NAME	Structure file
 #define __TAG	structure
 #include "parser/parser_macro1.src"
@@ -95,17 +103,17 @@ module system
     system_charges_initialized=.true.
 ! other poor man`s structure files
    case('PDB');
-    call PDB_init(structfilename,'PDB'); ! last argument specifies whether PDB or PQR format will be used
+    call system_PDB_init(structfilename,'PDB'); ! last argument specifies whether PDB or PQR format will be used
     system_PDB_initialized=.true.
     system_coordinates_initialized=.true.
    case('PQR');
-    call PDB_init(structfilename,'PQR');
+    call system_PDB_init(structfilename,'PQR');
     system_PDB_initialized=.true.
     system_coordinates_initialized=.true.
     system_radii_initialized=.true.
     system_charges_initialized=.true.
    case('CHARMM');
-    call PDB_init(structfilename,'CHARMM');
+    call system_PDB_init(structfilename,'CHARMM');
     system_PDB_initialized=.true.
     system_coordinates_initialized=.true.
    case default
@@ -113,26 +121,20 @@ module system
     return
   end select
 !
-! coordinates
+! read coordinates
 !
   if (.not.system_coordinates_initialized.or.existtag_nocase('coordinates',__CTX)) then
    coorfilename=getval_nocase('coordinates',__CTX);
+
    call system_read_coordinates(coorfilename);
-  elseif .not.(system_coordinates_initialized.or.existtag_nocase('coordinates', __CTX)) then
+  elseif (.not.(system_coordinates_initialized.or.existtag_nocase('coordinates', __CTX))) then
    call error(whoami, 'Atomic coordinates unspecified. Abort',-1);
   endif
 !
-
-
-
-
-
-
-
-! see also if parameter file(s) have been specified
-    if (existtag_nocase('PARAMETERS',__CTX)) then 
-!%%%%%%%%%%%%%%%%%%% read parameter file(s)%%%%%%%%%%%%%%%%%%%%%%%%
-     parmfilename=getval_nocase('PARAMETERS',__CTX)       ! parameter file(s)
+! parameters
+  if (existtag_nocase('parameters',__CTX)) then 
+!============= read parameter file(s); CHARMM topology files are also accepted =====
+     parmfilename=getval_nocase('parameters',__CTX)
      call system_read_parameters(parmfilename)
      i=2
      do
@@ -148,48 +150,39 @@ module system
         exit
       endif
      enddo
-
- system_parameters_initialized=.true.
-
-
-!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-! DISABLE CODE BELOW: COMPUTING RADII REQUIRES THAT COORDINATES BE INITIALIZED WHICH IS FALSE AT THIS STAGE
-!     if (system_parameters_initialized) then 
-!      call system_get_vw_radius()
-!      need_radii=.false.
-!     endif
-    endif
-
-
-
+     system_parameters_initialized=.true.
+! initialize radii (make sure arrays are allocated)
+     call system_get_vw_radius()
+     system_radii_initialized=.true.
+!
+  endif ! parameters
+!
+! ==== additional options to override or assign charges and radii
 ! charges
   if (existtag_nocase('charges')) then 
-   p=>system_init_mol_scalar_nocase('charges') ;  if (associated(p)) then ; q=p ; deallocate(p) ; endif
+   p=>system_init_mol_scalar_nocase('charges')
+   if (associated(p)) then 
+    q=p ; deallocate(p)
+   else
+    call warning(whoami, 'Cannot assign charges (null pointer internal error).',-1)
+   endif
+  endif
 ! radii
-  if (existtag_nocase('radii')) then
-   radius_type=getval_nocase_upper('radiitype')
-   select case(radius_type);
-    case('PARAM','PARAMETER','PARM'); ! obtain from parameter file; this works only if proper structure file is present:
-     if (struct_type.eq.'CHARMM'.or.struct_type.eq.'XPLOR') then
-      if(system_parameters_initialized) then
-       call system_get_vw_radius()
-      else ! not PSF
-       call error(whoami, 'CANNOT OBTAIN RADII FROM PARAMETERS BECAUSE PARAMETERS ARE MISSING. ABORT.',-1)
-      endif
-     else  ! struct_type
-      call error(whoami, 'CANNOT OBTAIN RADII FROM PARAMETERS BECAUSE ATOM TYPES ARE MISSING FROM THE STRUCTURE. ABORT.',-1)
-     endif ! struct_type
-    case default
-     call error(whoami, 'RADII IN UNKNOWN FORMAT. ABORT.',-1)
-    return
-   end select 
+  if (existtag_nocase('radii')) then 
+   p=>system_init_mol_scalar_nocase('radii')
+   if (associated(p)) then 
+    q=p ; deallocate(p)
+   else
+    call warning(whoami, 'Cannot assign radii (null pointer internal error).',-1)
+   endif
+  endif
 !======================================================================
   system_initialized=.true.
 !
  end subroutine system_initialize
 !
 !======================================================================
- subroutine system_read_parameters(filename) ! read parameter file
+ subroutine system_read_parameters(filename)
  character(len=*) :: filename
  character(len=vartaglen) :: fname
  character(len=vartaglen) :: paramtype
@@ -212,8 +205,8 @@ module system
  endif
 !
 !    call parser
- paramtype=getval_nocase_upper('paramtype')
-  select case(paramtype)
+ __GET_OPT_PAR(paramtype, paramtype, __DEFPARFMT, __CTX)
+ select case(paramtype)
    case('CHARMM','XPLOR')
     call message(whoami, 'Reading parameters in CHARMM format.')
     call parse_ch_param(fid&
@@ -224,19 +217,18 @@ module system
    case default
     call warning(whoami, 'Unknown parameter file format. Abort.',-1)
     return
-  end select
+ end select
 !
  call files_close(fid)
 !
- end subroutine system_read_parameters 
-!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
+ end subroutine system_read_parameters
+!===================================================================
  subroutine system_list_parameters()
  character(len=vartaglen) :: paramtype
  __IAM(SYSTEM_LIST_PARAMETERS)
 !
- paramtype=getval_nocase_upper('paramtype')
- call toupper(paramtype)
-  select case(paramtype)
+ __GET_OPT_PAR(paramtype, paramtype, __DEFPARFMT, __CTX)
+ select case(paramtype)
    case('CHARMM','XPLOR')
     call list_ch_params(&
 #ifdef __PARALLEL
@@ -245,7 +237,7 @@ module system
 &    )
    case default
     call warning(whoami, 'Unknown parameter file format. Abort.',-1)
-  end select
+ end select
 !
  end subroutine system_list_parameters 
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
@@ -272,8 +264,8 @@ module system
   return
  endif
 !    call parser
- paramtype=getval_nocase_upper('structype')
-  select case(paramtype)
+ __GET_OPT_PAR(structype, paramtype, __DEFPARFMT, __CTX)
+ select case(paramtype)
    case('CHARMM');
     call message(whoami, 'Reading structure in CHARMM format (PSF) from file '//fname(1:flen)//'.')
     call psf_read(fid &
@@ -302,12 +294,12 @@ module system
    case default;
     call warning(whoami, 'Unknown structure file format. Abort.',-1)
     return
-  end select
+ end select
 !
  call files_close(fid)
 !
  end subroutine system_read_structure
-!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
+!======================================================================
  subroutine system_read_coordinates(filename)
  use charmmio
  use freeio
@@ -330,13 +322,11 @@ module system
  int :: fid=iminusone
  __IAM(SYSTEM_READ_COORDINATES)
 !
-#include "multicom_def.src"
-!
  fname=filename
  call adjustleft(fname)
  flen=len_trim(fname)
  if (flen.gt.0) then
-  if (me.le.0) then ! if me=-1, assume valid serial mode 
+  if (__ME.le.0) then ! if me=-1, assume valid serial mode 
    call files_open(fid,fname(1:flen),'FORMATTED','READ')
    if (fid.le.0) then 
     call warning(whoami, 'Cannot open coordinate file. Abort.',-1)
@@ -354,7 +344,7 @@ module system
  endif
 !
 !allocate local arrays & copy mass and charge from structure info
-!note: this has to be done using global variables
+!note: this has to be re-done using global variables
 !
  natom=atoms%last
  allocate(r(ndim,natom), vr(ndim, natom), fr(ndim, natom), m(natom), q(natom), radius(natom), bfactor(natom), occupancy(natom))
@@ -376,19 +366,19 @@ module system
   select case(coortype)
    case('CHARMM')
     call message(whoami, 'Reading coordinates in CHARMM format from file "'//fname(1:flen)//'".')
-    if (me.le.0) call ch_coor_read(fid,r)
+    if (__ME.le.0) call ch_coor_read(fid,r)
    case('ATOMID')
     call message(whoami, 'Reading coordinates in free format by atomid from file "'//fname(1:flen)//'".')
-    if (me.le.0) call atomid_coor_read(fid,r)
+    if (__ME.le.0) call atomid_coor_read(fid,r)
    case('PDB')
     call message(whoami, 'Reading coordinates in PDB format from file "'//fname(1:flen)//'".')
-    if (me.le.0) call PDB_read(fid,r,occupancy,bfactor)
+    if (__ME.le.0) call PDB_read(fid,r,occupancy,bfactor)
    case('PQR')
     call message(whoami, 'Reading coordinates in PQR format from file "'//fname(1:flen)//'".')
-    if (me.le.0) call PQR_read(fid,r,q,radius)
+    if (__ME.le.0) call PQR_read(fid,r,q,radius)
     call warning(whoami, 'PQR format lacks SEGID identifier. This may cause coordinate errors.',0)
 #ifdef __PARALLEL
- call MPI_BCAST(r, 3*natom, mpifloat, 0, communicator, ierror)
+ call MPI_BCAST(r, 3*natom, mpifloat, 0, __COMM, ierror)
 #endif
 !    call coor_check()
    case default
@@ -396,7 +386,7 @@ module system
     return
   end select
 !
- if (me.le.0) call files_close(fid)
+ if (__ME.le.0) call files_close(fid)
 !
  system_coordinates_initialized=.true.
 !
@@ -419,8 +409,6 @@ module system
  int :: fid=-1, l
  float, pointer :: rout(:,:)
 !
-#include "multicom_def.src"
-!
  if (present(which)) then ; which2=which ; else ; which2='COOR' ; endif
 
  call toupper(which2)
@@ -440,7 +428,7 @@ module system
  call adjustleft(fname)
  flen=len_trim(fname)
  if (flen.gt.0) then
-  if (me.le.0) then 
+  if (__ME.le.0) then 
    call files_open(fid, name_=fname(1:flen), form_='FORMATTED', action_='WRITE')
    if (fid.le.0) call warning(whoami, 'Cannot open input file. Abort.',-1)
   endif ! me
@@ -459,15 +447,15 @@ module system
    case('CHARMM')
     call message(whoami, 'Writing '//tag(1:l)//' in CHARMM format to file "'//fname(1:flen)//'".')
 ! note: future parallelization may require that coordinates be gethered prior to write
-    if (me.le.0) call ch_coor_write(fid,rout)
+    if (__ME.le.0) call ch_coor_write(fid,rout)
    case('ATOMID')
     call message(whoami, 'Writing '//tag(1:l)//' in free format by atomid to file "'//fname(1:flen)//'".')
-    if (me.eq.0) call atomid_coor_write(fid,rout)
+    if (__ME.eq.0) call atomid_coor_write(fid,rout)
    case default
     call warning(whoami, 'Unknown file format. Abort.',-1)
   end select
 !
- if (me.le.0) call files_close(fid)
+ if (__ME.le.0) call files_close(fid)
 !
  end subroutine system_write_coordinates
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -486,11 +474,9 @@ module system
  bool :: addheader
  __IAM(SYSTEM_WRITE_DCD)
 !
-#include "multicom_def.src"
-!
 ! in parallel, will need to gather coordinates
 !
- if (me.le.0) call dcd_write_frame(fid,r,addheader)
+ if (__ME.le.0) call dcd_write_frame(fid,r,addheader)
  end subroutine
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
  subroutine system_read_velocities(fname)
@@ -533,193 +519,6 @@ module system
 !
  system_velocities_initialized=.true.
  end subroutine system_init_velocities 
-!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
- function system_init_mol_scalar_nocase(tag) result(s)
- use mol_formats
- use charmmio
- use pdbio
- use freeio
-!
- __DEP_CONST
-#ifdef __PARALLEL
- __DEP_MULTICOM
-#endif
-#ifdef __PARALLEL
- int :: ierror
-#endif
- float, pointer :: s(:)=>NULL()
- float, pointer :: otemp(:), btemp(:), rtemp(:,:)
- character(len=*), intent(in) :: tag
- character(len=len(tag)) :: tag2
- character(len=vartaglen) :: filename, file_format
- character(len=vartaglen) :: column
- __IAM(SYSTEM_INIT_MOL_SCALAR)
- int :: l, flen, j, ifmt, icol=-1, fid
-!
-!
-#include "multicom_def.src"
-!
- tag2=tag; call adjustleft(tag2); l=len_trim(tag2)
-!
- nullify(s);
-!
- if (.not.(system_structure_initialized.or.system_PDB_initialized)) then
-  call warning(whoami, 'Structure not initialized. Cannot proceed.',-1)
-  if (fatal_warning()) return
- endif
-!
-!%%%%%%%%%% check whether the tag exists %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
- if (existtag_nocase(tag2)) then
-   select case(getval_nocase_upper(tag2))
-    case('CONST','CONSTANT')
-     if     (existtag_nocase(tag2(1:l)//'_constant')) then
-      allocate(s(natom)) ; s=atof(getval_nocase(tag2(1:l)//'_constant'))
-     elseif (existtag_nocase(tag2(1:l)//'_const'   )) then
-      allocate(s(natom)) ; s=atof(getval_nocase(tag2(1:l)//'_const'   ))
-     else
-      call warning(whoami, 'Initialization constant for '//tag2(1:l)//' not specified.',-1)
-     endif
-!-------------------------------------------------------------------------
-    case('FILE')
-     if (existtag_nocase(tag2(1:l)//'_file')) then
-      filename=getval_nocase(tag2(1:l)//'_file')
-      call adjustleft(filename)
-      flen=len_trim(filename)
-      call message(whoami, 'Will initialize variable '//tag2(1:l)//' from file "'//filename(1:flen)//'"')
-!
-      if (existtag_nocase(tag2(1:l)//'_filetype')) then
-        file_format=getval_nocase_upper(tag2(1:l)//'_FILETYPE')
-        ifmt=unknowni
-        do j=1,num_mol_format
-         if (file_format.eq.mol_format_name(j)) then 
-          ifmt=j
-          exit
-         endif
-        enddo
-      endif
-!
-      if (ifmt.ne.unknowni) then
-       call message(whoami,mol_format_name(ifmt)(1:len_trim(mol_format_name(ifmt)))//' format will be used');
-!
-       icol=-1
-       if (existtag_nocase(tag2(1:l)//'_column')) then
-        column=getval_nocase_upper(tag2(1:l)//'_column')
-        select case(column)
-!**********************************************************
-         case('OCCUPANCY', 'O');
-          if ( all(ifmt.ne.(/pdb,pqr/))) then
-           call warning(whoami,'Column "'//column(1:len_trim(column))//'" is invalid for this file type',-1)
-          else
-           icol=ocol
-          endif
-!**********************************************************
-        case('BETA', 'BFACTOR', 'DEBYE','DEBYEWALLER','DEBYE-WALLER','DEBYE_WALLER','TEMPERATURE','TFACTOR','T_FACTOR','T-FACTOR',&
-     &'TEMPERATURE-FACTOR','TEMPERATURE_FACTOR','T','TEMPERATUREFACTOR','TFACT','T_FACT','T-FACT','TEMP','TEMPFACTOR','B_FACTOR',&
-     &'TEMP-FACTOR','TEMP_FACTOR','TEMP-FACT','TEMP_FACT','TEMPFACT','B','BVAL','BCOL','BFACT','B-FACT','B_FACT','B-FACTOR');
-         if ( all(ifmt.ne.(/pdb,pqr/))) then
-          call warning(whoami,'Column "'//column(1:len_trim(column))//'" is invalid for this file type',-1)
-         else
-          icol=bcol
-         endif
-!**********************************************************
-         case('WMAIN', 'W', 'WGT','WEIGHT');
-          if ( all(ifmt.ne.(/charmm/) ) ) then
-           call warning(whoami,'Column "'//column(1:len_trim(column))//'" is invalid for this file type',-1)
-          else
-           icol=wcol
-          endif
-!**********************************************************
-         case('X','XCOMP','XCOR','XCOOR','X-COR','X-COOR','X_COR','X_COOR',&
-     &        'XCOORDINATE','X-COORDINATE','X_COORDINATE',&
-     &        'XCOORD','X-COORD','X_COORD',&
-     &        'XCRD','X-CRD','X_CRD',&
-     &        'XVAL','X-VAL','X_VAL',&
-     &        'XVALUE','X-VALUE','X_VALUE'); icol=xcol
-!**********************************************************
-         case('Y','YCOMP','YCOR','YCOOR','Y-COR','Y-COOR','Y_COR','Y_COOR',&
-     &        'YCOORDINATE','Y-COORDINATE','Y_COORDINATE',&
-     &        'YCOORD','Y-COORD','Y_COORD',&
-     &        'YCRD','Y-CRD','Y_CRD',&
-     &        'YVAL','Y-VAL','Y_VAL',&
-     &        'YVALUE','Y-VALUE','Y_VALUE'); icol=ycol
-!**********************************************************
-         case('Z','ZCOMP','ZCOR','ZCOOR','Z-COR','Z-COOR','Z_COR','Z_COOR',&
-     &        'ZCOORDINATE','Z-COORDINATE','Z_COORDINATE',&
-     &        'ZCOORD','Z-COORD','Z_COORD',&
-     &        'ZCRD','Z-CRD','Z_CRD',&
-     &        'ZVAL','Z-VAL','Z_VAL',&
-     &        'ZVALUE','Z-VALUE','Z_VALUE'); icol=zcol
-!**********************************************************
-         case default
-          call warning(whoami,'Column "'//column(1:len_trim(column))//'" is invalid for this file type',-1)
-        end select
-!
-        if (icol.ge.0) then
-!
-         if (me.le.0) then
-          column=mol_col_name(icol)
-          call message(whoami, &
- &'Reading data for variable "'//tag2(1:l)//'" from column '//column(1:len_trim(column))//' of file '//filename(1:flen))
-          call files_open(fid, name_=filename(1:flen), form_='FORMATTED', action_='READ')
-          if (fid.ge.0) then
-           allocate(rtemp(ndim,natom), otemp(natom), btemp(natom))
-           select case(ifmt)
-            case(pdb);   call pdb_read(fid, rtemp, otemp, btemp)
-            case(pqr);   call pqr_read(fid, rtemp, otemp, btemp)
-            case(charmm);call ch_coor_read(fid, rtemp, btemp)
-            case(free);  call atomid_coor_read(fid, rtemp)
-           end select
-!
-           if (.not.fatal_warning()) then
-            call files_close(fid)
-            allocate(s(natom))
-            select case(icol)
-             case(bcol);   s=btemp
-             case(ocol);   s=otemp
-             case(wcol);   s=btemp
-             case(xcol);   s=rtemp(1,:)
-             case(ycol);   s=rtemp(2,:)
-             case(zcol);   s=rtemp(3,:)
-            end select
-!
-           endif ! fatal_warning
-           deallocate(otemp,btemp,rtemp)
-!
-          else ! problem opening file
-           call warning(whoami, 'Cannot open file. Abort.',-1)
-          endif
-          if (associated(s)) then ; j=size(s) ; else ; j=0 ; endif
-         endif ! me=0
-! broadcast data *****************************************************************
-#ifdef __PARALLEL 
-         call mpi_bcast(j, 1, mpiint, 0, communicator, ierror)
-         if (j.gt.0) then 
-          if (me.ne.0) allocate(s(j))
-          call mpi_bcast(s, j, mpifloat, 0, communicator, ierror)
-         endif
-! broadcast data *****************************************************************
-#endif
-!
-        endif ! icol<0 : invalid column
-!
-       else ! unspecified column
-        call warning(whoami,'File column for variable"'//tag2(1:l)//'" not specified',-1)
-       endif
-      else ! unknown format
-       call warning(whoami,'Format "'//file_format(1:len_trim(file_format))//'" is not recognized',-1)
-      endif
-     else ! invalid initialization file
-      call warning(whoami, 'Initialization file for variable "'//tag2(1:l)//'" not specified',-1)
-     endif
-!-------------------------------------------------------------------------
-    case default
-     call warning(whoami, 'No valid initialization option for variable "'//tag2(1:l)//'" found',-1)
-   end select
- else ! tag was not found
-  call warning(whoami, 'Parameter "'//tag2(1:l)//'" not found',-1)
- endif
-!
- end function system_init_mol_scalar_nocase
 !==============================================================================
 ! NOTE: need to take into account generic params (Z)
  subroutine system_check()
@@ -910,7 +709,7 @@ module system
 !
   system_ok=.true.
  end subroutine system_check
-!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+!==================================================================================
  subroutine system_get_vw_radius() ! set radius to the VW radii in parameter file
  use psfatom, only: unknown
  int :: i, j, i1
@@ -1034,10 +833,8 @@ module system
 !
  __IAM(SYSTEM_PRINTE)
 !
-#include "multicom_def.src"
-!
  KinE=calcKE(vr,m)
- if (me.eq.0) then
+ if (__ME.eq.0) then
   call message(whoami, '');
   write(_MSGBUF(1),'(A)') tab//'=================== ENERGY =================='
   write(_MSGBUF(2),'(1(A,F10.5))') tab//'TotalE: ', BondE+AngleE+DiheE+ImprE+KinE(1)
@@ -1049,7 +846,7 @@ module system
  endif
 !
  end subroutine system_printe
-!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
+!=========================================================================
  function system_getind(selection) result(ind)
  __DEP_OUTPUT
  __DEP_PARSER
@@ -1059,9 +856,9 @@ module system
 
 
  end function system_getind
-
-!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
+!=========================================================================
  subroutine system_PDB_init(filename, paramtype)
+  use psf
   use psfatom
 !
   character, parameter :: charmmcomment(1)=(/'*'/)
@@ -1070,7 +867,7 @@ module system
   __IAM(SYSTEM_PDB_INIT)
   character(len=maxlinelen) :: cmdline
   character(len=8) :: keyword
-!  
+!
 !  character(len=100, parameter :: pdbfmt='(A6,I5,1X,A4,1X,A3,2X,I4,4X,3F8.3,2F6.2,1X,3X,2X,A4)'
   character(len=100), parameter :: pdbfmt='(A6,I5,1X,A4,1X,A3,2X,A4,4X,3F8.3,2F6.2,1X,3X,2X,A4)' ! resid is a string
   character(len=100), parameter :: pqrfmt='*'
@@ -1286,4 +1083,192 @@ module system
 !
  end subroutine system_PDB_init
 !===========================================================================
+ function system_init_mol_scalar_nocase(tag) result(s)
+ use mol_formats
+ use charmmio
+ use pdbio
+ use freeio
+!
+ __DEP_CONST
+#ifdef __PARALLEL
+ __DEP_MULTICOM
+#endif
+#ifdef __PARALLEL
+ int :: ierror
+#endif
+ float, pointer :: s(:)
+ float, pointer :: otemp(:), btemp(:), rtemp(:,:)
+ character(len=*), intent(in) :: tag
+ character(len=len(tag)) :: tag2
+ character(len=vartaglen) :: filename, file_format
+ character(len=vartaglen) :: column='NONE'
+ __IAM(SYSTEM_INIT_MOL_SCALAR)
+ int :: l, flen, j, ifmt, icol=-1, fid
+!
+!
+ tag2=tag; call adjustleft(tag2); l=len_trim(tag2)
+!
+ nullify(s);
+!
+ if (.not.(system_structure_initialized.or.system_PDB_initialized)) then
+  call warning(whoami, 'Structure not initialized. Cannot proceed.',-1)
+  if (fatal_warning()) return
+ endif
+!
+!%%%%%%%%%% check whether the tag exists %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+ if (existtag_nocase(tag2)) then
+   select case(getval_nocase_upper(tag2))
+    case('CONST','CONSTANT')
+     if     (existtag_nocase(tag2(1:l)//'constant')) then
+      allocate(s(natom)) ; s=atof(getval_nocase(tag2(1:l)//'constant'))
+     elseif (existtag_nocase(tag2(1:l)//'const'   )) then
+      allocate(s(natom)) ; s=atof(getval_nocase(tag2(1:l)//'const'   ))
+     else
+      call warning(whoami, 'Initialization constant for '//tag2(1:l)//' not specified.',-1)
+     endif
+!-------------------------------------------------------------------------
+    case('FILE')
+     if (existtag_nocase(tag2(1:l)//'file')) then
+      filename=getval_nocase(tag2(1:l)//'file')
+      call adjustleft(filename)
+      flen=len_trim(filename)
+      call message(whoami, 'Will initialize variable '//tag2(1:l)//' from file "'//filename(1:flen)//'"')
+!
+      if (existtag_nocase(tag2(1:l)//'filetype')) then
+        file_format=getval_nocase_upper(tag2(1:l)//'filetype')
+        ifmt=unknowni
+        do j=1,num_mol_format
+         if (file_format.eq.mol_format_name(j)) then 
+          ifmt=j
+          exit
+         endif
+        enddo
+      endif
+!
+      if (ifmt.ne.unknowni) then
+       call message(whoami,mol_format_name(ifmt)(1:len_trim(mol_format_name(ifmt)))//' format will be used');
+!
+!===================== COLUMN SPEC =======================
+       icol=-1
+       if (existtag_nocase(tag2(1:l)//'column')) then
+        column=getval_nocase_upper(tag2(1:l)//'column')
+       elseif (existtag_nocase(tag2(1:l)//'col')) then
+        column=getval_nocase_upper(tag2(1:l)//'col')
+       endif
+!
+       select case(column)
+!**********************************************************
+         case('OCCUPANCY', 'O');
+          if ( all(ifmt.ne.(/pdb,pqr/))) then
+           call warning(whoami,'Column "'//column(1:len_trim(column))//'" is invalid for this file type',-1)
+          else
+           icol=ocol
+          endif
+!**********************************************************
+        case('BETA', 'BFACTOR', 'DEBYE','DEBYEWALLER','DEBYE-WALLER','DEBYE_WALLER','TEMPERATURE','TFACTOR','T_FACTOR','T-FACTOR',&
+     &'TEMPERATURE-FACTOR','TEMPERATURE_FACTOR','T','TEMPERATUREFACTOR','TFACT','T_FACT','T-FACT','TEMP','TEMPFACTOR','B_FACTOR',&
+     &'TEMP-FACTOR','TEMP_FACTOR','TEMP-FACT','TEMP_FACT','TEMPFACT','B','BVAL','BCOL','BFACT','B-FACT','B_FACT','B-FACTOR');
+         if ( all(ifmt.ne.(/pdb,pqr/))) then
+          call warning(whoami,'Column "'//column(1:len_trim(column))//'" is invalid for this file type',-1)
+         else
+          icol=bcol
+         endif
+!**********************************************************
+         case('WMAIN', 'W', 'WGT','WEIGHT');
+          if ( all(ifmt.ne.(/charmm/) ) ) then
+           call warning(whoami,'Column "'//column(1:len_trim(column))//'" is invalid for this file type',-1)
+          else
+           icol=wcol
+          endif
+!**********************************************************
+         case('X','XCOMP','XCOR','XCOOR','X-COR','X-COOR','X_COR','X_COOR',&
+     &        'XCOORDINATE','X-COORDINATE','X_COORDINATE',&
+     &        'XCOORD','X-COORD','X_COORD',&
+     &        'XCRD','X-CRD','X_CRD',&
+     &        'XVAL','X-VAL','X_VAL',&
+     &        'XVALUE','X-VALUE','X_VALUE'); icol=xcol
+!**********************************************************
+         case('Y','YCOMP','YCOR','YCOOR','Y-COR','Y-COOR','Y_COR','Y_COOR',&
+     &        'YCOORDINATE','Y-COORDINATE','Y_COORDINATE',&
+     &        'YCOORD','Y-COORD','Y_COORD',&
+     &        'YCRD','Y-CRD','Y_CRD',&
+     &        'YVAL','Y-VAL','Y_VAL',&
+     &        'YVALUE','Y-VALUE','Y_VALUE'); icol=ycol
+!**********************************************************
+         case('Z','ZCOMP','ZCOR','ZCOOR','Z-COR','Z-COOR','Z_COR','Z_COOR',&
+     &        'ZCOORDINATE','Z-COORDINATE','Z_COORDINATE',&
+     &        'ZCOORD','Z-COORD','Z_COORD',&
+     &        'ZCRD','Z-CRD','Z_CRD',&
+     &        'ZVAL','Z-VAL','Z_VAL',&
+     &        'ZVALUE','Z-VALUE','Z_VALUE'); icol=zcol
+!**********************************************************
+         case('NONE');
+          call warning(whoami,'File column for variable"'//tag2(1:l)//'" not specified',-1)
+!**********************************************************
+         case default
+          call warning(whoami,'Column "'//column(1:len_trim(column))//'" is invalid for this file type',-1)
+       end select
+!
+       if (icol.ge.0) then
+!
+         if (__ME.le.0) then          ! root only
+          column=mol_col_name(icol)
+          call message(whoami, &
+ &'Reading data for variable "'//tag2(1:l)//'" from column '//column(1:len_trim(column))//' of file '//filename(1:flen))
+          call files_open(fid, name_=filename(1:flen), form_='FORMATTED', action_='READ')
+          if (fid.ge.0) then
+           allocate(rtemp(ndim,natom), otemp(natom), btemp(natom))
+           select case(ifmt)
+            case(pdb);   call pdb_read(fid, rtemp, otemp, btemp)
+            case(pqr);   call pqr_read(fid, rtemp, otemp, btemp)
+            case(charmm);call ch_coor_read(fid, rtemp, btemp)
+            case(free);  call atomid_coor_read(fid, rtemp)
+           end select
+!
+           if (.not.fatal_warning()) then
+            call files_close(fid)
+            allocate(s(natom))
+            select case(icol)
+             case(bcol);   s=btemp
+             case(ocol);   s=otemp
+             case(wcol);   s=btemp
+             case(xcol);   s=rtemp(1,:)
+             case(ycol);   s=rtemp(2,:)
+             case(zcol);   s=rtemp(3,:)
+            end select
+!
+           endif ! fatal_warning
+           deallocate(otemp,btemp,rtemp)
+!
+          else ! problem opening file
+           call warning(whoami, 'Cannot open file. Abort.',-1)
+          endif
+          if (associated(s)) then ; j=size(s) ; else ; j=0 ; endif
+         endif ! __ME=0
+! broadcast data *****************************************************************
+#ifdef __PARALLEL 
+         call mpi_bcast(j, 1, mpiint, 0, __COMM, ierror)
+         if (j.gt.0) then 
+          if (__ME.ne.0) allocate(s(j))
+          call mpi_bcast(s, j, mpifloat, 0, __COMM, ierror)
+         endif
+! broadcast data *****************************************************************
+#endif
+!
+       endif ! icol<0 : invalid column
+      else ! unknown format
+       call warning(whoami,'Format "'//file_format(1:len_trim(file_format))//'" is not recognized',-1)
+      endif
+     else ! invalid initialization file
+      call warning(whoami, 'Initialization file for variable "'//tag2(1:l)//'" not specified',-1)
+     endif
+!=================================================================================
+    case default
+     call warning(whoami, 'No valid initialization option for variable "'//tag2(1:l)//'" found',-1)
+   end select
+ else ! tag was not found
+  call warning(whoami, 'Parameter "'//tag2(1:l)//'" not found',-1)
+ endif
+!
+ end function system_init_mol_scalar_nocase
 end module system
