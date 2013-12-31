@@ -2,7 +2,7 @@ ROOT=..
 OBJS=stats.o sysinfo.o system.o sysmanip.o verlet.o molsim.o
 NAME=dynamol
 INCLUDES=-I $(ROOT)/include
-DEPS=output parser vectors files multicom random bestfit constants
+DEPS=output parser vectors files multicom random bestfit constants datatypes
 SUBDIRS=param struc coor compute
 DEPS+=$(addprefix $(NAME)/,$(SUBDIRS))
 
@@ -23,6 +23,7 @@ include $(ROOT)/Makefile.inc
 sysinfo.o sysmanip.o : system.o
 system.o: stats.o multicom_def.src $(DIRS)
 verlet.o: system.o
+system.F90: parser/parser_macro1.src
 
 libraries : libdynamol.a
 

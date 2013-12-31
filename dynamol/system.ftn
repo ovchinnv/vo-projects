@@ -1,11 +1,12 @@
+#define __CTX __MOLCTX
 module system
  __DEP_PARSER
  __DEP_OUTPUT
  use ch_param
- use psf
- use files
- use datatypes
- use state
+ __DEP_PSF
+ __DEP_FILES
+! use datatypes
+! use state
 #ifdef __PARALLEL
  __DEP_MULTICOM
 #endif
@@ -29,11 +30,15 @@ module system
  bool, public :: system_structure_initialized=.false.
  bool, public :: system_coordinates_initialized=.false.
  bool, public :: system_velocities_initialized=.false.
+ bool, public :: system_radii_initialized=.false.
+ bool, public :: system_charges_initialized=.false.
+ bool, public :: system_PDB_initialized=.false. ! poor man`s structure file (insufficient for energy calculations)
  bool, public :: system_ok=.false.
 
- public system_read_parameters
- public system_list_parameters
- public system_read_structure
+! public system_read_parameters
+! public system_list_parameters
+! public system_read_structure
+! public sustem_PDB_init
  public system_check
  public system_get_vw_radius  ! populate radius array (above) from nonbonded parameters
  public system_printe
@@ -45,20 +50,149 @@ module system
  public system_init_velocities
  public system_compute
  public system_getind        ! return the set of atomic indices that match a valid selection
- public system_getind_charmm ! selection routine with charmm-compatible syntax
+! public system_getind_charmm ! selection routine with charmm-compatible syntax
  public system_done
- 
- contains
-!
- subroutine system_initialize()
- end subroutine system_initialize
 
-!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
+ contains
+!================================================================================
+ subroutine system_initialize()
+  __IAM(SYSTEM_INITIALIZE)
+!
+  character(len=vartaglen) :: param_type, struct_type, charge_type, radius_type
+  character(len=vartaglen) :: column ! specifies from which column (occupancy or B) charge/radius data are read
+  character(len=vartaglen) :: keyword
+  character(len=vartaglen) :: parmfilename, structfilename, coorfilename, chargefilename, radiusfilename
+!
+  float, pointer :: p=>NULL()
+!================================================================================
+  if (system_initialized) then
+   call warning(whoami, 'System already initialized. Use "done" to finalize.',0)
+   return
+  endif
+!
+! use macros to process input parameters
+#define __CONTEXT __CTX
+!
+#define __VAR	struct_type
+#define __NAME	Structure file format
+#define __TAG	structype
+#define __DEFAULT
+#define __DEFAULT_VAL CHARMM
+#define __CHAR
+#include "parser/parser_macro1.src"
+!
+#undef __DEFAULT
+#define __WARNIFMISSING
+#define __VAR	structurefilename
+#define __NAME	Structure file
+#define __TAG	structure
+#include "parser/parser_macro1.src"
+!
+  select case(struct_type);
+   case('CHARMM, XPLOR');
+    call system_read_structure(structfilename)
+    system_structure_initialized=.true.
+    system_charges_initialized=.true.
+! other poor man`s structure files
+   case('PDB');
+    call PDB_init(structfilename,'PDB'); ! last argument specifies whether PDB or PQR format will be used
+    system_PDB_initialized=.true.
+    system_coordinates_initialized=.true.
+   case('PQR');
+    call PDB_init(structfilename,'PQR');
+    system_PDB_initialized=.true.
+    system_coordinates_initialized=.true.
+    system_radii_initialized=.true.
+    system_charges_initialized=.true.
+   case('CHARMM');
+    call PDB_init(structfilename,'CHARMM');
+    system_PDB_initialized=.true.
+    system_coordinates_initialized=.true.
+   case default
+    call warning(whoami, 'Unknown structure format. Abort',-1)
+    return
+  end select
+!
+! coordinates
+!
+  if (.not.system_coordinates_initialized.or.existtag_nocase('coordinates',__CTX)) then
+   coorfilename=getval_nocase('coordinates',__CTX);
+   call system_read_coordinates(coorfilename);
+  elseif .not.(system_coordinates_initialized.or.existtag_nocase('coordinates', __CTX)) then
+   call error(whoami, 'Atomic coordinates unspecified. Abort',-1);
+  endif
+!
+
+
+
+
+
+
+
+! see also if parameter file(s) have been specified
+    if (existtag_nocase('PARAMETERS',__CTX)) then 
+!%%%%%%%%%%%%%%%%%%% read parameter file(s)%%%%%%%%%%%%%%%%%%%%%%%%
+     parmfilename=getval_nocase('PARAMETERS',__CTX)       ! parameter file(s)
+     call system_read_parameters(parmfilename)
+     i=2
+     do
+      write(keyword,'(I10)') i
+      call adjustleft(keyword)
+      if (existtag_nocase('PARAMETERS'//trim(keyword),&
+     &                                                __CTX)) then
+        parmfilename=getval_nocase('PARAMETERS'//trim(keyword),&
+     &                                                         __CTX)
+        call system_read_parameters(parmfilename)
+        i=i+1
+      else
+        exit
+      endif
+     enddo
+
+ system_parameters_initialized=.true.
+
+
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+! DISABLE CODE BELOW: COMPUTING RADII REQUIRES THAT COORDINATES BE INITIALIZED WHICH IS FALSE AT THIS STAGE
+!     if (system_parameters_initialized) then 
+!      call system_get_vw_radius()
+!      need_radii=.false.
+!     endif
+    endif
+
+
+
+! charges
+  if (existtag_nocase('charges')) then 
+   p=>system_init_mol_scalar_nocase('charges') ;  if (associated(p)) then ; q=p ; deallocate(p) ; endif
+! radii
+  if (existtag_nocase('radii')) then
+   radius_type=getval_nocase_upper('radiitype')
+   select case(radius_type);
+    case('PARAM','PARAMETER','PARM'); ! obtain from parameter file; this works only if proper structure file is present:
+     if (struct_type.eq.'CHARMM'.or.struct_type.eq.'XPLOR') then
+      if(system_parameters_initialized) then
+       call system_get_vw_radius()
+      else ! not PSF
+       call error(whoami, 'CANNOT OBTAIN RADII FROM PARAMETERS BECAUSE PARAMETERS ARE MISSING. ABORT.',-1)
+      endif
+     else  ! struct_type
+      call error(whoami, 'CANNOT OBTAIN RADII FROM PARAMETERS BECAUSE ATOM TYPES ARE MISSING FROM THE STRUCTURE. ABORT.',-1)
+     endif ! struct_type
+    case default
+     call error(whoami, 'RADII IN UNKNOWN FORMAT. ABORT.',-1)
+    return
+   end select 
+!======================================================================
+  system_initialized=.true.
+!
+ end subroutine system_initialize
+!
+!======================================================================
  subroutine system_read_parameters(filename) ! read parameter file
- __IMPNONE
  character(len=*) :: filename
- character(len=80) :: fname
- character(len=10) :: paramtype
+ character(len=vartaglen) :: fname
+ character(len=vartaglen) :: paramtype
  __IAM(SYSTEM_READ_PARAMETERS)
  int :: flen
  int :: fid=-1
@@ -78,8 +212,7 @@ module system
  endif
 !
 !    call parser
- paramtype=getval('paramtype')
- call toupper(paramtype)
+ paramtype=getval_nocase_upper('paramtype')
   select case(paramtype)
    case('CHARMM','XPLOR')
     call message(whoami, 'Reading parameters in CHARMM format.')
@@ -93,16 +226,15 @@ module system
     return
   end select
 !
- system_parameters_initialized=.true.
  call files_close(fid)
 !
  end subroutine system_read_parameters 
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
  subroutine system_list_parameters()
- character(len=10) :: paramtype
+ character(len=vartaglen) :: paramtype
  __IAM(SYSTEM_LIST_PARAMETERS)
 !
- paramtype=getval('paramtype')
+ paramtype=getval_nocase_upper('paramtype')
  call toupper(paramtype)
   select case(paramtype)
    case('CHARMM','XPLOR')
@@ -120,8 +252,8 @@ module system
  subroutine system_read_structure(filename)
  __DEP_FILES
  character(len=*), intent(in) :: filename
- character(len=len(filename)) :: fname
- character(len=10) :: paramtype
+ character(len=vartaglen) :: fname
+ character(len=vartaglen) :: paramtype
  __IAM(SYSTEM_READ_STRUCTURE)
  int :: flen
  int :: fid=-1
@@ -140,8 +272,7 @@ module system
   return
  endif
 !    call parser
- paramtype=getval_nocase('paramtype')
- call toupper(paramtype)
+ paramtype=getval_nocase_upper('structype')
   select case(paramtype)
    case('CHARMM');
     call message(whoami, 'Reading structure in CHARMM format (PSF) from file '//fname(1:flen)//'.')
@@ -175,16 +306,14 @@ module system
 !
  call files_close(fid)
 !
- system_structure_initialized=.true.
-!
-!allocate local arrays & copy mass and charge from structure info
  end subroutine system_read_structure
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
  subroutine system_read_coordinates(filename)
  use charmmio
  use freeio
  use pdbio
- use files
+ __DEP_FILES
+ __DEP_CONST
 !
 #ifdef __PARALLEL
  __DEP_MULTICOM
@@ -195,10 +324,10 @@ module system
 #endif
 !
  character(len=*), intent(in) :: filename
- character(len=len(filename)) :: fname
- character(len=10) :: coortype
+ character(len=vartaglen) :: fname
+ character(len=vartaglen) :: coortype
  int :: flen
- int :: fid=-1
+ int :: fid=iminusone
  __IAM(SYSTEM_READ_COORDINATES)
 !
 #include "multicom_def.src"
@@ -219,12 +348,13 @@ module system
   return
  endif
 !
- if (.not.system_structure_initialized) then
+ if (.not.(system_structure_initialized.or.system_PDB_initialized)) then
   call warning(whoami, 'Structure not initialized. Cannot proceed.',-1)
   return
  endif
 !
 !allocate local arrays & copy mass and charge from structure info
+!note: this has to be done using global variables
 !
  natom=atoms%last
  allocate(r(ndim,natom), vr(ndim, natom), fr(ndim, natom), m(natom), q(natom), radius(natom), bfactor(natom), occupancy(natom))
@@ -234,16 +364,15 @@ module system
  m=atoms%mass(1:natom)
  q=atoms%charge(1:natom)
 ! initialize coordinates
- r=unknown; vr=unknown; fr=0d0
+ r=unknownf; vr=unknownf; fr=0d0
 #ifdef __RCOMP
- rcomp=unknown
+ rcomp=unknownf
 #endif
- occupancy=unknown;
- bfactor=unknown;
+ occupancy=unknownf;
+ bfactor=unknownf;
 !
 !    call parser
- coortype=getval('coortype')
- call toupper(coortype)
+ coortype=getval_nocase_upper('coortype')
   select case(coortype)
    case('CHARMM')
     call message(whoami, 'Reading coordinates in CHARMM format from file "'//fname(1:flen)//'".')
@@ -258,12 +387,12 @@ module system
     call message(whoami, 'Reading coordinates in PQR format from file "'//fname(1:flen)//'".')
     if (me.le.0) call PQR_read(fid,r,q,radius)
     call warning(whoami, 'PQR format lacks SEGID identifier. This may cause coordinate errors.',0)
-#ifdef PARALLEL
+#ifdef __PARALLEL
  call MPI_BCAST(r, 3*natom, mpifloat, 0, communicator, ierror)
 #endif
 !    call coor_check()
    case default
-    call warning(whoami, 'UNKNOWN COORDINATE FILE FORMAT. ABORT.',-1)
+    call warning(whoami, 'Unknown coordinate file format. Abort.',-1)
     return
   end select
 !
@@ -276,7 +405,6 @@ module system
  subroutine system_write_coordinates(filename, which)
  use charmmio
  use freeio
- use parser
 #ifdef __PARALLEL
  __DEP_MULTICOM
 #endif
@@ -285,7 +413,7 @@ module system
  character(len=*), optional :: which
  character(len=20) :: which2
  character(len=80) :: fname, tag
- character(len=10) :: coortype
+ character(len=vartaglen) :: coortype
  __IAM(SYSTEM_WRITE_COORDINATES)
  int :: flen
  int :: fid=-1, l
@@ -301,7 +429,7 @@ module system
   case('VEL','V','VELO','VELOCITIES'); tag='velocities'; rout=>vr
   case('FC','F','FORCE','FORCES'); tag='forces'; rout=>fr
   case default;
-   call warning(whoami, 'INVALID ARRAY REQUESTED FOR OUTPUT. ABORT.',-1)
+   call warning(whoami, 'Invalid array requested for output. Abort.',-1)
  end select
 !
  if (fatal_warning()) return
@@ -326,8 +454,7 @@ module system
 !
  if (fatal_warning()) return
 !    call parser
- coortype=getval('coortype')
- call toupper(coortype)
+ coortype=getval_nocase_upper('coortype')
   select case(coortype)
    case('CHARMM')
     call message(whoami, 'Writing '//tag(1:l)//' in CHARMM format to file "'//fname(1:flen)//'".')
@@ -376,22 +503,22 @@ module system
  use mol_formats
  __DEP_CONST
  __IAM(SYSTEM_INIT_VELOCITIES)
- character(len=20) :: keyword
+ character(len=vartaglen) :: keyword
  float :: itemp
  int :: i, l
  int :: c=9 ! random channel
 !
  if (.not.system_structure_initialized) then ! masses may not be available
-  call warning(whoami, 'STRUCTURE NOT INITIALIZED. CANNOT PROCEED.',-1)
+  call warning(whoami, 'Structure not initialized. Cannot proceed.',-1)
   return
  endif
 !    call parser
- if (existtag('init_temp')) then ! NOTE : velocities initialization should be done ala variable initialization in ches
-  keyword=getval('init_temp')
- elseif (existtag('init_temperature')) then
-  keyword=getval('temperature')
+ if (existtag_nocase('init_temp')) then ! NOTE : velocities initialization should be done ala variable initialization in ches
+  keyword=getval_nocase('init_temp')
+ elseif (existtag_nocase('init_temperature')) then
+  keyword=getval_nocase('temperature')
  else
-  call warning(whoami, 'INITIALIZATION TEMPERATURE NOT SPECIFIED. ABORT.',0)
+  call warning(whoami, 'Initialization temperature not specified. Abort.',0)
   return
  endif
  itemp=atof(keyword)
@@ -420,12 +547,12 @@ module system
 #ifdef __PARALLEL
  int :: ierror
 #endif
- float, pointer :: s(:)
+ float, pointer :: s(:)=>NULL()
  float, pointer :: otemp(:), btemp(:), rtemp(:,:)
  character(len=*), intent(in) :: tag
  character(len=len(tag)) :: tag2
  character(len=vartaglen) :: filename, file_format
- character(len=20) :: column
+ character(len=vartaglen) :: column
  __IAM(SYSTEM_INIT_MOL_SCALAR)
  int :: l, flen, j, ifmt, icol=-1, fid
 !
@@ -436,7 +563,7 @@ module system
 !
  nullify(s);
 !
- if (.not.system_structure_initialized) then
+ if (.not.(system_structure_initialized.or.system_PDB_initialized)) then
   call warning(whoami, 'Structure not initialized. Cannot proceed.',-1)
   if (fatal_warning()) return
  endif
@@ -599,11 +726,11 @@ module system
  use ivector
  use tlist
  use psfatom, only: unknown
+ __DEP_CONST
 !
  character(len=8) :: a1, a2, a3, a4
- int :: i, j, i1, i2, i3, i4, j1, j2, j3, j4, k, l
+ int :: i, j, i1, i2, i3, i4, j1, j2, j3, k, l
  int, pointer :: jj(:)
- int, parameter :: five=5
  __IAM(SYSTEM_CHECK)
 !
  if (.not.system_parameters_initialized) then
@@ -732,7 +859,7 @@ module system
   dlist%ind(5,i)=jj(2)
 ! if additional entries are present, add additional dihedral lines to dlist:
   do k=3,l+1
-   j=toplist_add(dlist,five,(/ i1, i2, i3, i4, jj(k) /)) ! dihedral entry
+   j=toplist_add(dlist,ifive,(/ i1, i2, i3, i4, jj(k) /)) ! dihedral entry
   enddo
   deallocate(jj)
  enddo
@@ -775,7 +902,7 @@ module system
   ilist%ind(5,i)=jj(2)
 ! if additional entries are present, add additional dihedral lines to dlist (note, in CHARMM, multiple impropers are illegal)
   do k=3,l+1
-   j=toplist_add(ilist,five,(/ i1, i2, i3, i4, jj(k) /)) ! dihedral entry
+   j=toplist_add(ilist,ifive,(/ i1, i2, i3, i4, jj(k) /)) ! dihedral entry
   enddo
   deallocate(jj)
  enddo
@@ -857,7 +984,7 @@ module system
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
  subroutine system_done()
 !
- character(len=10) :: paramtype
+ character(len=vartaglen) :: paramtype
  system_ok=.false.
 ! 
  if (system_parameters_initialized) then 
@@ -934,4 +1061,229 @@ module system
  end function system_getind
 
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
+ subroutine system_PDB_init(filename, paramtype)
+  use psfatom
+!
+  character, parameter :: charmmcomment(1)=(/'*'/)
+  character, parameter :: freecomment(4) = (/'*', '#', '%', '!'/)
+  character :: comment(4)
+  __IAM(SYSTEM_PDB_INIT)
+  character(len=maxlinelen) :: cmdline
+  character(len=8) :: keyword
+!  
+!  character(len=100, parameter :: pdbfmt='(A6,I5,1X,A4,1X,A3,2X,I4,4X,3F8.3,2F6.2,1X,3X,2X,A4)'
+  character(len=100), parameter :: pdbfmt='(A6,I5,1X,A4,1X,A3,2X,A4,4X,3F8.3,2F6.2,1X,3X,2X,A4)' ! resid is a string
+  character(len=100), parameter :: pqrfmt='*'
+  character(len=100), parameter :: freefmt='*'
+  character(len=100), parameter :: charmmextfmt='(I10,10X,2(2X,A8),3F20.10,2X,A8,2X,A8,F20.10)'
+  character(len=100), parameter :: charmmfmt='(I5,5X,2(1X,A4),3F10.5,1X,A4,1X,A4,F10.5)'
+  character(len=100)            :: fmt
+!
+  int :: atomid, i, j, n=iminusone
+  integer :: ioerr
+  float :: x,y,z,occ,bf,d
+  character(len=8) :: aname='UNKNOWN', resname='UNKNOWN', segid='UNKNOWN', resid='UNKNOWN'
+!
+  character(len=*) :: filename
+  character(len=len(filename)) :: fname
+  character(len=*) :: paramtype
+  int :: flen
+  int :: fid=100
+  int :: pass
+  bool :: fext=.false.
+  bool :: found=.false.
+!
+  fname=filename
+  call adjustleft(fname)
+  flen=len_trim(fname)
+  if (flen.gt.0) then
+   open(fid, file=fname(1:flen), status='OLD', form='FORMATTED')
+  else
+   call error(whoami, 'STRUCTURE FILE NAME NOT SPECIFIED. ABORT.',-1)
+   return
+  endif
+!
+! initialize atom list member in psf
+  call atomlist_init(atoms)
+!
+  select case(paramtype)
+   case('ATOMID'); comment=freecomment
+   case default; comment=charmmcomment(1)
+  end select
+!
+! read the file in two passes; during the first pass, add atoms to a torn-down PSF;
+! in the second pass, populate what data exists in the file
+!
+  do pass=1,2
+!
+! remove comments at the beginning, if any
+!
+  do while (.true.)
+   read(fid,'(A)',IOSTAT=ioerr) cmdline
+   if (ioerr.eq.0) then 
+    if (any(comment.eq.cmdline(1:1))) cycle ! note: this will not get rid of 'REMARK' fields in PDBs
+    exit
+   else
+    call warning(whoami, 'Unexpected end of file.',-1)
+    return
+   endif
+  enddo
+!
+  if (paramtype.eq.'CHARMM') then 
+   if (ioerr.eq.0) then
+! guess whether the number of atoms is present
+    if ((numword(cmdline)).eq.1) then 
+     read(cmdline,*) n
+     if (n.gt.100000) fext=.true.
+    elseif ((numword(cmdline)).eq.2) then 
+     read(cmdline,*) n, keyword
+     call adjustleft(keyword)
+     if (keyword.eq.'EXT') then
+      fext=.true.
+     else
+      call warning(whoami, 'Unrecognized string in coordinate file.',0)
+      call warning(whoami, cmdline,-1)
+      return
+     endif
+    endif
+!
+    if (fext) then ; fmt=charmmextfmt ; else ; fmt=charmmfmt ; endif
+!
+   else ! eof
+    call warning(whoami, 'Unexpected end of file.',-1)
+    return
+   endif ! ioerr
+!
+   if (n.gt.-1) then ! number of atoms not specified in file
+    read(fid,'(A)',IOSTAT=ioerr) cmdline 
+    if (ioerr.ne.0) then
+     call warning(whoami, 'Unexpected end of file.',-1)
+     return
+    endif
+   endif
+!
+  elseif (paramtype.eq.'PDB') then 
+   fmt=pdbfmt
+  elseif (paramtype.eq.'PQR') then 
+   fmt=pqrfmt
+  elseif (paramtype.eq.'ATOMID') then 
+   fmt=freefmt
+  else
+   call warning(whoami, 'Unknown file type "'//paramtype//'". Abort.',-1)
+   return
+  endif ! paramtype CHARMM
+!
+  i=1
+  do while (ioerr.eq.0)
+! process command line
+#ifdef DEBUG
+  call message(whoami,cmdline(1:80))
+#endif
+! only lines that begin with 'ATOM'/'HETATM' are processed; 'TER ' or 'END ' indicates end of read
+   keyword(1:6)=cmdline(1:6);
+   call toupper(keyword)
+!***********************************************************************************************
+   if (paramtype.eq.'PDB'.or.paramtype.eq.'PQR') then
+!
+    select case(keyword(1:6))
+     case('ATOM  ', 'HETATM');
+      if (paramtype.eq.'PDB') read(cmdline,fmt) keyword, atomid, aname, resname, resid, x, y, z, occ, bf, segid
+      if (paramtype.eq.'PQR') read(cmdline,fmt) keyword, atomid, aname, resname, resid, x, y, z, occ, bf
+     case('TER   ','END   ');
+      exit ! loop over lines
+     case default ! keyword not recognized; assume that we can continue (we are not enforcing the PDB standard)
+! try to read next line
+      read(fid,'(A)',IOSTAT=ioerr) cmdline 
+      cycle
+    end select
+! 
+   elseif (paramtype.eq.'CHARMM') then 
+    read(cmdline,fmt) atomid, resname, aname, x, y, z, segid, resid, bf ! ignoring residue number; weight => B-factor
+   elseif (paramtype.eq.'ATOMID') then
+    read(cmdline,fmt) atomid, x, y, z
+   endif
+
+   call adjustleft(cmdline)
+   call adjustleft(segid)
+   call adjustleft(resid)
+   call adjustleft(resname)
+   call adjustleft(aname)
+! match atom coordinate entry with structure
+   if (atomid.lt.1) then
+    call warning(whoami, cmdline(1:len_trim(cmdline)),0)
+    call warning(whoami, 'Nonpositive atom ID read. Skipping entry. Some coordinates may be undefined',0)
+! try to read next line
+    read(fid,'(A)',IOSTAT=ioerr) cmdline 
+    cycle
+   endif
+! find index of the atom in structure
+   found=.false.
+   do j=atomid, atoms%last ! first, a forward search, assuming ordering; usually atomids will be [1..natom] 
+    if (atoms%atomid(j).eq.atomid) then
+     found=.true.
+     exit
+    endif
+   enddo
+   if (.not.found) then    ! try a reverse search, in case the file is disordered
+    do j=min(atomid-1,atoms%last), 1, -1 ! make sure indices stay within bounds
+     if (atoms%atomid(j).eq.atomid) then
+      found=.true.
+      exit
+     endif
+    enddo
+   endif
+!
+    if (.not.found) then 
+! add this atom
+     d=-1d0
+     j=atomlist_uadd_ch(atoms, atomid, segid, resid, resname, aname, iminusone, d, d) ! uknown parameters are -1
+!
+    else ! atom already present -- warn and overwrite
+     if (pass.eq.1) then 
+      call warning(whoami, cmdline(1:len_trim(cmdline)),0)
+      call warning(whoami, 'DUPLICATE ATOM ID IN COORDINATE FILE. WILL OVERWRITE ENTRY.',0)
+     endif
+    endif
+!
+    if (pass.eq.2) then ! when pass=1, the data structures are not allocated
+     r(:,j)=(/x,y,z/);
+!
+     if (paramtype.eq.'PDB') then
+      occupancy(j)=occ; ! occupancy
+      bfactor(j)=bf;    ! b-factor
+     elseif (paramtype.eq.'PQR') then
+      q(j)=occ
+      radius(j)=bf
+     elseif (paramtype.eq.'CHARMM') then 
+      bfactor(j)=bf
+     endif
+    endif ! pass
+!
+    i=i+1 ! increment atom count
+! try to read next line
+    read(fid,'(A)',IOSTAT=ioerr) cmdline 
+!**********************************************************************************
+!
+  enddo ! while
+!
+! the number of lines processed is i; were all of them valid atom entries?
+  if (pass.eq.1) then 
+   natom=atoms%last
+   if (n.eq.-1) n=i-1
+   if (n.ne.atoms%last) call warning(whoami, 'INCORRECT NUMBER OF ATOMS SPECIFIED IN COORDINATE FILE.',0)
+!
+   allocate(r(ndim,natom), q(natom), radius(natom), m(natom), bfactor(natom), occupancy(natom))
+   q=atoms%charge(1:natom)
+   m=1 ! default "mass"
+! initialize coordinates
+   r=unknownf; occupancy=unknownf; bfactor=unknownf;
+   rewind(fid)
+  endif ! pass
+!
+  enddo ! pass
+!
+  call message(whoami, 'Coordinate file read.')
+!
+ end subroutine system_PDB_init
+!===========================================================================
 end module system

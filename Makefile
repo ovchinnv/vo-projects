@@ -1,4 +1,4 @@
-DIRS=driver bestfit constants dynamol erf files lu multicom multidiag output parselist parser random string timer vectors confcons enm continua
+DIRS=driver datatypes bestfit constants dynamol erf files lu multicom multidiag output parselist parser random string timer vectors confcons enm continua
 DISTRIB=include obj lib
 
 all : $(DISTRIB)
