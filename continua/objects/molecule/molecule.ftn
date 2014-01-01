@@ -95,7 +95,6 @@ module molecule
   bool function molecule_ok(); molecule_ok=molecule_initialized;end function molecule_ok
 !********************************************************************
   function molecule_surface_pointer()
-  __IMPNONE
   float, pointer, dimension(:,:,:) :: molecule_surface_pointer
   nullify(molecule_surface_pointer)
   if (molecule_initialized) then
@@ -104,7 +103,6 @@ module molecule
   end function molecule_surface_pointer
 !********************************************************************
   subroutine molecule_read_parameters
-  __IMPNONE
   int :: l
   __IAM(MOLECULE_READ_PARAMETERS)
   character(len=vartaglen) :: keyword
@@ -242,7 +240,6 @@ module molecule
 ! use SIZE, only: nx, ny, nz
 ! use grid, only : xcen, ycen, zcen, dxcor, dycor, dzcor
 ! use state, only: eps, kappa, rhs
-  __IMPNONE
 ! declare passed parameters (gridded data) -- see above comments
   int :: nx, ny, nz
   float, dimension(nx,ny,nz) :: eps, kappa, rhs 
@@ -486,8 +483,8 @@ module molecule
 !
          dzdydx2=dzdy2+(xcen(i)-xpt)**2
 !     i range test:
-         if (qepsi)    qepsi=(dzdydx2.lt.rmax2eps)      
-         if (qkappai)  qkappai=(dzdydx2.lt.rmax2kappa)  
+         if (qepsi)    qepsi=(dzdydx2.lt.rmax2eps)
+         if (qkappai)  qkappai=(dzdydx2.lt.rmax2kappa)
          if (qchargei) qchargei=(dzdydx2.lt.rmax2charge)
          if (qsurfi)   qsurfi=(dzdydx2.lt.rmax2surf  )
          qanyi = qepsi .or. qkappai .or. qchargei .or. qsurfi
@@ -628,169 +625,12 @@ module molecule
   end subroutine molecule_grid_objects
 !**********************************************************************************
   subroutine molecule_initialize()
-  use PDB
-  __IMPNONE
-!
-  __IAM(MOLECULE_INITIALIZE)
-!
-  character(len=vartaglen) :: struct_type, charge_type, radius_type
-  character(len=vartaglen) :: column ! specifies from which column (occupancy or B) charge/radius data are read
-  character(len=vartaglen) :: keyword
-  character(len=vartaglen) :: parmfilename, structfilename, coorfilename, chargefilename, radiusfilename
-!
-  bool :: need_coordinates=.true., need_charges=.true., need_radii=.true.
-!
-  int :: i
-!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-  if (molecule_initialized) call molecule_done()
-!
-  struct_type=getval_nocase_upper('STRUCTURE_FORMAT',__CTX)
-  structfilename=getval_nocase('STRUCTURE',__CTX);      ! structure file
-!
-  select case(struct_type);
-   case('PSF');
-    call system_read_structure(structfilename); ! in dynamol
-    need_coordinates=.true.
-    need_charges=.false. ! charges are specified in PSF, but can be specified optionally
-    need_radii=.true. ! charges are specified in PSF, but can be specified optionally
-! see also if parameter file(s) have been specified
-    if (existtag_nocase('PARAMETERS',__CTX)) then 
-!%%%%%%%%%%%%%%%%%%% read parameter file(s)%%%%%%%%%%%%%%%%%%%%%%%%
-     parmfilename=getval_nocase('PARAMETERS',__CTX)       ! parameter file(s)
-     call system_read_parameters(parmfilename)
-     i=2
-     do
-      write(keyword,'(I10)') i
-      call adjustleft(keyword)
-      if (existtag_nocase('PARAMETERS'//trim(keyword),&
-     &                                                __CTX)) then
-        parmfilename=getval_nocase('PARAMETERS'//trim(keyword),&
-     &                                                         __CTX)
-        call system_read_parameters(parmfilename)
-        i=i+1
-      else
-        exit
-      endif
-     enddo
-!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-! DISABLE CODE BELOW: COMPUTING RADII REQUIRES THAT COORDINATES BE INITIALIZED WHICH IS FALSE AT THIS STAGE
-!     if (system_parameters_initialized) then 
-!      call system_get_vw_radius()
-!      need_radii=.false.
-!     endif
-    endif
-! other structure files
-   case('PDB');
-    call PDB_init(structfilename,'PDB'); ! last argument specifies whether PDB or PQR format will be used
-    need_coordinates=.false.
-    need_radii=.true.
-    need_charges=.true.
-   case('PQR');
-    call PDB_init(structfilename,'PQR');
-    need_coordinates=.false.
-    need_radii=.false.
-    need_charges=.false.
-   case('CHARMM');
-    call PDB_init(structfilename,'CHARMM');
-    need_coordinates=.false.
-    need_radii=.true.
-    need_charges=.true.
-   case default
-    call warning(whoami, 'Unknown structure format. Abort',-1)
-    return
-  end select 
-! coordinates
-  if (need_coordinates.or.existtag_nocase('COORDINATES',__CTX)) then
-   coorfilename=getval_nocase('COORDINATES',__CTX);
-   call system_read_coordinates(coorfilename); ! in dynamol; this will work because PDB_init hacks the system module not to die in the absence of 
-                                               ! proper topology and parameters
-  elseif (need_coordinates.and..not.existtag_nocase('COORDINATES')) then
-   call error(whoami, 'Atomic coordinates unspecified. Abort',-1);
-  endif
-!
-! charges
-  if (need_charges.or.existtag_nocase('charges')) then
-   charge_type=getval_nocase_upper('chargestype')
-   chargefilename=getval_nocase('charges')
-!
-   select case(charge_type);
-    case('PDB');
-     column=getval_nocase('charges_column');
-     call PDB_read_charges(chargefilename,'PDB',column)
-    case('PQR');
-     call PDB_read_charges(chargefilename,'PQR')
-    case('ATOMID');
-     call PDB_read_charges(chargefilename,'ATOMID')
-    case('CHARMM');
-     call PDB_read_charges(chargefilename,'CHARMM') ! charges are assumed to be in main weighting array
-    case default
-     call error(whoami, 'Charges in unknown format. Abort',-1)
-    return
-   end select 
-  elseif (need_charges.and..not.existtag('charges')) then
-   call error(whoami, 'Atomic charges unspecified. ABORT',-1);
-  endif
-!
-! radii
-  if (need_radii.or.existtag('radii')) then
-   radius_type=getval_nocase_upper('radiitype')
-!
-   select case(radius_type);
-    case('PDB');
-     column=getval('radii_column');
-     radiusfilename=getval('radii')
-     call PDB_read_radii(radiusfilename,'PDB',column)
-    case('PQR');
-     radiusfilename=getval('radii')
-     call PDB_read_radii(radiusfilename,'PQR')
-    case('ATOMID');
-     radiusfilename=getval('radii')
-     call PDB_read_radii(radiusfilename,'ATOMID')
-    case('CHARMM');
-     radiusfilename=getval('radii')
-     call PDB_read_radii(radiusfilename,'CHARMM') ! radii are assumed to be in main weighting array
-    case('PARAM','PARAMETER','PARM'); ! obtain from parameter file; this works only if proper structure file is present:
-     if (struct_type.eq.'PSF') then
-      if(.not.system_parameters_initialized) then ! if params read above do nothing
-!%%%%%%%%%%%%% read parameter file(s) - note code duplication above %
-       parmfilename=getval_nocase('parameters')       ! parameter file(s)
-       call system_read_parameters(parmfilename)
-       i=2
-       do
-        write(keyword,'(I10)') i
-        call adjustleft(keyword)
-        if (existtag_nocase('parameters'//keyword(1:len_trim(keyword)))) then
-          parmfilename=getval_nocase('parameters'//keyword(1:len_trim(keyword)))
-          call system_read_parameters(parmfilename)
-          i=i+1
-        else
-          exit
-        endif
-       enddo
-!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-      endif
-      call system_get_vw_radius()
-     else ! not PSF
-      call error(whoami, 'CANNOT OBTAIN RADII FROM PARAMETER FILE(S) BECAUSE ATOM TYPES ARE MISSING FROM STRUCTURE. ABORT.',-1)
-     endif
-    case default
-     call error(whoami, 'RADII IN UNKNOWN FORMAT. ABORT.',-1)
-    return
-   end select 
-!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-  elseif (need_radii.and..not.existtag('RADII')) then
-   call error(whoami, 'ATOMIC RADII UNSPECIFIED. ABORT',-1);
-  endif
-!
-  nullify(rho)
-  molecule_initialized=.true.
-!
+  call system_initialize() ; molecule_initialized=system_initialized
   end subroutine molecule_initialize
 !***********************************************************************************
   subroutine molecule_center(rcen, qmass)
   use sysmanip
   use sysinfo
-  __IMPNONE
   float :: dimens(ndim,3)
   float :: rcen(3)
   bool :: qmass
@@ -805,7 +645,6 @@ module molecule
   subroutine molecule_align(qmass)
   use sysmanip
   use sysinfo
-  __IMPNONE
   bool :: qmass
 !
   if (.not. molecule_initialized) call molecule_initialize()
@@ -816,7 +655,6 @@ module molecule
 !***********************************************************************************
   function molecule_dimens()
   use sysinfo
-  __IMPNONE
   float :: molecule_dimens(ndim,3)
   float :: pad
 !
@@ -831,12 +669,11 @@ module molecule
   end function molecule_dimens
 !
 !***********************************************************************************
-  int function molecule_ndim() ; __IMPNONE
+  int function molecule_ndim()
   molecule_ndim=ndim
   end function molecule_ndim
 !***********************************************************************************
   subroutine molecule_done()
-  __IMPNONE
   molecule_initialized=.false.
   if (allocated(closest_pt)) deallocate(closest_pt)
   if (associated(rho)) deallocate(rho)

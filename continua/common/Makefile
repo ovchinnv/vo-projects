@@ -1,6 +1,6 @@
 ROOT=../..
 COMMON=..
-OBJS=gridsize.o continuum.o
+OBJS=gridsize.o continuum.o grid.o
 NAME=continua/common
 DEPS=output parser constants files state multicom continua/io continua/objects
 
@@ -9,7 +9,6 @@ include $(ROOT)/Makefile.inc
 
 continuum.o: gridsize.o grid.o
 grid.o: gridsize.o
-
 grid.F90 : gridopts.def
 
 test:: force_look
