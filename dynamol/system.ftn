@@ -1,4 +1,4 @@
-#define __CTX __MOLCTX
+#define __CTX __STRING(__MOLCTX)
 #define __DEFPARFMT __STRING(CHARMM)
 module system
  __DEP_CONST
@@ -80,7 +80,7 @@ module system
   __IAM(SYSTEM_INITIALIZE)
 !
   character(len=vartaglen) :: param_type, struct_type
-  character(len=vartaglen) :: parmfilename, structfilename, coorfilename
+  character(len=vartaglen) :: filename
   character(len=vartaglen) :: keyword
 !
   float, pointer :: p(:)=>NULL() ! auxiliary pointer
@@ -104,29 +104,29 @@ module system
 !
 #undef __DEFAULT
 #define __WARNIFMISSING
-#define __VAR	structfilename
+#define __VAR	filename
 #define __NAME	Structure file
 #define __TAG	structure
 #include "parser/parser_macro1.src"
 !
   select case(struct_type);
    case('CHARMM, XPLOR');
-    call system_read_structure(structfilename)
+    call system_read_structure(filename)
     system_structure_initialized=.true.
     system_charges_initialized=.true.
 ! other poor man`s structure files
    case('PDB');
-    call system_PDB_init(structfilename,'PDB'); ! last argument specifies whether PDB or PQR format will be used
+    call system_PDB_init(filename,'PDB'); ! last argument specifies whether PDB or PQR format will be used
     system_PDB_initialized=.true.
     system_coordinates_initialized=.true.
    case('PQR');
-    call system_PDB_init(structfilename,'PQR');
+    call system_PDB_init(filename,'PQR');
     system_PDB_initialized=.true.
     system_coordinates_initialized=.true.
     system_radii_initialized=.true.
     system_charges_initialized=.true.
    case('CHARMM');
-    call system_PDB_init(structfilename,'CHARMM');
+    call system_PDB_init(filename,'CHARMM');
     system_PDB_initialized=.true.
     system_coordinates_initialized=.true.
    case default
@@ -134,12 +134,11 @@ module system
     return
   end select
 !
-! read coordinates
+! coordinates
 !
   if (.not.system_coordinates_initialized.or.existtag_nocase('coordinates',__CTX)) then
-   coorfilename=getval_nocase('coordinates',__CTX);
-
-   call system_read_coordinates(coorfilename);
+   filename=getval_nocase('coordinates',__CTX);
+   call system_read_coordinates(filename);
   elseif (.not.(system_coordinates_initialized.or.existtag_nocase('coordinates', __CTX))) then
    call error(whoami, 'Atomic coordinates unspecified. Abort',-1);
   endif
@@ -147,17 +146,17 @@ module system
 ! parameters
   if (existtag_nocase('parameters',__CTX)) then 
 !============= read parameter file(s); CHARMM topology files are also accepted =====
-     parmfilename=getval_nocase('parameters',__CTX)
-     call system_read_parameters(parmfilename)
+     filename=getval_nocase('parameters',__CTX)
+     call system_read_parameters(filename)
      i=2
      do
       write(keyword,'(I10)') i
       call adjustleft(keyword)
-      if (existtag_nocase('PARAMETERS'//trim(keyword),&
+      if (existtag_nocase('parameters'//trim(keyword),&
      &                                                __CTX)) then
-        parmfilename=getval_nocase('PARAMETERS'//trim(keyword),&
+        filename=getval_nocase('parameters'//trim(keyword),&
      &                                                         __CTX)
-        call system_read_parameters(parmfilename)
+        call system_read_parameters(filename)
         i=i+1
       else
         exit
@@ -165,15 +164,20 @@ module system
      enddo
      system_parameters_initialized=.true.
 ! initialize radii (make sure arrays are allocated)
-     call system_get_vw_radius()
+     call system_get_vw_radius() ! the radius array is not used in dynamics
      system_radii_initialized=.true.
+! initialize velocities
+     if (existtag_nocase('velocities',__CTX)) then
+      filename=getval_nocase('velocities',__CTX);
+      call system_read_velocities(filename);
+     endif
 !
   endif ! parameters
 !
 ! ==== additional options to override or assign charges and radii
 ! charges
-  if (existtag_nocase('charges')) then 
-   p=>system_init_mol_scalar_nocase('charges')
+  if (existtag_nocase('charges',__CTX)) then 
+   p=>system_init_mol_scalar_nocase('charges',__CTX)
    if (associated(p)) then 
     q=p ; deallocate(p)
    else
@@ -181,8 +185,8 @@ module system
    endif
   endif
 ! radii
-  if (existtag_nocase('radii')) then 
-   p=>system_init_mol_scalar_nocase('radii')
+  if (existtag_nocase('radii', __CTX)) then 
+   p=>system_init_mol_scalar_nocase('radii',__CTX)
    if (associated(p)) then 
     q=p ; deallocate(p)
    else
@@ -390,7 +394,7 @@ module system
   select case(coortype)
    case('CHARMM')
     call message(whoami, 'Reading coordinates in CHARMM format from file "'//fname(1:flen)//'".')
-    if (__ME.le.0) call ch_coor_read(fid,r)
+    if (__ME.le.0) call ch_coor_read(fid,r, bfactor)
    case('ATOMID')
     call message(whoami, 'Reading coordinates in free format by atomid from file "'//fname(1:flen)//'".')
     if (__ME.le.0) call atomid_coor_read(fid,r)
@@ -410,12 +414,85 @@ module system
     return
   end select
 !
- if (__ME.le.0) call files_close(fid)
+ __QPRINT(call files_close(fid))
 !
  system_coordinates_initialized=.true.
 !
  end subroutine system_read_coordinates
-!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
+!======================================================================
+ subroutine system_read_velocities(filename)
+ use charmmio
+ use freeio
+ use pdbio
+ __DEP_FILES
+ __DEP_CONST
+!
+#ifdef __PARALLEL
+ __DEP_MULTICOM
+#endif
+!
+#ifdef __PARALLEL
+ int :: ierror
+#endif
+!
+ character(len=*), intent(in) :: filename
+ character(len=vartaglen) :: fname
+ character(len=vartaglen) :: coortype
+ int :: flen
+ int :: fid=iminusone
+ __IAM(SYSTEM_READ_VELOCITIES)
+!
+ fname=filename
+ call adjustleft(fname)
+ flen=len_trim(fname)
+ if (flen.gt.0) then
+  if (__ME.le.0) then ! if me=-1, assume valid serial mode 
+   call files_open(fid,fname(1:flen),'FORMATTED','READ')
+   if (fid.le.0) then 
+    call warning(whoami, 'Cannot open velocity file. Abort.',-1)
+    return
+   endif
+  endif
+ else
+  call warning(whoami, 'Velocity file name not specified. Abort.',-1)
+  return
+ endif
+!
+ if (.not.system_coordinates_initialized) then
+  call warning(whoami, 'Velocity not initialized. Cannot proceed.',-1)
+  return
+ endif
+!
+ coortype=getval_nocase_upper('veltype')
+  select case(coortype)
+   case('CHARMM')
+    call message(whoami, 'Reading velocities in CHARMM format from file "'//fname(1:flen)//'".')
+    if (__ME.le.0) call ch_coor_read(fid,vr)
+   case('ATOMID')
+    call message(whoami, 'Reading velocities in free format by atomid from file "'//fname(1:flen)//'".')
+    if (__ME.le.0) call atomid_coor_read(fid,vr)
+   case('PDB')
+    call message(whoami, 'Reading velocities in PDB format from file "'//fname(1:flen)//'".')
+    if (__ME.le.0) call PDB_read(fid,vr)
+   case('PQR')
+    call message(whoami, 'Reading velocities in PQR format from file "'//fname(1:flen)//'".')
+    if (__ME.le.0) call PQR_read(fid,vr)
+    call warning(whoami, 'PQR format lacks SEGID identifier. This may cause coordinate errors.',0)
+#ifdef __PARALLEL
+ call MPI_BCAST(vr, 3*natom, mpifloat, 0, __COMM, ierror)
+#endif
+!    call coor_check()
+   case default
+    call warning(whoami, 'Unknown velocity file format. Abort.',-1)
+    return
+  end select
+!
+ __QPRINT(call files_close(fid))
+!
+ system_velocities_initialized=.true.
+!
+ end subroutine system_read_velocities
+!===========================================================================
  subroutine system_write_coordinates(filename, which)
  use charmmio
  use freeio
@@ -483,10 +560,10 @@ module system
 !
  end subroutine system_write_coordinates
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
- subroutine system_write_velocities(f); __IMPNONE; character(len=*) :: f; call system_write_coordinates(f,'VEL')
+ subroutine system_write_velocities(f); character(len=*) :: f; call system_write_coordinates(f,'VEL')
  end subroutine system_write_velocities
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
- subroutine system_write_forces(f); __IMPNONE; character(len=*) :: f; call system_write_coordinates(f,'FC')
+ subroutine system_write_forces(f); character(len=*) :: f; call system_write_coordinates(f,'FC')
  end subroutine system_write_forces
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  subroutine system_write_dcd(fid,addheader)
@@ -502,11 +579,7 @@ module system
 !
  if (__ME.le.0) call dcd_write_frame(fid,r,addheader)
  end subroutine
-!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
- subroutine system_read_velocities(fname)
- character(len=*) :: fname
- end subroutine system_read_velocities 
-!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
+!============================================================================
  subroutine system_init_velocities() 
  use rng
  __DEP_OUTPUT
@@ -1119,11 +1192,12 @@ module system
 !
  end subroutine system_PDB_init
 !===========================================================================
- function system_init_mol_scalar_nocase(tag) result(s)
+ function system_init_mol_scalar_nocase(tag, ctx_) result(s)
  use mol_formats
  use charmmio
  use pdbio
  use freeio
+ __DEP_PARSER
 !
  __DEP_CONST
 #ifdef __PARALLEL
@@ -1135,6 +1209,8 @@ module system
  float, pointer :: s(:)
  float, pointer :: otemp(:), btemp(:), rtemp(:,:)
  character(len=*), intent(in) :: tag
+ character(len=*), intent(in), optional :: ctx_
+ character(len=contextnamelen) :: ctx
  character(len=len(tag)) :: tag2
  character(len=vartaglen) :: filename, file_format
  character(len=vartaglen) :: column='NONE'
@@ -1151,27 +1227,28 @@ module system
   if (fatal_warning()) return
  endif
 !
+ if (present(ctx_)) then ; ctx = ctx_ ; else ; ctx=maincontext_name ; endif
 !%%%%%%%%%% check whether the tag exists %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
- if (existtag_nocase(tag2)) then
+ if (existtag_nocase(tag2, ctx)) then
    select case(getval_nocase_upper(tag2))
     case('CONST','CONSTANT')
-     if     (existtag_nocase(tag2(1:l)//'constant')) then
-      allocate(s(natom)) ; s=atof(getval_nocase(tag2(1:l)//'constant'))
-     elseif (existtag_nocase(tag2(1:l)//'const'   )) then
-      allocate(s(natom)) ; s=atof(getval_nocase(tag2(1:l)//'const'   ))
+     if     (existtag_nocase(tag2(1:l)//'constant', ctx)) then
+      allocate(s(natom)) ; s=atof(getval_nocase(tag2(1:l)//'constant', ctx))
+     elseif (existtag_nocase(tag2(1:l)//'const', ctx)) then
+      allocate(s(natom)) ; s=atof(getval_nocase(tag2(1:l)//'const', ctx))
      else
       call warning(whoami, 'Initialization constant for '//tag2(1:l)//' not specified.',-1)
      endif
 !-------------------------------------------------------------------------
     case('FILE')
-     if (existtag_nocase(tag2(1:l)//'file')) then
-      filename=getval_nocase(tag2(1:l)//'file')
+     if (existtag_nocase(tag2(1:l)//'file', ctx)) then
+      filename=getval_nocase(tag2(1:l)//'file', ctx)
       call adjustleft(filename)
       flen=len_trim(filename)
       call message(whoami, 'Will initialize variable '//tag2(1:l)//' from file "'//filename(1:flen)//'"')
 !
-      if (existtag_nocase(tag2(1:l)//'filetype')) then
-        file_format=getval_nocase_upper(tag2(1:l)//'filetype')
+      if (existtag_nocase(tag2(1:l)//'filetype', ctx)) then
+        file_format=getval_nocase_upper(tag2(1:l)//'filetype', ctx)
         ifmt=unknowni
         do j=1,num_mol_format
          if (file_format.eq.mol_format_name(j)) then 
@@ -1186,10 +1263,10 @@ module system
 !
 !===================== COLUMN SPEC =======================
        icol=-1
-       if (existtag_nocase(tag2(1:l)//'column')) then
-        column=getval_nocase_upper(tag2(1:l)//'column')
-       elseif (existtag_nocase(tag2(1:l)//'col')) then
-        column=getval_nocase_upper(tag2(1:l)//'col')
+       if (existtag_nocase(tag2(1:l)//'column', ctx)) then
+        column=getval_nocase_upper(tag2(1:l)//'column', ctx)
+       elseif (existtag_nocase(tag2(1:l)//'col', ctx)) then
+        column=getval_nocase_upper(tag2(1:l)//'col', ctx)
        endif
 !
        select case(column)
@@ -1317,10 +1394,8 @@ module system
        if (noexec(__CTX)) return
 !
 __NULL_COMM_STOP
-__QPRINT
        call message(whoami,'Executing commands within context "'//&
      &                                                            trim(__CTX)//'"')
-!
        do
         command=>get_next_command(__CTX)
         if (.not.associated(command)) exit

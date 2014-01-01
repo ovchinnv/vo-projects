@@ -61,7 +61,7 @@ GLOBALMACROS=-include $(ROOT)/source.defs -include $(ROOT)/contexts.def
 MSG=-include $(ROOT)/source.msg
 CHMSG=-include $(ROOT)/charmm.msg
 TESTMSG=-include $(ROOT)/test.msg
-GLOBALDEPS=$(ROOT)/source.defs $(ROOT)/source.msg $(ROOT)/contexts.def
+GLOBALDEPS=$(ROOT)/source.defs $(ROOT)/source.msg $(ROOT)/contexts.def $(ROOT)/setcomm.def  $(ROOT)/exec.def
 
 MPI_INCLUDE=-I $(MPI_HOME)/include -I $(MPI_HOME)
 MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -pthread -lmpich -lmpichf90 -lmpl # -lmpi -lmpi_f90 -lmpi_f77 # mpich

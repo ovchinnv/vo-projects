@@ -1,5 +1,8 @@
+#define __CONTEXT __DMOLCTX
+#define __CTX __STRING(__CONTEXT)
+#//
 #include "multicom_def.src"
-module molsim
+module dmol
 ! contains setup and details of molecular simulation
 ! this module a proof-of-principle "wrapper" around other modules
 ! Work is underway to make the design more OO.
@@ -14,10 +17,8 @@ module molsim
 
  __IMPNONE
 
- public molsim_init
- public molsim_integrate
-
-#define __CTX __DMOLCTX
+ public dmol_init
+ public dmol_integrate
 
  int, save :: num_iterations
  int, save :: iteration_count                               ! number of MD iterations (persistent)
@@ -29,96 +30,65 @@ module molsim
  character(len=vartaglen), save :: trajectoryoutname, restartoutname, statisticsoutname
  int, save :: trajectoryfid=-1, statisticsfid=-1
 !
- bool, save :: restart, verbose=.false.
- bool, save :: molsim_initialized=.false.
+ bool, save :: restart
+ bool, save :: dmol_initialized=.false.
+ int, save :: msglev, wrnlev
 !
  contains
-!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
- subroutine molsim_init()
+!====================================================================================
+ subroutine dmol_init()
  character(len=vartaglen) :: keyword
  int :: i
 !
- __IAM(MOLSIM_INIT)
- character(len=vartaglen) :: parmfilename, structfilename, coorfilename, velfilename
+ __IAM(DMOL_INIT)
 !
- __GET_OPT_PAR_B('verbose',verbose,.false.,__CTX)
-!%%%%%%%%%%%%%%%%%%% read parameter file(s)%%%%%%%%%%%%%%%%%%%%%%%%
- parmfilename=getval('parameters',__CTX)       ! parameter file(s)
- call system_read_parameters(parmfilename)
- i=2
- do
-  write(keyword,*) i
-  call adjustleft(keyword)
-  if (existtag('parameters'//&
-                             &trim(keyword),__CTX)) then
-   parmfilename=getval('parameters'//&
-                                     &trim(keyword), __CTX)
-   call system_read_parameters(parmfilename)
-   i=i+1
-  else
-   exit
-  endif
- enddo
-!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
- if (verbose) call system_list_parameters()
-!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
- structfilename=getval_nocase('structure',__CTX)     ! structure file
- coorfilename=getval_nocase('coordinates',__CTX)     ! coordinate file
-!
- call system_read_structure(structfilename)
- call system_read_coordinates(coorfilename)
-!
+!initialize system
+ call system_initialize()
+ call system_list_parameters()
  call system_check()     ! check that all parameters are known and whether coordinates/velocities are defined 
  call random_init()      ! initialize random number generator
  call verlet_init()      ! initialize verlet integrator
 !
 ! note that there is no mechanism for restarts -- to be added !
 !
- if (existtag_nocase('velocities',__CTX)) then
-  velfilename=getval_nocase('velocities',__CTX)      ! velocity file
-  call system_read_velocities(velfilename)
- else
+ if (.not. system_velocities_initialized .or. existtag_
   call system_init_velocities()
  endif
 !
- if (verbose) then
-  call system_compute() ! if langevin on, already computed; ignore for now
-  call system_printe()
- endif
+ call message(whoami, 'Testing energy calculation:',msglev)
+!
+ call system_compute() ! if langevin on, already computed; ignore for now
+ call system_printe()
 !
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% request a few parameters from parser %%%%%%%%%%%%%%%%%%%%%%%%%%%%
 #define __INT
 #define __MINUSERR
-#define __WHOAMI whoami
-#define __BUFFER keyword
-#ifdef __WARNIFMISSING
-#undef __WARNIFMISSING
-#endif
+#undef  __WARNIFMISSING
 !
 #define __VAR	outfreq(printf)
 #define __TAG	printfreq
 #define __NAME	Print frequency
-#include "input_macros.src"
+#include "parser/parser_macro1.src"
 !
 #define __VAR	outfreq(outf)
 #define __TAG	outputfreq
 #define __NAME	Output frequency
-#include "input_macros.src"
+#include "parser/parser_macro1.src"
 !
 #define __VAR	outfreq(trajf)
 #define __TAG	trajectoryfreq
 #define __NAME	Trajectory output frequency
-#include "input_macros.src"
+#include "parser/parser_macro1.src"
 !
 #define __VAR	outfreq(resf)
 #define __TAG	restartfreq
 #define __NAME	Restart file output frequency
-#include "input_macros.src"
+#include "parser/parser_macro1.src"
 !
 #define __VAR	outfreq(statf)
 #define __TAG	statisticsfreq
 #define __NAME	Statistics output frequency
-#include "input_macros.src"
+#include "parser/parser_macro1.src"
 !
  if (outfreq(trajf).gt.0) then 
   if (existtag_nocase('trajectoryfile',__CTX)) then
@@ -150,14 +120,14 @@ module molsim
  else
 !
   iteration_count=0
-  molsim_initialized=.true.
+  dmol_initialized=.true.
 !
  endif
 !
- end subroutine molsim_init
+ end subroutine dmol_init
 !
 !%%%%%%%%%%%%%%%%%%%%%%% integrate %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
- subroutine molsim_integrate(numiter)
+ subroutine dmol_integrate(numiter)
 #ifdef __PARALLEL
  __DEP_MULTICOM
 #endif
@@ -167,7 +137,7 @@ module molsim
  bool :: addheader
  character(len=6) :: action
 !
- __IAM(MOLSIM_INTEGRATE)
+ __IAM(dmol_INTEGRATE)
  __DECLARE_MSGBUF
 !
 #include "multicom_def.src"
@@ -177,19 +147,12 @@ module molsim
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%% get number of iterations from input file %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 #define __INT
 #define __MINUSERR
-#ifndef  __WARNIFMISSING
 #define  __WARNIFMISSING
-#endif
-#define __WHOAMI whoami
-#ifdef __BUFFER
-#undef __BUFFER
-#endif
-#define __BUFFER _MSGBUF (1)
 !
 #define __VAR	num_iterations
 #define __TAG	iterations
 #define __NAME	Number of simulation steps
-#include "input_macros.src"
+#include "parser/parser_macro1.src"
 !
  endif ! numiter
 !%%%%%%%%%%%%%%%%%%%%%%%%%%% get number of iterations from input file %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -253,6 +216,6 @@ module molsim
  if (existtag_nocase('finalcoordinates',__CTX)) call system_write_coordinates(getval_nocase('finalcoordinates',__CTX))
  if (existtag_nocase('finalvelocities',__CTX))  call system_write_velocities(getval_nocase('finalvelocities',__CTX))
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
- end subroutine molsim_integrate
+ end subroutine dmol_integrate
 
-end module molsim
+end module dmol

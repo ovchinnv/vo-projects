@@ -1,5 +1,5 @@
 ROOT=..
-OBJS=stats.o sysinfo.o system.o sysmanip.o verlet.o molsim.o
+OBJS=stats.o sysinfo.o system.o sysmanip.o verlet.o dmol.o
 NAME=dynamol
 INCLUDES=-I $(ROOT)/include
 DEPS=output parser vectors files multicom random bestfit constants datatypes
