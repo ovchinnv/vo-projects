@@ -1,5 +1,4 @@
-#define __CONTEXT __DMOLCTX
-#define __CTX __STRING(__CONTEXT)
+#define __CTX __STRING(__DMOLCTX)
 #//
 #include "multicom_def.src"
 module dmol
@@ -18,7 +17,9 @@ module dmol
  __IMPNONE
 
  public dmol_init
+ public dmol_done
  public dmol_integrate
+ public dmol_exec
 
  int, save :: num_iterations
  int, save :: iteration_count                               ! number of MD iterations (persistent)
@@ -32,35 +33,47 @@ module dmol
 !
  bool, save :: restart
  bool, save :: dmol_initialized=.false.
- int, save :: msglev, wrnlev
+!
+ int :: msglev = 1
 !
  contains
 !====================================================================================
  subroutine dmol_init()
  character(len=vartaglen) :: keyword
- int :: i
+ int :: l
 !
  __IAM(DMOL_INIT)
 !
 !initialize system
  call system_initialize()
  call system_list_parameters()
- call system_check()     ! check that all parameters are known and whether coordinates/velocities are defined 
  call random_init()      ! initialize random number generator
  call verlet_init()      ! initialize verlet integrator
 !
 ! note that there is no mechanism for restarts -- to be added !
 !
- if (.not. system_velocities_initialized .or. existtag_
-  call system_init_velocities()
- endif
+ if (existtag_nocase('init_temp', __CTX)) then
+  if (system_velocities_initialized) then 
+   call warning(whoami, 'Starting velocities and initial temperature cannot both be specified. Abort.',-1)
+  else
+   call system_init_velocities()
+  endif ! velocities initialized
+ else
+  call warning(whoami, 'Either starting velocities or initial temperature must be specified. Abort.',-1)
+ endif ! init_temp
+!
+ if (fatal_warning()) return
 !
  call message(whoami, 'Testing energy calculation:',msglev)
 !
+ call system_check()   ! check that all parameters are known and whether coordinates/velocities are defined 
  call system_compute() ! if langevin on, already computed; ignore for now
  call system_printe()
 !
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% request a few parameters from parser %%%%%%%%%%%%%%%%%%%%%%%%%%%%
+! define context for macros below
+#define __CONTEXT __CTX
+!
 #define __INT
 #define __MINUSERR
 #undef  __WARNIFMISSING
@@ -126,6 +139,12 @@ module dmol
 !
  end subroutine dmol_init
 !
+!======================================
+ subroutine dmol_done()
+  call verlet_done()
+  dmol_initialized=.false.
+ end subroutine dmol_done
+!======================================
 !%%%%%%%%%%%%%%%%%%%%%%% integrate %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  subroutine dmol_integrate(numiter)
 #ifdef __PARALLEL
@@ -136,9 +155,10 @@ module dmol
  int :: minfreq, iterations, ncycles, i
  bool :: addheader
  character(len=6) :: action
+ int :: l
+ character(len=vartaglen) :: keyword
 !
- __IAM(dmol_INTEGRATE)
- __DECLARE_MSGBUF
+ __IAM(DMOL_INTEGRATE)
 !
 #include "multicom_def.src"
 !
@@ -159,8 +179,10 @@ module dmol
 !
  if (any(outfreq>0)) then ; minfreq=minval(outfreq,1,outfreq>0); else; minfreq=num_iterations; endif ! minimum frequency
  if (minfreq.ne.0) then
-  if (sum(mod(outfreq,minfreq)).gt.0) &
- & call warning(whoami, 'One of the frequency values must divide the others.',-1)
+  if (sum(mod(outfreq,minfreq)).gt.0) then
+   call warning(whoami, 'One of the frequency values must divide the others. Abort.',-1);
+   return
+  endif
  else
   minfreq=1 ! in this case, niter nust be zero (see above), so ncycle will be zero below
  endif
@@ -217,5 +239,19 @@ module dmol
  if (existtag_nocase('finalvelocities',__CTX))  call system_write_velocities(getval_nocase('finalvelocities',__CTX))
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  end subroutine dmol_integrate
+!=================================================================================
+!
+#ifdef __CONTEXT
+#undef __CONTEXT
+#endif
+#define __CONTEXT __DMOLCTX
+#define _IFS1 'INIT','INITIALIZE'
+#define _DOS1 init
+#define _IFS2 'SOLVE','RUN','EXEC'
+#define _DOS2 integrate
+#define _IFS4 'DONE','STOP','END'
+#define _DOS4 done
+#include "exec.def"
+!=================================================================================
 
 end module dmol

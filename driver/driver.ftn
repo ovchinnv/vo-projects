@@ -10,7 +10,11 @@
 #define __ME 0
 #define _COMMA
 #endif
+#ifdef __QPRINT
+#undef __QPRINT
+#endif
 #define __QPRINT qprint=(__ME.eq.0)
+
 #ifdef __TIMER
 #define __TIMESTAMP(__DESCRIPTION) itime=itime+1; time(itime)=timer_stamp(mpe_timer) ; task(itime)=__STRING(__DESCRIPTION);
 #else
@@ -40,14 +44,19 @@ PROGRAM MUPHEN ! MUlti-PHysics-ENvironment
   use files
   use continuum
   use state
+#ifdef __DMOL
+  use dmol
+  use system
+#endif
 !
   __IMPNONE
 !======================= variables
   __IAM(MPE Manager)
   int :: i
   int :: numarg
-  character(len=80) :: filename, fname
-  int :: flen
+  character(len=vartaglen) :: keyword, filename, fname
+  character(len=vartaglen), pointer, dimension(:) :: inits, execs
+  int :: l, flen
   int :: fid=-1 
 !
 #ifdef __TIMER
@@ -112,51 +121,81 @@ PROGRAM MUPHEN ! MUlti-PHysics-ENvironment
   if (__ME.le.0) call files_close(fid)
 ! *********************************************************************************************************
 ! now that the input has been parsed, we first see if output parameters changed
-  if (existtag_nocase('minwarnlev',__OUTCTX))    call set_minwarnlev   (atoi(getval('minwarnlev',__OUTCTX)))
+  if (existtag_nocase('minwarnlev'   ,__OUTCTX)) call set_minwarnlev   (atoi(getval('minwarnlev',__OUTCTX   )))
   if (existtag_nocase('minmessagelev',__OUTCTX)) call set_minmessagelev(atoi(getval('minmessagelev',__OUTCTX)))
-  if (existtag_nocase('minerrorlev',__OUTCTX))   call set_minerrorlev  (atoi(getval('minerrorlev',__OUTCTX)))
+  if (existtag_nocase('minerrorlev'  ,__OUTCTX)) call set_minerrorlev  (atoi(getval('minerrorlev',__OUTCTX  )))
 !
 ! *********************************************************************************************************
   __TIMESTAMP(Parsing time)
 !
 #ifdef __PARALLEL
 !======= now call multicom to set up various communicators before going further
-#if __DEBUG
-  call message(whoami, 'RUNNING MULTICOM EXECUTION STACK', __DBGLEV)
-#endif
-  __EXEC(multicom)
-!
+  __EXEC(MULTICOM)
   __TIMESTAMP(Multicom execution time)
 #endif
-! misc. initialization
-!
-#if __DEBUG
-  call message(whoami, 'INITIALIZING CONTINUUM', __DBGLEV)
-#endif
- __INIT(continuum)
-#if __DEBUG
-  call message(whoami, 'INITIALIZING STATE', __DBGLEV)
-#endif
- __INIT(state)
-!
-!====== now initialize slave codes by scanning the context list
-!  call muphen_init_codes()
+! ===========================================
+! check for custom initialization/execution order
+  if (existtag_nocase('init')) then 
+   keyword=getval_nocase('init')
+   l=numword(keyword)
+   allocate(inits(l))
+   do i=1, l
+    inits(i)=pop_string(keyword) ; call toupper(inits(i));
+   enddo
+  else
+   l=2
+   allocate(inits(l))
+   inits(1)='CONTINUUM'; inits(2)='STATE';
+  endif
+! perform initialization
+#define __CASEINIT(__WHAT) case (__STRING(__WHAT) );__INIT(__WHAT)
+  do i=1,l
+   select case(inits(i))
+    __CASEINIT(CONTINUUM)
+    __CASEINIT(STATE)
+   case default
+    call warning(whoami, 'Invalid context "'//trim(inits(i))//'" specified for initialization. Skipping.',-1)
+   end select
+  enddo
+  __ERRORCHECK
+  if(associated(inits)) deallocate(inits);
   __TIMESTAMP(Basic initialization time)
-!====== launch codes
-!======= continuum execution, e.g. print grid
-#if __DEBUG
-  call message(whoami, 'RUNNING CONTINUUM EXECUTION STACK', __DBGLEV)
+! ===========================================
+! check for custom execution order
+  if (existtag_nocase('exec')) then 
+   keyword=getval_nocase('exec')
+   l=numword(keyword)
+   allocate(execs(l))
+   do i=1, l
+    execs(i)=pop_string(keyword) ; call toupper(execs(i));
+   enddo
+  else
+   l=4
+   allocate(execs(l))
+   execs(1)='CONTINUUM'; execs(2)='CHES'; execs(3)='SYSTEM' ; execs(4)='DMOL';
+  endif
+! perform initialization
+#define __CASEXEC(__WHAT) case (__STRING(__WHAT) );__EXEC(__WHAT)
+  do i=1,l
+   select case(execs(i))
+    __CASEXEC(CONTINUUM)
+#ifdef __CHES
+    __CASEXEC(CHES)
 #endif
-  __EXEC(continuum)
-!====== CHES
-#if __DEBUG
-  call message(whoami, 'RUNNING CHES EXECUTION STACK', __DBGLEV)
+!#ifdef __EDDIE
+!    __CASEXEC(EDDIE)
+!#endif
+#ifdef __DMOL
+    __CASEXEC(SYSTEM)
+    __CASEXEC(DMOL)
 #endif
-  __EXEC(ches)
-!  __EXEC(eddie)
-!
-!
-  __TIMESTAMP(Other code execution time)
+   case default
+    call warning(whoami, 'Invalid context "'//trim(execs(i))//'" specified for execution. Skipping.',-1)
+   end select
+  enddo
+  __ERRORCHECK
+  if(associated(execs)) deallocate(execs);
+  __TIMESTAMP(Code execution time)
 
 !====== cleanup : not sure how to do this, and whether this is necessary
 !  call muphen_cleanup_codes()
@@ -169,13 +208,9 @@ PROGRAM MUPHEN ! MUlti-PHysics-ENvironment
 !       call files_done() ! close all units
 !       call parser_done()
 !
-
 #ifdef __PARALLEL
 !======= now call multicom to set up various communicators before going further
-#if __DEBUG
-  call message(whoami, 'FINALIZING MULTICOM', __DBGLEV)
-#endif
-  call multicom_cleanup() ! NOTE : multicom will not call mpi_finalize (will only call mpi_init if needed)
+  __STOP(MULTICOM) ! NOTE : multicom will not call mpi_finalize (will only call mpi_init if needed)
 !
   __TIMESTAMP(Parallel finalization time)
 #endif
@@ -186,6 +221,10 @@ PROGRAM MUPHEN ! MUlti-PHysics-ENvironment
  call message(whoami,'Total time'//char(9)//': '//ftoa(timer_elapsed_total(mpe_timer)));
  call message(whoami,'===============================================')
 #endif
+!====== stop timer
+#ifdef __TIMER
+  __STOP(TIMER)
+#endif
 !
 #ifdef __PARALLEL
 #if __DEBUG
@@ -193,11 +232,6 @@ PROGRAM MUPHEN ! MUlti-PHysics-ENvironment
 #endif
  call mpi_initialized(mpiinit,i)
  if (mpiinit) call mpi_finalize(i)
-#endif
-!====== stop timer
-#ifdef __TIMER
-  call message(whoami, 'FINALIZING TIMER', __DBGLEV)
-  call timer_done()
 #endif
 !
 !

@@ -63,23 +63,26 @@ module system
  public system_check
  public system_get_vw_radius  ! populate radius array (above) from nonbonded parameters
  public system_printe
- public system_read_coordinates
  public system_init_mol_scalar_nocase
- public system_write_dcd
- public system_write_coordinates
- public system_read_velocities
  public system_init_velocities
+ public system_read_coordinates
+ public system_read_velocities
+ public system_write_coordinates
+ public system_write_velocities
+ public system_write_dcd
+ public system_write_restart
  public system_compute
  public system_getind        ! return the set of atomic indices that match a valid selection
 ! public system_getind_charmm ! selection routine with charmm-compatible syntax
  public system_done
+ public system_exec
 
  contains
 !================================================================================
  subroutine system_initialize()
   __IAM(SYSTEM_INITIALIZE)
 !
-  character(len=vartaglen) :: param_type, struct_type
+  character(len=vartaglen) :: struct_type
   character(len=vartaglen) :: filename
   character(len=vartaglen) :: keyword
 !
@@ -110,7 +113,7 @@ module system
 #include "parser/parser_macro1.src"
 !
   select case(struct_type);
-   case('CHARMM, XPLOR');
+   case('CHARMM', 'XPLOR');
     call system_read_structure(filename)
     system_structure_initialized=.true.
     system_charges_initialized=.true.
@@ -125,7 +128,7 @@ module system
     system_coordinates_initialized=.true.
     system_radii_initialized=.true.
     system_charges_initialized=.true.
-   case('CHARMM');
+   case('COR','CRD');
     call system_PDB_init(filename,'CHARMM');
     system_PDB_initialized=.true.
     system_coordinates_initialized=.true.
@@ -337,6 +340,7 @@ module system
  character(len=vartaglen) :: coortype
  int :: flen
  bool :: qinit
+ bool :: qnone
  int :: fid=iminusone
  __IAM(SYSTEM_READ_COORDINATES)
 !
@@ -344,22 +348,31 @@ module system
  call adjustleft(fname)
  flen=len_trim(fname)
  if (flen.gt.0) then
+!
+! allow "none"
+  coortype=fname; call toupper(coortype); qnone=coortype.eq.'NONE';
+!
   if (__ME.le.0) then ! if me=-1, assume valid serial mode 
-   call files_open(fid,fname(1:flen),'FORMATTED','READ')
-   if (fid.le.0) then 
-    call warning(whoami, 'Cannot open coordinate file. Abort.',-1)
-    return
-   endif
-  endif
+   if (qnone) then
+    call warning(whoami, 'Will try to proceed without coordinates.',0)
+   else
+    call files_open(fid,fname(1:flen),'FORMATTED','READ')
+    if (fid.le.0) then 
+     call warning(whoami, 'Cannot open coordinate file. Abort.',-1)
+    endif
+   endif ! qnone
+  endif ! me
  else
   call warning(whoami, 'Coordinate file name not specified. Abort.',-1)
   return
  endif
 !
+ if (fatal_warning(__COMM)) return
+!
  if (.not.(system_structure_initialized.or.system_PDB_initialized)) then
   call warning(whoami, 'Structure not initialized. Cannot proceed.',-1)
-  return
  endif
+ if (fatal_warning(__COMM)) return
 !
 !allocate local arrays & copy mass and charge from structure info
 !note: variables are stored inside state module
@@ -389,8 +402,9 @@ module system
  occupancy=unknownf;
  bfactor=unknownf;
 !
+ if (.not.qnone) then
 !    call parser
- coortype=getval_nocase_upper('coortype')
+  coortype=getval_nocase_upper('coortype')
   select case(coortype)
    case('CHARMM')
     call message(whoami, 'Reading coordinates in CHARMM format from file "'//fname(1:flen)//'".')
@@ -406,17 +420,19 @@ module system
     if (__ME.le.0) call PQR_read(fid,r,q,radius)
     call warning(whoami, 'PQR format lacks SEGID identifier. This may cause coordinate errors.',0)
 #ifdef __PARALLEL
- call MPI_BCAST(r, 3*natom, mpifloat, 0, __COMM, ierror)
+    call MPI_BCAST(r, 3*natom, mpifloat, 0, __COMM, ierror)
 #endif
 !    call coor_check()
    case default
     call warning(whoami, 'Unknown coordinate file format. Abort.',-1)
     return
-  end select
+   end select
 !
- __QPRINT(call files_close(fid))
+   __QPRINT(call files_close(fid))
 !
- system_coordinates_initialized=.true.
+ endif ! qnone
+!
+ system_coordinates_initialized=.true. ! note that if qnone=1, arrays are allocated but set to unknown values
 !
  end subroutine system_read_coordinates
 !======================================================================
@@ -565,6 +581,38 @@ module system
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  subroutine system_write_forces(f); character(len=*) :: f; call system_write_coordinates(f,'FC')
  end subroutine system_write_forces
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+ subroutine system_write_restart(filename)
+ character(len=*) :: filename
+ character(len=len(filename)) :: fname
+ __IAM(SYSTEM_WRITE_RESTART)
+ int :: fid=-1, flen
+ float, pointer :: rout(:,:)
+!
+ if (.not.system_parameters_initialized) call warning(whoami, 'Parameters not initialized. Cannot proceed.' ,-1)
+ if (.not.system_structure_initialized)  call warning(whoami, 'Structure not initialized. Cannot proceed.'  ,-1)
+ if (.not.system_coordinates_initialized)call warning(whoami, 'Coordinates not initialized. Cannot proceed.',-1)
+ if (.not.system_velocities_initialized) call warning(whoami, 'Velocities not initialized. Cannot proceed.',-1)
+ if (fatal_warning()) return
+!
+ fname=filename
+ call adjustleft(fname)
+ flen=len_trim(fname)
+ if (flen.gt.0) then
+  if (__ME.le.0) then 
+   call files_open(fid, name_=fname(1:flen), form_='FORMATTED', action_='WRITE')
+   if (fid.le.0) call warning(whoami, 'Cannot open input file. Abort.',-1)
+  endif ! me
+ else
+  call warning(whoami, 'File name not specified. Abort.',-1)
+ endif
+!
+ if (fatal_warning()) return
+!
+! write restart file :
+! (nothing yet)
+!
+ end subroutine system_write_restart
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  subroutine system_write_dcd(fid,addheader)
  use charmmio
@@ -813,20 +861,11 @@ module system
 !
  __IAM(SYSTEM_GET_VW_RADIUS)
 !
- if (.not.system_parameters_initialized) then
-   call warning(whoami, 'Parameters not initialized. Cannot proceed.',-1)
-  return
- endif
+ if (.not.system_parameters_initialized) call warning(whoami, 'Parameters not initialized. Cannot proceed.' ,-1)
+ if (.not.system_structure_initialized)  call warning(whoami, 'Structure not initialized. Cannot proceed.'  ,-1)
+ if (.not.system_coordinates_initialized)call warning(whoami, 'Coordinates not initialized. Cannot proceed.',-1)
 !
- if (.not.system_structure_initialized) then
-   call warning(whoami, 'Structure not initialized. Cannot proceed.',-1)
-  return
- endif
-!
- if (.not.system_coordinates_initialized) then
-   call warning(whoami, 'Coordinates not initialized. Cannot proceed.',-1)
-  return
- endif
+ if (fatal_warning()) return
 !
 ! note code duplication from system_check()
  do i=1,atoms%last ! structure
@@ -989,9 +1028,13 @@ module system
   call adjustleft(fname)
   flen=len_trim(fname)
   if (flen.gt.0) then
-   open(fid, file=fname(1:flen), status='OLD', form='FORMATTED')
+   call files_open(fid,fname(1:flen),'FORMATTED','READ')
+   if (fid.le.0) then 
+    call warning(whoami, 'Cannot open parameter file. Abort.',-1)
+    return
+   endif
   else
-   call error(whoami, 'STRUCTURE FILE NAME NOT SPECIFIED. ABORT.',-1)
+   call warning(whoami, 'Structure file name not specified. Abort.',-1)
    return
   endif
 !
@@ -1409,6 +1452,7 @@ __NULL_COMM_STOP
          case('ENERGY') ; call system_compute(.false.) ; call system_printe();
 !         case('OUTPUT') ; call system_output()
          case('DONE','STOP','END') ; call system_done()
+         case('LSPARAM','LISTPARAM','LIST_PARAM','LS_PARAM', 'LIST_PARAMETERS', 'LIST PARAMETERS') ; call system_list_parameters()
          case default; call warning(whoami, 'Unknown command. Skipping.',-1)
         end select
 !
