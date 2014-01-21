@@ -1,8 +1,8 @@
 ROOT=..
-OBJS=stats.o sysinfo.o system.o sysmanip.o verlet.o dmol.o
+OBJS=stats.o sysinfo.o system.o sysmanip.o verlet.o dmol.o pca.o
 NAME=dynamol
 INCLUDES=-I $(ROOT)/include
-DEPS=output parser vectors files multicom random bestfit constants datatypes
+DEPS=output parser vectors files multicom random bestfit constants state parselist
 SUBDIRS=param struc coor compute
 DEPS+=$(addprefix $(NAME)/,$(SUBDIRS))
 
@@ -20,10 +20,10 @@ LOCALDEPS=source.defs multicom_def.src
 
 include $(ROOT)/Makefile.inc
 
-sysinfo.o sysmanip.o : system.o
-system.o: stats.o multicom_def.src $(DIRS)
+sysinfo.o sysmanip.o pca.o : system.o
+system.o: stats.o multicom_def.src
 verlet.o: system.o
-system.F90: parser/parser_macro1.src
+system.F90 pca.F90 dmol.F90 : parser/parser_macro1.src files/fopen.def
 
 libraries : libdynamol.a
 
