@@ -223,12 +223,13 @@ subroutine pca_compute()
  use charmmio
 __IAM(PCA_COMPUTE)
 #include "files/fopen.def"
- int :: fid, ioerr, iframe, nframes, i
+ int :: fid, ioerr, iframe, nframes, i, fido
  float, pointer :: r(:,:), rref(:,:)
  int, pointer :: freeatoms(:)
  real*8, pointer :: unitcell(:)
  float :: t, u(3,3)=Id3;
  bool :: readheader = .true.
+ character(len=10) :: tmpdcd='__dmol.tmp'
 
  if (.not. pca_initialized) then
   call warning (whoami, 'PCA module not initialized. Cannot proceed.',-1)
@@ -248,13 +249,19 @@ __IAM(PCA_COMPUTE)
 !
 ! skip first_frame-1 frames, return number of frames read in iframe
   nframes=0
-  ioerr=dcd_read_frame(fid, ravg, readheader, freeatoms, unitcell, first_frame, iframe); readheader=.false. 
-write(0,*) first_frame, iframe, last_frame, associated(freeatoms), associated(unitcell), fid, ioerr
+  ioerr=dcd_read_frame(fid, ravg, readheader, freeatoms, unitcell, first_frame, iframe);
+!write(0,*) first_frame, iframe, last_frame, associated(freeatoms), associated(unitcell), fid, ioerr
   if (ioerr.ne.0) then
    call warning(whoami, 'Error reading first frame (#'//itoa(first_frame)//'). Abort.',-1); return
   else
    allocate(rref(3,natoms), r(3,natoms))
    rref=ravg; __INC(nframes);
+! open new trajectory file that will contain only the requested frames and th requested atoms
+   call message(whoami,'Opening temporary trajectory file')
+__FOPEN(tmpdcd,'UNFORMATTED','WRITE',fido)
+   ioerr=dcd_write_frame(fido, r, readheader, freeatoms, unitcell); readheader=.false. ;
+   if (ioerr.ne.0) call warning(whoami, 'Trajectory write failed with IOSTAT='//itoa(ioerr)//'. Abort.',-1)
+   if (fatal_warning(__COMM)) return
 !
    do while (( iframe+stride_frame<=last_frame ) .or. last_frame<0) ! read until frame range exceeded, or EOF.
     ioerr=dcd_read_frame(fid, r, readheader, freeatoms, unitcell, stride_frame, i); iframe=iframe+i ! keep track of the number of frames
@@ -277,6 +284,8 @@ write(0,*) first_frame, iframe, last_frame, associated(freeatoms), associated(un
    enddo ! while
    call message(whoami,'Read '//itoa(nframes)//' trajectory frames.')
 
+ call files_close(fid) 
+ call files_close(fido)
 
   endif ! ioerr.ne.0 (first frame)
 !

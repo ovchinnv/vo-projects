@@ -436,13 +436,15 @@ module charmmio
 !
  end subroutine ch_coor_write
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
- subroutine dcd_write_frame(fid, r, addheader, freeatoms)
+ function dcd_write_frame(fid, r, addheader, freeatoms, unitcell) result(ioerr)
+ __DEP_CONST
  __IMPNONE
  int :: fid
- int :: natom, i
+ int :: i
  float :: r(:,:)
  bool :: addheader
  int, optional :: freeatoms(:)
+ real*8, optional :: unitcell(6)
  __IAM(DCD_WRITE_FRAME)
 !
  integer*4, parameter :: ntitle=1
@@ -450,13 +452,22 @@ module charmmio
  integer*4 :: n, nfree
  integer*4 :: idum(20)=0
  character(len=4) :: header='CORD'
+ int :: ioerr
+ bool :: qdimswap ! whether the passed coordinate array has cartesian components in the second position
 !
- natom=size(r,2)
- n=natom
+ if (size(r,2).eq.3) then
+  qdimswap=.true.
+  n=size(r,1)
+ elseif (size(r,1).eq.3) then
+  qdimswap=.false.
+  n=size(r,2)
+ else
+  call warning(whoami, 'Coordinate data must be 3D. Abort.',-1) ; return
+ endif
 !
  if (present(freeatoms)) then 
   if ( any(freeatoms.gt.n.or.freeatoms.lt.1) ) then
-   call warning(whoami, 'Some free atom indices are out of range. Will use all atoms. Abort.',0)
+   call warning(whoami, 'Some free atom indices are out of range. Abort.',-1)
    return
   else
    nfree=size(freeatoms) 
@@ -464,34 +475,56 @@ module charmmio
  else 
   nfree=n 
  endif
-
 !
  idum(1)=1
  if (addheader) then
-  write(fid) header, idum 
+  idum(1)=1
+  idum(9)=n-nfree ! number of fixed atoms
+  if (present(unitcell)) idum(11)=ione
+  write(fid, IOSTAT=ioerr, ERR=888) header, idum 
   title(1)='* DCD TRAJECTORY FILE WRITTEN BY DYNAMO PROGRAM'
-  write(fid) ntitle, (title(i), i=1,ntitle)
-  write(fid) n
-  if (nfree.ne.n) write(fid) freeatoms
-  write(fid) real(r(1,:))
-  write(fid) real(r(2,:))
-  write(fid) real(r(3,:))
- else
-  if (nfree.ne.n) then
-   write(fid) real(r(1,freeatoms))
-   write(fid) real(r(2,freeatoms))
-   write(fid) real(r(3,freeatoms))
+  write(fid, IOSTAT=ioerr, ERR=888) ntitle, (title(i), i=1,ntitle)
+  write(fid, IOSTAT=ioerr, ERR=888) n
+  if (nfree.ne.n) write(fid, IOSTAT=ioerr, ERR=888) freeatoms
+  if (present(unitcell)) write(fid, IOSTAT=ioerr, ERR=888) unitcell
+  if (qdimswap) then
+   write(fid, IOSTAT=ioerr, ERR=888) real(r(:,1))
+   write(fid, IOSTAT=ioerr, ERR=888) real(r(:,1))
+   write(fid, IOSTAT=ioerr, ERR=888) real(r(:,1))
   else
-   write(fid) real(r(1,:))
-   write(fid) real(r(2,:))
-   write(fid) real(r(3,:))
+   write(fid, IOSTAT=ioerr, ERR=888) real(r(1,:))
+   write(fid, IOSTAT=ioerr, ERR=888) real(r(1,:))
+   write(fid, IOSTAT=ioerr, ERR=888) real(r(3,:))
+  endif
+ else
+  if (present(unitcell)) write(fid, IOSTAT=ioerr, ERR=888) unitcell
+  if (nfree.ne.n) then
+   if (qdimswap) then
+    write(fid, IOSTAT=ioerr, ERR=888) real(r(freeatoms,1))
+    write(fid, IOSTAT=ioerr, ERR=888) real(r(freeatoms,2))
+    write(fid, IOSTAT=ioerr, ERR=888) real(r(freeatoms,3))
+   else
+    write(fid, IOSTAT=ioerr, ERR=888) real(r(1,freeatoms))
+    write(fid, IOSTAT=ioerr, ERR=888) real(r(2,freeatoms))
+    write(fid, IOSTAT=ioerr, ERR=888) real(r(3,freeatoms))
+   endif
+  else
+   if (qdimswap) then
+    write(fid, IOSTAT=ioerr, ERR=888) real(r(:,1))
+    write(fid, IOSTAT=ioerr, ERR=888) real(r(:,2))
+    write(fid, IOSTAT=ioerr, ERR=888) real(r(:,3))
+   else
+    write(fid, IOSTAT=ioerr, ERR=888) real(r(1,:))
+    write(fid, IOSTAT=ioerr, ERR=888) real(r(2,:))
+    write(fid, IOSTAT=ioerr, ERR=888) real(r(3,:))
+   endif
   endif ! nfree
  endif
 !
+ 888 continue ! write error jumps here
+! call message(whoami, 'DCD frame written.')
 !
- call message(whoami, 'DCD frame written.')
-!
- end subroutine dcd_write_frame
+ end function dcd_write_frame
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  function dcd_read_frame(fid, r, readheader, freeatoms, unitcell, stride_, iframe) result(ioerr)
  __DEP_CONST
