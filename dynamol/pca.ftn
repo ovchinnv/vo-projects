@@ -35,6 +35,7 @@ module pca
  int :: stride_frame, first_frame, last_frame
  int :: natoms=-1
  float :: temperature ! quasiharmonic temperature
+ float :: bfit_tol ! tolerance for iterative bestfit
 ! data arrays
  float, pointer :: ravg(:,:), rcov(:,:), eval(:), evec(:,:), wgt(:)
 !
@@ -166,6 +167,12 @@ module pca
 #define __DEFAULT_VAL 300.0d0
 #include "parser/parser_macro1.src"
 !
+#define __VAR	bfit_tol
+#define __TAG	bestfit_tol
+#define __NAME	Tolerance for iterative bestfit calculation
+#define __DEFAULT_VAL __ERRTOL*100d0
+#include "parser/parser_macro1.src"
+!
 ! process bestfit
  call toupper(sbfit);
  select case(sbfit)
@@ -221,6 +228,7 @@ end subroutine pca_done
 !============================
 subroutine pca_compute()
  use charmmio
+ __DEP_CONST
 __IAM(PCA_COMPUTE)
 #include "files/fopen.def"
  int :: fid, ioerr, iframe, nframes, i, fido
@@ -228,6 +236,7 @@ __IAM(PCA_COMPUTE)
  int, pointer :: freeatoms(:)
  real*8, pointer :: unitcell(:)
  float :: t, u(3,3)=Id3;
+ float :: rmsdavg ! rmsd between successive average structures (for iterative bestfit)
  bool :: readheader = .true.
  character(len=10) :: tmpdcd='__dmol.tmp'
 
@@ -252,49 +261,79 @@ __IAM(PCA_COMPUTE)
   ioerr=dcd_read_frame(fid, ravg, readheader, freeatoms, unitcell, first_frame, iframe);
 !write(0,*) first_frame, iframe, last_frame, associated(freeatoms), associated(unitcell), fid, ioerr
   if (ioerr.ne.0) then
-   call warning(whoami, 'Error reading first frame (#'//itoa(first_frame)//'). Abort.',-1); return
-  else
-   allocate(rref(3,natoms), r(3,natoms))
-   rref=ravg; __INC(nframes);
+   call warning(whoami, 'Error reading first frame (#'//itoa(first_frame)//'). Abort.',-1); goto 999
+  endif
+!
+  allocate(rref(3,natoms), r(3,natoms))
+  rref=ravg; __INC(nframes);
 ! open new trajectory file that will contain only the requested frames and th requested atoms
    call message(whoami,'Opening temporary trajectory file')
 __FOPEN(tmpdcd,'UNFORMATTED','WRITE',fido)
-   ioerr=dcd_write_frame(fido, r, readheader, freeatoms, unitcell); readheader=.false. ;
-   if (ioerr.ne.0) call warning(whoami, 'Trajectory write failed with IOSTAT='//itoa(ioerr)//'. Abort.',-1)
-   if (fatal_warning(__COMM)) return
+  ioerr=dcd_write_frame(fido, r, readheader, freeatoms); readheader=.false. ;
+  if (ioerr.ne.0) call warning(whoami, 'Trajectory write failed with IOSTAT='//itoa(ioerr)//'. Abort.',-1)
+!write(0,*) ioerr, fatal_warning(__COMM)
+  if (fatal_warning(__COMM)) goto 999
 !
-   do while (( iframe+stride_frame<=last_frame ) .or. last_frame<0) ! read until frame range exceeded, or EOF.
+  do while (( iframe+stride_frame<=last_frame ) .or. last_frame<0) ! read until frame range exceeded, or EOF.
     ioerr=dcd_read_frame(fid, r, readheader, freeatoms, unitcell, stride_frame, i); iframe=iframe+i ! keep track of the number of frames
 !write(0,*) iframe, stride_frame, ioerr
     if (ioerr.eq.0) then ! process frame 
      if (qbfit) call RMSBestFit(r,rref,wgt,u, QDIMSWAP_=.true.);
      __INC(nframes)
      t=one / (nframes)
+! write frame to output dcd file (before rotation to avoid precision loss)
+     ioerr=dcd_write_frame(fido, r, readheader, freeatoms);
+     if (ioerr.ne.0) then ; call warning(whoami, 'Trajectory write failed with IOSTAT='//itoa(ioerr)//'. Abort.',-1); goto 999 ; endif
+!
      r=matmul(u,r) ! rotate to overlap with rref
      ravg=(one-t)*ravg + t*r
     else ! ioerr>0
      if (last_frame>0) then
-      call message(whoami, 'Not enough frames in trajectory ('//itoa(iframe)//'). Abort.', -1);
-      __FREE(rref);__FREE(r); return
+      call message(whoami, 'Not enough frames in trajectory ('//itoa(iframe)//'). Abort.', -1); goto 999
      else
       last_frame=iframe;
       exit
      endif ! last frame<0
     endif ! ioerr
-   enddo ! while
-   call message(whoami,'Read '//itoa(nframes)//' trajectory frames.')
+  enddo ! while
+  call message(whoami,'Read '//itoa(nframes)//' trajectory frames.')
+  call files_close(fid)
+  call files_close(fido)
+! perform bestfit iteratively, if requested
+  if (qbfit.and.qbfit_iter) then
+   call message(whoami, 'Performing iterative bestfit to compute optimal average structure.');
+   rmsdavg=rmsd(ravg, rref, wgt, qdimswap_=.true.)
+   do while (rmsdavg.gt.bfit_tol)
+    call message(whoami, ' ===> Log10(RMSD) between successive average structures: '//&
+     &ftoa(log10(max(__ERRTOL, rmsdavg))))
+    __FOPEN(tmpdcd,'UNFORMATTED','READ',fid)
+    readheader=.true.
+    do i=1,nframes
+     ioerr=dcd_read_frame(fid, r, readheader, freeatoms, unitcell); readheader=.false.
+     if (ioerr.ne.0) then 
+      call warning(whoami, 'Reading temporary trajectory failed with IOSTAT='//itoa(ioerr)//'. Abort.',-1); goto 999 ;
+     endif
+     call RMSBestFit(r,ravg,wgt,u, QDIMSWAP_=.true.);
+     t=one / i
+     rref=(one-t)*rref + t*matmul(u,r)
+    enddo
+    call files_close(fid)
+    rmsdavg=rmsd(ravg, rref, wgt, qdimswap_=.true.)
+    ravg=rref;
+   enddo
+  endif
+!
 
- call files_close(fid) 
- call files_close(fido)
 
-  endif ! ioerr.ne.0 (first frame)
 !
   case default
-   call warning(whoami, 'Trajectory type "'//trim(trajectory_type)//'" is not supported.', -1)
-   return
+   call warning(whoami, 'Trajectory type "'//trim(trajectory_type)//'" is not supported.', -1); goto 999
  end select
 
+ 999 continue
 !================= clean up
+ call files_close(fid, 1) ! keep quiet if not open
+ call files_close(fido,1)
  __FREE(freeatoms)
  __FREE(unitcell)
  __FREE(r)
