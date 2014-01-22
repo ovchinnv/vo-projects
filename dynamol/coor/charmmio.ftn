@@ -2,6 +2,9 @@ module charmmio
  __DEP_OUTPUT
  __DEP_PARSER
  __IMPNONE
+!
+ int, parameter :: maxtitle=32, titlelen=80
+!
  contains
 !
  subroutine ch_coor_read(fid,r,wgt,mask)
@@ -443,7 +446,7 @@ module charmmio
  __IAM(DCD_WRITE_FRAME)
 !
  integer*4, parameter :: ntitle=1
- character(len=80) :: title(ntitle)='*'
+ character(len=titlelen) :: title(ntitle)='*'
  integer*4 :: n, nfree
  integer*4 :: idum(20)=0
  character(len=4) :: header='CORD'
@@ -490,33 +493,49 @@ module charmmio
 !
  end subroutine dcd_write_frame
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
- function dcd_read_frame(fid, r, readheader, freeatoms) result(ioerr)
+ function dcd_read_frame(fid, r, readheader, freeatoms, unitcell, stride_, iframe) result(ioerr)
+ __DEP_CONST
  __IMPNONE
  int, intent(in) :: fid
  float, intent(out) :: r(:,:)
  bool, intent(in) :: readheader
  int, pointer, intent(inout) :: freeatoms(:)
- int :: ioerr
+ real*8, pointer, intent(inout) :: unitcell(:)
+ int, optional, intent(in) :: stride_
+ int, optional, intent(out) :: iframe
+ int :: ioerr, stride, iunitcell
 !
- float, pointer :: r4(:,:)
+ real*4, pointer :: r4(:,:)
  int :: natom, i
  __IAM(DCD_READ_FRAME)
 !
- integer, parameter :: maxtitle=100
  integer*4 :: ntitle
- character(len=132) :: title(maxtitle)
+ character(len=titlelen) :: title(maxtitle)
  integer*4 :: n, nfree, nfixed
  integer*4 :: idum(20)=0
  character(len=4) :: header
 !
  natom=size(r,2)
+ iframe=0
 !
+ if (present(stride_)) then ; 
+  stride=stride_ ;
+  if (stride<=0) then ; call warning(whoami, 'Stride must be positive. Abort.',-1) ; return; endif
+ else ; 
+  stride=1 ; 
+ endif
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  if (readheader) then
 !
   read(fid, IOSTAT=ioerr, ERR=999) header, idum
   read(fid, IOSTAT=ioerr, ERR=999) ntitle, (title(i), i=1,min(ntitle,maxtitle))
+  call message(whoami, 'Trajectory file has the title:',0)
+  do i=1, ntitle; n=index(title(i),char(0))-1;if (n.le.0) n=titlelen; title(i)=trim(title(i)(1:n)); 
+   call message(whoami, '(Title) '//title(i),0); enddo
+!
   read(fid, IOSTAT=ioerr, ERR=999) n
+  call message(whoami, 'Trajectory file has '//itoa(n)//' atoms.',0);
+!
   if (n.lt.natom) then 
    call warning(whoami, 'Number of atoms in trajectory file ('//itoa(n)//') is smaller than the array size. Abort.',0)
    return
@@ -526,6 +545,7 @@ module charmmio
   endif
 !
   nfixed=idum(9)
+  call message(whoami, 'Trajectory file has '//itoa(nfixed)//' fixed atoms.',0);
   if (nfixed.lt.0.or.nfixed.gt.natom) then
    call warning(whoami, 'Number of fixed atoms ('//itoa(nfixed)//') is invalid. Abort.',0)
    return
@@ -536,13 +556,43 @@ module charmmio
    if (associated(freeatoms)) deallocate(freeatoms)
    allocate(freeatoms(nfree)) ; read(fid, IOSTAT=ioerr, ERR=999) freeatoms
   endif
+!write(0,*) nfixed
 !
+  if (idum(11).eq.1) then 
+   call message(whoami, 'Trajectory file has unit cell parameters.',0);
+   __FREE(unitcell); allocate(unitcell(6));
+   read(fid, IOSTAT=ioerr, ERR=999) unitcell
+   iunitcell=1
+  else 
+   iunitcell=0
+  endif
 ! read 4-byte coordinates
-  allocate(r4(3,natom))
-  read(fid, IOSTAT=ioerr, ERR=999) r4(1,:)
-  read(fid, IOSTAT=ioerr, ERR=999) r4(2,:)
-  read(fid, IOSTAT=ioerr, ERR=999) r4(3,:)
-  r=r4
+  allocate(r4(natom,3))
+! trajectory may contain unit cell info
+  read(fid, IOSTAT=ioerr, ERR=999) r4(:,1)
+  read(fid, IOSTAT=ioerr, ERR=999) r4(:,2)
+  read(fid, IOSTAT=ioerr, ERR=999) r4(:,3)
+  __INC(iframe)
+! skip frames
+! read 2 : stride-1 times below to skip stride-1 frames in total
+  do i=3, stride ; do n=1,3+iunitcell ; read(fid, IOSTAT=ioerr,ERR=999) ; enddo ; __INC(iframe) ; enddo
+  do while (iframe.ne.stride) ! if stride < iframe will read to EOF
+   if(iunitcell>0) read(fid, IOSTAT=ioerr, ERR=999) unitcell
+   if (nfree.ne.natom) then
+    read(fid, IOSTAT=ioerr, ERR=999) r4(freeatoms,1)
+    read(fid, IOSTAT=ioerr, ERR=999) r4(freeatoms,2)
+    read(fid, IOSTAT=ioerr, ERR=999) r4(freeatoms,3)
+    r(1,freeatoms)=r4(freeatoms,1)
+    r(2,freeatoms)=r4(freeatoms,2)
+    r(3,freeatoms)=r4(freeatoms,3)
+   else
+    read(fid, IOSTAT=ioerr, ERR=999) r4(:,1)
+    read(fid, IOSTAT=ioerr, ERR=999) r4(:,2)
+    read(fid, IOSTAT=ioerr, ERR=999) r4(:,3)
+    r=transpose(r4)
+   endif ! nfree
+   __INC(iframe)
+  enddo
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  else ! readheader
 ! check for fixed atoms
@@ -557,22 +607,33 @@ module charmmio
    nfree=natom
   endif ! associated
 !
-  allocate(r4(3,natom))
-  if (nfree.ne.natom) then
-   read(fid, IOSTAT=ioerr, ERR=999) r4(1,freeatoms)
-   read(fid, IOSTAT=ioerr, ERR=999) r4(2,freeatoms)
-   read(fid, IOSTAT=ioerr, ERR=999) r4(3,freeatoms)
-   r(:,freeatoms)=r4(:,freeatoms)
-  else
-   read(fid, IOSTAT=ioerr, ERR=999) r4(1,:)
-   read(fid, IOSTAT=ioerr, ERR=999) r4(2,:)
-   read(fid, IOSTAT=ioerr, ERR=999) r4(3,:)
-   r=r4
-  endif ! nfree
+! skip frames
+  if (associated(unitcell)) then ; iunitcell=1; else ; iunitcell=0; endif
+! read 1 : stride-1 times (same below) to skip stride-1 frames
+  do i=2, stride ; do n=1,3+iunitcell ; read(fid, IOSTAT=ioerr,ERR=999) ; enddo ; __INC(iframe) ; enddo
+  allocate(r4(natom,3))
+  do while (iframe.ne.stride)
+   if(iunitcell>0) read(fid, IOSTAT=ioerr, ERR=999) unitcell
+   if (nfree.ne.natom) then
+    read(fid, IOSTAT=ioerr, ERR=999) r4(freeatoms,1)
+    read(fid, IOSTAT=ioerr, ERR=999) r4(freeatoms,2)
+    read(fid, IOSTAT=ioerr, ERR=999) r4(freeatoms,3)
+    r(1,freeatoms)=r4(freeatoms,1)
+    r(2,freeatoms)=r4(freeatoms,2)
+    r(3,freeatoms)=r4(freeatoms,3)
+   else
+    read(fid, IOSTAT=ioerr, ERR=999) r4(:,1)
+    read(fid, IOSTAT=ioerr, ERR=999) r4(:,2)
+    read(fid, IOSTAT=ioerr, ERR=999) r4(:,3)
+    r=transpose(r4)
+   endif ! nfree
+   __INC(iframe)
+  enddo
  endif
 !
  999 continue ! error jumps here
- if (associated(r4)) deallocate(r4) 
+!
+ __FREE(r4)
 !
  end function dcd_read_frame
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

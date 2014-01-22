@@ -33,15 +33,17 @@ module pca
  bool :: qentropy, qmass, qbfit, qbfit_iter
  type (int_vector) :: evec_inds
  int :: stride_frame, first_frame, last_frame
+ int :: natoms=-1
  float :: temperature ! quasiharmonic temperature
 ! data arrays
- float, pointer :: ravg(:,:), rcov(:,:), eval(:), evec(:,:)
+ float, pointer :: ravg(:,:), rcov(:,:), eval(:), evec(:,:), wgt(:)
 !
  contains
 !====================================================================================
  subroutine pca_initialize()
  character(len=vartaglen) :: keyword
  int :: l
+ float :: totmass=zero
  __IAM(PCA_INIT)
 !
  if (.not. system_initialized) then 
@@ -135,14 +137,14 @@ module pca
 !
 #undef __CHAR
 #define __INT
-#define __MINUSERR
+#define __LEZEROERR
 #define __VAR	stride_frame
 #define __TAG	stride_frame
 #define __NAME	frame stride
 #define __DEFAULT_VAL 1
 #include "parser/parser_macro1.src"
 !
-#undef __MINUSERR
+#undef __LEZEROERR
 #undef __INT
 #define __BOOL
 #define __VAR	qmass
@@ -179,7 +181,6 @@ module pca
  call toupper(sfirst_frame)
  select case(sfirst_frame)
   case('FIRST','BEG') ; first_frame=1 ! duh
-  case('LAST','END','FINAL') ; first_frame = -1 ! speecial code for last frame
   case default 
    first_frame=atoi(sfirst_frame)
  end select
@@ -191,19 +192,23 @@ module pca
    last_frame=atoi(slast_frame)
  end select
 ! check fram limits
- if ( (first_frame.gt.last_frame.and.last_frame.ne.-1).or.&
-    & (first_frame.eq.-1 .and. last_frame.ne.-1).or.&
-    & (first_frame.lt.-1).or.(last_frame.lt.-1)) then
-  call warning(whoami, 'Invalid frame range specified: '//trim(sfirst_frame)//' -- '//trim(slast_frame)//'. Abort.',-1)
+ if ( ( (first_frame+stride_frame>last_frame).and.(last_frame.ne.-1) ).or.&
+    & (first_frame.le.-1).or.(last_frame.lt.-1)) then
+  call warning(whoami, 'Invalid frame range specified: '//trim(sfirst_frame)//' : '//itoa(stride_frame)//&
+    &                  ' : '//trim(slast_frame)//'. Abort.',-1)
   return
  endif
 !
 ! allocate variables
- natom=atoms%last
+ natoms=atoms%last
 !
- allocate(ravg(3,natom)) ; ravg=unknownf;       ! average structure
- allocate(rcov(3*natom,3*natom)) ; rcov=unknownf ! covariance matrix
-
+ allocate(wgt(natom))                        ! weights
+ if (qmass) then ; wgt=m; else ; wgt=one ; endif
+ totmass=abs(sum(wgt)); if (totmass.gt.__ERRTOL) then ; totmass=one/totmass; else ; totmass=one ; endif ; wgt=wgt*totmass
+!
+ allocate(ravg(3,natom)) ; ravg=zero;        ! average structure
+ allocate(rcov(3*natom,3*natom)) ; rcov=zero ! covariance matrix
+!
  if (.not.fatal_warning(__COMM)) pca_initialized=.true.
 !
 end subroutine pca_initialize
@@ -211,16 +216,18 @@ end subroutine pca_initialize
 subroutine pca_done()
  pca_initialized=.false.
 ! deallocate trajectory data
+ __FREE(wgt)
 end subroutine pca_done
 !============================
 subroutine pca_compute()
  use charmmio
 __IAM(PCA_COMPUTE)
 #include "files/fopen.def"
- int :: fid, ioerr, iframe
- 
- float, pointer :: r(:,:)
+ int :: fid, ioerr, iframe, nframes, i
+ float, pointer :: r(:,:), rref(:,:)
  int, pointer :: freeatoms(:)
+ real*8, pointer :: unitcell(:)
+ float :: t, u(3,3)=Id3;
  bool :: readheader = .true.
 
  if (.not. pca_initialized) then
@@ -228,23 +235,61 @@ __IAM(PCA_COMPUTE)
   return
  endif
 
-
  call toupper(trajectory_type)
  select case(trajectory_type)
   case('DCD', 'CHARMM', 'XPLOR','NAMD');
  __FOPEN(trajectory_file,'UNFORMATTED','READ',fid)
-  iframe=0
-  ioerr=dcd_read_frame(fid, r, readheader, freeatoms); readheader=.false.
-  
 
+  call message(whoami, 'Computing average structure using frames in the range: '//&
+  & trim(sfirst_frame)//' : '//itoa(stride_frame)//' : '//trim(slast_frame)//'.')
+  if (qbfit) then ; call message(whoami, 'Will use best-fitting');
+   if (qmass) call message(whoami, 'Will use mass-weighting');
+  endif
+!
+! skip first_frame-1 frames, return number of frames read in iframe
+  nframes=0
+  ioerr=dcd_read_frame(fid, ravg, readheader, freeatoms, unitcell, first_frame, iframe); readheader=.false. 
+write(0,*) first_frame, iframe, last_frame, associated(freeatoms), associated(unitcell), fid, ioerr
+  if (ioerr.ne.0) then
+   call warning(whoami, 'Error reading first frame (#'//itoa(first_frame)//'). Abort.',-1); return
+  else
+   allocate(rref(3,natoms), r(3,natoms))
+   rref=ravg; __INC(nframes);
+!
+   do while (( iframe+stride_frame<=last_frame ) .or. last_frame<0) ! read until frame range exceeded, or EOF.
+    ioerr=dcd_read_frame(fid, r, readheader, freeatoms, unitcell, stride_frame, i); iframe=iframe+i ! keep track of the number of frames
+!write(0,*) iframe, stride_frame, ioerr
+    if (ioerr.eq.0) then ! process frame 
+     if (qbfit) call RMSBestFit(r,rref,wgt,u, QDIMSWAP_=.true.);
+     __INC(nframes)
+     t=one / (nframes)
+     r=matmul(u,r) ! rotate to overlap with rref
+     ravg=(one-t)*ravg + t*r
+    else ! ioerr>0
+     if (last_frame>0) then
+      call message(whoami, 'Not enough frames in trajectory ('//itoa(iframe)//'). Abort.', -1);
+      __FREE(rref);__FREE(r); return
+     else
+      last_frame=iframe;
+      exit
+     endif ! last frame<0
+    endif ! ioerr
+   enddo ! while
+   call message(whoami,'Read '//itoa(nframes)//' trajectory frames.')
+
+
+  endif ! ioerr.ne.0 (first frame)
+!
   case default
    call warning(whoami, 'Trajectory type "'//trim(trajectory_type)//'" is not supported.', -1)
    return
  end select
 
 !================= clean up
- if (associated(freeatoms)) deallocate(freeatoms)
- if (associated(r)) deallocate(r)
+ __FREE(freeatoms)
+ __FREE(unitcell)
+ __FREE(r)
+ __FREE(rref)
 !
 end subroutine pca_compute
 !=================================================================================

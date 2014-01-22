@@ -14,7 +14,7 @@ CFLAGS =-O3 -fno-math-errno -g -c
 #---GNU
 FC=gfortran
 #FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  -Wall  #-fopenmp 
-FFLAGS=-O2 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  -Wall  #-fopenmp 
+FFLAGS=-O1 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  -Wall  #-fopenmp 
 #FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno #-fbounds-check -frange-check 
 MPI_HOME=/usr/local/mpich2-gnu
 #MPI_HOME=/usr/lib/openmpi
