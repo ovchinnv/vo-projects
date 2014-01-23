@@ -4,6 +4,7 @@
 module pca
 ! functioniality to perform principal component analysis (PCA) 
 ! and related calculations
+! TO DO :  prallelization
 !=============================================================
  __DEP_PARSER
  __DEP_OUTPUT
@@ -15,6 +16,7 @@ module pca
  use bestfit
  use parselist
  use ivector
+ use mol_formats
 
  __IMPNONE
 
@@ -205,6 +207,13 @@ module pca
     &                  ' : '//trim(slast_frame)//'. Abort.',-1)
   return
  endif
+! interpret output options
+! 1) average structure
+ if (avg_file.ne.'NONE') then
+  call toupper(avg_type)
+  if (all(mol_format_name.ne.avg_type)) &
+   call warning(whoami, 'Coordinate format "'//trim(avg_type)//'" for is  not supported. Abort.',-1)
+ endif
 !
 ! allocate variables
  natoms=atoms%last
@@ -228,16 +237,16 @@ end subroutine pca_done
 !============================
 subroutine pca_compute()
  use charmmio
+ use corio
  __DEP_CONST
 __IAM(PCA_COMPUTE)
-#include "files/fopen.def"
  int :: fid, ioerr, iframe, nframes, i, fido
- float, pointer :: r(:,:), rref(:,:)
- int, pointer :: freeatoms(:)
- real*8, pointer :: unitcell(:)
+ float, pointer :: r(:,:)=>NULL(), rref(:,:)=>NULL()
+ int, pointer :: freeatoms(:)=>NULL()
+ real*8, pointer :: unitcell(:)=>NULL()
  float :: t, u(3,3)=Id3;
  float :: rmsdavg ! rmsd between successive average structures (for iterative bestfit)
- bool :: readheader = .true.
+ bool :: readheader = .true., ok
  character(len=10) :: tmpdcd='__dmol.tmp'
 
  if (.not. pca_initialized) then
@@ -321,9 +330,14 @@ __FOPEN(tmpdcd,'UNFORMATTED','WRITE',fido)
     rmsdavg=rmsd(ravg, rref, wgt, qdimswap_=.true.)
     ravg=rref;
    enddo
+  endif ! qbfit
+! write average structure, if requested
+  if (avg_file.ne.'NONE') then
+   ok=corio_write(avg_file, avg_type, ravg, B=wgt*natoms)
+   if (.not.ok) call warning(whoami, 'Could not write average structure.',0);
   endif
 !
-
+! compute covariance matrix
 
 !
   case default
