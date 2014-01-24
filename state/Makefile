@@ -1,7 +1,7 @@
 ROOT=../
 OBJS=fieldbcdef.o datatypes.o state.o
 NAME=state
-DEPS=output constants parser
+DEPS=output constants parser continua/io
 
 include $(ROOT)/Makefile.inc
 

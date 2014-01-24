@@ -3,7 +3,14 @@
 #else
 #define __COMM
 #endif
-!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+module chestio
+!
+!
+ character(len=6), parameter :: float_format='G21.13'
+
+ contains
+
+!==========================================================
   subroutine chest_read_scalar(filename,q,nx,ny,nz,qbin &
 #ifdef __PARALLEL
 & , communicator &
@@ -33,7 +40,7 @@
 !
   bool :: bin
   bool :: q3d
-! 
+!
   integer :: ioerr
 !
   character(len=*) :: filename
@@ -127,12 +134,12 @@
   endif ! fatal_warning
 !
   end subroutine chest_read_scalar
-!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-  subroutine chest_write_scalar(filename,q,nx,ny,nz,qbin &
+!==============================================================
+  function chest_write_scalar(filename,q,nx,ny,nz,qbin &
 #ifdef __PARALLEL
 & , communicator &
 #endif
-&  )
+&  ) result(ok)
 #ifdef __PARALLEL
   __DEP_MPI
 #endif
@@ -142,18 +149,18 @@
   __DEP_PARSER
   __IMPNONE
 !
-  int :: nx, ny, nz 
-  float :: q(nx,ny,nz)
-  int :: mx, my, mz
-  bool :: qbin
+  int, intent(in) :: nx, ny, nz
+  float :: q(*)
+  bool :: qbin, ok
 #ifdef __PARALLEL
-  int4mpi :: communicator, ierror, me ! , ncpu
+  int4mpi, optional :: communicator
+  int4mpi :: ierror, me ! , ncpu
 #else
  int :: me
 #endif
 !
   character(len=11) :: fmt
-  __IAM(CHEST_WRITE_SCALAR)
+  __IAM(CHEST_WRITE_SCALAR3D)
 !
   bool :: bin
   bool :: q3d
@@ -161,11 +168,17 @@
   integer :: ioerr
 !
   character(len=*) :: filename
-  character(len=80) :: fname
-  int :: flen, fid=-1
+  character(len=len(filename)) :: fname
+  int :: flen, fid=-1, offset
+!
+  ok=.false.
 !
 #ifdef __PARALLEL
-   call mpi_comm_rank(communicator, me, ierror)
+   if (present(communicator)) then
+    call mpi_comm_rank(communicator, me, ierror)
+   else ; 
+    me = 0; 
+   endif
 #else
    me=0
 #endif
@@ -187,26 +200,25 @@
    if (fatal_warning(__COMM)) return
 !
   else ! flen > 0
-   if (me.eq.0) call warning(whoami, 'Input file name not specified. Abort.',0)
+   if (me.eq.0) call warning(whoami, 'File name not specified. Abort.',0)
    return
   endif
 !
   q3d=(nz.gt.3)
-  mx=nx; my=ny; mz=nz ! initialize
 !
   if (me.eq.0) then
 !************** header *******
    if (bin) then 
     if (q3d) then 
-     write(fid, IOSTAT=ioerr) mx, my, mz
+     write(fid, IOSTAT=ioerr) nx, ny, nz
     else
-     write(fid, IOSTAT=ioerr) mx, my
+     write(fid, IOSTAT=ioerr) nx, ny
     endif ! q3d
    else ! qbin
     if (q3d) then 
-     write(fid,*, IOSTAT=ioerr) mx, my, mz
+     write(fid,*, IOSTAT=ioerr) nx, ny, nz
     else
-     write(fid,*, IOSTAT=ioerr) mx, my
+     write(fid,*, IOSTAT=ioerr) nx, ny
     endif ! q3d
    endif ! qbin
 !
@@ -215,9 +227,11 @@
    else
 !********* write scalar data *******
     if (q3d) then 
-     if (qbin) then  ; write(fid, IOSTAT=ioerr) q ; else ; write(fid,*, IOSTAT=ioerr) q ; endif
+     if (qbin) then  ; write(fid, IOSTAT=ioerr) q(1:nx*ny*nz) ; else ; write(fid,'(5'//float_format//')', IOSTAT=ioerr) q(1:nx*ny*nz) ; endif
     else
-     if (qbin) then  ; write(fid, IOSTAT=ioerr) q(:,:,2) ; else ; write(fid,*, IOSTAT=ioerr) q(:,:,2) ; endif
+     if (nz>1) then ; offset=nx*ny ; else ; offset=0 ; endif ! compatibility for writing 2D fields with ghostpoints
+     if (qbin) then ; write(fid, IOSTAT=ioerr) q(offset+1:offset+nx*ny) ; 
+               else ; write(fid,'(5'//float_format//')',IOSTAT=ioerr) q(offset+1:offset+nx*ny) ; endif
     endif
     if (ioerr.ne.0) call warning(whoami, 'Error encountered while writing file "'//fname(1:flen)//'.',-1)
    endif ! ioerr
@@ -234,9 +248,10 @@
 ! not yet clear what to do in parallel
 #endif
 !
+   ok=.true.
   endif ! fatal_warning
 !
-  end subroutine chest_write_scalar
+  end function chest_write_scalar
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
   subroutine chest_write_grid(filename,x,y,z,nx,ny,nz,bin &
 #ifdef __PARALLEL
@@ -311,4 +326,5 @@
   call message(whoami, trim(fmt)//' grid file "'//fname(1:flen)//'" written.')
 !
   end subroutine chest_write_grid
-!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+!=============================================================
+end module chestio

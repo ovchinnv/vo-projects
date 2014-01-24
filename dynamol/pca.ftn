@@ -39,14 +39,14 @@ module pca
  float :: temperature ! quasiharmonic temperature
  float :: bfit_tol ! tolerance for iterative bestfit
 ! data arrays
- float, pointer :: ravg(:,:), rcov(:,:), eval(:), evec(:,:), wgt(:)
+ float, pointer :: ravg(:,:)=>NULL(), rcov(:,:,:,:)=>NULL(), eval(:)=>NULL(), evec(:,:)=>NULL(), wgt(:)=>NULL(), wgtn(:)=>NULL()
 !
  contains
 !====================================================================================
  subroutine pca_initialize()
  character(len=vartaglen) :: keyword
  int :: l
- float :: totmass=zero
+ float :: totmass
  __IAM(PCA_INIT)
 !
  if (.not. system_initialized) then 
@@ -152,7 +152,7 @@ module pca
 #define __BOOL
 #define __VAR	qmass
 #define __TAG	mass
-#define __NAME	use mass weighting
+#define __NAME	use mass weighting in best-fitting
 #define __DEFAULT_VAL .true.
 #include "parser/parser_macro1.src"
 !
@@ -214,16 +214,29 @@ module pca
   if (all(mol_format_name.ne.avg_type)) &
    call warning(whoami, 'Coordinate format "'//trim(avg_type)//'" for is  not supported. Abort.',-1)
  endif
+! 2) average structure
+ if (covmat_file.ne.'NONE') then
+  call toupper(covmat_type)
+  select case(covmat_type)
+   case ('BINARY','BIN','UNFORMATTED','ASCII','TEXT','TXT'); ! nothing
+   case default
+    call message(whoami, 'File format "'//trim(covmat_type)//'" is not supported. Abort.',-1); return
+  end select
+ endif
 !
 ! allocate variables
  natoms=atoms%last
 !
- allocate(wgt(natom))                        ! weights
- if (qmass) then ; wgt=m; else ; wgt=one ; endif
- totmass=abs(sum(wgt)); if (totmass.gt.__ERRTOL) then ; totmass=one/totmass; else ; totmass=one ; endif ; wgt=wgt*totmass
+ allocate(wgt(natoms)) ! weights for covariance matrix
+ wgt=m ! masses
+ if (qbfit) then
+  allocate(wgtn(natoms))
+  if (qmass) then ; wgtn=m; totmass=abs(sum(wgtn)) ; else ; wgtn=one ; totmass=natoms ; endif
+  if (totmass.gt.__ERRTOL) then ; totmass=one/totmass; else ; totmass=one ; endif ; wgtn=wgtn*totmass
+ endif
 !
  allocate(ravg(3,natom)) ; ravg=zero;        ! average structure
- allocate(rcov(3*natom,3*natom)) ; rcov=zero ! covariance matrix
+ allocate(rcov(3,natom,3,natom)) ; rcov=zero ! covariance matrix
 !
  if (.not.fatal_warning(__COMM)) pca_initialized=.true.
 !
@@ -233,18 +246,25 @@ subroutine pca_done()
  pca_initialized=.false.
 ! deallocate trajectory data
  __FREE(wgt)
+ __FREE(wgtn)
+ __FREE(ravg)
+ __FREE(rcov)
+ __FREE(eval)
+ __FREE(evec)
 end subroutine pca_done
 !============================
 subroutine pca_compute()
  use charmmio
  use corio
+ use fieldio
  __DEP_CONST
 __IAM(PCA_COMPUTE)
  int :: fid, ioerr, iframe, nframes, i, fido
+ int :: j, k, a, b ! indices
  float, pointer :: r(:,:)=>NULL(), rref(:,:)=>NULL()
  int, pointer :: freeatoms(:)=>NULL()
  real*8, pointer :: unitcell(:)=>NULL()
- float :: t, u(3,3)=Id3;
+ float :: t, u(3,3)=Id3, rr
  float :: rmsdavg ! rmsd between successive average structures (for iterative bestfit)
  bool :: readheader = .true., ok
  character(len=10) :: tmpdcd='__dmol.tmp'
@@ -275,7 +295,7 @@ __IAM(PCA_COMPUTE)
 !
   allocate(rref(3,natoms), r(3,natoms))
   rref=ravg; __INC(nframes);
-! open new trajectory file that will contain only the requested frames and th requested atoms
+!========================== open new trajectory file that will contain only the requested frames (and the requested atoms)
    call message(whoami,'Opening temporary trajectory file')
 __FOPEN(tmpdcd,'UNFORMATTED','WRITE',fido)
   ioerr=dcd_write_frame(fido, r, readheader, freeatoms); readheader=.false. ;
@@ -287,7 +307,7 @@ __FOPEN(tmpdcd,'UNFORMATTED','WRITE',fido)
     ioerr=dcd_read_frame(fid, r, readheader, freeatoms, unitcell, stride_frame, i); iframe=iframe+i ! keep track of the number of frames
 !write(0,*) iframe, stride_frame, ioerr
     if (ioerr.eq.0) then ! process frame 
-     if (qbfit) call RMSBestFit(r,rref,wgt,u, QDIMSWAP_=.true.);
+     if (qbfit) call RMSBestFit(r,rref,wgtn,u, QDIMSWAP_=.true.);
      __INC(nframes)
      t=one / (nframes)
 ! write frame to output dcd file (before rotation to avoid precision loss)
@@ -308,13 +328,14 @@ __FOPEN(tmpdcd,'UNFORMATTED','WRITE',fido)
   call message(whoami,'Read '//itoa(nframes)//' trajectory frames.')
   call files_close(fid)
   call files_close(fido)
-! perform bestfit iteratively, if requested
+!================================= perform bestfit iteratively, if requested
   if (qbfit.and.qbfit_iter) then
    call message(whoami, 'Performing iterative bestfit to compute optimal average structure.');
-   rmsdavg=rmsd(ravg, rref, wgt, qdimswap_=.true.)
-   do while (rmsdavg.gt.bfit_tol)
-    call message(whoami, ' ===> Log10(RMSD) between successive average structures: '//&
+   rmsdavg=rmsd(ravg, rref, wgtn, qdimswap_=.true.)
+   call message(whoami, ' ===> Log10(RMSD) between successive average structures: '//&
      &ftoa(log10(max(__ERRTOL, rmsdavg))))
+!
+   do while (rmsdavg.gt.bfit_tol)
     __FOPEN(tmpdcd,'UNFORMATTED','READ',fid)
     readheader=.true.
     do i=1,nframes
@@ -322,23 +343,76 @@ __FOPEN(tmpdcd,'UNFORMATTED','WRITE',fido)
      if (ioerr.ne.0) then 
       call warning(whoami, 'Reading temporary trajectory failed with IOSTAT='//itoa(ioerr)//'. Abort.',-1); goto 999 ;
      endif
-     call RMSBestFit(r,ravg,wgt,u, QDIMSWAP_=.true.);
+     call RMSBestFit(r,ravg,wgtn,u, QDIMSWAP_=.true.);
      t=one / i
      rref=(one-t)*rref + t*matmul(u,r)
     enddo
     call files_close(fid)
-    rmsdavg=rmsd(ravg, rref, wgt, qdimswap_=.true.)
+    rmsdavg=rmsd(ravg, rref, wgtn, qdimswap_=.true.)
     ravg=rref;
+!
+    call message(whoami, ' ===> Log10(RMSD) between successive average structures: '//&
+     &ftoa(log10(max(__ERRTOL, rmsdavg))))
    enddo
   endif ! qbfit
-! write average structure, if requested
+!================================= write average structure, if requested
   if (avg_file.ne.'NONE') then
-   ok=corio_write(avg_file, avg_type, ravg, B=wgt*natoms)
+   ok=corio_write(avg_file, avg_type, ravg, B=wgt)
    if (.not.ok) call warning(whoami, 'Could not write average structure.',0);
-  endif
+  endif ! avg_file
+!================================= compute covariance matrix
+  call message(whoami, 'Computing covariance matrix.');
+! iterate over trajectory one more time 
+  __FOPEN(tmpdcd,'UNFORMATTED','READ',fid)
+  readheader=.true.
 !
-! compute covariance matrix
-
+  do i=1,nframes
+   ioerr=dcd_read_frame(fid, r, readheader, freeatoms, unitcell); readheader=.false.
+   if (ioerr.ne.0) then 
+    call warning(whoami, 'Reading temporary trajectory failed with IOSTAT='//itoa(ioerr)//'. Abort.',-1); goto 999 ;
+   else
+    call message(whoami, 'Processing frame '//itoa(i));
+   endif
+   call RMSBestFit(r,ravg,wgtn,u, QDIMSWAP_=.true.);
+   r=matmul(u,r)-ravg
+!   t=one / i
+   do k=1,natoms ! do not know how to make this faster
+    do b=1,3
+     rr=r(b,k);
+     do j=1, k-1
+      do a=1,3
+!       rcov(a, j, b, k) = rcov(a, j, b, k) + t * ( r(a,j)*rr - rcov(a, j, b, k) ) ; ! NOTE: this is not a running variance -- correct only at the end 
+       rcov(a, j, b, k) = rcov(a, j, b, k) + r(a,j)*rr ! simplest method
+!
+      enddo
+     enddo
+! j=k case: (block diagonal)
+     j=k
+     do a=1,b ! lower limits
+!      rcov(a, j, b, k) = rcov(a, j, b, k) + t * ( r(a,j)*rr - rcov(a, j, b, k) )
+      rcov(a, j, b, k) = rcov(a, j, b, k) + r(a,j)*rr
+     enddo
+    enddo ! b
+   enddo ! k
+  enddo ! frames
+!
+! normalization and mass-weighting
+  wgt=sqrt(wgt/natoms)
+  do k=1,natoms ! do not know how to make this faster
+   do b=1,3
+    do j=1, k-1
+     do a=1,3 ; rcov(a,j,b,k) = rcov(a,j,b,k) * wgt(j) * wgt(k) ; rcov(b,k,a,j) = rcov(a,j,b,k) ;  enddo
+    enddo ! j
+    do a=1,b ; rcov(a,k,b,k) = rcov(a,k,b,k) * wgt(k)**2; rcov(b,k,a,k) = rcov(a,k,b,k) ; enddo
+   enddo ! b
+  enddo ! k
+!================================= write covariance matrix, if requested
+  if (covmat_file.ne.'NONE') then
+   call message(whoami, 'Writing mass-weighted covariance matrix.');
+   ok=fieldio_write_scalar3D(covmat_file, 'CHEST', covmat_type, rcov, 3*natoms, 3*natoms, 1)
+   if (.not.ok) call warning(whoami, 'Could not write covariance matrix.',0);
+  endif ! covmat_file
+!=======================================================================
 !
   case default
    call warning(whoami, 'Trajectory type "'//trim(trajectory_type)//'" is not supported.', -1); goto 999
@@ -354,7 +428,7 @@ __FOPEN(tmpdcd,'UNFORMATTED','WRITE',fido)
  __FREE(rref)
 !
 end subroutine pca_compute
-!=================================================================================
+!=======================================================================
 !
 #ifdef __CONTEXT
 #undef __CONTEXT
