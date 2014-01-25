@@ -31,7 +31,7 @@ module pca
  int :: msglev = 1
 !
  character(len=vartaglen) :: trajectory_file, trajectory_type, covmat_file, covmat_type, avg_file, avg_type,&
-    & evec_file, evec_type, evec_inds_str, eval_file, sbfit, sfirst_frame, slast_frame
+    & evec_file, evec_type, evec_inds_str, eval_file, sbfit, sfirst_frame, slast_frame, atom_selection
  bool :: qentropy, qmass, qbfit, qbfit_iter
  type (int_vector) :: evec_inds
  int :: stride_frame, first_frame, last_frame
@@ -40,6 +40,7 @@ module pca
  float :: bfit_tol ! tolerance for iterative bestfit
 ! data arrays
  float, pointer :: ravg(:,:)=>NULL(), rcov(:,:,:,:)=>NULL(), eval(:)=>NULL(), evec(:,:)=>NULL(), wgt(:)=>NULL(), wgtn(:)=>NULL()
+ int, pointer :: iatom_selection(:)=>NULL()
 !
  contains
 !====================================================================================
@@ -138,6 +139,12 @@ module pca
 #define __DEFAULT_VAL 'LAST'
 #include "parser/parser_macro1.src"
 !
+#define __VAR	atom_selection
+#define __TAG	atom_selection
+#define __NAME	atom selection
+#define __DEFAULT_VAL 'ALL'
+#include "parser/parser_macro1.src"
+!
 #undef __CHAR
 #define __INT
 #define __LEZEROERR
@@ -174,7 +181,6 @@ module pca
 #define __NAME	Tolerance for iterative bestfit calculation
 #define __DEFAULT_VAL __ERRTOL*100d0
 #include "parser/parser_macro1.src"
-!
 ! process bestfit
  call toupper(sbfit);
  select case(sbfit)
@@ -200,7 +206,7 @@ module pca
   case default 
    last_frame=atoi(slast_frame)
  end select
-! check fram limits
+! check frame limits
  if ( ( (first_frame+stride_frame>last_frame).and.(last_frame.ne.-1) ).or.&
     & (first_frame.le.-1).or.(last_frame.lt.-1)) then
   call warning(whoami, 'Invalid frame range specified: '//trim(sfirst_frame)//' : '//itoa(stride_frame)//&
@@ -222,6 +228,12 @@ module pca
    case default
     call message(whoami, 'File format "'//trim(covmat_type)//'" is not supported. Abort.',-1); return
   end select
+ endif
+!
+! interpret atom selection
+ iatom_selection=>system_getind(atom_selection)
+ if (.not.associated(iatom_selection)) then
+  call warning(whoami, 'Error processing atom selection. Abort.',-1) ;  return
  endif
 !
 ! allocate variables
@@ -251,6 +263,7 @@ subroutine pca_done()
  __FREE(rcov)
  __FREE(eval)
  __FREE(evec)
+ __FREE(iatom_selection)
 end subroutine pca_done
 !============================
 subroutine pca_compute()
@@ -412,7 +425,10 @@ __FOPEN(tmpdcd,'UNFORMATTED','WRITE',fido)
    ok=fieldio_write_scalar3D(covmat_file, 'CHEST', covmat_type, rcov, 3*natoms, 3*natoms, 1)
    if (.not.ok) call warning(whoami, 'Could not write covariance matrix.',0);
   endif ! covmat_file
-!=======================================================================
+!================================== diagonalize covariance matrix
+
+
+
 !
   case default
    call warning(whoami, 'Trajectory type "'//trim(trajectory_type)//'" is not supported.', -1); goto 999

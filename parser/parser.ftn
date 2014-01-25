@@ -40,6 +40,8 @@
       character, parameter :: vector_close(2)=(/')',']'/)
       character, parameter :: context_open(1)=(/'{'/)
       character, parameter :: context_close(1)=(/'}'/)
+      character, parameter :: string_open(1)=(/'"'/)
+      character, parameter :: string_close(1)=(/'"'/) ! do not have to be the same -- see code below
       character(len=200), parameter :: allowed=upper//lower//digits//decimal//underscore//hyphen//slash//tilde
       character(len=5), parameter :: exec_start='exec:'
       character(len=18), parameter :: exec_msg='Execution stack +='
@@ -90,6 +92,11 @@
       interface adjustleft
        module procedure adjustleft_1, adjustleft_2
       end interface adjustleft
+!
+      interface pop_string
+       module procedure pop_string_default
+       module procedure pop_string_custom
+      end interface pop_string
 !
       interface itoa
        module procedure itoa4, itoa8
@@ -455,6 +462,7 @@
        character :: allowed2(200),c
        bool :: qtag, qeq, qval, qexec, qerror ! active : tag, equals, value, executable line, error flag
        bool :: qvector ! flag that is active when we are reading a vector (certain default behavior is overridden)
+       bool :: qstring ! flag that is active when we are reading a character string (anything is allowed inside)
        bool :: qcontext ! flag that is active when any context other than the main context is active
 !
        integer :: ioerr
@@ -479,6 +487,7 @@
        qvector=.false.
        qerror=.false.
        qexec=.false.
+       qstring=.false.
        if (.not. parser_initialized) call parser_init()
        call message(whoami, 'Reading input file.')
        do while (.true.)
@@ -509,6 +518,7 @@
          qeq=.false.
          qvector=.false.      ! this implies that a vector entry currently cannot span multiple lines
          qexec=.false.        ! this implies that an executable command currently cannot span multiple lines
+         qstring=.false.      ! string cannot span multiple lines
 !
          do while (l.ge.1)
            i=i+1
@@ -525,6 +535,9 @@
               qerror=.true.; exit 
              elseif (qvector) then
               call warning(whoami, 'Missing closing bracket for vector parameter "'//tag(1:ltag)//'". Skipping line',0)
+              qerror=.true.; exit 
+             elseif (qstring) then
+              call warning(whoami, 'Missing termination character for string parameter "'//tag(1:ltag)//'". Skipping line',0)
               qerror=.true.; exit 
              else ! store tag and val
               call message(whoami, tag(1:ltag)//' <= '//val(1:lval))
@@ -551,7 +564,74 @@
             else ! qtag
              exit
             endif ! qtag
+!=============================================================================================================
+           elseif (any(string_open.eq.c).or.any(string_close.eq.c)) then ! beginning/finishing string parameter
 !
+!write(0,*) cmdline(i:l), qtag, qval, qstring ! aa
+!
+            if ((qtag.and.ltag.gt.0).or.qeq) then
+             call warning(whoami, 'Unexpected string character while processing parameter "'//tag(1:ltag)//'".  Skipping line',0)
+             qerror=.true. ; exit
+!
+            elseif (qtag.and.(ltag.eq.0)) then
+             call warning(whoami, 'Missing parameter name. Skipping line',0)
+             qerror=.true. ; exit
+!
+            elseif (qexec) then ! this is a valid command character
+             lexec=lexec+1; exec(lexec:lexec)=c
+!
+            elseif (qvector) then
+             call warning(whoami, 'Unexpected string character while processing vector parameter "'//tag(1:ltag)//'"  Skipping line',0)
+             qerror=.true. ; exit
+!
+            elseif (qval) then ! the only acceptable occurrence
+             if (qstring) then
+              if (any(string_close.eq.c)) then !  already reading a string so terminate and attempt to store
+               qstring=.false. ! the only legitimate occurrence
+!     peek ahead to make sure we have a spacer, if not, issue a warning and skip line
+!     (the convention is that a vector value must be separated from a subsequent tag)
+               c=cmdline(i+1:i+1)
+               if ( (i.lt.l) .and. (all(space.ne.c)) .and. (all(comment.ne.c))) then 
+                call warning(whoami, 'Error reading string value for parameter "'//tag(1:ltag)//'". Skipping line.',0)
+                qerror=.true.; exit 
+!     otherwise, attempt to add tag/value pair
+               else
+!                if (lval.eq.0) then ! this is unnecessary in view of what is below
+!                 call warning(whoami, 'Missing string value for parameter "'//tag(1:ltag)//'". Skipping line.',0)
+!                 qerror=.true.; exit 
+!                endif
+                call adjustleft(val(1:lval)); lval=len_trim(val(1:lval));
+                if (lval.eq.0) then
+                 call warning(whoami, 'Missing string value for parameter "'//tag(1:ltag)//'". Skipping line.',0)
+                 qerror=.true.; exit 
+                else ! add pair
+                 call adjustleft(val(1:lval)); lval=len_trim(val(1:lval));
+                 call message(whoami, tag(1:ltag)//'[STRING] <= "'//val(1:lval)//'"')
+                 j=params_uadd(parameters,tag,val,ltag,lval)
+                 ltag=0; lval=0
+                 cmdline=cmdline(i+1:l) ! remove tag/val pair from string
+                 call adjustleft(cmdline) ! remove tag/val pair from string
+                 l=len_trim(cmdline)
+                 i=0
+                endif ! lval
+                qtag=.true. ; ltag=0
+                qval=.false.
+               endif ! (i.lt.l)
+              else ! c=string_open
+               call warning(whoami, 'Unexpected string opening character while processing string parameter "'//tag(1:ltag)//'"  Skipping line',0)
+              endif ! c=string_close
+             else ! not qstring, so start reading a new string
+              if (any(string_open.eq.c)) then
+               qstring=.true. ! reading a string now
+              else ! not qstring
+               call warning(whoami, 'Unexpected string termination character while processing parameter "'//tag(1:ltag)//'"  Skipping line',0)
+              endif
+             endif ! qstring
+            else ! should not be here !
+             call warning(whoami, 'Unexpected character encountered (please report this internal error). Abort.',-1)
+             qerror=.true. ; exit
+            endif
+!=================================================================================
            elseif (any(space.eq.c)) then ! completed a tag or value (since lines cannot begin with blanks -- see above)
 !
             if (qtag) then
@@ -560,9 +640,9 @@
             elseif (qeq) then
 !      nothing
             elseif (qval) then 
-             if (qvector) then ! if we are in the process of reading a vector, then the separator (space) tags do not apply;
+             if (qvector.or.qstring) then ! if we are in the process of reading a vector/string, then the separator (space) tags do not apply;
 !                                      otherwise, a tag/value pair has been completed, so attempt to add pair and reinitialize for new tag
-              lval=lval+1; val(lval:lval)=' ' ! substitute a space for all separators
+              __INC(lval); val(lval:lval)=' ' ! substitute a space for all separators
              else
 !
               qval=.false.
@@ -584,8 +664,8 @@
             elseif (qexec) then ! space is a valid exec character
              lexec=lexec+1; exec(lexec:lexec)=' '
             endif ! qtag
-!
-           elseif (any(equals.eq.c)) then ! completed a tag
+!==============================================================================================
+           elseif (any(equals.eq.c)) then ! "=" encountered : assume we have completed a tag
 ! write(0,*) qtag, qeq, qval, "tag: ", tag(1:ltag)
 ! write(0,*) "CMD:", cmdline(i+1:l)
             if (qtag) then
@@ -609,8 +689,11 @@
              call adjustleft(cmdline) 
              l=len_trim(cmdline)
              i=0
-            elseif (qval) then ! expected a value but found '='
-             if (lval.eq.0) then
+            elseif (qval) then ! found '=' while reading parameter value
+             if (qstring) then ! '=' is legitimate inside strings
+              __INC(lval); val(lval:lval)='='
+!write(0,*) '= inside string ; tag= ',tag(1:ltag), '; val(so far)= ', val(1:lval)
+             elseif (lval.eq.0) then
               call warning(whoami, 'Missing value for parameter "'//tag(1:ltag)//'". Skipping line',0)
               qerror=.true.; exit 
              elseif (qvector) then
@@ -625,9 +708,9 @@
               call adjustleft(cmdline) ! remove tag/val pair from string
               l=len_trim(cmdline)
               i=0
-             endif ! lval
-             qtag=.true. ; ltag=0
-             qval=.false.
+              qtag=.true. ; ltag=0
+              qval=.false.
+             endif ! qstring
 !
             elseif (qexec) then ! this is a valid command character
              lexec=lexec+1; exec(lexec:lexec)=c
@@ -635,8 +718,10 @@
 !
 !************************************** CONTEXTS **************************************
            elseif (any(context_open.eq.c)) then ! encountered a context opening bracket
+            if (qstring) then ! allowed
+             __INC(lval) ; val(lval:lval)=c;
 !    check if already inside a context (currently nesting is not supported)
-            if (qcontext) then
+            elseif (qcontext) then
              call warning(whoami, 'Unexpected open brace while processing parameter "'//tag(1:ltag),0)
              call message(whoami, 'Nested contexts are not allowed. Skipping line.')
              qerror=.true.; exit
@@ -675,9 +760,11 @@
              call warning(whoami, 'Unexpected open brace while processing parameter "'//tag(1:ltag)//'". Skipping line.',0)
              qerror=.true.; exit
             endif ! qcontext
-!
+!===========================================================================================
            elseif (any(context_close.eq.c)) then ! encountered a context closing bracket
-            if (.not. qcontext) then ! make sure that there was an open brace
+            if (qstring) then ! allowed
+             __INC(lval) ; val(lval:lval)=c;
+            elseif (.not. qcontext) then ! make sure that there was an open brace
              call warning(whoami, 'Encountered a close brace without a matching open brace. Skipping line.',0)
              qerror=.true.; exit
             elseif (qtag.and.ltag.eq.0) then   ! if expecting a new tag
@@ -740,7 +827,9 @@
             endif ! qcontext
 !************************************** VECTOR DATA *****************************************
            elseif (any(vector_open.eq.c)) then ! encountered an opening vector bracket
-            if (qtag) then ! opening bracket not allowed
+            if (qstring) then ! allowed
+             __INC(lval) ; val(lval:lval)=c;
+            elseif (qtag) then ! opening bracket not allowed
              call warning(whoami, 'Unexpected opening bracket when processing parameter "'//tag(1:ltag)//'". Skipping line.',0)
              qerror=.true.; exit
             elseif (qeq) then
@@ -759,10 +848,12 @@
              lexec=lexec+1; exec(lexec:lexec)=c
 !
             endif
-!
+!========================================================================================
            elseif (any(vector_close.eq.c)) then ! encountered a closing vector bracket
+            if (qstring) then ! allowed
+             __INC(lval) ; val(lval:lval)=c;
 !      write(0,*) '**', qtag, qeq, qval, qvector, tag, ltag, val, lval; !aa
-            if (qtag) then ! closing bracket not allowed
+            elseif (qtag) then ! closing bracket not allowed
              call warning(whoami, 'Unexpected closing bracket when processing parameter "'//tag(1:ltag)//'". Skipping line.',0)
 !              write(0,*) cmdline(i:l) ! aa
              qerror=.true.; exit
@@ -808,7 +899,7 @@
              call warning(whoami, 'Misplaced closing bracket in input. Skipping line.',0)
              qerror=.true.; exit
             endif 
-!
+!=============================================================================================
            elseif (any(allowed2(1:allowed_len).eq.c)) then ! check that the characters are allowed
 !
             if (qtag) then ! reading a tag
@@ -848,16 +939,18 @@
              qerror=.true.; exit 
 !
             elseif (qval) then
-             lval=lval+1; val(lval:lval)=c
+             __INC(lval); val(lval:lval)=c
 !
             elseif (qexec) then ! append to command
-             lexec=lexec+1; exec(lexec:lexec)=c
+             __INC(lexec); exec(lexec:lexec)=c
 !
             else
-             call warning(whoami, 'Internal input error. Skipping line',0)
+             call warning(whoami, 'Internal input error (please report). Skipping line',-1)
              qerror=.true.; exit 
             endif
 !
+           elseif (qstring) then ! character is not allowed except in a string, where we currently allow anything
+             __INC(lval); val(lval:lval)=c
            else
              call warning(whoami, 'Unrecognized character "'//c//'". Skipping line.',0)
              exit 
@@ -1314,26 +1407,28 @@
 ! this subroutine uses a custom definition of white space
        subroutine adjustleft_1(a, space)
         character(len=*) :: a
-        character :: space(:)
+        character, intent(in) :: space(:)
         int :: l, i, j
-        l=len(a)
-        if (l.gt.0) then
-         i=1
-         do while (i.le.l)
-          if (all(space.ne.a(i:i))) exit
-          i=i+1
-         enddo
+        if (len(space).gt.0) then
+         l=len(a)
+         if (l.gt.0) then
+          i=1
+          do while (i.le.l)
+           if (all(space.ne.a(i:i))) exit
+           i=i+1
+          enddo
 !    move string left
-         j=1
-         do while (j.le.l-i+1)
-          a(j:j)=a(i+j-1:i+j-1)
-          j=j+1
-         enddo
+          j=1
+          do while (j.le.l-i+1)
+           a(j:j)=a(i+j-1:i+j-1)
+           j=j+1
+          enddo
 !    pad with blanks
-         do while (j.le.l)
-          a(j:j)=' '
-          j=j+1
-         enddo
+          do while (j.le.l)
+           a(j:j)=' '
+           j=j+1
+          enddo
+         endif
         endif
 !
        end subroutine adjustleft_1
@@ -1391,8 +1486,8 @@
    endif
    numword=n
   end function numword
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-  function pop_string(a,n) result(b) ! returns the next white-space-delimited word in a string, and removes it from the string
+!===============================================================================
+  function pop_string_default(a,n) result(b) ! returns the next white-space-delimited word in a string, and removes it from the string
    character(len=*) :: a
    character(len=len(a)) :: b
    character, parameter :: tab=char(9)
@@ -1410,8 +1505,29 @@
    b=a(1:j-1)
    a=a(j:l)
    if (present(n)) n=l-j+1
-  end function pop_string
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  end function pop_string_default
+!===============================================================================
+  function pop_string_custom(a,n,space) result(b) ! same as pop_string except custom white space is passed in
+   character(len=*) :: a
+   character(len=len(a)) :: b
+   character(len=*) :: space
+   character :: space2(len(space))
+   int, optional, intent(inout) :: n
+   int :: j,l
+!
+   l=len(space); do j=1,l ; space2(j)=space(j:j) ; enddo
+!
+   if (present(n)) a(max(0,n)+1:)='' ! erase string beyond length n
+!
+   call adjustleft(a,space2)
+   l=len_trim(a);
+   j=scan(a(1:l),space)
+   if (j.eq.0) j=l+1 ! there must be only one word
+   b=a(1:j-1)
+   a=a(j:l)
+   if (present(n)) n=l-j+1
+  end function pop_string_custom
+!===============================================================================
   function find_tag(a,tag,n)
   character(len=*), intent(inout) :: a ! because we might be removing white space
   character(len=*) :: tag

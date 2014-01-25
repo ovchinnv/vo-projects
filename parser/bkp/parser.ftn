@@ -41,7 +41,10 @@
       character, parameter :: context_open(1)=(/'{'/)
       character, parameter :: context_close(1)=(/'}'/)
       character(len=200), parameter :: allowed=upper//lower//digits//decimal//underscore//hyphen//slash//tilde
-      character(len=5), parameter :: command_start(1)=(/'exec:'/)
+      character(len=5), parameter :: exec_start='exec:'
+      character(len=18), parameter :: exec_msg='Execution stack +='
+      character(len=4), parameter, public :: maincontext_name='MAIN'
+      int, parameter :: maincontext_namelen=4
 !
       int, parameter, private :: context_incr=1  ! expand increment for contexts
 !
@@ -65,6 +68,7 @@
       public existtag	! return tag value
       public existtag_nocase	! return tag value (case insensitive version)
       public get_next_command	! return command
+      public noexec             ! returns true if context specified in the atgument has no executable statements or is not present
       public parse_file ! read input file and store all parameters
       public parser_done
       public list_params ! list parameters
@@ -86,6 +90,11 @@
       interface adjustleft
        module procedure adjustleft_1, adjustleft_2
       end interface adjustleft
+!
+      interface pop_string
+       module procedure pop_string_default
+       module procedure pop_string_custom
+      end interface pop_string
 !
       interface itoa
        module procedure itoa4, itoa8
@@ -111,7 +120,7 @@
        context%length=context_incr
        context%last=1
        context%current=1
-       context%context_name(1)='MAIN'
+       context%context_name(1)=maincontext_name
 !    initialize main context
        parameters=>context%context_params(1)
        executables=>context%context_commands(1)
@@ -149,18 +158,20 @@
        subroutine parser_context_expand()
 !    increase the size of contexts array
        int :: newlength
-       type (params), pointer :: newcontexts(:)
+       type (params), pointer :: newparams(:)
+       type (commands), pointer :: newcommands(:)
        character(len=contextnamelen), pointer :: newnames(:)
 !
        if ( .not. parser_initialized ) call parser_init()
        newlength=context%length+context_incr
-       allocate(newcontexts(newlength), newnames(newlength))
-       newcontexts(1:context%length)=context%context_params ! copy members of context_params (incl. pointers)
+       allocate(newparams(newlength), newcommands(newlength), newnames(newlength))
+       newparams(1:context%length)=context%context_params ! copy members of context_params (incl. pointers)
+       newcommands(1:context%length)=context%context_commands
        newnames(1:context%length)=context%context_name
-       deallocate(context%context_params, context%context_name)
-       context%context_params=>newcontexts ; context%context_name=>newnames ! point to new arrays
+       deallocate(context%context_params, context%context_commands, context%context_name)
+       context%context_params=>newparams ; context%context_commands=>newcommands ; context%context_name=>newnames ! point to new arrays
        context%length=newlength
-       nullify(newcontexts, newnames)
+       nullify(newparams, newcommands, newnames)
 !
        end subroutine parser_context_expand
 !********************************************************************************************
@@ -261,64 +272,137 @@
        character(len=*), intent(in) :: atag
        character(len=*), intent(in), optional :: ctx
        int :: ictx
+       __IAM(GETVAL)
        ictx=1 ; if (present(ctx)) ictx=max(1,parser_find_context(ctx))
-!
        value=params_getval(context%context_params(ictx),atag)
-       if (len_trim(value).eq.0) call warning('GETVAL','Parameter "'//trim(atag)//'" not found.',-1)
+       if (len_trim(value).eq.0) call warning(whoami,'Parameter "'//trim(atag)//'" not found in context "'//trim(context%context_name(ictx))//'"',-1)
        getval=value
 !
        end function getval
-!********************************************************************************************
-       function get_next_command(ctx) ! returning command as an array of characters
-       use output, only: warning
-       character(len=:), pointer :: get_next_command
-       character(len=*), intent(in), optional :: ctx
-       type (commands) :: c
-       int :: ictx, i
-!
-       nullify(get_next_command)
-!
-       if (.not.parser_initialized) call parser_init()
-       ictx=1 ; if (present(ctx)) ictx=max(1,parser_find_context(ctx))
-!
-       c=context%context_commands(ictx)
-       if (.not.c%initialized) then 
-!
-       elseif (c%current.le.c%last) then
-        i=c%clen(c%current)
-        allocate(character(i) :: get_next_command)
-        get_next_command=c%command(c%current)(1:i)
-        c%current=c%current+1
-       endif
-!
-       end function get_next_command
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        character(len=vartaglen) function getval_nocase(atag,ctx)
        use output, only: warning
        character(len=vartaglen) :: value
        character(len=*), intent(in) :: atag
        character(len=*), intent(in), optional :: ctx ; int :: ictx
+       __IAM(GETVAL_NOCASE)
        ictx=1 ; if (present(ctx)) ictx=max(1,parser_find_context(ctx))
-!
        value=params_getval_nocase(context%context_params(ictx),atag)
-       if (len_trim(value).eq.0) call warning('GETVAL_NOCASE','Parameter "'//trim(atag)//'" not found.',-1)
+       if (len_trim(value).eq.0) call warning(whoami,'Parameter "'//trim(atag)//'" not found in context "'//trim(context%context_name(ictx))//'"',-1)
        getval_nocase=value
 !
        end function getval_nocase
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+       character(len=vartaglen) function getval_nocasev(atag,ctx)
+       use output, only: warning, message
+       character(len=vartaglen) :: value
+       character(len=*), intent(in) :: atag
+       character(len=*), intent(in), optional :: ctx(:) 
+       int :: ictx, i, j
+       bool :: found
+       __IAM(GETVAL_NOCASEV)
+       found=.false.
+       ictx=1 ;
+       if (present(ctx)) then
+        j=size(ctx);
+        do i=1, j
+         ictx=parser_find_context(ctx(i))
+         if (ictx.gt.0) then
+          if (i.gt.1) call message(whoami, 'Checking for parameter "'//trim(atag)//'" in context "'//trim(context%context_name(ictx))//'"',0)
+          value=params_getval_nocase(context%context_params(ictx),atag)
+          if (len_trim(value).eq.0) then ! issue a warning; if i=j, wrnlev=-1 (should be fatal)
+           call warning(whoami,'Parameter "'//trim(atag)//'" not found in context "'//trim(context%context_name(ictx))//'"', min(1,j-i)-1)
+          else  ! value
+           exit
+          endif ! value
+         else ! (ictx==0)
+          call warning(whoami,'Skipping nonexistent context "'//trim(ctx(i))//'"',min(1,j-i)-1)
+         endif ! ictx
+        enddo ! loop over contexts
+       else ! present(ctx) : default to main context
+        value=params_getval_nocase(context%context_params(ictx),atag)
+        if (len_trim(value).eq.0) call warning(whoami,'Parameter "'//trim(atag)//'" not found in context "'//trim(context%context_name(ictx))//'"',-1)
+       endif ! present(ctx)
+!
+       getval_nocasev=value
+       end function getval_nocasev
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        character(len=vartaglen) function getval_nocase_upper(atag,ctx)
        use output, only: warning
        character(len=vartaglen) :: value
        character(len=*), intent(in) :: atag
        character(len=*), intent(in), optional :: ctx ; int :: ictx
+       __IAM(GETVAL_NOCASE_UPPER)
        ictx=1 ; if (present(ctx)) ictx=max(1,parser_find_context(ctx))
-!
        value=params_getval_nocase(context%context_params(ictx),atag)
-       if (len_trim(value).eq.0) call warning('GETVAL_NOCASE_UPPER','Parameter "'//trim(atag)//'" not found.',-1)
+       if (len_trim(value).eq.0) call warning(whoami,'Parameter "'//trim(atag)//'" not found in context "'//trim(context%context_name(ictx))//'"',-1)
        call toupper(value)
        getval_nocase_upper=value
 !
        end function getval_nocase_upper
+!********************************************************************************************
+       function get_next_command(ctx) ! returning command as an array of characters
+       use output, only: warning
+       character(len=maxlinelen), pointer :: get_next_command
+! some advanced Fortran 2003 commented out
+!       character(len=:), pointer :: get_next_command
+       character(len=*), intent(in), optional :: ctx
+       type (commands), pointer :: c
+       int :: ictx, i
+       __IAM(GET_NEXT_COMMAND)
+!
+       nullify(get_next_command)
+!
+       if (.not.parser_initialized) call parser_init()
+       ictx=1 ; if (present(ctx)) ictx=parser_find_context(ctx)
+!
+       if (ictx.gt.0) then
+!
+        c=>context%context_commands(ictx)
+        if (.not.c%initialized) then 
+!
+        elseif (c%current.le.c%last) then
+         i=c%clen(c%current)
+!         allocate(character(i) :: get_next_command)
+         allocate(get_next_command)
+         get_next_command=c%command(c%current)(1:i)
+#ifdef __DEBUG
+        call message(whoami,' CURRENT COMMAND IS: "'//trim(get_next_command)//&
+        &'".',__DBGLEV)
+#endif
+         c%current=c%current+1
+        endif ! c%initialized
+       else
+        call warning(whoami,'Context "'//trim(ctx)//'" not found.',-1)
+       endif ! ictx > 0
+!
+       end function get_next_command
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+       bool function noexec(ctx)
+       character(len=*), intent(in), optional :: ctx
+       type (commands), pointer :: c
+       int :: ictx
+       __IAM(NOEXEC)
+       noexec=.true.
+       if (.not.parser_initialized) call parser_init()
+       ictx=1 ; if (present(ctx)) ictx=parser_find_context(ctx)
+       if (ictx.gt.0) then
+        c=>context%context_commands(ictx)
+        if (c%initialized) then
+         if (c%current.le.c%last) noexec=.false.
+        endif !c%initialized
+       endif ! ictx
+!
+#ifdef __DEBUG
+       if (noexec) then
+         call message(whoami,'CONTEXT IS EMPTY',__DBGLEV);
+       else
+         call message(whoami,'CONTEXT INDEX :'//&
+    &    itoa(ictx), __DBGLEV );
+         call message(whoami,'CONTEXT IS NOT EMPTY',__DBGLEV);
+       endif
+#endif
+       end function noexec
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        function existtag(atag,ctx)
        use output, only: error
@@ -365,23 +449,25 @@
 #ifdef __PARALLEL
        int4mpi :: communicator, me
        int4mpi, optional :: me__
+       int :: msglev
 #endif
 !
        int :: fid ! input file handle
        int :: i, j
-       character(len=10), parameter :: whoami = 'PARSE_FILE'
+       __IAM(PARSE_FILE)
 !
-       int :: allowed_len, lower_len, upper_len, digits_len
+       int :: allowed_len
        character :: allowed2(200),c
-       bool :: qtag, qeq, qval, qerror, qcommand
+       bool :: qtag, qeq, qval, qexec, qerror ! active : tag, equals, value, executable line, error flag
        bool :: qvector ! flag that is active when we are reading a vector (certain default behavior is overridden)
        bool :: qcontext ! flag that is active when any context other than the main context is active
 !
        integer :: ioerr
        int4mpi :: ierr
-       int :: l=0, ltag=0, lval=0
-       character(len=400) :: cmdline
-       character(len=vartaglen) :: tag, val
+       int :: l=0, ltag=0, lval=0, lexec=0
+       character(len=2*maxlinelen) :: cmdline
+       character(len=vartaglen) :: tag, val, exec
+       character(len=contextnamelen), pointer :: contextname
 !
        allowed_len=len_trim(allowed)
        do i=1,allowed_len
@@ -390,26 +476,27 @@
 !
 #ifdef __PARALLEL
        if (present(me__)) then ; me=me__ ; else ; call mpi_comm_rank(communicator,me,ierr) ; endif
+       msglev=get_minmessagelev() ; qprint=(me.eq.0)
 #endif
 !     do work
 !
        qcontext=.false.
        qvector=.false.
        qerror=.false.
-       qcommand=.false.
+       qexec=.false.
        if (.not. parser_initialized) call parser_init()
        call message(whoami, 'Reading input file.')
        do while (.true.)
 #ifdef __PARALLEL
         if (me.le.0) read(fid,'(A)',IOSTAT=ioerr) cmdline ! if running in parallel, then only the root node is passed a valid handle
-        if (communicator.ne.MPI_COMM_NULL) call MPI_BCAST(ioerr,1,MPI_INT,0,communicator,ierr)
+        if (communicator.ne.MPI_COMM_NULL) call MPI_BCAST(ioerr,1,mpiint,0,communicator,ierr)
 #else
         read(fid,'(A)',IOSTAT=ioerr) cmdline ! if running in parallel, then only the root node is passed a valid handle
 #endif
 !
         if (ioerr.eq.0) then
 #ifdef __PARALLEL
-        if (communicator.ne.MPI_COMM_NULL) call MPI_BCAST(cmdline,len(cmdline),MPI_BYTE,0,communicator,ierr) ! broadcast to all CPUs
+         if (communicator.ne.MPI_COMM_NULL) call MPI_BCAST(cmdline,len(cmdline),MPI_BYTE,0,communicator,ierr) ! broadcast to all CPUs
 #endif
 !   write(0,*) cmdline
 ! read from the line
@@ -417,22 +504,23 @@
          l=len_trim(cmdline)
 !   write(0,*) cmdline(1:l)
 ! add comment character to know when to stop below
-         if (l.lt.maxlinelen) l=l+1
-         cmdline(l:l)='*'
+         if (l.lt.2*maxlinelen) l=l+1
+         cmdline(l:l)='*'   ! note the difference between lowercase "L" (here) and "one" (below)
          if (any(comment.eq.cmdline(1:1))) l=1 ! skip lines that are comments
-
+!
          i=0
          qtag=.true. ; ltag=0 ! each line is required to begin with a tag
          qval=.false.; lval=0
          qeq=.false.
          qvector=.false.      ! this implies that a vector entry currently cannot span multiple lines
-         qcommand=.false.     ! this implies that a command currently cannot span multiple lines
+         qexec=.false.        ! this implies that an executable command currently cannot span multiple lines
 !
-         do while (l.gt.1)
+         do while (l.ge.1)
            i=i+1
            c=cmdline(i:i)
 !     write(0,*) tag(1:ltag), val(1:lval),i
            if (any(comment.eq.c.or.i.eq.l)) then ! end of command line
+!write(0,*) "EOL:", qtag, tag(1:ltag), '=', val(1:lval)
             if ((qtag.and.i.gt.1).or.qeq) then
              call warning(whoami,'Unexpected end of line',0)
              qerror=.true.; exit 
@@ -440,16 +528,32 @@
              if (lval.eq.0) then
               call warning(whoami, 'Missing value for parameter "'//tag(1:ltag)//'". Skipping line',0)
               qerror=.true.; exit 
-            elseif (qvector) then
+             elseif (qvector) then
               call warning(whoami, 'Missing closing bracket for vector parameter "'//tag(1:ltag)//'". Skipping line',0)
               qerror=.true.; exit 
              else ! store tag and val
               call message(whoami, tag(1:ltag)//' <= '//val(1:lval))
               j=params_uadd(parameters,tag,val,ltag,lval)
               ltag=0; lval=0
+              qtag=.true. ! no need because we are at the eol, but included here for clarity
               exit
              endif
-            else
+            elseif (qexec) then
+             if (lexec.eq.0) then
+              contextname=>context%context_name(context%current)
+              call warning(whoami, 'Empty command line in context "'//contextname(1:len_trim(contextname))//'". Skipping line',0)
+              qerror=.true.; exit 
+             else ! store command
+! remove trailing space
+              lexec=len_trim(exec(1:lexec))
+              call message(whoami, exec_msg//' "'//exec(1:lexec)//'"')
+              j=commands_add(executables, exec, lexec)
+              qexec=.false.; qtag=.true.
+              lexec=0
+              exit
+             endif
+!
+            else ! qtag
              exit
             endif ! qtag
 !
@@ -482,10 +586,13 @@
               endif ! lval
               ltag=0
              endif ! qvector
+            elseif (qexec) then ! space is a valid exec character
+             lexec=lexec+1; exec(lexec:lexec)=' '
             endif ! qtag
 !
-           elseif (any(equals.eq.c)) then ! completed a tag
-!
+           elseif (any(equals.eq.c)) then ! "=" encountered : assume we have completed a tag
+! write(0,*) qtag, qeq, qval, "tag: ", tag(1:ltag)
+! write(0,*) "CMD:", cmdline(i+1:l)
             if (qtag) then
              qtag=.false.
              if (ltag.eq.0) then
@@ -526,6 +633,9 @@
              endif ! lval
              qtag=.true. ; ltag=0
              qval=.false.
+!
+            elseif (qexec) then ! this is a valid command character
+             lexec=lexec+1; exec(lexec:lexec)=c
             endif ! qtag
 !
 !************************************** CONTEXTS **************************************
@@ -539,16 +649,28 @@
             elseif (qtag.or.qeq) then
              if (ltag.gt.0) then
               call toupper(tag)
-              call message(whoami, 'Switching to context "'//tag(1:ltag)//'".')
-              parameters=>context%context_params(parser_context(tag(1:ltag)))
-              qcontext=.true.
-              qtag=.true.
-              qeq=.false.
-              ltag=0
-              cmdline=cmdline(i+1:l) ! remove open brace from string
-              call adjustleft(cmdline)
-              l=len_trim(cmdline)
-              i=0
+! check to make sure the new context name is not the default name
+              if (tag(1:ltag).ne.maincontext_name(1:maincontext_namelen)) then
+               call message(whoami, '======================> Switching to context "'//tag(1:ltag)//'".')
+!     note : cannot simply do this:
+!               parameters =>context%context_params  (parser_context(tag(1:ltag)))
+!     because context_params might need to be reallocated _during the call_; in the meantime, parameters points to the wrong thing
+               j=parser_context(tag(1:ltag))
+               parameters=>context%context_params(j)
+               executables=>context%context_commands(j)
+!
+               qcontext=.true.
+               qtag=.true.
+               qeq=.false.
+               ltag=0
+               cmdline=cmdline(i+1:l) ! remove open brace from string
+               call adjustleft(cmdline)
+               l=len_trim(cmdline)
+               i=0
+              else ! context name not allowed
+               call warning(whoami, 'Context name "'//tag(1:ltag)//'" is not allowed. Skipping line.',0)
+               qerror=.true.; exit 
+              endif ! tag .ne. maincontext_name
              else
               call warning(whoami, 'Missing context name. Skipping line.',0)
               qerror=.true.; exit 
@@ -564,8 +686,12 @@
              call warning(whoami, 'Encountered a close brace without a matching open brace. Skipping line.',0)
              qerror=.true.; exit
             elseif (qtag.and.ltag.eq.0) then   ! if expecting a new tag
-             call message(whoami, 'Returning to main context.')
-             parameters=>context%context_params(parser_context('main')) ! switch to default context
+             call message(whoami, '======================> Returning to main context.')
+!
+             j=parser_context(maincontext_name) ! default context
+             parameters =>context%context_params(j)
+             executables=>context%context_commands(j)
+!
              qcontext=.false.
              cmdline=cmdline(i+1:l) ! remove close bracket
              call adjustleft(cmdline) 
@@ -582,11 +708,37 @@
              call adjustleft(cmdline)
              l=len_trim(cmdline)
              i=0
-             ltag=0
 !    now return to then main context
              call message(whoami, 'Returning to main context.')
-             parameters=>context%context_params(parser_context('main')) ! switch to default context
+!
+             j=parser_context(maincontext_name) ! default context
+             parameters =>context%context_params(j)
+             executables=>context%context_commands(j)
+!
              qcontext=.false.
+            elseif (qexec) then
+             if (lexec.le.0) then
+              contextname=>context%context_name(context%current)
+              call warning(whoami, 'Unexpected close brace while reading command in context "'//contextname(1:len_trim(contextname))//'". Skipping line',0)
+              qerror=.true.; exit 
+             else ! store command
+! remove trailing space
+              lexec=len_trim(exec(1:lexec))
+              call message(whoami, exec_msg//' "'//exec(1:lexec)//'"')
+              j=commands_add(executables, exec, lexec)
+              lexec=0
+              qexec=.false.
+              qtag=.true.
+              cmdline=cmdline(i+1:l) ! remove command from string and also the close bracket
+              call adjustleft(cmdline)
+              l=len_trim(cmdline)
+              i=0
+              call message(whoami, 'Returning to main context.')
+              j=parser_context(maincontext_name) ! default context
+              parameters =>context%context_params(j)
+              executables=>context%context_commands(j)
+             endif
+!
             else
              call warning(whoami, 'Unexpected close brace while processing parameter "'//tag(1:ltag)//'". Skipping line.',0)
              qerror=.true.; exit
@@ -601,12 +753,16 @@
              qerror=.true.; exit 
             elseif (qval) then
              if (qvector) then ! already read one bracket 
-             call warning(whoami, & 
-                           'Unexpected opening bracket when processing vector parameter "'//tag(1:ltag)//'". Skipping line.',0)
+              call warning(whoami, & 
+&                          'Unexpected opening bracket when processing vector parameter "'//tag(1:ltag)//'". Skipping line.',0)
              qerror=.true.; exit
              else
               qvector=.true. ! the only legitimate occurrence
              endif
+!
+            elseif (qexec) then ! this is a valid command character
+             lexec=lexec+1; exec(lexec:lexec)=c
+!
             endif
 !
            elseif (any(vector_close.eq.c)) then ! encountered a closing vector bracket
@@ -649,13 +805,37 @@
               qtag=.true. ; ltag=0
               qval=.false.
              endif ! (i.lt.l)
-            else ! no input mode (qtag/qeq/qval) : this should never happen
+!
+            elseif (qexec) then ! this is a valid command character
+             lexec=lexec+1; exec(lexec:lexec)=c
+!
+            else ! no input mode (qtag/qeq/qval/qexec) : this should never happen
              call warning(whoami, 'Misplaced closing bracket in input. Skipping line.',0)
              qerror=.true.; exit
             endif 
 !
            elseif (any(allowed2(1:allowed_len).eq.c)) then ! check that the characters are allowed
 !
+            if (qtag) then ! reading a tag
+             if (ltag.eq.0) then 
+! test for executable line; if executable tag found, switch off qtag, switch on qexec
+              j=len_trim(exec_start)
+!              write(0,*) cmdline(i:l)
+              if ( i + j - 1 .lt. l) then ! recall that cmdline(l:l) is a comment
+               qexec=cmdline(i : i + j - 1).eq.exec_start(1:j)
+               if (qexec) then
+                cmdline=cmdline(i+j:l)
+                call adjustleft(cmdline) 
+                l=len_trim(cmdline)
+                i=0
+                qtag=.false.
+                lexec=0
+                cycle !    <==== will bail if starting a command line
+               endif ! qexec
+              endif ! i+j-1 < l
+             endif ! ltag
+            endif ! qtag
+! try again
             if (qtag) then ! reading a tag
              if (all(lower2(1:26).ne.c).and.all(upper2(1:26).ne.c)) then
               if (ltag.eq.0) then 
@@ -667,16 +847,22 @@
               endif
              endif
              ltag=ltag+1; tag(ltag:ltag)=c
+!
             elseif (qeq) then
              call warning(whoami, 'Missing value for parameter "'//tag(1:ltag)//'". Skipping line.',0)
              qerror=.true.; exit 
+!
             elseif (qval) then
              lval=lval+1; val(lval:lval)=c
+!
+            elseif (qexec) then ! append to command
+             lexec=lexec+1; exec(lexec:lexec)=c
+!
             else
-             call warning(whoami, 'Unknown error. Skipping line',0)
+             call warning(whoami, 'Internal input error. Skipping line',0)
              qerror=.true.; exit 
             endif
-!      
+!
            else
              call warning(whoami, 'Unrecognized character "'//c//'". Skipping line.',0)
              exit 
@@ -691,16 +877,24 @@
        if (qcontext) then 
         call warning(whoami, 'File ended while inside a context. Your input may be incomplete.',0)
         qerror=.true.
+        call message(whoami, 'Returning to main context.') ; 
+        j=parser_context(maincontext_name)
+        parameters =>context%context_params(j)
+        executables=>context%context_commands(j)
        endif
 !
 #ifdef __PARALLEL
-       call MPI_BCAST(qerror,mpibool,1,0,communicator,ioerr)
+       call MPI_BCAST(qerror,1,mpibool,0,communicator,ioerr)
 #endif
        if (qerror) then
-         call warning(whoami, 'ERROR(S) FOUND IN INPUT.',0)
+         call warning(whoami, 'Error(s) found in input.',0)
        else
          call message(whoami, 'Input file read.')
        endif
+!
+#ifdef __PARALLEL
+       if (me.gt.0) call set_minmessagelev(msglev) ! restore
+#endif
 !
        end subroutine parse_file
 !============================================================================================
@@ -714,7 +908,7 @@
 !
        character(len=*), intent(in), optional :: ctx ; int :: ictx
 !
-       character(len=11), parameter :: whoami = 'LIST_PARAMS'
+       __IAM(LIST_PARAMS)
        int :: i
 #ifdef __PARALLEL
        int4mpi :: me
@@ -748,7 +942,7 @@
 !
        character(len=*), intent(in), optional :: ctx ; int :: ictx
 !
-       character(len=13), parameter :: whoami = 'LIST_COMMANDS'
+       __IAM(LIST_COMMANDS)
        int :: i
 #ifdef __PARALLEL
        int4mpi :: me
@@ -780,10 +974,10 @@
        int :: atoi4, i, l, j, k, sgn, base, missing
        character(len=*), intent(in) :: a
        character(len=len(a)) :: b
-       character(len=4), parameter :: whoami = 'ATOI'
+       __IAM(ATOI)
        int :: flag(10)
 ! convert string to int
-       missing=invalid
+       missing=INT(invalid)
        i=0
 !
        b=a
@@ -805,7 +999,7 @@
        do j=l,1,-1
         where(digits2.eq.b(j:j)); flag=1 ; elsewhere; flag=0 ; endwhere; k=sum(maxloc(flag))-1
         if (all(flag.eq.0)) then 
-         call warning(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO INTEGER.',-1)
+         call warning(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO INTEGER.',0)
          i=missing; sgn=1;
          exit
         else
@@ -822,10 +1016,10 @@
        int :: atoi8, i, l, j, k, sgn, base, missing
        character(len=*), intent(in) :: a
        character(len=len(a)) :: b
-       character(len=4), parameter :: whoami = 'ATOI'
+       __IAM(ATOI)
        int :: flag(10)
 ! convert string to int
-       missing=invalid
+       missing=INT(invalid)
        i=0
 !
        b=a
@@ -847,7 +1041,7 @@
        do j=l,1,-1
         where(digits2.eq.b(j:j)); flag=1 ; elsewhere; flag=0 ; endwhere; k=sum(maxloc(flag))-1
         if (all(flag.eq.0)) then 
-         call warning(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO INTEGER.',-1)
+         call warning(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO INTEGER.',0)
          i=missing; sgn=1;
          exit
         else
@@ -863,7 +1057,7 @@
        int :: atoi_, i, l, j, k, sgn, base, missing
        character(len=*), intent(in) :: a
        character(len=len(a)) :: b
-       character(len=4), parameter :: whoami = 'ATOI'
+       __IAM(ATOI)
        int :: flag(10)
 ! convert string to int
        missing=-999
@@ -888,7 +1082,7 @@
        do j=l,1,-1
         where(digits2.eq.b(j:j)); flag=1 ; elsewhere; flag=0 ; endwhere; k=sum(maxloc(flag))-1
         if (all(flag.eq.0)) then 
-         call warning(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO INTEGER.',-1)
+         call warning(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO INTEGER.',0)
          i=missing; sgn=1;
          exit
         else
@@ -901,10 +1095,10 @@
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        function atoiv(a,n)
        use output, only: warning
-       use constants, only: unknowni
+       __DEP_NUMBER, only: unknowni
        character(len=*) :: a
        character(len=maxlinelen), allocatable :: b(:)
-       character(len=5), parameter :: whoami = 'ATOIV'
+       __IAM(ATOIV)
        int :: n, i, j
        int, dimension(n) :: atoiv
 !
@@ -931,10 +1125,10 @@
        float, optional, intent(in) :: invalid
        float :: atof, missing
        float :: f 
-       int :: i, l, j, k, sgn, base
+       int :: l, j, k, sgn, base
        character(len=*) :: a
        character(len=len(a)) :: b
-       character(len=4), parameter :: whoami = 'ATOF'
+       __IAM(ATOF)
        bool :: fraction
        int :: flag(10)
 ! convert string to floating point number
@@ -956,12 +1150,12 @@
        else
         f=missing; sgn=1
        endif ! l.ge.1
-!       
+!
        base=0
        do j=l,1,-1
         if (b(j:j).eq.decimal) then
          if (fraction) then ! two decimal points are invalid
-          call warning(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO REAL.',-1)
+          call warning(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO REAL.',0)
           f=missing; sgn=1;
           exit
          else
@@ -974,7 +1168,7 @@
         else
          where(digits2.eq.b(j:j)); flag=1 ; elsewhere; flag=0 ; endwhere; k=sum(maxloc(flag))-1
          if (all(flag.eq.0)) then 
-          call warning(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO REAL.',-1)
+          call warning(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO REAL.',0)
           f=missing; sgn=1;
           exit
          else
@@ -988,10 +1182,10 @@
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        function atofv4(a,n)
        use output, only: warning
-       use constants, only: unknownf
+       __DEP_NUMBER, only: unknownf
        character(len=*) :: a
        character(len=maxlinelen), allocatable :: b(:)
-       character(len=5), parameter :: whoami = 'ATOFV'
+       __IAM(ATOFV)
        integer*4 :: n
        int :: i, j
        float, dimension(n) :: atofv4
@@ -1003,7 +1197,7 @@
        elseif (i.ne.n) then 
         call warning(whoami,' Vector dimension mismatch',-1)
        endif
-       i=min(i,n)
+       i=INT(min(i,n))
        atofv4=unknownf
        allocate(b(i))
        read(a,*) b
@@ -1016,10 +1210,10 @@
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        function atofv8(a,n)
        use output, only: warning
-       use constants, only: unknownf
+       __DEP_NUMBER, only: unknownf
        character(len=*) :: a
        character(len=maxlinelen), allocatable :: b(:)
-       character(len=5), parameter :: whoami = 'ATOFV'
+       __IAM(ATOFV)
        integer*8 :: n
        int :: i, j
        float, dimension(n) :: atofv8
@@ -1031,7 +1225,7 @@
        elseif (i.ne.n) then 
         call warning(whoami,' Vector dimension mismatch',-1)
        endif
-       i=min(i,n)
+       i=INT(min(i,n))
        atofv8=unknownf
        allocate(b(i))
        read(a,*) b
@@ -1047,7 +1241,7 @@
        bool :: atol
        character(len=*) :: a
        character(len=maxlinelen) :: b
-       character(len=4), parameter :: whoami = 'ATOL'
+       __IAM(ATOL)
        int :: l
 !
        b=a
@@ -1060,42 +1254,40 @@
         case('false', '.false.', '.FALSE.', 'FALSE', 'NO', 'OFF', 'no', 'off', 'n', 'N');
          atol=.false.
         case default
-         call error(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO BOOLEAN.',-1)
+         call error(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO BOOLEAN.',0)
         atol=.false.
        end select
 !
        end function atol
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
    function itoa4(i)
-   use constants, only : one
+   __DEP_NUMBER, only : one
    integer*4 :: i
    integer*4, parameter :: ione=1, itwo=2
 !   character(len=((ceiling(log10(one*abs(i)+1.)))+1)) :: itoa
 !   character(len=((ceiling(log10(one*abs(i)+1.)))+count((/i.lt.0/)) )) :: itoa4 ! sexy way to cast bool to int ? does not work with Pathscale
-   character(len=((ceiling(log10(one*abs(i)+1.)))+ (ione-sign(ione,i))/itwo )) :: itoa4
+   character(len=max(((ceiling(log10(one*abs(i)+1.)))+ (ione-sign(ione,i))/itwo ),1)) :: itoa4
    character(len=80) :: b 
    write(b,*) i
-   b=adjustl(b)
-   itoa4=b(1:len_trim(b))
+   itoa4=adjustl(b)
    end function itoa4
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
    function itoa8(i)
-   use constants, only : one
+   __DEP_NUMBER, only : one
    integer*8 :: i
    integer*8, parameter :: ione=1, itwo=2
 !   character(len=((ceiling(log10(one*abs(i)+1.)))+1)) :: itoa
 !   character(len=((ceiling(log10(one*abs(i)+1.)))+count((/i.lt.0/)) )) :: itoa8 ! sexy way to cast bool to int ?
-   character(len=((ceiling(log10(one*abs(i)+1.)))+ (ione-sign(ione,i))/itwo )) :: itoa8
+   character(len=max(((ceiling(log10(one*abs(i)+1.)))+ (ione-sign(ione,i))/itwo ),1)) :: itoa8
    character(len=80) :: b 
    write(b,*) i
-   b=adjustl(b)
-   itoa8=b(1:len_trim(b))
+   itoa8=adjustl(b)
    end function itoa8
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
    function ftoa(f)
    float :: f
-   character(len=20) :: ftoa
-   write(ftoa,'(G20.10)') f
+   character(len=17) :: ftoa
+   write(ftoa,'(G17.10)') f
    end function ftoa
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
    function ltoa(l)
@@ -1127,26 +1319,28 @@
 ! this subroutine uses a custom definition of white space
        subroutine adjustleft_1(a, space)
         character(len=*) :: a
-        character :: space(:)
+        character, intent(in) :: space(:)
         int :: l, i, j
-        l=len(a)
-        if (l.gt.0) then
-         i=1
-         do while (i.le.l)
-          if (all(space.ne.a(i:i))) exit
-          i=i+1
-         enddo
+        if (len(space).gt.0) then
+         l=len(a)
+         if (l.gt.0) then
+          i=1
+          do while (i.le.l)
+           if (all(space.ne.a(i:i))) exit
+           i=i+1
+          enddo
 !    move string left
-         j=1
-         do while (j.le.l-i+1)
-          a(j:j)=a(i+j-1:i+j-1)
-          j=j+1
-         enddo
+          j=1
+          do while (j.le.l-i+1)
+           a(j:j)=a(i+j-1:i+j-1)
+           j=j+1
+          enddo
 !    pad with blanks
-         do while (j.le.l)
-          a(j:j)=' '
-          j=j+1
-         enddo
+          do while (j.le.l)
+           a(j:j)=' '
+           j=j+1
+          enddo
+         endif
         endif
 !
        end subroutine adjustleft_1
@@ -1187,7 +1381,7 @@
 !
    l=len_trim(a);
    n=0
-   if (l.eq.0.or.any(a(1:l).eq.space2)) return ! this is string comparison: any applies to space2
+   if (l.eq.0.or.any(a(1:l).eq.space2)) then ; numword=n; return ; endif ! this is string comparison: any applies to space2
    j=1
    i=1
    do while (j.gt.0)
@@ -1204,8 +1398,8 @@
    endif
    numword=n
   end function numword
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-  function pop_string(a,n) result(b) ! returns the next white-space-delimited word in a string, and removes it from the string
+!===============================================================================
+  function pop_string_default(a,n) result(b) ! returns the next white-space-delimited word in a string, and removes it from the string
    character(len=*) :: a
    character(len=len(a)) :: b
    character, parameter :: tab=char(9)
@@ -1223,8 +1417,29 @@
    b=a(1:j-1)
    a=a(j:l)
    if (present(n)) n=l-j+1
-  end function pop_string
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  end function pop_string_default
+!===============================================================================
+  function pop_string_custom(a,n,space) result(b) ! same as pop_string except custom white space is passed in
+   character(len=*) :: a
+   character(len=len(a)) :: b
+   character(len=*) :: space
+   character :: space2(len(space))
+   int, optional, intent(inout) :: n
+   int :: j,l
+!
+   l=len(space); do j=1,l ; space2(j)=space(j:j) ; enddo
+!
+   if (present(n)) a(max(0,n)+1:)='' ! erase string beyond length n
+!
+   call adjustleft(a,space2)
+   l=len_trim(a);
+   j=scan(a(1:l),space)
+   if (j.eq.0) j=l+1 ! there must be only one word
+   b=a(1:j-1)
+   a=a(j:l)
+   if (present(n)) n=l-j+1
+  end function pop_string_custom
+!===============================================================================
   function find_tag(a,tag,n)
   character(len=*), intent(inout) :: a ! because we might be removing white space
   character(len=*) :: tag
@@ -1268,6 +1483,7 @@
   character(len=2), parameter :: space = ' '//tab
   character, parameter :: space2(2) = (/' ',tab/)
 !
+  j=0
   copy=tag; call adjustleft(copy,space2); ltag=len_trim(copy)
   if (present(n)) a(max(0,n)+1:)=''        ! erase string beyond length n
   call adjustleft(a,space2); l=len_trim(a);
