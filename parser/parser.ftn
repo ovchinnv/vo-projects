@@ -26,6 +26,7 @@
       int :: i
       character, parameter :: lower2(26)=(/ (lower(i:i),i=1,26)/)
       character, parameter :: upper2(26)=(/ (upper(i:i),i=1,26)/)
+      character, parameter, public :: letters(52)=(/ (lower2(i), i=1,26), (upper2(i), i=1,26) /)
       character, parameter, public :: digits2(10)=(/ (digits(i:i),i=1,10)/)
       character, parameter :: tilde='~'
       character, parameter :: decimal='.'
@@ -90,12 +91,13 @@
       public ltoa
 !
       interface adjustleft
-       module procedure adjustleft_1, adjustleft_2
+       module procedure adjustleft_1, adjustleft_2, adjustleft_3
       end interface adjustleft
 !
       interface pop_string
        module procedure pop_string_default
        module procedure pop_string_custom
+       module procedure pop_string_custom2
       end interface pop_string
 !
       interface itoa
@@ -524,7 +526,7 @@
            i=i+1
            c=cmdline(i:i)
 !     write(0,*) tag(1:ltag), val(1:lval),i
-           if (any(comment.eq.c.or.i.eq.l)) then ! end of command line
+           if ( (any(comment.eq.c).and..not.qstring).or.(i.eq.l)) then ! end of command line
 !write(0,*) "EOL:", qtag, tag(1:ltag), '=', val(1:lval)
             if ((qtag.and.i.gt.1).or.qeq) then
              call warning(whoami,'Unexpected end of line',0)
@@ -564,6 +566,9 @@
             else ! qtag
              exit
             endif ! qtag
+!
+           elseif ( any(comment.eq.c).and.qstring ) then ! comments are ok as long as they are part of a string
+            __INC(lval) ; val(lval:lval)=c;
 !=============================================================================================================
            elseif (any(string_open.eq.c).or.any(string_close.eq.c)) then ! beginning/finishing string parameter
 !
@@ -1405,18 +1410,31 @@
        end subroutine tolower
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 ! this subroutine uses a custom definition of white space
-       subroutine adjustleft_1(a, space)
+       subroutine adjustleft_1(a, space, invert_)
         character(len=*) :: a
         character, intent(in) :: space(:)
+        bool, optional, intent(in) :: invert_ ! when true "space" becomes "not space" i.e. everything but "space" is considered whitespace
+        bool :: invert
         int :: l, i, j
+        if (present(invert_)) then ; invert = invert_  ; else ; invert=.false. ; endif
+!
         if (len(space).gt.0) then
          l=len(a)
          if (l.gt.0) then
           i=1
-          do while (i.le.l)
-           if (all(space.ne.a(i:i))) exit
-           i=i+1
-          enddo
+!
+          if (invert) then
+           do while (i.le.l)
+            if (any(space.eq.a(i:i))) exit
+            i=i+1
+           enddo
+          else ! invert
+           do while (i.le.l)
+            if (all(space.ne.a(i:i))) exit
+            i=i+1
+           enddo
+          endif ! invert
+
 !    move string left
           j=1
           do while (j.le.l-i+1)
@@ -1459,6 +1477,32 @@
         endif
 !
        end subroutine adjustleft_2
+!====================================================================
+       subroutine adjustleft_3(a,l) ! length passed in
+        character(len=*) :: a
+        int, intent(inout) :: l
+        int :: i, j
+        if (l.gt.0) then
+         i=1
+         do while (i.le.l)
+          if (all(space.ne.a(i:i))) exit
+          i=i+1
+         enddo
+!    move string left
+         j=1
+         do while (j.le.l-i+1)
+          a(j:j)=a(i+j-1:i+j-1)
+          j=j+1
+         enddo
+!    pad with blanks
+         do while (j.le.l)
+          a(j:j)=' '
+          j=j+1
+         enddo
+         l=l-i+1; ! new string length
+        endif
+!
+       end subroutine adjustleft_3
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
   function numword(a) ! returns the number of blank-separated words in a string
    character(len=*) :: a
@@ -1507,26 +1551,61 @@
    if (present(n)) n=l-j+1
   end function pop_string_default
 !===============================================================================
-  function pop_string_custom(a,n,space) result(b) ! same as pop_string except custom white space is passed in
+  function pop_string_custom(a,n,space,invert_) result(b) ! same as pop_string except custom white space is passed in
    character(len=*) :: a
    character(len=len(a)) :: b
-   character(len=*) :: space
+   character(len=*), intent(in) :: space
+   bool, optional, intent(in) :: invert_ ! when true "space" becomes "not space" i.e. everything but "space" is considered whitespace
+   bool :: invert
    character :: space2(len(space))
-   int, optional, intent(inout) :: n
-   int :: j,l
+   int, intent(inout) :: n
+   int :: j,k,l
+   if (present(invert_)) then ; invert = invert_  ; else ; invert=.false. ; endif
 !
    l=len(space); do j=1,l ; space2(j)=space(j:j) ; enddo
 !
-   if (present(n)) a(max(0,n)+1:)='' ! erase string beyond length n
+   a(max(0,n)+1:)='' ! erase string beyond length n
 !
-   call adjustleft(a,space2)
+   call adjustleft(a,space2,invert)
    l=len_trim(a);
-   j=scan(a(1:l),space)
+   if (invert) then
+    j=0; do k=1,l ; if ( all(space2.ne.a(k:k)) ) then ; j=k ; exit ; endif ; enddo
+   else
+    j=scan(a(1:l),space)
+   endif
    if (j.eq.0) j=l+1 ! there must be only one word
    b=a(1:j-1)
    a=a(j:l)
-   if (present(n)) n=l-j+1
+   n=l-j+1
   end function pop_string_custom
+!===============================================================================
+  function pop_string_custom2(a,n,space2, invert_) result(b) ! same as pop_string except custom white space is passed in
+   character(len=*) :: a
+   character(len=len(a)) :: b
+   character, intent(in) :: space2(:)
+   bool, optional, intent(in) :: invert_ ! when true "space" becomes "not space" i.e. everything but "space" is considered whitespace
+   bool :: invert
+   character(len=size(space2)) :: space
+   int, intent(inout) :: n
+   int :: j,k,l
+   if (present(invert_)) then ; invert = invert_  ; else ; invert=.false. ; endif
+!
+   l=size(space2); do j=1,l ; space(j:j)=space2(j) ; enddo
+!
+   a(max(0,n)+1:)='' ! erase string beyond length n
+!
+   call adjustleft(a,space2, invert)
+   l=len_trim(a);
+   if (invert) then
+    j=0; do k=1,l ; if ( all(space2.ne.a(k:k)) ) then ; j=k ; exit ; endif ; enddo
+   else
+    j=scan(a(1:l),space)
+   endif
+   if (j.eq.0) j=l+1 ! there must be only one word
+   b=a(1:j-1)
+   a=a(j:l)
+   n=l-j+1
+  end function pop_string_custom2
 !===============================================================================
   function find_tag(a,tag,n)
   character(len=*), intent(inout) :: a ! because we might be removing white space
