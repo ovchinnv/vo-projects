@@ -961,12 +961,20 @@ module system
  character(len=*), intent(in) :: selection
  character(len=len(selection)) :: s, tag, operator, value
  character, parameter :: nontext(3) = (/' ','=','~'/)
- character, parameter :: opchar(4) = (/'=','~','(',')'/)
+ character, parameter :: opchar(7) = (/'=','~','(',')','<','>','!'/)
+ character(len=8), parameter :: unitary(4) = (/'ALL     ','NOH     ','HEAVY   ','HYDROGEN'/) ! list of tags corresponding to unitary operations
  int, pointer :: ind(:)
- int :: l
+ int, pointer :: ind0(:)
+ int :: l, i, ii, j, nsel
+ bool :: qerror
  __IAM(SYSTEM_GETIND)
 !
+! currently aim to support single selections only (i.e. no "and" "or" and combinations thereof)
+!
+ if (.not. system_initialized) return ! this may be too stringent -- may refine in the future
+!
  nullify(ind);
+ qerror=.false.
 !
  s=selection; call adjustleft(s); l=len_trim(s)
  if (l.le.0) then
@@ -983,19 +991,82 @@ module system
   tag=pop_string(s,l,nontext)
  endif
 !
- call adjustleft(s,l);
- if (all(opchar.ne.s(1:1))) then
-  call warning(whoami, 'Invalid character "'//s(1:1)//'" in operator. Abort.', -1); return
- else
-  operator=pop_string(s,l,opchar,.true.) ! take off just the operator part of the string
+ if (all(tag.ne.unitary)) then ! expecting a binary operation
+!
+  call adjustleft(s,l);
+  if (all(opchar.ne.s(1:1))) then
+   call warning(whoami, 'Invalid character "'//s(1:1)//'" in operator. Abort.', -1); return
+  else
+   operator=pop_string(s,l,opchar,.true.) ! take off just the operator part of the string
+  endif
+!
+  value=pop_string(s,l);
+!
+ endif ! not unitary
+!
+! process simple selection condition
+! create initial selection (ALL)
+ allocate(ind0(1:natom)) ; ind0=(/ (i , i=1,natom) /);
+ nsel=natom
+!
+! will use preprocessor macros to reduce explicit code duplication
+!
+ select case(tag)
+  case('ALL') ;  ! nothing -- ind0 is correct
+!===========
+  case('NOH','HEAVY') ;
+   j=0
+   do i=1, nsel ;
+    ii = ind0(i)
+    if ( all( atoms%type(ii)(1:1) .ne.(/'H','h'/) ) ) then ; __INC(j) ; ind0(j)=ii ; endif ! repopulate ind0 with matching indices
+   enddo
+   nsel=j;
+!===========
+  case('HYDROGEN') ;
+   j=0
+   do i=1, nsel ;
+    ii = ind0(i)
+    if ( any( atoms%type(ii)(1:1) .eq.(/'H','h'/) ) ) then ; __INC(j) ; ind0(j)=ii ; endif ! repopulate ind0 with matching indices
+   enddo
+   nsel=j;
+!===========
+  case('ANAME');
+!===========
+  select case(operator)
+   case('=','==') ; 
+     j=0 ! new index on ind0 
+     do i=1, nsel ; 
+      ii = ind0(i)
+      if (atoms%aname(ii).eq.value) then ; __INC(j) ; ind0(j)=ii ; endif ! repopulate ind0 with matching indices
+     enddo
+     nsel=j;
+!
+   case('~=','!=','<>') ;
+     j=0
+     do i=1, nsel ; 
+      ii = ind0(i)
+      if (atoms%aname(ii).ne.value) then ; __INC(j) ; ind0(j)=ii ; endif
+     enddo
+     nsel=j;
+!
+  case default;
+   call warning(whoami, 'Unsupported operator "'//trim(operator)//'" for selection tag "'//trim(tag)//'". Abort.', -1); qerror=.true.
+  end select
+!===========
+  case default;
+   call warning(whoami, 'Unsupported selection tag "'//trim(tag)//'". Abort.', -1); qerror=.true.
+ end select
+!
+! write(0,*) trim(tag), trim(operator), trim(value) ! , '"',s(1:l), '"'
+!
+ if (.not.qerror) then
+  allocate(ind(1:nsel));
+  call message(whoami, itoa(nsel)//' atoms were selected.')
+  if (nsel.lt.1) deallocate(ind)
  endif
 !
- value=pop_string(s,l);
-
-
- write(0,*) trim(tag), trim(operator), trim(value) ! , '"',s(1:l), '"'
-
-
+ __FREE(ind0)
+!
  end function system_getind
 !=========================================================================
  subroutine system_PDB_init(filename, paramtype)
