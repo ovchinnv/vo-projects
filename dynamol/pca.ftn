@@ -35,7 +35,7 @@ module pca
  bool :: qentropy, qmass, qbfit, qbfit_iter
  type (int_vector) :: evec_inds
  int :: stride_frame, first_frame, last_frame
- int :: natoms=-1
+ int :: nsel=-1 ! number of selected atoms
  float :: temperature ! quasiharmonic temperature
  float :: bfit_tol ! tolerance for iterative bestfit
 ! data arrays
@@ -234,21 +234,26 @@ module pca
  iatom_selection=>system_getind(atom_selection)
  if (.not.associated(iatom_selection)) then
   call warning(whoami, 'Error processing atom selection. Abort.',-1) ;  return
+ else 
+  nsel=size(iatom_selection)
+  if(nsel.lt.1) then
+   call warning(whoami, 'Empty selection specified. Abort.',-1) ;  __FREE(iatom_selection) ; return
+  endif
  endif
 !
 ! allocate variables
- natoms=atoms%last
 !
- allocate(wgt(natoms)) ! weights for covariance matrix
- wgt=m ! masses
+
+ allocate(wgt(nsel)) ! weights for covariance matrix
+ wgt=m(iatom_selection) ! masses
  if (qbfit) then
-  allocate(wgtn(natoms))
-  if (qmass) then ; wgtn=m; totmass=abs(sum(wgtn)) ; else ; wgtn=one ; totmass=natoms ; endif
+  allocate(wgtn(nsel))
+  if (qmass) then ; wgtn=m(iatom_selection); totmass=abs(sum(wgtn)) ; else ; wgtn=one ; totmass=nsel ; endif
   if (totmass.gt.__ERRTOL) then ; totmass=one/totmass; else ; totmass=one ; endif ; wgtn=wgtn*totmass
  endif
 !
- allocate(ravg(3,natom)) ; ravg=zero;        ! average structure
- allocate(rcov(3,natom,3,natom)) ; rcov=zero ! covariance matrix
+ allocate(ravg(3,nsel)) ;        ravg=zero; ! average structure
+ allocate(rcov(3,nsel,3,nsel)) ; rcov=zero  ! covariance matrix
 !
  if (.not.fatal_warning(__COMM)) pca_initialized=.true.
 !
@@ -274,13 +279,14 @@ subroutine pca_compute()
 __IAM(PCA_COMPUTE)
  int :: fid, ioerr, iframe, nframes, i, fido
  int :: j, k, a, b ! indices
- float, pointer :: r(:,:)=>NULL(), rref(:,:)=>NULL()
+ float, pointer :: r(:,:)=>NULL(), rref(:,:)=>NULL(), rall(:,:)=>NULL(), wlapack(:)=>NULL()
  int, pointer :: freeatoms(:)=>NULL()
  real*8, pointer :: unitcell(:)=>NULL()
  float :: t, u(3,3)=Id3, rr
  float :: rmsdavg ! rmsd between successive average structures (for iterative bestfit)
- bool :: readheader = .true., ok
+ bool :: readheader = .true., ok, qdouble
  character(len=10) :: tmpdcd='__dmol.tmp'
+ int, parameter :: ninfo=100 ! how frequently to output frame read count
 
  if (.not. pca_initialized) then
   call warning (whoami, 'PCA module not initialized. Cannot proceed.',-1)
@@ -299,36 +305,38 @@ __IAM(PCA_COMPUTE)
   endif
 !
 ! skip first_frame-1 frames, return number of frames read in iframe
+  allocate(rall(3,natom)) ! all atoms
   nframes=0
-  ioerr=dcd_read_frame(fid, ravg, readheader, freeatoms, unitcell, first_frame, iframe);
+  ioerr=dcd_read_frame(fid, rall, readheader, freeatoms, unitcell, first_frame, iframe);
 !write(0,*) first_frame, iframe, last_frame, associated(freeatoms), associated(unitcell), fid, ioerr
   if (ioerr.ne.0) then
    call warning(whoami, 'Error reading first frame (#'//itoa(first_frame)//'). Abort.',-1); goto 999
   endif
 !
-  allocate(rref(3,natoms), r(3,natoms))
-  rref=ravg; __INC(nframes);
+  allocate(rref(3,nsel), r(3,nsel))
+  rref=rall(:,iatom_selection); __INC(nframes);
 !========================== open new trajectory file that will contain only the requested frames (and the requested atoms)
    call message(whoami,'Opening temporary trajectory file')
 __FOPEN(tmpdcd,'UNFORMATTED','WRITE',fido)
-  ioerr=dcd_write_frame(fido, r, readheader, freeatoms); readheader=.false. ;
+  ioerr=dcd_write_frame(fido, rref, readheader); readheader=.false. ; ! note that we are not using the freeatoms functionality
   if (ioerr.ne.0) call warning(whoami, 'Trajectory write failed with IOSTAT='//itoa(ioerr)//'. Abort.',-1)
 !write(0,*) ioerr, fatal_warning(__COMM)
   if (fatal_warning(__COMM)) goto 999
 !
   do while (( iframe+stride_frame<=last_frame ) .or. last_frame<0) ! read until frame range exceeded, or EOF.
-    ioerr=dcd_read_frame(fid, r, readheader, freeatoms, unitcell, stride_frame, i); iframe=iframe+i ! keep track of the number of frames
+    ioerr=dcd_read_frame(fid, rall, readheader, freeatoms, unitcell, stride_frame, i); iframe=iframe+i ! keep track of the number of frames
 !write(0,*) iframe, stride_frame, ioerr
     if (ioerr.eq.0) then ! process frame 
+     r=rall(:,iatom_selection)
      if (qbfit) call RMSBestFit(r,rref,wgtn,u, QDIMSWAP_=.true.);
      __INC(nframes)
      t=one / (nframes)
-! write frame to output dcd file (before rotation to avoid precision loss)
-     ioerr=dcd_write_frame(fido, r, readheader, freeatoms);
+! write frame to output dcd file (before rotation to avoid changing the coordinates)
+     ioerr=dcd_write_frame(fido, r, readheader);
      if (ioerr.ne.0) then ; call warning(whoami, 'Trajectory write failed with IOSTAT='//itoa(ioerr)//'. Abort.',-1); goto 999 ; endif
 !
      r=matmul(u,r) ! rotate to overlap with rref
-     ravg=(one-t)*ravg + t*r
+     ravg=(one-t)*ravg + t*r ! no need to initialize ravg
     else ! ioerr>0
      if (last_frame>0) then
       call message(whoami, 'Not enough frames in trajectory ('//itoa(iframe)//'). Abort.', -1); goto 999
@@ -367,10 +375,10 @@ __FOPEN(tmpdcd,'UNFORMATTED','WRITE',fido)
     call message(whoami, ' ===> Log10(RMSD) between successive average structures: '//&
      &ftoa(log10(max(__ERRTOL, rmsdavg))))
    enddo
-  endif ! qbfit
+  endif ! iterative bestfit
 !================================= write average structure, if requested
   if (avg_file.ne.'NONE') then
-   ok=corio_write(avg_file, avg_type, ravg, B=wgt)
+   ok=corio_write(avg_file, avg_type, ravg, B=wgt, iselection=iatom_selection)
    if (.not.ok) call warning(whoami, 'Could not write average structure.',0);
   endif ! avg_file
 !================================= compute covariance matrix
@@ -384,12 +392,22 @@ __FOPEN(tmpdcd,'UNFORMATTED','WRITE',fido)
    if (ioerr.ne.0) then 
     call warning(whoami, 'Reading temporary trajectory failed with IOSTAT='//itoa(ioerr)//'. Abort.',-1); goto 999 ;
    else
-    call message(whoami, 'Processing frame '//itoa(i));
+    if ( (mod(i-1,ninfo)==0) .or. (i==nframes) ) call message(whoami, 'Processing frame '//itoa(i));
    endif
-   call RMSBestFit(r,ravg,wgtn,u, QDIMSWAP_=.true.);
-   r=matmul(u,r)-ravg
+   if (qbfit) then
+    if (qbfit_iter) then
+     call RMSBestFit(r,ravg,wgtn,u, QDIMSWAP_=.true.); ! superpose upon average structure
+    else
+     call RMSBestFit(r,rref,wgtn,u, QDIMSWAP_=.true.); ! superpose upon the reference structure for compatibility with other implementations
+    endif
+    r=matmul(u,r)-ravg
+   else ! no bestfit
+    r=r-ravg
+   endif
+!
 !   t=one / i
-   do k=1,natoms ! do not know how to make this faster
+!
+   do k=1,nsel ! do not know how to make this faster
     do b=1,3
      rr=r(b,k);
      do j=1, k-1
@@ -410,8 +428,8 @@ __FOPEN(tmpdcd,'UNFORMATTED','WRITE',fido)
   enddo ! frames
 !
 ! normalization and mass-weighting
-  wgt=sqrt(wgt/natoms)
-  do k=1,natoms ! do not know how to make this faster
+  wgt=sqrt(wgt/nframes)
+  do k=1,nsel ! do not know how to make this faster
    do b=1,3
     do j=1, k-1
      do a=1,3 ; rcov(a,j,b,k) = rcov(a,j,b,k) * wgt(j) * wgt(k) ; rcov(b,k,a,j) = rcov(a,j,b,k) ;  enddo
@@ -422,13 +440,36 @@ __FOPEN(tmpdcd,'UNFORMATTED','WRITE',fido)
 !================================= write covariance matrix, if requested
   if (covmat_file.ne.'NONE') then
    call message(whoami, 'Writing mass-weighted covariance matrix.');
-   ok=fieldio_write_scalar3D(covmat_file, 'CHEST', covmat_type, rcov, 3*natoms, 3*natoms, 1)
+   ok=fieldio_write_scalar3D(covmat_file, 'CHEST', covmat_type, rcov, 3*nsel, 3*nsel, 1)
    if (.not.ok) call warning(whoami, 'Could not write covariance matrix.',0);
   endif ! covmat_file
 !================================== diagonalize covariance matrix
-
-
-
+  allocate(eval(3*nsel)) ;
+  
+  qdouble=(kind(rcov).eq.kind(1d0)) 
+  if (qdouble) then ! double precision
+   call dsyev('V','L', 3*nsel, rcov, 3*nsel, eval, eval, iminusone, ioerr)
+  else              ! single precision
+   call ssyev('V','L', 3*nsel, rcov, 3*nsel, eval, eval, iminusone, ioerr)
+  endif
+!
+  if (ioerr.ne.0) then 
+   call warning(whoami, 'Error calculating work array size for LAPACK diagonalizer. Abort',-1); __FREE(eval) ; goto 999 ;
+  endif
+!
+  i=nint(eval(1)) ; ! dimension of work array
+  allocate(wlapack(i)) ;
+  call message(whoami, 'Calling LAPACK diagonalizer.');
+  if (qdouble) then 
+   call dsyev('V','L', 3*nsel, rcov, 3*nsel, eval, wlapack, i, ioerr)
+  elseif (qsingle)
+   call ssyev('V','L', 3*nsel, rcov, 3*nsel, eval, wlapack, i, ioerr)
+  else
+   
+  endif
+!
+  write(0,*) 'eig:'
+  write(0,*) eval
 !
   case default
    call warning(whoami, 'Trajectory type "'//trim(trajectory_type)//'" is not supported.', -1); goto 999
@@ -442,6 +483,7 @@ __FOPEN(tmpdcd,'UNFORMATTED','WRITE',fido)
  __FREE(unitcell)
  __FREE(r)
  __FREE(rref)
+ __FREE(wlapack)
 !
 end subroutine pca_compute
 !=======================================================================

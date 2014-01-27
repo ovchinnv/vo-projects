@@ -13,8 +13,8 @@ CFLAGS =-O3 -fno-math-errno -g -c
 #MPI_HOME=/usr/local/mpich2-intel
 #---GNU
 FC=gfortran
-#FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  -Wall  #-fopenmp 
-FFLAGS=-O1 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  -Wall  #-fopenmp 
+FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  -Wall  #-fopenmp 
+#FFLAGS=-O1 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  -Wall  #-fopenmp 
 #FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno #-fbounds-check -frange-check
 MPI_HOME=/usr/local/mpich2-gnu
 #MPI_HOME=/usr/lib/openmpi
@@ -52,9 +52,11 @@ LD=$(FC)
 LDFLAGS=-dynamic -Bdynamic # -no-ipo
 #LDFLAGS=-static -ipa
 
-#FLIBS+=-lgfortran
+#EXTRA_LIBS+=-lgfortran
 # extra libs for ifort
-#FLIBS+=-lirc -limf -lifcore -ldl
+#EXTRA_LIBS+=-lirc -limf -lifcore -ldl
+
+EXTRA_LIBS=-llapack
 
 PIC=-fPIC
 GLOBALMACROS=-include $(ROOT)/source.defs -include $(ROOT)/contexts.def
@@ -70,6 +72,7 @@ MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -pthread -lmpich -lmpichf90 -lmpl # -
 
 INCLUDES+=-I $(ROOT)/include
 LIBS+=-L $(ROOT)/lib
+LIBS+=$(EXTRA_LIBS)
 OBJDIR=$(ROOT)/obj
 LOBJS=$(addprefix $(OBJDIR)/,$(LINKOBJS))
 DEPS+=$(addprefix $(NAME)/,$(SUBDIRS))
