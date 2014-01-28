@@ -19,12 +19,12 @@ d=fread(fid,2,delf);
 a=fread(fid,[nx ny],ff); pcolor(a); shading interp; colorbar;
 
 % 
-mass=12.0110;
-a=a/mass/mass;
+%mass=12.0110;
+%a=a/mass/mass;
 
-save 'a.dat' -ascii a
+%save 'a.dat' -ascii a
 
-return
+%return
 
 %diagonalize
 [ev,e]=eig(a);

@@ -38,6 +38,7 @@ module pca
  int :: nsel=-1 ! number of selected atoms
  float :: temperature ! quasiharmonic temperature
  float :: bfit_tol ! tolerance for iterative bestfit
+ float :: entropy_q, entropy_c ! classical and quantum entropies
 ! data arrays
  float, pointer :: ravg(:,:)=>NULL(), rcov(:,:,:,:)=>NULL(), eval(:)=>NULL(), evec(:,:)=>NULL(), wgt(:)=>NULL(), wgtn(:)=>NULL()
  int, pointer :: iatom_selection(:)=>NULL()
@@ -172,7 +173,7 @@ module pca
 #undef __BOOL
 #define __VAR	temperature
 #define __TAG	quasi_temp
-#define __NAME	temprature (Kelvin) for entropy calculation
+#define __NAME	temperature (Kelvin) for entropy calculation
 #define __DEFAULT_VAL 300.0d0
 #include "parser/parser_macro1.src"
 !
@@ -238,6 +239,15 @@ module pca
   nsel=size(iatom_selection)
   if(nsel.lt.1) then
    call warning(whoami, 'Empty selection specified. Abort.',-1) ;  __FREE(iatom_selection) ; return
+  else
+   l=last_frame-first_frame+1;
+   if (last_frame.gt.0.and.(3*nsel.gt.l)) then
+    call warning(whoami, 'Requested number of frames ('//itoa(l)//') < number of DOFs ('//itoa(3*nsel)//')',0)
+    call warning(whoami, 'Covariance matrix will therefore have zero eigenvalues.',0);
+    if (qentropy) then 
+     call warning(whoami,'Entropy will not be computed.',0) ; qentropy=.false.
+    endif
+   endif ! test frame range
   endif
  endif
 !
@@ -282,9 +292,9 @@ __IAM(PCA_COMPUTE)
  float, pointer :: r(:,:)=>NULL(), rref(:,:)=>NULL(), rall(:,:)=>NULL(), wlapack(:)=>NULL()
  int, pointer :: freeatoms(:)=>NULL()
  real*8, pointer :: unitcell(:)=>NULL()
- float :: t, u(3,3)=Id3, rr
+ float :: t, u(3,3)=Id3, rr, alpha
  float :: rmsdavg ! rmsd between successive average structures (for iterative bestfit)
- bool :: readheader = .true., ok, qdouble
+ bool :: readheader = .true., ok, qdouble, qsingle
  character(len=10) :: tmpdcd='__dmol.tmp'
  int, parameter :: ninfo=100 ! how frequently to output frame read count
 
@@ -323,19 +333,25 @@ __FOPEN(tmpdcd,'UNFORMATTED','WRITE',fido)
 !write(0,*) ioerr, fatal_warning(__COMM)
   if (fatal_warning(__COMM)) goto 999
 !
+  ravg=rref ! initialize average structure
+!
   do while (( iframe+stride_frame<=last_frame ) .or. last_frame<0) ! read until frame range exceeded, or EOF.
     ioerr=dcd_read_frame(fid, rall, readheader, freeatoms, unitcell, stride_frame, i); iframe=iframe+i ! keep track of the number of frames
 !write(0,*) iframe, stride_frame, ioerr
     if (ioerr.eq.0) then ! process frame 
      r=rall(:,iatom_selection)
-     if (qbfit) call RMSBestFit(r,rref,wgtn,u, QDIMSWAP_=.true.);
-     __INC(nframes)
-     t=one / (nframes)
 ! write frame to output dcd file (before rotation to avoid changing the coordinates)
      ioerr=dcd_write_frame(fido, r, readheader);
      if (ioerr.ne.0) then ; call warning(whoami, 'Trajectory write failed with IOSTAT='//itoa(ioerr)//'. Abort.',-1); goto 999 ; endif
 !
-     r=matmul(u,r) ! rotate to overlap with rref
+     __INC(nframes)
+     t=one / (nframes)
+!
+     if (qbfit) then 
+      call RMSBestFit(r,rref,wgtn,u, QDIMSWAP_=.true.);
+      r=matmul(u,r)     ! rotate to overlap with rref
+     endif
+!
      ravg=(one-t)*ravg + t*r ! no need to initialize ravg
     else ! ioerr>0
      if (last_frame>0) then
@@ -349,6 +365,19 @@ __FOPEN(tmpdcd,'UNFORMATTED','WRITE',fido)
   call message(whoami,'Read '//itoa(nframes)//' trajectory frames.')
   call files_close(fid)
   call files_close(fido)
+!
+! test frame range (again, now that we know the number of frames)
+!
+  if (atoi(slast_frame)<0) then ! otherwise, a warning was issued during initialization
+   i=last_frame-first_frame+1;
+   if (3*nsel.gt.i) then
+    call warning(whoami, 'Number of trajectory frames ('//itoa(i)//') < number of DOFs ('//itoa(3*nsel)//')',0)
+    call warning(whoami, 'Covariance matrix will therefore have zero eigenvalues.',0);
+    if (qentropy) then 
+     call warning(whoami,'Entropy will not be computed.',0) ; qentropy=.false.
+    endif
+   endif ! test frame range
+  endif
 !================================= perform bestfit iteratively, if requested
   if (qbfit.and.qbfit_iter) then
    call message(whoami, 'Performing iterative bestfit to compute optimal average structure.');
@@ -445,12 +474,17 @@ __FOPEN(tmpdcd,'UNFORMATTED','WRITE',fido)
   endif ! covmat_file
 !================================== diagonalize covariance matrix
   allocate(eval(3*nsel)) ;
-  
-  qdouble=(kind(rcov).eq.kind(1d0)) 
-  if (qdouble) then ! double precision
+!
+  qdouble=(kind(rcov).eq.kind(1d0));
+  qsingle=(kind(rcov).eq.kind(1.0));
+!
+  if (qdouble) then       ! double precision
    call dsyev('V','L', 3*nsel, rcov, 3*nsel, eval, eval, iminusone, ioerr)
-  else              ! single precision
+  elseif (qsingle) then   ! single precision
    call ssyev('V','L', 3*nsel, rcov, 3*nsel, eval, eval, iminusone, ioerr)
+  else
+   call warning(whoami, 'Cannot find compatible LAPACK diagonalization routine for kind "'//itoa(kind(rcov))//'". Abort',-1);
+   __FREE(eval); goto 999
   endif
 !
   if (ioerr.ne.0) then 
@@ -462,14 +496,49 @@ __FOPEN(tmpdcd,'UNFORMATTED','WRITE',fido)
   call message(whoami, 'Calling LAPACK diagonalizer.');
   if (qdouble) then 
    call dsyev('V','L', 3*nsel, rcov, 3*nsel, eval, wlapack, i, ioerr)
-  elseif (qsingle)
+  elseif (qsingle) then
    call ssyev('V','L', 3*nsel, rcov, 3*nsel, eval, wlapack, i, ioerr)
   else
-   
+! should be impossible to get here
   endif
+!=============================================
+! output eigenvalues
+  if (eval_file.ne.'NONE') then
+   call message(whoami, 'Writing eigenvalues.');
+   __FOPEN(eval_file, 'FORMATTED','WRITE',i);
+   if (i>0) write(i,'(5G30.22)',IOSTAT=ioerr) eval
+   if (ioerr.ne.0) then 
+    call warning(whoami, 'Error writing eigenvalues to file "'//trim(eval_file)//'"',-1); 
+    __FREE(eval) ; goto 999 ; 
+   endif
+  endif
+!=============================================
+! compute quasiharmonic entropy
+  if (qentropy) then
+   call message(whoami, 'Computing quasiharmonic entropy.');
+   t=one/sqrt(kboltzmann*temperature*kjoule) * ( planck * 1d13 ) * opi * half ! parameter to convert eigenvalue units to dimensionless energy (h nu)/(k T)
 !
-  write(0,*) 'eig:'
-  write(0,*) eval
+   entropy_q = zero
+   entropy_c = one
+   j=0; k=0
+   do i=1, 3*nsel
+    if (( eval(i)<0 ) .and.  abs(eval(i)).gt.__ERRTOL*100d0) then ; __INC(j) ; cycle ;
+    elseif (abs(eval(i)).le.__ERRTOL*100d0) then ; __INC(k) ; cycle ;
+    endif
+!
+    alpha = t / sqrt( max(eval(i),__ERRTOL)) ;
+    rr=exp(-alpha)
+    entropy_q = entropy_q + alpha * rr / ( one - rr ) - log (one - rr )
+    entropy_c = entropy_c * alpha
+   enddo
+   entropy_q=entropy_q * kboltzmann
+   entropy_c = - kboltzmann * ( log (entropy_c) + 3*nsel - j )
+!
+   call message(whoami, 'Quantum mechanical HO entropy (kcal/mol/K): '//ftoa(entropy_q)//', -TS (kcal/mol): '//ftoa(-entropy_q*temperature))
+   call message(whoami, 'Classical HO entropy (kcal/mol/K)         : '//ftoa(entropy_c)//', -TS (kcal/mol): '//ftoa(-entropy_c*temperature))
+   call message(whoami, itoa(j)//' negative and '//itoa(k)//' near-zero eigenvalues were ignored.')
+  endif ! qentropy
+
 !
   case default
    call warning(whoami, 'Trajectory type "'//trim(trajectory_type)//'" is not supported.', -1); goto 999
