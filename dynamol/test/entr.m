@@ -13,7 +13,7 @@ h=hbar*2*pi*Na*jle; %   so that h * pf2 gives kcal/mol
 % compute entropy from covariance matrix eigenvalues
 %
 fname='rab11a_eval.dat';
-fname='carma.PCA.eigenvalues.dat';
+%fname='carma.PCA.eigenvalues.dat';
 
 [ev]=textread(fname,'','emptyvalue',NaN); % puts missing values where there is a space followed by newline
 
