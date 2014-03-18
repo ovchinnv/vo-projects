@@ -54,7 +54,7 @@ bestfit.h : bestfit.H $(LOCALDEPS) $(GLOBALDEPS)
 	$(FPP) $(FPPFLAGS) -D__BINDC -U__CHARMM $(GLOBALMACROS) $(LOCALMACROS) -P $< > $@
 
 ctest :: ctest.o shared static force_look
-	$(CC) -Bdynamic ctest.o $(LIBS) $(MPI_LIBS) $(CLIB) $(FLIBS) -o  ctest
+	$(CC) -Bdynamic -pie ctest.o $(LIBS) $(MPI_LIBS) $(CLIB) $(FLIBS) -o  ctest
 	echo "==================================================="
 	echo "Running C test :"
 	echo "==================================================="
@@ -62,7 +62,7 @@ ctest :: ctest.o shared static force_look
 	echo "==================================================="
 	echo
 ctest.o : ctest.c bestfit.h $(LOCALDEPS)
-	$(CC) $(CFLAGS) -D__BINDC $(LOCALMACROS) -P $< -o $@
+	$(CC) $(CFLAGS) -D__BINDC $(LOCALMACROS) $< -o $@
 
 clean::
 	rm -f *.mod $(CHARMM_SOURCES) $(SOURCES) $(BINDSOURCES) $(OBJS) $(CBINDOBJ) $(SBINDOBJS) $(DBINDOBJS) $(ROOT)/$(NAME).stamp \
