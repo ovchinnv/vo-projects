@@ -52,11 +52,11 @@ LD=$(FC)
 LDFLAGS=-dynamic -Bdynamic # -no-ipo
 #LDFLAGS=-static -ipa
 
-#EXTRA_LIBS+=-lgfortran
+EXTRA_LIBS+=-lgfortran
 # extra libs for ifort
 #EXTRA_LIBS+=-lirc -limf -lifcore -ldl
 
-EXTRA_LIBS=-llapack
+EXTRA_LIBS+=-llapack
 
 PIC=-fPIC
 GLOBALMACROS=-include $(ROOT)/source.defs -include $(ROOT)/contexts.def

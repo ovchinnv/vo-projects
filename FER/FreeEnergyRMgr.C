@@ -23,7 +23,7 @@
 #include "GlobalMaster.h"
 #include "GlobalMasterFreeEnergy.h"
 
-#define DEBUGM
+//#define DEBUGM
 #include "Debug.h"
 
 ARestraintManager::ARestraintManager() {

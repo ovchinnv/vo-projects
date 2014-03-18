@@ -956,20 +956,24 @@ void AnRMSDRestraint::qDiffRotCheck() {
   int nforced = Groups[1].GetSize();
   int const *iatom_o=Groups[0].GetInds();
   int const *iatom_f=Groups[1].GetInds();
+  const double* orientWeights = Groups[0].GetWeights() ;
+  const double* forcedWeights = Groups[1].GetWeights() ;
 //
   if (norient==nforced) {
    qdiffrot=0 ; // assume that the indices are the same, check below
-   std::map<int, std::vector<int> > imap; // maps aid to o/f atom indices
+   std::map<int, double > imap; // maps aid to o/f atom weights
 // first store forced atom indices
    for (int i=0; i<nforced; i++) {
     int aid = iatom_f[i];
-    imap[aid]=std::vector<int> (1,i); //store forced atom index
+    imap[aid]=forcedWeights[i]; //store forced atom weight
    }
-// now store orientation atom indices
+// now loop over orientation atom indices
    for (int i=0; i<norient; i++) {
     int aid = iatom_o[i];
-    std::map<int, std::vector<int> > ::iterator ind = imap.find(aid) ; // check whether id already in the map
+    std::map<int, double > ::iterator ind = imap.find(aid) ; // check whether id already in the map
     if (ind == imap.end()) {// not found
+     qdiffrot=1; break;
+    } else if (imap[aid] != orientWeights[i]) {
      qdiffrot=1; break;
     }
    } //i
