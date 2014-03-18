@@ -1,7 +1,7 @@
 SHELL=/bin/sh
 #
 CC=gcc
-CFLAGS =-O3 -fno-math-errno -g -c -fPIC -fPIE
+CFLAGS =-O3 -fno-math-errno -g -c -fPIC
 #---INTEL
 #FC=ifort
 #FFLAGS=-O2 -c

@@ -40,13 +40,13 @@ libbestfit.so: $(DBINDOBJS)
 tcl : libbestfit_tcl.so
 libbestfit_tcl.so : bestfit.i $(DBINDOBJS)
 	$(SWIGC) -D__BINDC $(SFLAGS) -tcl bestfit.i
-	$(CC) -fPIC $(CFLAGS) -D__BINDC $(LOCALMACROS) bestfit_wrap.c
+	$(CC) $(PIC) $(CFLAGS) -D__BINDC $(LOCALMACROS) bestfit_wrap.c
 	$(CC) -shared bestfit_wrap.o $(DBINDOBJS) $(FLIBS) -o $@
 
 python : _bestfit.so
 _bestfit.so : bestfit.i $(DBINDOBJS)
 	$(SWIGC) -D__BINDC $(SFLAGS) -python bestfit.i
-	$(CC) -fPIC $(CFLAGS) -D__BINDC $(LOCALMACROS) $(PYTHONH) bestfit_wrap.c
+	$(CC) $(PIC) $(CFLAGS) -D__BINDC $(LOCALMACROS) $(PYTHONH) bestfit_wrap.c
 	$(CC) -shared bestfit_wrap.o $(DBINDOBJS) $(FLIBS) $(LPYTHON) -o $@
 
 bestfit.i : bestfit.h
@@ -54,7 +54,7 @@ bestfit.h : bestfit.H $(LOCALDEPS) $(GLOBALDEPS)
 	$(FPP) $(FPPFLAGS) -D__BINDC -U__CHARMM $(GLOBALMACROS) $(LOCALMACROS) -P $< > $@
 
 ctest :: ctest.o shared static force_look
-	$(CC) -Bdynamic -pie ctest.o $(LIBS) $(MPI_LIBS) $(CLIB) $(FLIBS) -o  ctest
+	$(CC) -Bdynamic ctest.o $(LIBS) $(MPI_LIBS) $(CLIB) $(FLIBS) -o  ctest
 	echo "==================================================="
 	echo "Running C test :"
 	echo "==================================================="
