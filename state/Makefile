@@ -1,4 +1,4 @@
-ROOT=../
+ROOT=..
 OBJS=fieldbcdef.o datatypes.o state.o
 NAME=state
 DEPS=output constants parser continua/io
