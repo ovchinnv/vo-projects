@@ -35,7 +35,7 @@ static : libbestfit.a
 libbestfit.a: $(SBINDOBJS)
 	$(AR) $(AFLAGS) $@ $(SBINDOBJS)
 libbestfit.so: $(DBINDOBJS)
-	$(CC) -shared $(DBINDOBJS) $(FLIBS) -o $@
+	$(LD) -shared $(DBINDOBJS) $(FLIBS) -o $@
 
 tcl : libbestfit_tcl.so
 libbestfit_tcl.so : bestfit.i $(DBINDOBJS)

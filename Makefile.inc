@@ -5,7 +5,7 @@ CFLAGS =-O3 -fno-math-errno -g -c -fPIC
 #---INTEL
 #FC=ifort
 #FFLAGS=-O2 -c
-#FFLAGS=-O3 -fast -finline -fp-model fast=2 -xhost -ipo -fno-math-errno -no-inline-factor -no-inline-min-size -c
+#FFLAGS=-O3 -fast -finline -fp-model fast=2 -xhost -ipo -fno-math-errno -no-inline-factor -no-inline-min-size -c -g
 #FFLAGS= -O3 -fast -c -ipo -debug#-fast -fno-math-errno -finline -fp-model fast=2 -xhost -no-ipo #-ipo 
 #FFLAGS= -O0 -c -g -check all -debug extended -debug-parameters all -traceback -no-ipo #-fast -fno-math-errno -finline -fp-model fast=2 -xhost -no-ipo #-ipo 
 #FFLAGS= -O3 -c -fast -fno-math-errno -finline -fp-model fast=2 -xSSE3 -ipo # -no-inline-factor -no-inline-min-size #-ipo #xSSE3 for pentium
@@ -13,9 +13,9 @@ CFLAGS =-O3 -fno-math-errno -g -c -fPIC
 #MPI_HOME=/usr/local/mpich2-intel
 #---GNU
 FC=gfortran
-#FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  -Wall  #-fopenmp 
+FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  -Wall  #-fopenmp 
 #FFLAGS=-O1 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  -Wall  #-fopenmp 
-FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno #-fbounds-check -frange-check
+#FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno #-fbounds-check -frange-check
 MPI_HOME=/usr/local/mpich2-gnu
 #MPI_HOME=/usr/lib/openmpi
 #---PATHSCALE
@@ -24,7 +24,7 @@ MPI_HOME=/usr/local/mpich2-gnu
 #FFLAGS=-Ofast -fno-math-errno -extend-source -ffortran-bounds-check -OPT:Olimit=8753 -INLINE -ipa -c
 #FFLAGS=-extend-source -OPT:Olimit=8753 -INLINE -c
 #MPI_HOME=/usr/local/mpich2-path64
-#FC=g95
+#FC=/usr/bin/g95
 #FFLAGS=-O3 -c -g -ffree-line-length-huge -ffixed-line-length-132 -fno-second-underscore -cpp
 #MPI_HOME=/usr/local/mpich2-g95
 #
@@ -43,7 +43,7 @@ DEFS+=-Dint=integer -Dfloat=real*8 -Dbool=logical -Dmpiint=MPI_INTEGER -Dmpifloa
 # -C flag preserves comments
 
 AR=xiar
-#AR=ar
+AR=ar
 AFLAGS=rvcs
 
 LD=$(FC)
@@ -52,9 +52,12 @@ LD=$(FC)
 LDFLAGS=-dynamic -Bdynamic # -no-ipo
 #LDFLAGS=-static -ipa
 
-EXTRA_LIBS+=-lgfortran
+#EXTRA_LIBS+=-lgfortran
 # extra libs for ifort
 #EXTRA_LIBS+=-lirc -limf -lifcore -ldl
+#
+# G95
+#EXTRA_LIBS+=-lf95 -lgcc
 
 EXTRA_LIBS+=-llapack
 
