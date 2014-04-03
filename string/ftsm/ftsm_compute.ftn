@@ -685,7 +685,7 @@ __CHARMM_ONLY##IF STRINGM
 !===========================================================================
 !===========================================================================
       subroutine ftsm_addforce(fx,fy,fz,addforce)
-
+      __DEP_NUMBER
 !    note: boundary points require special treatment: x0.25 force constant and x2 dperp0
 !    this is because distance between replicas is halved for the endpoints, but still corresponds to 1 (as for the inner pts)
       float :: fx(:), fy(:), fz(:)
@@ -708,6 +708,8 @@ __CHARMM_ONLY##IF STRINGM
       else
        t=1d0; omt=0d0
       endif
+!
+      if (ftsm_scaledist) then
 ! lowering the force constants for endpoints is necessary to get the equivalent fluctuations
 ! can think of either scaling the force constants, or scaling the distances (and gradients) by 0.5 and keeping the same force constans
 ! perpendicular component normalized by physical interimage dist. (which is halved for endpoints); so it appears too large, and is halved below
@@ -715,18 +717,23 @@ __CHARMM_ONLY##IF STRINGM
 ! for the internal points, integrating the force through one inter-image distance is equivalent to multiplying
 ! the force by 0.5 (0.5 is the scaled distance between adjacent inner images)
 ! for the endpoints, the distance between adjacent images is 1, so take the force (scaled down) and multiply by 1
-      if (qendpoint) then ; fac=0.5d0 ; fac2=1d0 ; fe_curv=0d0 ! no curvature at endpoints
-                     else ; fac=1.0d0 ; fac2=0.5d0
+       if (qendpoint) then ; fac=0.5d0 ; fac2=1d0 ; fe_curv=0d0 ! no curvature at endpoints
+                      else ; fac=1.0d0 ; fac2=0.5d0
+       endif
+!     no need to scale -- using dimensional distances
+      else
+       fac=one ; fac2=one ;
+       if (qendpoint) fe_curv=zero ; ! the endpoint curvature from ftsmv2_compute is scaled by 4 (incorrect) but we do not use it here
       endif
 !
       if (proj_on) then
 ! restraint force parallel to string
        pre1 = kpara * fac * fac * ( dpar-dpar0 )                ! scale down the force constant of endpoints (one for d, one for gradients)
-       pre2 = kperp * fac * max   ( fac * dperp - dperp0, 0d0 ) ! ignore negative values; dperp0 criterion in inner-replica d-metric
+       pre2 = kperp * fac * max   ( fac * dperp - dperp0, zero ) ! ignore negative values; dperp0 criterion in inner-replica d-metric
 ! update force: for inner points, multiply force by 0.5; for boundary use 1d0; the FE is then simply the sum of the forces along the string
        avforce(1) = t * avforce(1) + omt * pre1 * fac2 ! force acting on dpar0 is pre1 (integrate negative to get f.e.)
        avforce(2) = t * avforce(2) - omt * pre1 * fac2 * (fe_curv * fac * fac) ! force due to curvature (note: either fac=1 or curv=0)
-       avforce(3) = t * avforce(3) + omt * pre2 * fac2 ! force acting on derp0 is pre2 ( NOTE: this is not a true force along the path)
+       avforce(3) = t * avforce(3) + omt * pre2 * fac2 ! force acting on dperp0 is pre2 ( NOTE: this is not a true force along the path)
 !                                                      ! even if I am treating it here as such; it is an orthogonal `correction`
        if (pre2 .gt. 0d0) then
 !
@@ -762,7 +769,7 @@ __CHARMM_ONLY##IF STRINGM
        endif
       else ! .not.  proj_on
        pre1 = krms * ( drms-drms0 )
-       if (qrms_upper_bound) pre1=max(pre1,0d0) ! apply of force exceeds threshold
+       if (qrms_upper_bound) pre1=max(pre1,0d0) ! apply if force exceeds threshold
 ! update force (which will not likely be used)
 !
        avforce(1) = t * avforce(1) + omt * pre1 ! force acting on dpar0 is pre1 (integrate negative to get f.e.)

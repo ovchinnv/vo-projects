@@ -312,7 +312,7 @@ __CHARMM_ONLY##IF STRINGM
      & /,A,' BUT INVALID STRING ID (MAY BE OK).')
       elseif (ME_STRNG.ne.MPI_UNDEFINED.and.                            &
      &  (ME_LOCAL.ne.0.or.MPI_COMM_LOCAL.eq.MPI_COMM_NULL)) then
-        write(_MSGBUF, 111) whoami, ME_GLOBAL, whoami ; __PRINT(_MSGBUF)
+        write(_MSGBUF, 112) whoami, ME_GLOBAL, whoami ; __PRINT(_MSGBUF)
  112  FORMAT(A, ' WORLD REPLICA ',I5, ' HAS A VALID STRING ID',         &
      & /,A,' BUT A NONZERO GROUP ID. ABORTING.')
        return
@@ -485,7 +485,6 @@ __CHARMM_ONLY##ENDIF
 !
 #endif
       int, pointer :: jselct(:)
-      int :: nslct
 !
       __IAM(SM0K_REPA_INIT)
 !
@@ -507,22 +506,19 @@ __CHARMM_ONLY##ENDIF
       num_average_samples=0
 !
 !     deallocate arrays
-      if (allocated(fixed_o)) deallocate(fixed_o) ! flags
-      if (allocated(fixed_m)) deallocate(fixed_m) ! flags
-      if (allocated(iatom_o)) deallocate(iatom_o)
-      if (allocated(iatom_m)) deallocate(iatom_m)
-      if (allocated(iatom_free_o)) deallocate(iatom_free_o)
-      if (allocated(iatom_free_m)) deallocate(iatom_free_m)
-      if (allocated(rref_o)) deallocate(rref_o)
-      if (allocated(rcurrent_o)) deallocate(rcurrent_o)
-      if (allocated(rcurrent_m)) deallocate(rcurrent_m)
-      if (allocated(orientWeights)) deallocate(orientWeights)
-      if (allocated(repaWeights)) deallocate(repaWeights)
-!
-!     deallocate arclength+curavture arrays
-      if (allocated(ds)) deallocate(ds)
-!     initialize curvature array
-      if (allocated(curv)) deallocate(curv)
+      __DEALL(fixed_o)
+      __DEALL(fixed_m)
+      __DEALL(iatom_o)
+      __DEALL(iatom_m)
+      __DEALL(iatom_free_o)
+      __DEALL(iatom_free_m)
+      __DEALL(rref_o)
+      __DEALL(rcurrent_o)
+      __DEALL(rcurrent_m)
+      __DEALL(orientWeights)
+      __DEALL(repaWeights)
+      __DEALL(ds) !     deallocate arclength+curavture arrays
+      __DEALL(curv) ! deallocate curvature array
 !
       repa_initialized=.false.
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -865,10 +861,10 @@ __TRIMA(methods(interp_method),mlen)
       repa_initialized=.true.
 !
 !    deallocate temporary variables
-      if (associated(iselct)) deallocate(iselct)
-      if (associated(jselct)) deallocate(jselct)
+      __FREE(iselct)
+      __FREE(jselct)
 #ifdef __CHARMM
-      if (associated(backlist)) deallocate(backlist)
+       __FREE(backlist)
 #endif
 !
       end subroutine sm0k_repa_init
@@ -1429,7 +1425,7 @@ __TRIMA(methods(interp_method),mlen)
       character(len=20) :: methods(4), method, form
       character(len=8)  :: keyword
 !
-      bool :: qprint, qdcd, qcor, qbase, qlist
+      bool :: qdcd, qcor, qbase, qlist __CHARMM_ONLY, qprint
 !
 #ifdef __CHARMM
 !
@@ -1454,7 +1450,9 @@ __TRIMA(methods(interp_method),mlen)
 !
 #elif defined (__DMOL)
  __DECLARE_DMOL_SELECT
-      int :: fmt, natom
+      int :: ifmt, natom
+      real*8, pointer :: unitcell(:)=>NULL()
+      bool :: ok
 #endif
       float, pointer :: orient_weights(:), weight(:)
       int :: ierror, offset
@@ -1621,7 +1619,7 @@ __TRIMA(methods(interp_method),length)
         modew=4
         if (__INDX_RM(comlyn,comlen,'RESI').gt.0) lresid=.true.
 #elif defined(__DMOL)
-        fmt=pdb
+        ifmt=pdb
 #endif
         form='FORMATTED'
 #ifdef __CHARMM
@@ -1637,7 +1635,7 @@ __TRIMA(methods(interp_method),length)
         moder=1
         modew=2
 #elif defined(__DMOL)
-        fmt=charmm
+        ifmt=charmm
 #endif
         form='FORMATTED'
       else ! default
@@ -1645,7 +1643,7 @@ __TRIMA(methods(interp_method),length)
         moder=1
         modew=2
 #elif defined(__DMOL)
-        fmt=charmm
+        ifmt=charmm
 #endif
         form='FORMATTED'
       endif
@@ -1854,7 +1852,7 @@ __TRIMA(methods(interp_method),length)
          if (i.eq.1) then ; stop_ = begin_ + skip_ * ( ibegin - 1 + num_rep_in * istep ) ; if (istats.lt.0) istats=2; endif
 !
 #elif defined(__DMOL)
-         call dcd_read_frame(ifile, dr(:,:,1), i.eq.1, FREEATOMS=stringatoms) ! read header only if i==1
+         ierror=dcd_read_frame(ifile, dr(:,:,1), i.eq.1, stringatoms, unitcell) ! read header only if i==1
 #endif
         enddo ! skip frames
        endif ! ME_STRNG==0
@@ -1874,7 +1872,7 @@ __TRIMA(methods(interp_method),length)
         if (j+ibegin.eq.2) then ; stop_ = begin_ + skip_ * ( ibegin - 1 + num_rep_in * istep ) ; if (istats.lt.0) istats=2; endif
 !      write(0,*) j+ibegin, stop_, begin_, skip_, istep, ibegin, skip_ * ( ibegin - 1 + num_rep_in * istep )
 #elif defined(__DMOL)
-        call dcd_read_frame(ifile, rin_all(:,:,1), j+ibegin.eq.2, FREEATOMS=stringatoms) ! read header only if ibegin=1 & j=1
+        ierror=dcd_read_frame(ifile, rin_all(:,:,1), j+ibegin.eq.2, stringatoms, unitcell) ! read header only if ibegin=1 & j=1
 #endif
 !====================================================================================
 ! skip requested frames (stride), unless we just read the final frame we need
@@ -1888,7 +1886,7 @@ __TRIMA(methods(interp_method),length)
      &     istep_, istats, ndof, delta, begin_, stop_, skip_,               &
      &     nsavv_, 'CORD', 'CORD', title, ntitle, qdim4, trash8, .false.)
 #elif defined(__DMOL)
-           call dcd_read_frame(ifile, dr(:,:,1), .false., FREEATOMS=stringatoms) ! no header
+           ierror=dcd_read_frame(ifile, dr(:,:,1), .false., stringatoms, unitcell) ! no header
 #endif
          enddo
         endif ! j not last
@@ -1909,7 +1907,7 @@ __TRIMA(methods(interp_method),length)
      &        segid, resid, nictot, nseg, lresid, .false.,              &
      &        dummy, 80, 0, .false.)
 #elif defined (__DMOL)
-        select case(fmt)
+        select case(ifmt)
          case(charmm) ; call ch_coor_read(ifile, rcomp)
          case(pdb)    ; call pdb_read(ifile, rcomp)
         end select
@@ -1926,7 +1924,7 @@ __TRIMA(methods(interp_method),length)
       if (any(rin_all.eq.__NAN)) then 
         __WRN(whoami,'WARNING: SOME INPUT COORDINATES ARE UNDEFINED AFTER READING.')
       endif
-!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!========================================================================================
 !     orient structures if requested
 !
       if (qprint) then
@@ -1979,20 +1977,13 @@ __TRIMA(methods(interp_method),length)
 !
 !     do the actual interpolation --  simple, not self-consistent
 !      allocate memory
-        if (allocated(dr)) deallocate(dr)
-        allocate(dr(natom,3,num_rep_in-1))
-        if (allocated(ds)) deallocate(ds)
-        allocate(ds(num_rep_in-1))
-        if (allocated(s)) deallocate(s)
-        allocate(s(num_rep_in))
-        if (allocated(t)) deallocate(t)
-        allocate(t(num_rep_out))
-        if (allocated(rr)) deallocate(rr)
-        allocate(rr(num_rep_in))
-        if (allocated(rr_out)) deallocate(rr_out)
-        allocate(rr_out(num_rep_out))
-        if (allocated(rrpp)) deallocate(rrpp)
-        allocate(rrpp(num_rep_in))
+        __DEALL(dr);        allocate(dr(natom,3,num_rep_in-1))
+        __DEALL(ds);        allocate(ds(num_rep_in-1))
+        __DEALL(s);         allocate(s(num_rep_in))
+        __DEALL(t);         allocate(t(num_rep_out))
+        __DEALL(rr);        allocate(rr(num_rep_in))
+        __DEALL(rr_out);    allocate(rr_out(num_rep_out))
+        __DEALL(rrpp);      allocate(rrpp(num_rep_in))
 !
 !     compute arclength
         dr=rin_all(:,:,2:num_rep_in)-rin_all(:,:,1:num_rep_in-1)
@@ -2070,9 +2061,9 @@ __TRIMA(methods(interp_method),length)
      &               NRES,NATOM,iselct,modew,0,0,.false.)
 #elif defined (__DMOL)
          rcomp=transpose(rout_all(:,:,j))
-         select case(fmt)
-          case(charmm) ; call ch_coor_write(ofile, rcomp, bfactor)
-          case(pdb)    ; call pdb_write(ofile, rcomp, occupancy, bfactor)
+         select case(ifmt)
+          case(charmm) ; ok=ch_coor_write(ofile, rcomp, bfactor)
+          case(pdb)    ; ok=pdb_write(ofile, rcomp, occupancy, bfactor)
          end select
 #endif
          __CLOSE_FILE(ofile,'KEEP',ierror)
@@ -2087,8 +2078,15 @@ __TRIMA(methods(interp_method),length)
       if (allocated(fname_cor_in))  deallocate(fname_cor_in )
       if (allocated(fname_cor_out)) deallocate(fname_cor_out)
 !
-      if (associated(orient_weights)) deallocate(orient_weights)
-      if (associated(weight)) deallocate(weight)
+      __DEALL(rin_all)
+      __DEALL(rout_all)
+      __DEALL(fname_cor_in)
+      __DEALL(fname_cor_out)
+#ifdef __DMOL
+      __FREE(unitcell)
+#endif
+      __FREE(weight)
+      __FREE(orient_weights)
 !
       end subroutine sm0k_interpolate
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
