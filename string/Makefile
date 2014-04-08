@@ -1,5 +1,5 @@
 ROOT=..
-OBJS=sm_var.o sm_config.o splines.o sm_util.o sm_main.o
+OBJS=sm_var.o sm_config.o splines.o sm_util.o sm_main.o tsp.o
 NAME=string
 SUBDIRS=sm0k smcv ftsm
 DEPS=multicom multidiag

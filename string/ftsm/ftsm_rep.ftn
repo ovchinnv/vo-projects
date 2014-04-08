@@ -1,0 +1,363 @@
+! reparametrization module for finite-temperature string module
+      module ftsm_rep
+!
+#if (defined(__CHARMM) || defined(__PARALLEL) )
+__CHARMM_ONLY##IF STRINGM
+!
+      __CHARMM_ONLY __DEP_KINDS
+      use ftsm_var
+      __IMPNONE
+!
+!=====================================================================
+!     SUBROUTINES
+      public ftsm_repa_init
+      public ftsm_repa
+      public ftsm_compute_arcl_curv
+!
+      contains
+!=======================================================================
+      subroutine ftsm_repa_init(comlyn, comlen)
+!
+      __DEP_OUTPUT
+      __DEP_PARSER 
+      __DEP_MULTICOM       __CHARMM_ONLY !##MULTICOM
+      __DEP_MPI 
+!
+ __DECLARE_MSGBUF
+!
+      CHARACTER(LEN=*) :: COMLYN
+      int :: COMLEN
+      __IAM(FTSM_REPA_INIT)
+      bool :: qprint, qroot
+!
+      qroot=MPI_COMM_STRNG.ne.MPI_COMM_NULL
+      qprint=qroot.and.ME_STRNG.eq.0
+!
+      if (qprint) then ; write(_MSGBUF,8002) whoami ; __PRINT(_MSGBUF) ; endif
+      call smcv_repa_init(comlyn, comlen)
+!
+ 8002 format(/A,' USING SMCV INITIALIZATION ROUTINE')
+!
+      end subroutine ftsm_repa_init
+!======================================================================================
+      subroutine ftsm_repa(qbcast)
+! the rather convoluted approach in this routine stems from the original implementation
+! idea to modify orientation coordinates only if required, that is, only those that are
+! also forcing coordinates; coordinates that are _purely_ orientation are left untouched
+! for this reason, if diffrot=f, ro1 points to rf (since rf is modified by interp), and
+! otherwise ro1 is a copy of the ref coords
+! ===> for ftsm version 2, we need to keep the string perfectly aligned because the
+! neighbor images are not aligned with the instantaneous structure, as in version 1
+!
+      __DEP_PARSER
+      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
+      __DEP_MPI
+      __DEP_OUTPUT
+      __DEP_NUMBER
+      __DEP_CONST
+      use ftsm_util
+!
+! local variables
+!
+      __IAM(FTSM_REPA)
+      bool :: qroot, qslave, qprint
+      bool, optional :: qbcast
+      float :: u(3,3)= RESHAPE( (/one,zero,zero,zero,one,zero,zero,zero,one/), (/3,3/) ) ! rotation matrix
+      float, pointer :: r_o_com(:) ! COM vector
+      float, pointer, dimension(:,:) :: ro, rf, ro1
+      float :: w
+      float :: weights(nforced,3) ! assuming nforced is reasonably defined
+      int4mpi :: stat(MPI_STATUS_SIZE)
+      int :: i, ierror
+!
+ __DECLARE_MSGBUF
+#include "mpitype.def"
+!
+      interface
+        subroutine interp_driver_sci(rin,rout,wgt,n,                    &
+     &   interp_method,tol,max_iterations,d_arclength, curvature,       &
+     &   dst_cutoff, dr,r_bc_0, r_bc_1)
+      __CHARMM_ONLY __DEP_KINDS
+      __DEP_OUTPUT
+        int n
+        float rin(n), rout(n), wgt(n)
+        int, intent(in) ::  interp_method
+        int max_iterations
+        float :: tol, d_arclength(:), curvature(:)
+        float, optional :: dst_cutoff
+        float, optional :: dr(n) ,r_bc_0(n), r_bc_1(n)
+        end subroutine interp_driver_sci
+!
+        subroutine interp_linear_exact(rin,rout,wgt,n,                  &
+     &   d_arclength, curvature,                                        &
+     &   drout,                                                         &
+     &   r_bc_0, r_bc_1)
+      __CHARMM_ONLY __DEP_KINDS
+        int :: n
+        float :: rin(n), rout(n), wgt(n)
+        float :: d_arclength(:), curvature(:)
+        float, optional :: drout(n) ! optional computation of tangent
+        float , optional :: r_bc_0(n), r_bc_1(n)   ! optional fixed bc data
+       end subroutine interp_linear_exact
+!
+      end interface
+!
+      qroot =MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.SIZE_STRNG.gt.1
+      qslave=MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.SIZE_LOCAL.gt.1
+      qprint=MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.ME_STRNG.eq.0
+!
+      if (present(qbcast)) qslave=qslave.and.qbcast ! in case qbcast false do not broadcast to slaves
+!
+! check if the user has made an initialization call
+!
+      if (.not.repa_initialized) then
+       __WRN( whoami,'NO REPARAMETRIZATION OPTIONS SELECTED. NOTHING DONE.')
+       return
+      endif
+      if (qprint) then
+       write(_MSGBUF,690) whoami ; __PRINTL(_MSGBUF,5)
+      endif
+ 690  format(A,' PERFORMING STRING REPARAMETRIZATION.')
+!
+! shorthand
+      rf => r_f(:,:,center)
+      ro  => r_o(:,:,center)
+      ro1 => r_o(:,:,dummy)
+      r_o_com=>rcom(:,center)
+!
+      if (qroot) then
+!
+       if (qorient) then
+!       translate structure to centroid
+!       note: this should not be needed because the structure should always be kept COM-free
+!       but is kept in case things change in the future (overhead of repa is small)
+        r_o_com=zero
+        do i=1, norient
+         w=orientWeights(i)
+         r_o_com(1)=r_o_com(1) + w * ro(i,1)
+         r_o_com(2)=r_o_com(2) + w * ro(i,2)
+         r_o_com(3)=r_o_com(3) + w * ro(i,3)
+        enddo
+! orientation atoms ! comment out to avoid unneeded roundoff error with qdiffrot=T
+!        ro(:,1)=ro(:,1)-r_o_com(1)
+!        ro(:,2)=ro(:,2)-r_o_com(2)
+!        ro(:,3)=ro(:,3)-r_o_com(3)
+! forced atoms (same as orientation atoms if qdiffrot F)
+        if (qdiffrot) then
+         rf(:,1)=rf(:,1)-r_o_com(1)
+         rf(:,2)=rf(:,2)-r_o_com(2)
+         rf(:,3)=rf(:,3)-r_o_com(3)
+        endif
+!ccccccccccc orientation ccccccc
+!      send/receive orientation structure
+!      this is a slow procedure, as the orientation is done
+!      sequentially
+!
+        if (mestring.gt.0) then
+         call MPI_RECV(ro1,3*norient,mpifloat,mestring-1, 1,               &
+     &        MPI_COMM_STRNG, stat, ierror)
+!       orient current structure
+!         call RMSBestFit(ro,ro1,orientWeights,u)
+         call RMSBestFit(ro1,ro,orientWeights,u) ! this computes u^T, saving us a transposition
+!       transform current structure (ro) to overlap with reference (ro1)
+!       (if orientation is off, u=I)
+         if (.not.qdiffrot) then ; ro1=>rf ! actually, rf/ro point to the same thing in this case
+         elseif (qver2) then ; ro1=>ro     ! modify orientation coords
+         endif
+         ro1(:,1)=ro(:,1)-r_o_com(1)
+         ro1(:,2)=ro(:,2)-r_o_com(2)
+         ro1(:,3)=ro(:,3)-r_o_com(3)
+!
+!         u=transpose(u) ! see transposition above
+         ro1=matmul(ro1,u)
+         if (qdiffrot) rf=matmul(rf,u)
+!
+        else ! first replica enters below
+!         ro1=>ro ! make sure 1st replica sends the center, not dummy coords
+! technically, the above line is correct (since ro is com-free; com is never subtracted with qdiffrot=false above)
+! however, conceptually, the COM _should_ be subtracted as in the loop above (e.g. note ro1=>rf, which can modify both rf and ro)
+! I also do not like the fact that the code below involves copying, which slows down the first replica!
+         if (.not.qdiffrot) then ; ro1=>rf ! will remove the COM from actual ro/rf coordinates below (they are modified anyway by interp)
+         elseif (qver2) then ; ro1=>ro     ! modify orientation coords
+         endif
+         ro1(:,1)=ro(:,1)-r_o_com(1)
+         ro1(:,2)=ro(:,2)-r_o_com(2)
+         ro1(:,3)=ro(:,3)-r_o_com(3)
+        endif ! mestring
+!
+        if (mestring.lt.nstring-1) then
+         call mpi_send(ro1,3*norient,mpifloat,mestring+1, 1,               &
+     &        MPI_COMM_STRNG, ierror)
+        endif ! me
+       endif ! qorient
+!cccccccccccccc now call the appropriate interpolation subroutine
+       weights(:,1)=forcedWeights
+       weights(:,2)=forcedWeights
+       weights(:,3)=forcedWeights
+!
+       if (interp_method.eq.linear_exact) then
+        call interp_linear_exact(rf,rf,weights,3*nforced,ds,curv)
+       else
+        call interp_driver_sci(rf,rf,weights,3*nforced,                 &
+     &   interp_method,def,iterations,ds,curv,dst_cutoff)
+       endif
+!
+       if (qorient.and..not.qver2) then
+        u=transpose(u)
+        if (mestring.gt.0) rf=matmul(rf, u)    ! rotate back
+!     restore original COM
+        rf(:,1)=rf(:,1)+r_o_com(1)
+        rf(:,2)=rf(:,2)+r_o_com(2)
+        rf(:,3)=rf(:,3)+r_o_com(3)
+!
+       endif ! orient
+      endif ! root
+!
+!    broadcast coordinates to slaves
+      if (qslave) then ; __BROADCAST_LOCAL_8B(rf,3*nforced) ; endif
+!    update any orientation coordinates that have changes
+      if (qorient.and.qdiffrot) call ftsm_update_overlap_coor(ione)
+!
+      call ftsm_save_com()
+!
+      end subroutine ftsm_repa
+!======================================================================================
+      subroutine ftsm_compute_arcl_curv(interp_method_) ! compute arclength and curvature
+! much code duplication from ftsm_repa, unfortunately
+! see that routine (ftsm_repa) below for more code comments
+      __DEP_PARSER, only : itoa
+      __DEP_MULTICOM
+      __DEP_NUMBER
+!
+      __IAM(FTSM_COMPUTE_ARCL_CURV)
+      int, optional :: interp_method_
+!
+      int :: interp_m
+      int :: i, ierror
+!
+      float :: u(3,3)= RESHAPE( (/one,zero,zero,zero,one,zero,zero,zero,one/), (/3,3/) ) ! rotation matrix
+      float :: r_o_com(3), w, weights(nforced,3)
+      float, target :: rf(nforced,3)
+      float, pointer :: ro(:,:), ro1(:,:)
+!
+ __DECLARE_MSGBUF
+#include "mpitype.def"
+      int4mpi :: stat(MPI_STATUS_SIZE)
+!
+      interface
+        subroutine interp_driver_sci(rin,rout,wgt,n,                    &
+     &   interp_method,tol,max_iterations,d_arclength, curvature,       &
+     &   dst_cutoff, dr,r_bc_0, r_bc_1)
+      __CHARMM_ONLY __DEP_KINDS
+      __DEP_OUTPUT
+        int n
+        float rin(n), rout(n), wgt(n)
+        int, intent(in) ::  interp_method
+        int max_iterations
+        float :: tol, d_arclength(:), curvature(:)
+        float, optional :: dst_cutoff
+        float, optional :: dr(n) ,r_bc_0(n), r_bc_1(n)
+        end subroutine interp_driver_sci
+!
+        subroutine interp_linear_exact(rin,rout,wgt,n,                  &
+     &   d_arclength, curvature,                                        &
+     &   drout,                                                         &
+     &   r_bc_0, r_bc_1)
+      __CHARMM_ONLY __DEP_KINDS
+        int :: n
+        float :: rin(n), rout(n), wgt(n)
+        float :: d_arclength(:), curvature(:)
+        float, optional :: drout(n) ! optional computation of tangent
+        float , optional :: r_bc_0(n), r_bc_1(n)   ! optional fixed bc data
+       end subroutine interp_linear_exact
+!
+      end interface
+!
+      if (present(interp_method_)) then 
+       if (all(interp_methods.ne.interp_method_)) then
+        write(_MSGBUF,'(A)') &
+     &    'UNRECOGNIZED INTERPOLATION METHOD CODE ('//itoa(interp_method_)//'). WILL USE LINEAR INTERPOLATION.' ;
+        __WRN(whoami, _MSGBUF)
+        interp_m = linear
+       else
+        interp_m = interp_method_
+       endif
+      elseif (repa_initialized) then
+       interp_m = interp_method
+      else
+       interp_m=linear
+      endif
+!
+      if ( MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.SIZE_STRNG.gt.1 ) then
+       if (qorient) then
+        ro  => r_o(:,:,center)
+        ro1 => r_o(:,:,dummy)
+!       translate structure to centroid
+        r_o_com=zero
+        do i=1, norient
+         w=orientWeights(i)
+         r_o_com(1)=r_o_com(1) + w * ro(i,1)
+         r_o_com(2)=r_o_com(2) + w * ro(i,2)
+         r_o_com(3)=r_o_com(3) + w * ro(i,3)
+        enddo
+        if (qdiffrot) then
+         rf(:,1)=r_f(:,1,center)-r_o_com(1)
+         rf(:,2)=r_f(:,2,center)-r_o_com(2)
+         rf(:,3)=r_f(:,3,center)-r_o_com(3)
+        endif
+!ccccccccccc orientation ccccccc
+!      send/receive orientation structure, orient sequentially
+        if (mestring.gt.0) then
+         call MPI_RECV(ro1,3*norient,mpifloat,mestring-1, 1,               &
+     &        MPI_COMM_STRNG, stat, ierror)
+!       orient current structure
+         call RMSBestFit(ro1,ro,orientWeights,u) ! u^T rotates ro onto ro1
+!       transform current structure to overlap with reference
+!       (if orientation is off, u=I)
+         if (.not.qdiffrot) ro1=>rf
+         ro1(:,1)=ro(:,1)-r_o_com(1)
+         ro1(:,2)=ro(:,2)-r_o_com(2)
+         ro1(:,3)=ro(:,3)-r_o_com(3)
+!
+         ro1=matmul(ro1,u)
+         if (qdiffrot) rf=matmul(rf,u) ! otherwise already rotated
+!
+        else ! first replica enters below
+         if (.not.qdiffrot) ro1=>rf ! will remove the COM from actual ro/rf coordinates below (they are modified anyway by interp)
+         ro1(:,1)=ro(:,1)-r_o_com(1)
+         ro1(:,2)=ro(:,2)-r_o_com(2)
+         ro1(:,3)=ro(:,3)-r_o_com(3)
+        endif ! mestring
+!
+        if (mestring.lt.nstring-1) then
+         call mpi_send(ro1,3*norient,mpifloat,mestring+1, 1,               &
+     &        MPI_COMM_STRNG, ierror)
+        endif ! me
+!
+       else ! (.not. qorient)
+!
+        rf(:,1)=r_f(:,1,center)
+        rf(:,2)=r_f(:,2,center)
+        rf(:,3)=r_f(:,3,center)
+!
+       endif ! qorient
+!cccccccccccccc now call the appropriate interpolation subroutine
+       weights(:,1)=forcedWeights
+       weights(:,2)=forcedWeights
+       weights(:,3)=forcedWeights
+!
+       if (interp_m.eq.linear_exact) then
+        call interp_linear_exact(rf,rf,weights,3*nforced,ds,curv)
+       else
+        i=0; ! request zero maximum iterations
+        call interp_driver_sci(rf,rf,weights,3*nforced,                 &
+     &   interp_m,def,i,ds,curv,dst_cutoff)
+       endif
+      endif ! qroot
+!
+      end subroutine ftsm_compute_arcl_curv
+!=================================================================================
+__CHARMM_ONLY##ENDIF
+#endif
+      end module ftsm_rep
+!

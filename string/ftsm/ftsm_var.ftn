@@ -29,6 +29,8 @@ __CHARMM_ONLY##IF STRINGM
      &   output_rex_log,                                                &
      &   output_M,                                                      &
 !
+__CHARMM_ONLY  &   Id3,                                                 &
+!
      &   stat_initialized,                                              &
 !
      &   forces_fname, rex_fname, voronoi_fname,                        &
@@ -47,13 +49,15 @@ __CHARMM_ONLY##IF STRINGM
      &   voronoi_flen
 !
       use sm_config, only:                                              &
-     & ftsm_on, repa_on, restrained_on,                                 &
+     & ftsm_on, repa_on, restrained_on, unrestrained_on,                &
+     & restraint_force_on,                                              &
      & stat_on,                                                         &
      & string_noprint, restraint_force_on,                              &
      & calc_bestfit_grad_para,                                          &
      & allgather_method, allgather_, gather_bcast_, hypercube_,         &
      & evolve_freq, stat_freq,                                          &
      & restrained_eq_steps, restrained_eq0, evolve_nskip,               &
+     & unrestrained_eq_steps, unrestrained_eq0,                         & 
      & olditeration,                                                    &
      & evolve_aver_on,                                                  & ! in this context, whether the evolution corresponds to averaging the simulation structure
 !                      ! when false, evolve_expo_on is used, which implies a fixed exponential filter width
@@ -79,15 +83,17 @@ __CHARMM_ONLY##IF STRINGM
        int, save :: num_force_samples=0           ! number of force samples
        int, save :: num_M_samples=0               ! number of samples in the running average of M tensor
        int, save :: num_J_samples=0               ! number of samples in the Jacobian
-       bool, save :: ftsm_initialized=.false., &
-     &               ftsm_mini_initialized=.false.
+       bool, save :: ftsm_initialized=.false.
 #ifdef __CHARMM
        bool, save :: ftsm_nbond_image_data_initialized=.false.
 #endif
        bool, save :: evolve_ftsm_on=.false.,                            & ! is string evolution on?
      &               update_on=.false.,                                 & ! image updating on?
-     &               ftsm_mini_on=.false.                                 ! image minimization on?
+     &               ftsm_mini_on=.false.,                              & ! image minimization on?
+     &               ftsm_reconnect_on=.false.                            ! try to reconnect path during updates ?
        bool, save :: output_centers=.false. ! center of the transition tube (these are coordinate files)
+       bool, save :: output_connect_map=.false. ! whether to output ftsm path connectivity map
+       bool, save :: output_connect_log=.false. ! whether to output ftsm path connectivity log
        bool, save :: output_dist=.false. ! whether to output distance to the string (dpar, dprp, or drms)
        bool, save :: qdiffrot=.false.      ! whether the orientation atoms are different from forcing atoms, in which case store them separately
        bool, save :: qorient=.false. ! whether images are to be oriented in the bestfit sense
@@ -96,28 +102,20 @@ __CHARMM_ONLY##IF STRINGM
 !
        bool, save :: output_J=.false. ! whether to compute FTSM Jacobian 
 !
-       character(len=80), save :: centers_fname='', dist_fname='', J_fname='';
-       int, save :: centers_funit=-1, centers_flen=0, dist_funit=-1, dist_flen=0, J_flen=0;
-       character(len=80), save :: cenform, distform
+       character(len=80), save :: centers_fname='', dist_fname='', J_fname='', connect_fname='';
+       int, save :: centers_funit=-1, centers_flen=0, dist_funit=-1, dist_flen=0, &
+&                   J_flen=0, connect_funit=-1, connect_flen=0;
+       character(len=80), save :: cenform, distform, connectform
 !
        int, save :: norient=0, nforced=0,                           & ! orientation and forcing atoms
      &                  nany=0, nboth=0                               ! any atoms, overlapping atoms
        int, save :: update_freq=0                                     ! frequency for performing image update
-!
-       int, save :: ftsm_mini_method=0      ! minimization method
-       int, parameter :: sd=1, conj=2       ! minimization method codes
-       int, save :: ftsm_mini_bath_iterations=50, ftsm_mini_forced_iterations=10 ! minimizer iterations
-       float, save :: ftsm_mini_step        ! minimization step
-#ifdef __CHARMM
-       type(nonbondDataStructure) :: ftsm_nbond_copy
-       type(imageDataStructure)   :: ftsm_image_copy
-#endif
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! coordinate variables below
        float, save, pointer, dimension (:,:,:) ::                   &
-     &        r_f, rall_f, rall_new_f,                              & ! forcing (rall`s will not always be associated so beware)
-     &        r_o, rall_o, rall_new_o                                 ! orientation
+     &        r_f,                                                  & ! forcing (rall`s will not always be associated so beware)
+     &        r_o                                                     ! orientation
        float, save, pointer, dimension(:,:,:,:,:) :: Mtensor          ! metric tensor (stats only)
-       float, save, pointer, dimension(:,:) :: rcom, rcom_all         ! COM coordinates
+       float, save, pointer, dimension(:,:) :: rcom                   ! COM coordinates
        float, save :: Jacobian(2) ! FTSM Jacobian
 !     weights
        float, save, pointer :: orientWeights(:), forcedWeights(:)

@@ -1,0 +1,464 @@
+! module for finite-temperature string module for reconnecting the path to minimize length
+! compute distances between all pairs of string images; optimize order to produce a shorter total path length
+!
+      module ftsm_connect
+!
+#if (defined(__CHARMM) || defined(__PARALLEL) )
+__CHARMM_ONLY##IF STRINGM
+!
+      __CHARMM_ONLY __DEP_KINDS
+      use ivector_list ! to keep track of migrations
+      use ftsm_var
+      use tsp
+      __DEP_MULTICOM
+      __DEP_CONST
+      __IMPNONE
+!
+! code based loosely on ftsm_voronoi and ftsm_rex
+!
+      bool, save, public :: ftsm_connect_initialized=.false.
+      float, save, pointer, dimension (:,:,:) :: rall_f,         & ! forcing (rall`s will not always be associated so beware)
+     &                                           rall_o            ! orientation
+!
+      int, dimension(:), pointer :: ftsm_connect_map ! holds map between original replica index and current index
+      type (int_vlist), save, public :: ftsm_connect_log
+!
+      float, save, private :: ftsm_connect_dist=-one
+      float, save, private :: ftsm_connect_itemp, ftsm_connect_dtemp, ftsm_connect_ftemp
+      int, save, private :: ftsm_connect_nmove
+      int, parameter, private :: ftsm_connect_nmove_default=1000 ;
+      bool, save, private :: ftsm_connect_gettemp
+!
+!=================================================================================
+!     SUBROUTINES
+      public ftsm_reconnect_parse
+      public ftsm_reconnect_init
+      public ftsm_reconnect
+      public ftsm_reconnect_done
+      public ftsm_reconnect_print_map
+      public ftsm_reconnect_read_map
+      public ftsm_reconnect_print_log
+!
+      contains
+!=================================================================================
+       subroutine ftsm_reconnect_parse(comlyn, comlen)
+       __DEP_PARSER
+       character(len=*) :: comlyn
+       int :: comlen
+       character(len=20) :: keyword
+       bool :: qroot, qprint
+       int :: ifile, flen, i
+#ifndef __CHARMM
+       character(len=vartaglen) :: fname
+#else
+       character(len=80) :: fname
+#endif
+ __DECL_MSGBUF
+       __IAM(FTSM_RECONNECT_PARSE)
+!
+       qroot=MPI_COMM_STRNG.ne.MPI_COMM_NULL
+       qprint=qroot.and.ME_STRNG.eq.0
+!
+       keyword=__NEXTA(comlyn,comlen)
+!=================================================================================
+       if ( __STRNCMP(keyword,'DONE',4) ) then
+        if (ftsm_connect_initialized) call ftsm_reconnect_done()
+       elseif  ( ( __STRNCMP(keyword,'INIT',4) ) .or. ( .not. ftsm_connect_initialized ) ) then
+        call ftsm_reconnect_init(comlyn, comlen)
+       elseif ( __STRNCMP(keyword,'RMAP',4) ) then
+!
+!    write cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+        if (__INDX_RM(comlyn, comlen, 'PRIN').gt.0) then
+          ifile=__GET_RM_I(comlyn,comlen,'UNIT',-1)
+          __GET_RM_A(COMLYN,COMLEN,'NAME',4,FNAME,80,FLEN)
+!        note: FNAME will be UPPER CASE
+          if (qroot) then
+           if (flen.gt.0) then
+            if (qprint) then 
+             __OPEN_FILE(ifile,fname,'FORMATTED','WRITE')
+             write(_MSGBUF,6011) whoami, fname(1:flen) ; __PRINT(_MSGBUF)
+            endif
+ 6011 format(A,' WRITING FTSM PATH CONNECTIVITY MAP TO FILE ',A,'.')
+            call ftsm_reconnect_print_map(ifile)
+            if (qprint) then ; __CLOSE_FILE(ifile,'KEEP',ierror) ; endif
+           else
+            __WRN(whoami,'FILE NAME NOT SPECIFIED. NOTHING DONE.')
+           endif ! flen
+          endif ! qroot
+!    read ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+        elseif (__INDX_RM(comlyn, comlen, 'READ').gt.0) then
+          ifile=__GET_RM_I(comlyn,comlen,'UNIT',-1)
+          __GET_RM_A(COMLYN,COMLEN,'NAME',4,FNAME,80,FLEN)
+!        note: FNAME will be UPPER CASE
+          if (flen.gt.0) then
+            if (qprint) then 
+            __OPEN_FILE(ifile,fname,'FORMATTED','WRITE')
+             write(_MSGBUF,6013) whoami, fname(1:flen) ; __PRINT(_MSGBUF)
+            endif
+!
+ 6013 format(A,' READING FTSM PATH CONNECTIVITY MAP FROM FILE ',A,'.')
+            call ftsm_reconnect_read_map(ifile)
+            if (qprint) then ; __CLOSE_FILE(ifile,'KEEP',ierror) ; endif
+           else
+            __WRN(whoami,'FILE NAME NOT SPECIFIED. NOTHING DONE.')
+           endif ! flen
+!    clear ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+        elseif (__INDX_RM(comlyn, comlen, 'CLEA').gt.0) then
+         if (qprint) then
+          write(_MSGBUF,6012) whoami ; __PRINT(_MSGBUF)
+ 6012 format(A,' RESETTING FTSM PATH CONNECTIVITY MAP.');
+         endif
+         if (associated(ftsm_connect_map)) ftsm_connect_map=(/(i,i=1,nstring)/)
+        endif ! PRINT
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       else ! assume initialization
+        if (qprint) then
+          write(_MSGBUF,6014) whoami ; __PRINT(_MSGBUF)
+ 6014 format(A,' REINITIALIZING FTSM PATH RECONNECTION.');
+        endif
+        call ftsm_reconnect_init(comlyn, comlen)
+       endif
+!
+       end subroutine ftsm_reconnect_parse
+!=================================================================================
+       subroutine ftsm_reconnect_init(comlyn, comlen)
+       __DEP_PARSER
+       character(len=*) :: comlyn
+       int :: comlen
+       int :: i
+       bool :: qprint, qroot
+ __DECL_MSGBUF
+       __IAM(FTSM_RECONNECT_INIT)
+!
+       qroot=MPI_COMM_STRNG.ne.MPI_COMM_NULL
+       qprint=qroot.and.ME_STRNG.eq.0
+!
+       if (.not.ftsm_initialized) then 
+        __WRN(whoami, 'FTSM NOT INITIALIZED. NOTHING DONE.')
+        return
+       endif
+!
+       if (ftsm_connect_initialized) call ftsm_reconnect_done()
+!
+       ftsm_connect_itemp=__GET_RM_F(comlyn, comlen, 'ITEM', __NAN)
+       ftsm_connect_ftemp=__GET_RM_F(comlyn, comlen, 'FTEM', __NAN)
+       ftsm_connect_dtemp=__GET_RM_F(comlyn, comlen, 'DTEM', -__NAN) ! dtemp negated prior to tsp (it is a decrement)
+       ftsm_connect_nmove=__GET_RM_I(comlyn, comlen, 'NMOV', ftsm_connect_nmove_default)
+!   print summary
+       if (qprint) then
+        write(_MSGBUF(1),99) whoami
+ 99   format(A, ' WILL RECONNECT PATH OPTIMALLY USING MONTE CARLO SIMULATED ANNEALING.')
+        if (ftsm_connect_itemp .ge. zero ) then
+         write(_MSGBUF(2),100) whoami, 'SET TO '//ftoa(ftsm_connect_itemp)
+         ftsm_connect_gettemp=.false.
+        else
+         write(_MSGBUF(2),100) whoami, 'WILL BE SET EMPIRICALLY.'
+         ftsm_connect_gettemp=.true.
+        endif
+ 100  format(A,' INITIAL REFERENCE DISTANCE IN PATH OPTIMIZATION BY MCSA ')
+!====================================================================
+        if (ftsm_connect_ftemp .ge. zero ) then
+         write(_MSGBUF(3),101) whoami, 'SET TO '//ftoa(ftsm_connect_ftemp)
+        else
+         write(_MSGBUF(3),101) whoami, 'WILL BE SET TO ALGORITHM DEFAULT.'
+        endif
+ 101  format(A,' FINAL REFERENCE DISTANCE IN PATH OPTIMIZATION BY MCSA ')
+!=====================================================================
+        if (ftsm_connect_dtemp .ge. zero ) then
+         write(_MSGBUF(4),102) whoami, 'SET TO '//ftoa(ftsm_connect_dtemp)
+        else
+         write(_MSGBUF(4),102) whoami, 'WILL BE COMPUTED AUTOMATICALLY.'
+        endif
+        ftsm_connect_dtemp=-ftsm_connect_dtemp
+ 102  format(A,' REFERENCE DISTANCE DECREMENT IN PATH OPTIMIZATION BY MCSA ')
+!=====================================================================
+         write(_MSGBUF(5),103) whoami, ftsm_connect_nmove
+ 103  format(A,' NUMBER OF ITERATIONS IN PATH OPTIMIZATION BY MCSA SET TO ',I9)
+        __PRINT(_MSGBUF)
+       endif
+!
+!    allocate data for all replicas, if not already allocated elsewhere (voronoi is not the only module that is expected to use rall)
+!
+       if (.not. associated(rall_f)) allocate(rall_f(nforced,3,nstring))
+       if (qorient) then 
+         if (qdiffrot) then
+          if (.not. associated(rall_o)) allocate(rall_o(norient,3,nstring))
+         else
+          rall_o =>rall_f
+         endif !qdiffrot
+       endif ! qorient
+!
+       allocate(ftsm_connect_map(nstring));
+       ftsm_connect_map=(/(i, i=1,nstring)/)
+       call int_vlist_init(ftsm_connect_log);
+!
+       ftsm_connect_initialized=.true.  ! this must be set because it affects the behavior of voronoi_update 
+!
+       end subroutine ftsm_reconnect_init
+!=================================================================================
+       subroutine ftsm_reconnect(itime)
+       __DEP_MPI
+       __DEP_BESTFIT
+!
+       int :: itime
+       bool :: qstring, qgrp, ok
+       bool :: ready(1:2*nstring) ! test if communication completed for forcing and orientation atoms
+       float, pointer, dimension(:,:) :: rf, ro
+       float, dimension(3,3,nstring) :: u ! rotation matrices
+       float, dimension(nstring,nstring) :: dmat ! distance matrix
+       int :: i, j, k, ind
+       int, pointer :: newroute(:)
+       int :: oldroute(nstring)
+       type (int_vector), pointer :: list
+!
+       int4mpi :: ierror
+       int4mpi, dimension(0:2*nstring-2) :: srequest, rrequest
+       int4mpi :: stat(MPI_STATUS_SIZE)
+       real*8 :: path_len(2) ! for determining nore index of optimap path
+!
+#include "../../mpitype.def"
+__DECL_MSGBUF
+       __IAM(FTSM_RECONNECT)
+!
+       if (.not.ftsm_connect_initialized) then 
+        __WRN(whoami, ' FTSM PATH RECONNECTION NOT INITIALIZED. NOTHING DONE.')
+        return
+       endif
+!
+       srequest=MPI_REQUEST_NULL
+       rrequest=MPI_REQUEST_NULL
+!
+! current center coordinates
+!       ro=>r_o(:,:,center)
+!       rf=>r_f(:,:,center)
+! will change evolving coordinates (otherwise evolution will be slow)
+       ro=>r_o(:,:,center_new)
+       rf=>r_f(:,:,center_new)
+!
+       qstring=(MPI_COMM_STRNG.ne.MPI_COMM_NULL).and.(SIZE_STRNG.gt.1)
+       qgrp=(MPI_COMM_LOCAL.ne.MPI_COMM_NULL).and.(SIZE_LOCAL.gt.1)
+!
+!    submit sends and receives to/from all nodes
+!
+       if (qstring) then ! only roots exchange coordinates
+        do i=0, nstring-1
+         if (i.eq.ME_STRNG) then
+          rrequest(ME_STRNG)=MPI_REQUEST_NULL                       ! make sure mpi_waitany does not consider self-communications
+          if (qorient.and.qdiffrot) rrequest(ME_STRNG+nstring)=MPI_REQUEST_NULL ! orientation atoms
+          cycle ! skip self
+         endif
+         call MPI_ISEND(ro,              3*nforced, mpifloat, i, ME_STRNG, MPI_COMM_STRNG, srequest(i), ierror) ! orientation atoms first
+         call MPI_IRECV(rall_o(:,:,i+1), 3*nforced, mpifloat, i, i,        MPI_COMM_STRNG, rrequest(i), ierror)
+         if (qdiffrot) then
+          call MPI_ISEND(rf,              3*norient, mpifloat, i, -ME_STRNG, MPI_COMM_STRNG, srequest(i+nstring), ierror) ! also forcing atoms
+          call MPI_IRECV(rall_f(:,:,i+1), 3*norient, mpifloat, i, -i,        MPI_COMM_STRNG, rrequest(i+nstring), ierror)
+         endif
+        enddo
+! receive and process messages
+        ready=.false.
+        if (.not.qdiffrot) then
+         ready(nstring+1:2*nstring)=.true. ! forcing atoms the same as orientation atoms
+         k=nstring
+        else
+         k=2*nstring
+        endif
+!
+        do while (any(.not.ready(1:k)))
+         call MPI_WAITANY(k, rrequest, ind, ok, stat, ierror)
+         ready(ind)=.true.
+         if (ind.lt.nstring) then ! orientation atoms received
+          if (qorient) then ! NOTE : assuming here that COM has been subtracted, compute rotation matrix
+           call RMSBestFit(ro, rall_o(:,:,ind), orientWeights, u(:,:,ind))
+          endif
+         endif
+!    determine if can compute metric
+         j=mod(ind-1,nstring)+1
+         if (ready(j).and.ready(j+nstring)) then ! bot sets are ready ( if !qdiffrot ready(j+nstring) always true)
+          if (qorient) then ! optimally rotate received forcing atoms
+           rall_f(:,:,j) = matmul(rall_f(:,:,j),u(:,:,j))
+          endif
+!    compute RMSD
+          dmat(j,ME_STRNG) = rmsd(rall_f(:,:,j), rf, forcedWeights);
+         endif ! ready
+        enddo ! any(not ready)
+! gather distance matrix
+! in principle, we could use the same asynchronous strategy as above, but the benefits will be much less, 
+! at the expense of longer code.  Instead, will use a simple allgather
+        dmat(ME_STRNG, ME_STRNG)=0 ! self distances
+        call mpi_allgather(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, nstring,&
+&                          dmat(1,ME_STRNG), MPI_COMM_STRNG, ierror)
+       endif
+! send distance matrix to slaves
+       if (qgrp) then
+#ifdef __CHARMM
+        __BROADCAST_LOCAL_4B(dmat, nstring**2) !##SINGLE
+        __BROADCAST_LOCAL_8B(dmat, nstring**2) !##.not.SINGLE
+#else
+        __BROADCAST_LOCAL(dmat, nstring**2, mpifloat)
+#endif
+       endif
+! compute initial distance before optimization
+       oldroute=(/(i,i=1,nstring)/)
+       ftsm_connect_dist=tsp_path_len(oldroute, dmat, nstring)
+       if (.not.string_noprint.and.ME_STRNG.eq.0) then
+        write(_MSGBUF(1),'(A," UNOPTIMIZED PATH LENGTH IS ",'//real_format//')' ) whoami, ftsm_connect_dist
+       endif
+!
+! call tsp solver on all cores
+       newroute=>tsp_anneal_path(dmat, oldroute, &
+& ftsm_connect_nmove, ftsm_connect_itemp, ftsm_connect_ftemp, ftsm_connect_dtemp, ftsm_connect_gettemp)
+! compute new distance
+       ftsm_connect_dist=tsp_path_len(newroute, dmat, nstring)
+       if (qgrp) then
+! determine local node with lowest dstance path
+        path_len(1)=ftsm_connect_dist ; path_len(2) = dble(ME_LOCAL)
+        call mpi_allreduce(MPI_IN_PLACE, 1, MPI_2DOUBLE_PRECISION, MPI_MINLOC, MPI_COMM_LOCAL, ierror)
+! broadcast optimal route within local group
+        call mpi_bcast(newroute, nstring, mpiint, INT(path_len(2)), MPI_COMM_LOCAL, ierror)
+       endif
+! repeat the same procedure within string communicator
+       if (qstring) then
+        path_len(2)=ME_STRNG
+        call mpi_allreduce(MPI_IN_PLACE, 1, MPI_2DOUBLE_PRECISION, MPI_MINLOC, MPI_COMM_STRNG, ierror)
+! broadcast optimal route within local group
+        call mpi_bcast(newroute, nstring, mpiint, INT(path_len(2)), MPI_COMM_STRNG, ierror)
+       endif
+! broadcast to local cpus
+       if (qgrp.and.nstring.gt.1) then
+        call mpi_bcast(newroute, nstring, mpiint, 0, MPI_COMM_LOCAL, ierror)
+       endif
+!
+!    update distance and route map
+!
+       ftsm_connect_dist=path_len(1)
+       ftsm_connect_map=ftsm_connect_map(newroute);
+!    update coordinates
+       rf=rall_f(:,:,newroute(mestring+1))
+       if (qdiffrot) ro=rall_o(:,:,newroute(mestring+1))
+!
+       if (.not.string_noprint.and.ME_STRNG.eq.0) then
+        write(_MSGBUF(2),'(A," OPTIMIZED PATH LENGTH IS ",'//real_format//')' ) whoami, ftsm_connect_dist
+        __PRINT(_MSGBUF)
+       endif
+!
+!    add new route to log
+       if (ME_STRNG.eq.0) then 
+        i=int_vlist_uadd(ftsm_connect_log, itime)
+        list=>ftsm_connect_log%v(i)
+        do i=1, nstring  ! faster to add elements via a pointer to list
+         j=int_vector_add(list, ftsm_connect_map(j))
+        enddo
+       endif
+!
+       __FREE(newroute)
+!
+       end subroutine ftsm_reconnect
+!=================================================================================
+       subroutine ftsm_reconnect_print_log(iunit,fmt)
+      __DEP_OUTPUT
+!      only root process should call
+       int :: iunit
+       character(len=*), optional :: fmt
+!      local
+       int :: j, itime, llen
+       int, pointer :: list(:)
+       character(80) :: frm
+       __IAM(FTSM_RECONNECT_PRINT_LOG)
+!      begin
+       if (.not.ftsm_connect_initialized) then 
+        __WRN(whoami, ' FTSM PATH RECONNECTION NOT INITIALIZED. NOTHING DONE.')
+        return
+       endif
+!
+       if (.not.present(fmt)) then
+        write(frm,'("(I10,",I5,"I5)")') nstring
+       else
+        frm=fmt
+       endif
+       do j=1, ftsm_connect_log%last
+        itime=ftsm_connect_log%i(j)     ! list label
+        list=>ftsm_connect_log%v(j)%i   ! data vector
+        llen=ftsm_connect_log%v(j)%last ! must equal nstring, but just to be safe and avoid a segfault
+       enddo
+!
+       write(iunit,frm) itime, list(1:llen)
+       call int_vlist_init(ftsm_connect_log)        ! erase and reinitialize log
+!
+       end subroutine ftsm_reconnect_print_log
+!=================================================================================
+       subroutine ftsm_reconnect_done()
+!
+        __FREE(ftsm_connect_map)
+        call int_vlist_done(ftsm_connect_log)
+        __FREE(rall_f)
+        __FREE(rall_o)
+        ftsm_connect_initialized=.false.
+!
+       end subroutine ftsm_reconnect_done
+!=================================================================================
+       subroutine ftsm_reconnect_print_map(iunit,fmt)
+      __DEP_OUTPUT
+!      only root process should call
+       int :: iunit
+       character(len=*), optional :: fmt
+!      local
+       int :: i
+       character(80) :: frm
+       __IAM(FTSM_RECONNECT_PRINT_MAP)
+!      begin
+       if (.not.ftsm_connect_initialized) then 
+        __WRN(whoami, ' FTSM PATH RECONNECTION NOT INITIALIZED. NOTHING DONE.')
+        return
+       endif
+!
+       if (.not.present(fmt)) then
+        write(frm,'("(",I5,"I5)")') nstring
+       else
+        frm=fmt
+       endif
+       write(iunit,frm) (/ (i, i=0,nstring-1) /)
+       write(iunit,frm) ftsm_connect_map(1:nstring)
+       end subroutine ftsm_reconnect_print_map
+!===================================================================================================
+       subroutine ftsm_reconnect_read_map(iunit)
+      __DEP_OUTPUT
+      __DEP_MULTICOM
+      __DEP_MPI
+!
+#include "../../mpitype.def"
+!
+       int :: iunit, ierror
+       __IAM(FTSM_RECONNECT_READ_MAP)
+!      begin
+!
+       if (.not.ftsm_connect_initialized) then 
+        __WRN(whoami, ' FTSM PATH RECONNECTION NOT INITIALIZED. NOTHING DONE.')
+        return
+       endif
+!
+       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then
+        if (ME_STRNG.eq.0) then
+         read(iunit,*) ftsm_connect_map(1:nstring) ! first row contains indices 0 -- nstring-1
+         read(iunit,*) ftsm_connect_map(1:nstring) ! second row is what we want
+         if (any(ftsm_connect_map.lt.0)) __WRN(whoami,'READ NEGATIVE RANK.')
+        endif ! ME_
+        if (SIZE_STRNG.gt.1) __BROADCAST_STRING(ftsm_connect_map, nstring, mpiint)
+       endif ! MPI_COMM
+!    broadcast to slave nodes
+       if (ME_LOCAL.ne.MPI_UNDEFINED.and.SIZE_LOCAL.gt.1)               &
+!     &  call MPI_BCAST(cv%rex_map, nstring, MPI_INTEGER,
+!     &                     0,MPI_COMM_LOCAL,ierr)
+#ifdef __CHARMM
+     &  call PSND4(ftsm_connect_map,nstring)     !__CHARMM_ONLY##.not.INTEGER8
+     &  call PSND8(ftsm_connect_map,nstring)     !__CHARMM_ONLY##INTEGER8
+#else
+     & __BROADCAST_LOCAL(ftsm_connect_map,nstring,mpiint)
+#endif
+!
+       end subroutine ftsm_reconnect_read_map
+!==================================================================================================
+!
+__CHARMM_ONLY##ENDIF
+#endif
+      end module ftsm_connect
+!

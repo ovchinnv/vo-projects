@@ -1,0 +1,233 @@
+!
+! TSP.MOD -- solution of traveling salesman problem by Monte-Carlo simulated annealing
+!=====================================================================================
+!
+module tsp
+!
+ __DEP_OUTPUT
+ __DEP_CONST
+ __DEP_RANDOM
+
+ __IMPNONE
+
+ __DECL_MSGBUF
+
+!
+ private
+!
+ public tsp_anneal_path
+ private shiftpath
+ public tsp_path_len
+
+!======================================================================================
+ contains
+!
+  function tsp_anneal_path(D, route, nmove, itemp_, ftemp_, dtemp_, gettemp_) result(newroute)
+! macro to compute total length
+!===================================================================
+#define __PLEN(_R,_D) _D=zero; do i=2,n;_D=_D+D(_R(i-1),_R(i));enddo
+! macro for length change due to swapping vertices _I and _J : this involves redrawing at maximum four edges
+! the special cases in which i and j are adjacent or separated by one vertex are not considered (they would save a small amount of computation time)
+!===================================================================
+#define __DPLEN(_R,_I,_J,_DD) _DD=\
+ (D(_R(_J),_R(_I-1))+D(_R(_J),_R(_I+1))+D(_R(_I),_R(_J-1))+D(_R(_I),_R(_J+1)))\
+-(D(_R(_I),_R(_I-1))+D(_R(_I),_R(_I+1))+D(_R(_J),_R(_J-1))+D(_R(_J),_R(_J+1)))
+! macro for simple path move : swapping two vertices at random
+!===================================================================
+#define __SHIFTPATH_SIMPLE(_N,_I,_J)\
+ _I=1 + ( INT(__RANDOMU(__SEED)*(_N-2)) + 1 );\
+ _J=1 + ( INT(__RANDOMU(__SEED)*(_N-3)) + 1 );\
+ if (_J.ge._I) __INC(_J)
+
+!
+! macro for swapping two integers in place
+!===================================================================
+#define __SWAPI(_a, _b) _a=ieor(_a,_b) ; _b=ieor(_a,_b) ; _a=ieor(_a,_b)
+
+!
+  float, intent(in) :: D(:,:)   ! matrix of distances between all vertices
+  int, intent(in) :: route(:) ! initial route
+  float, optional, intent(inout) :: itemp_, ftemp_, dtemp_ ! initial and final temperatures for annealing, and the temperature decrement
+  bool, optional, intent(in) :: gettemp_ ! flag that indicates whether to estimate initial temperature
+  int, intent(in) :: nmove ! number of Monte Carlo moves
+!
+  int, pointer :: newroute(:)
+  float, parameter :: mintemp = 0.01 ; ! default minimum temperature
+  int, parameter :: gettemp_niter = 1000 ! number of iterations to guess initial temperature
+  float, parameter :: gettemp_defrac=0.2 ! fraction of energy difference for computing temperature
+!
+! locals
+  __IAM(TSP_ANNEAL_PATH)
+  int :: i,n
+  float :: itemp, ftemp, dtemp, temp
+  bool :: gettemp
+  int, pointer, dimension(:) :: minroute, iroute
+  float :: mind, maxd, dist, newd, dd
+  int :: ind1, ind2
+!
+!
+  nullify(newroute)
+!==== consistency checks
+  n=size(route)
+  if (n.lt.4) then 
+   __WRN(whoami, 'NUMBER OF VERTICES MUST BE AT LEAST FOUR. NOTHING DONE.')
+   return
+  elseif ( size(D,1).ne.n .or. size(D,2).ne.n ) then
+   __WRN(whoami, 'DISTANCE MATRIX MUST BE SQUARE WITH SIZE EQUAL TO THE NUMBER OF VERTICES. NOTHING DONE.')
+   return
+  elseif (nmove .lt. 0) then
+   __WRN(whoami, 'NUMBER OF MONTE CARLO MOVES CANNOT BE NEGATIVE. NOTHING DONE.')
+   return
+  endif
+! see if we have sufficient information to determine temperature schedule
+!
+  if (present(gettemp_)) then
+   gettemp=gettemp_
+   if (.not.gettemp) then
+    if ( .not. present(itemp_) ) then
+     __WRN(whoami, 'MUST SPECIFY INITIAL TEMPERATURE OR SET "GETTEMP". NOTHING DONE.');
+     return
+    elseif (itemp_.eq.__NAN) then
+     gettemp=.true.
+    elseif (itemp_.lt.0) then
+      __WRN(whoami,'INITIAL TEMPERATURE CANNOT BE LESS THAN ZERO. NOTHING DONE.');
+      return
+    else
+     itemp=itemp_
+    endif
+   endif ! .not. gettemp
+  else ! gettemp is not supplied
+! check if itemp is supplied, if not, set gettemp tp true
+   if (present(itemp_)) then
+    if (itemp_.lt.0) then
+      __WRN(whoami,'INITIAL TEMPERATURE CANNOT BE LESS THAN ZERO. NOTHING DONE.');
+      return
+    endif
+    gettemp=.false.
+   else ! itemp not supplied
+    gettemp=.true.
+   endif ! present (itemp)
+  endif ! present(gettemp)
+!=========================== now, if gettemp is set, get the initial temperature
+  allocate(iroute(n)); iroute=route;   ! original route
+!
+  __PLEN(route,dist)
+  if (gettemp) then
+   mind=dist
+   maxd=dist
+   do i=1, gettemp_niter
+    __SHIFTPATH_SIMPLE(n,ind1,ind2)
+    __DPLEN(route, ind1, ind2, dd)
+    newd=dist+dd
+    if (newd<mind) then ;  mind=newd; elseif (newd>maxd) then ; maxd=newd; endif
+   enddo
+   itemp = (maxd-mind)*gettemp_defrac
+!
+   if (present(itemp_)) itemp_=itemp ! pass itemp to calling subroutine
+  endif ! gettemp
+!
+!================== ftemp
+  if (present(ftemp_)) then 
+   if(ftemp_.lt.zero) then 
+! special case : -1 means determine automatically
+    if (ftemp_.eq.__NAN) then
+     ftemp_=mintemp
+    else
+     __WRN(whoami,'FINAL TEMPERATURE CANNOT BE LESS THAN ZERO. NOTHING DONE.');
+     return;
+    endif
+   elseif (ftemp_.gt.itemp) then
+    __WRN(whoami,'FINAL TEMPERATURE IS GREATER THAN INITIAL TEMPERATURE.')
+   endif
+   ftemp=ftemp_
+  else
+   ftemp=mintemp
+  endif ! present(ftemp)
+! dtemp :
+  if (present(dtemp_)) then 
+   if (dtemp.eq.__NAN) then ! special case -- assign automatically if equals -1
+    dtemp_=(itemp - ftemp) / nmove * 1.2d0
+   elseif ( dtemp_*nmove .lt. (itemp-ftemp)) then;
+    __WRN(whoami, 'NOT ENOUGH ITERATIONS TO ANNEAL TO ZERO FOR GIVEN DeltaT');
+   endif
+   dtemp=dtemp_
+  else
+   dtemp=(itemp - ftemp) / nmove * 1.2d0
+  endif
+!=========================================================
+! perform annealing
+  allocate(minroute(n))
+  minroute=iroute;
+  mind=dist;
+!
+  temp=itemp;
+
+  do i=1,nmove
+   if (mod(i,2).eq.0) then
+     call shiftpath(D,n,iroute, ind1, ind2)
+   else
+     __SHIFTPATH_SIMPLE(n,ind1,ind2)
+   endif
+   __DPLEN(route, ind1, ind2, dd)
+   newd=dist+dd
+!
+   if ( newd .le. dist ) then
+    __SWAPI(iroute(ind1), iroute(ind2)) ! swap vertices
+    dist=newd;
+    if (dist.lt.mind) then; mind=dist; minroute=route; endif
+!
+   elseif ( exp ( - (newd - dist)/temp ) .gt. __RANDOMU(__SEED)  ) then ! Metropolis criterion
+    __SWAPI(iroute(ind1), iroute(ind2)) ! swap vertices
+    dist=newd;
+    if (dist.lt.mind) then; mind=dist; minroute=route; endif
+   endif
+!  change temperature (annealing)
+   temp=max(temp-dtemp,ftemp)
+  enddo ! nmove
+!
+  __FREE(iroute)
+  newroute=>minroute; nullify(minroute);
+!
+  end function tsp_anneal_path
+!========================================================
+ subroutine shiftpath(D,n,r,indi,indk)
+  float, intent(in) :: D(n,n)
+  int, intent(in) :: n, r(n)
+  int, intent(out) :: indi, indk
+!
+  int :: rinv(n) ! inverse map
+  int :: idir, indj, ind1, ind2, i, indk1(1)
+  float :: dmax, Di(n)
+!
+  indi=0 ; indk=0 ;
+  if (n.lt.4) return;
+!
+  rinv=0;  do i=1,n ; rinv(r(i))=i ; enddo ! inverse map
+!
+! choose random vertex between 2 : n-1
+  indi=1 + ( INT(__RANDOMU(__SEED)*(n-2)) + 1 )
+! choose an adjacent vertex randomly, which will define an edge
+  idir= INT(__RANDOMU(2))*2-1
+  indj= indi + idir ; ! (indi, indj) correspond to an edge
+! get absolute vertex indices
+  ind1=r(indi);
+  ind2=r(indj);
+!find a vertex that is closest to indj and that is not indi
+  Di=D(ind2,:)
+  dmax=maxval(Di) + one
+  Di(ind1)=dmax ; Di(ind2)=dmax ; Di(r(1))=dmax ; Di(r(n))=dmax ; ! exclude corresponding indices from minimization below
+  indk1 = rinv(minloc(Di)); ! index in r of the vertex that is closest to the vertex r(indi)
+  indk=indk1(1) ! minloc needs an array
+!
+ end subroutine shiftpath
+!========================================================
+ function tsp_path_len(route,D,n) result(dist)
+ int :: n, i
+ int, intent(in) :: route(n)
+ float, intent(in) :: D(n,n)
+ float :: dist
+  __PLEN(route,dist)
+ end function tsp_path_len
+!========================================================
+end module tsp
+
