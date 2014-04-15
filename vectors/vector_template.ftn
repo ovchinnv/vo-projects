@@ -16,7 +16,7 @@
 #ifdef __CHARMM
 ##IFN PATHSCALE
 #endif
-#if !(defined(__pathf90) || defined(__pathf77) || defined(__pathf95))
+#if !(defined(__pathf90) || defined(__pathf77) || defined(__pathf95) || defined(__g95))
       contains
        procedure :: init   => __CONCAT(__TNAME,_init)
        procedure :: done   => __CONCAT(__TNAME,_done)
@@ -39,20 +39,39 @@
 !
       contains
 
-       subroutine __CONCAT(__TNAME,_init( v ))
+       subroutine __CONCAT(__TNAME,_init( v, expand_incr_ ))
 #ifndef __CHARMM
        __TYPE (__TNAME) :: v
 #else
        class (__TNAME) :: v !##.not.PATHSCALE
        type  (__TNAME) :: v !##PATHSCALE
 #endif
-!       if (associated(v%__DATANAME)) deallocate(v%__DATANAME) ! testing unassigned pointer is an error!
-       allocate(v%__DATANAME(expand_incr))
+       int, optional :: expand_incr_
+       int :: length
+       if (v%initialized) return
+       if (present(expand_incr_)) then
+        length=max(expand_incr_, expand_incr)
+       else
+        length=expand_incr
+       endif
+       allocate(v%__DATANAME(length))
        v%__DATANAME=0
-       v%length=expand_incr
+       v%length=length
        v%last=0
        v%initialized=.true.
        end subroutine __CONCAT(__TNAME,_init)
+!ccccc
+       subroutine __CONCAT(__TNAME,_reinit( v, expand_incr_ ))
+#ifndef __CHARMM
+       __TYPE (__TNAME) :: v
+#else
+       class (__TNAME) :: v !##.not.PATHSCALE
+       type  (__TNAME) :: v !##PATHSCALE
+#endif
+       int, optional :: expand_incr_
+       if (v%initialized) call int_vector_done(v)
+       if (present(expand_incr_)) then ; call int_vector_init(v, expand_incr_) ; else ; call int_vector_done(v) ; endif
+       end subroutine __CONCAT(__TNAME,_reinit)
 !ccccc
        subroutine __CONCAT(__TNAME,_done( v ))
 #ifndef __CHARMM
@@ -67,13 +86,14 @@
        v%initialized=.false.
        end subroutine __CONCAT(__TNAME,_done)
 !ccccc
-       subroutine __CONCAT(__TNAME,_expand( v ))
+       subroutine __CONCAT(__TNAME,_expand( v, expand_incr_ ))
 #ifndef __CHARMM
        __TYPE (__TNAME) :: v
 #else
        class (__TNAME) :: v !##.not.PATHSCALE
        type  (__TNAME) :: v !##PATHSCALE
 #endif
+       int, optional :: expand_incr_
        int :: newlength
        __DATATYPE, dimension(:), allocatable :: p
 !
@@ -81,7 +101,11 @@
         call __CONCAT(__TNAME,_init(v))
        else
 !    assume length is valid
-        newlength=v%length+expand_incr
+        if (present(expand_incr_)) then
+         newlength=v%length+max(expand_incr_, expand_incr)
+        else
+         newlength=v%length+expand_incr
+        endif
         allocate(p(newlength))       ! new memory
         p(1:v%length)=v%__DATANAME ! copy old data
         deallocate(v%__DATANAME) ! delete old data
@@ -91,6 +115,22 @@
         v%length=newlength
        endif
        end subroutine __CONCAT(__TNAME,_expand)
+!ccccc
+       subroutine __CONCAT(__TNAME,_set( v, w )) ! set vector v to another vector w
+#ifndef __CHARMM
+       __TYPE (__TNAME) :: v, w
+#else
+       class (__TNAME) :: v, w !##.not.PATHSCALE
+       type  (__TNAME) :: v, w !##PATHSCALE
+#endif
+       if (w%initialized) then
+        if (v%initialized) call int_vector_done(v)
+        call int_vector_init(v, w%last)
+        v%__DATANAME=w%__DATANAME(1:w%last)
+        v%last=w%last
+       endif
+!
+       end subroutine __CONCAT(__TNAME,_set)
 !ccccc
        function __CONCAT(__TNAME,_add( v,i )) ! add a new element to the list (not necessarily unique)
 !                                       and return its index
@@ -211,4 +251,57 @@
        endif
        end function __CONCAT(__TNAME,_delete)
 !ccccc
+       function __CONCAT(__TNAME, _eq_ordered(v,w)) result(equal)
+#ifndef __CHARMM
+       __TYPE (__TNAME) :: v, w
+#else
+       class (__TNAME) :: v, w !##.not.PATHSCALE
+       type  (__TNAME) :: v, w !##PATHSCALE
+#endif
+       bool :: equal
+       equal = v%initialized.and.w%initialized
+       if (equal) equal = v%last .eq. w%last
+       if (equal.and.v%last.gt.0) equal=all(v%__DATANAME(1:v%last).eq.w%__DATANAME(1:v%last))
+       end function __CONCAT(__TNAME, _eq_ordered)
+!ccccc
+       function __CONCAT(__TNAME, _eq_unordered(v,w)) result(equal)
+#ifndef __CHARMM
+       __TYPE (__TNAME) :: v, w
+#else
+       class (__TNAME) :: v, w !##.not.PATHSCALE
+       type  (__TNAME) :: v, w !##PATHSCALE
+#endif
+       bool :: equal
+       __DATATYPE, dimension(:), pointer :: a, b
+       int :: error
+       equal = v%last .eq. w%last
+       if (equal.and.v%last.gt.0) then
+        allocate(a(v%last), b(v%last))
+        a=v%__DATANAME(1:v%last) ! make copies
+        b=w%__DATANAME(1:v%last)
+        call __CONCAT(__DATANAME,sort('i', v%last, a, error)) ! sort in increasing order
+        call __CONCAT(__DATANAME,sort('i', v%last, b, error))
+        equal=all(a.eq.b)
+        deallocate(a,b)
+       endif
+       end function __CONCAT(__TNAME, _eq_unordered)
+!ccccc
+       subroutine __CONCAT(__TNAME, _sort(v,dir))
+#ifndef __CHARMM
+       __TYPE (__TNAME) :: v
+#else
+       class (__TNAME) :: v !##.not.PATHSCALE
+       type  (__TNAME) :: v !##PATHSCALE
+#endif
+       character, optional :: dir
+       character :: d
+       int :: error
+       if (present(dir)) then ; d=dir ; else ; d = 'i' ; endif ! sort in increasing order by default
+       if (v%initialized) then
+        if (v%last.gt.1) call __CONCAT(__DATANAME, sort(d, v%last, v%__DATANAME(1:v%last), error))
+       endif
+       end subroutine __CONCAT(__TNAME, _sort)
+!cccc
+
+
       end module __MODNAME

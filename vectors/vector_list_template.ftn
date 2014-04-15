@@ -19,7 +19,7 @@
 #ifdef __CHARMM
 ##IFN PATHSCALE
 #endif
-#if !(defined(__pathf90) || defined(__pathf77) || defined(__pathf95))
+#if !(defined(__pathf90) || defined(__pathf77) || defined(__pathf95) || defined (__g95))
       contains
        procedure :: init   => __CONCAT(__TLNAME,_init)
        procedure :: done   => __CONCAT(__TLNAME,_done)
@@ -39,7 +39,7 @@
 !
       private __CONCAT(__TLNAME,_expand)
       private __CONCAT(__TLNAME,_add)
-      int, parameter, private :: expand_incr=1
+      int, parameter, private :: expand_incr=10
 !
       contains
 
@@ -52,7 +52,7 @@
        class (__TLNAME) :: vl !##.not.PATHSCALE
        type  (__TLNAME) :: vl !##PATHSCALE
 #endif
-!       if (associated(vl%v)) then ... ! testing unassigned pointer is an error in F90 !
+       if (vl%initialized) return ! do not reinitialize
        if (present(length)) then  ; llength=length; 
        else ; llength=expand_incr ; endif
        allocate(vl%v(llength))
@@ -65,6 +65,18 @@
        vl%initialized=.true.
        end subroutine __CONCAT(__TLNAME,_init)
 !
+       subroutine __CONCAT(__TLNAME,_reinit( vl, length ))
+       int, optional :: length
+#ifndef __CHARMM
+       __TYPE (__TLNAME) :: vl
+#else
+       class (__TLNAME) :: vl !##.not.PATHSCALE
+       type  (__TLNAME) :: vl !##PATHSCALE
+#endif
+       if (vl%initialized) call __CONCAT(__TLNAME,_done(vl))
+       if (present(length)) then ; call __CONCAT(__TLNAME,_init(vl, length)) ; else ; call __CONCAT(__TLNAME,_init(vl)) ; endif
+       end subroutine __CONCAT(__TLNAME,_reinit)
+!
        subroutine __CONCAT(__TLNAME,_done( vl ))
        int :: i
 #ifndef __CHARMM
@@ -73,6 +85,7 @@
        class (__TLNAME) :: vl !##.not.PATHSCALE
        type  (__TLNAME) :: vl !##PATHSCALE
 #endif
+       if (.not.vl%initialized) return ! do nothing if list not initialized
        if (associated(vl%v)) then
         do i=1,vl%length ; call __CONCAT(__TNAME,_done(vl%v(i))) ; enddo
         deallocate(vl%v)
@@ -200,6 +213,7 @@
 #endif
        int :: i, k
        __DATATYPE, pointer :: list(:)
+       nullify(list)
        do k=1,vl%last
          if (vl%i(k).eq.i) then
           allocate(list(vl%v(k)%last))

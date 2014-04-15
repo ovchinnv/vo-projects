@@ -55,7 +55,8 @@ __CHARMM_ONLY##IF STRINGM
 !
       float :: tol
 !
-      float, pointer :: ow(:), fw(:)
+      float, pointer :: ow(:), fw(:), wgts(:)
+      int, pointer :: inds(:)
 !
       interface
        subroutine hypercube_allgatherv(message,count,displ,type,        &
@@ -90,21 +91,13 @@ __CHARMM_ONLY##IF STRINGM
       rfpar=>r_f(:,:,vpar);  rfprp=>r_f(:,:,vperp) ! displacement vectors
 !
 !      load coordinates
-      do k=1,nforced
-       ind=iatom_f(k)
-       rfi(k,1)=x(ind)
-       rfi(k,2)=y(ind)
-       rfi(k,3)=z(ind)
-      enddo
+#define _RF rfi
+#include "ftsm_load_fcor.def"
 !
       if (qorient) then
        if (qdiffrot) then
-        do k=1,norient ! when qorient false, norient zero
-         ind=iatom_o(k)
-         roi(k,1)=x(ind)
-         roi(k,2)=y(ind)
-         roi(k,3)=z(ind)
-        enddo
+#define _RO roi
+#include "ftsm_load_ocor.def"
        endif ! qdiffrot (otherwise rfi and roi point to the same thing)
 !
 !       translate forced atoms to centroid
@@ -689,8 +682,10 @@ __CHARMM_ONLY##IF STRINGM
       float :: fx(:), fy(:), fz(:)
       float, pointer, dimension(:,:) :: ffpar, ffprp, fopar, foprp
       float :: pre1, pre2
-      float :: fac, fac2, t, omt
-      int :: i, ind
+      float :: fac, fac2, t, omt, wgt, dx, dy, dz
+      int, pointer :: inds(:)
+      float, pointer :: wgts(:)
+      int :: i, j, ind
       bool :: addforce  ! whether to add forces to running force average
       bool :: qendpoint
 !
@@ -732,65 +727,119 @@ __CHARMM_ONLY##IF STRINGM
        avforce(1) = t * avforce(1) + omt * pre1 * fac2 ! force acting on dpar0 is pre1 (integrate negative to get f.e.)
        avforce(2) = t * avforce(2) - omt * pre1 * fac2 * (fe_curv * fac * fac) ! force due to curvature (note: either fac=1 or curv=0)
        avforce(3) = t * avforce(3) + omt * pre2 * fac2 ! force acting on dperp0 is pre2 ( NOTE: this is not a true force along the path)
-!                                                      ! even if I am treating it here as such; it is an orthogonal `correction`
-       if (pre2 .gt. 0d0) then
 !
-        do i=1, nforced
-         ind=iatom_f(i)
-         fx(ind) = fx(ind) + pre1 * ffpar(i,1) + pre2 * ffprp(i,1)
-         fy(ind) = fy(ind) + pre1 * ffpar(i,2) + pre2 * ffprp(i,2)
-         fz(ind) = fz(ind) + pre1 * ffpar(i,3) + pre2 * ffprp(i,3)
-        enddo
-        if (qorient.and.qdiffrot) then
-         do i=1, norient
-          ind=iatom_o(i)
-          fx(ind) = fx(ind) + pre1 * fopar(i,1) + pre2 * foprp(i,1)
-          fy(ind) = fy(ind) + pre1 * fopar(i,2) + pre2 * foprp(i,2)
-          fz(ind) = fz(ind) + pre1 * fopar(i,3) + pre2 * foprp(i,3)
-         enddo
-        endif
-       else ! parallel force only
-        do i=1, nforced
-         ind=iatom_f(i)
-         fx(ind) = fx(ind) + pre1 * ffpar(i,1)
-         fy(ind) = fy(ind) + pre1 * ffpar(i,2)
-         fz(ind) = fz(ind) + pre1 * ffpar(i,3)
-        enddo
-        if (qorient.and.qdiffrot) then
-         do i=1, norient
-          ind=iatom_o(i)
-          fx(ind) = fx(ind) + pre1 * fopar(i,1)
-          fy(ind) = fy(ind) + pre1 * fopar(i,2)
-          fz(ind) = fz(ind) + pre1 * fopar(i,3)
-         enddo
-        endif
-       endif
       else ! .not.  proj_on
        pre1 = krms * ( drms-drms0 )
-       if (qrms_upper_bound) pre1=max(pre1,0d0) ! apply if force exceeds threshold
+       if (qrms_upper_bound) pre1=max(pre1,zero) ! apply if force exceeds threshold
+       pre2=zero
 ! update force (which will not likely be used)
-!
        avforce(1) = t * avforce(1) + omt * pre1 ! force acting on dpar0 is pre1 (integrate negative to get f.e.)
-!
-       do i=1, nforced
-        ind=iatom_f(i)
-        fx(ind) = fx(ind) + pre1 * ffpar(i,1)
-        fy(ind) = fy(ind) + pre1 * ffpar(i,2)
-        fz(ind) = fz(ind) + pre1 * ffpar(i,3)
-       enddo
-       if (qorient.and.qdiffrot) then
-        do i=1, norient
-          ind=iatom_o(i)
-          fx(ind) = fx(ind) + pre1 * fopar(i,1)
-          fy(ind) = fy(ind) + pre1 * fopar(i,2)
-          fz(ind) = fz(ind) + pre1 * fopar(i,3)
+      endif ! proj_on
+!                                                      ! even if I am treating it here as such; it is an orthogonal `correction`
+      if (pre2 .gt. zero) then
+       if (ftsm_com_on) then
+        do i=1, nforced
+          dx=pre1 * ffpar(i,1) + pre2 * ffprp(i,1)
+          dy=pre1 * ffpar(i,2) + pre2 * ffprp(i,2)
+          dz=pre1 * ffpar(i,3) + pre2 * ffprp(i,3)
+          inds=>iatoms_f%v(i)%i
+          wgts=>wgts_f%v(i)%r
+          do j=1, iatoms_f%v(i)%last
+           ind=inds(j)
+           wgt=wgts(j)
+           __INCR(fx(ind),wgt*dx)
+           __INCR(fy(ind),wgt*dy)
+           __INCR(fz(ind),wgt*dz)
+          enddo ! j
+        enddo ! i
+       else ! ftsm_com_on
+        do i=1, nforced
+          ind=iatom_f(i)
+          fx(ind) = fx(ind) + pre1 * ffpar(i,1) + pre2 * ffprp(i,1)
+          fy(ind) = fy(ind) + pre1 * ffpar(i,2) + pre2 * ffprp(i,2)
+          fz(ind) = fz(ind) + pre1 * ffpar(i,3) + pre2 * ffprp(i,3)
         enddo
-       endif
+       endif ! ftsm_com_on
 !
-      endif
+       if (qorient.and.qdiffrot) then
+        if (ftsm_com_on) then
+         do i=1, norient
+           dx=pre1 * fopar(i,1) + pre2 * foprp(i,1)
+           dy=pre1 * fopar(i,2) + pre2 * foprp(i,2)
+           dz=pre1 * fopar(i,3) + pre2 * foprp(i,3)
+           inds=>iatoms_o%v(i)%i
+           wgts=>wgts_o%v(i)%r
+           do j=1, iatoms_o%v(i)%last
+            ind=inds(j)
+            wgt=wgts(j)
+            __INCR(fx(ind),wgt*dx)
+            __INCR(fy(ind),wgt*dy)
+            __INCR(fz(ind),wgt*dz)
+           enddo ! j
+         enddo ! i
+        else ! ftsm_com_on
+         do i=1, norient
+           ind=iatom_o(i)
+           fx(ind) = fx(ind) + pre1 * fopar(i,1) + pre2 * foprp(i,1)
+           fy(ind) = fy(ind) + pre1 * fopar(i,2) + pre2 * foprp(i,2)
+           fz(ind) = fz(ind) + pre1 * fopar(i,3) + pre2 * foprp(i,3)
+         enddo
+        endif ! ftsm_com_on
+       endif ! qorient && qdiffrot
+!
+      else ! parallel force only
+       if (ftsm_com_on) then
+        do i=1, nforced
+          dx=pre1 * ffpar(i,1)
+          dy=pre1 * ffpar(i,2)
+          dz=pre1 * ffpar(i,3)
+          inds=>iatoms_f%v(i)%i
+          wgts=>wgts_f%v(i)%r
+          do j=1, iatoms_f%v(i)%last
+           ind=inds(j)
+           wgt=wgts(j)
+           __INCR(fx(ind),wgt*dx)
+           __INCR(fy(ind),wgt*dy)
+           __INCR(fz(ind),wgt*dz)
+          enddo ! j
+        enddo ! i
+       else ! ftsm_com_on
+        do i=1, nforced
+          ind=iatom_f(i)
+          fx(ind) = fx(ind) + pre1 * ffpar(i,1)
+          fy(ind) = fy(ind) + pre1 * ffpar(i,2)
+          fz(ind) = fz(ind) + pre1 * ffpar(i,3)
+        enddo
+       endif ! ftsm_com_on
+!
+       if (qorient.and.qdiffrot) then
+        if (ftsm_com_on) then
+         do i=1, norient
+           dx=pre1 * fopar(i,1)
+           dy=pre1 * fopar(i,2)
+           dz=pre1 * fopar(i,3)
+           inds=>iatoms_o%v(i)%i
+           wgts=>wgts_o%v(i)%r
+           do j=1, iatoms_o%v(i)%last
+            ind=inds(j)
+            wgt=wgts(j)
+            __INCR(fx(ind),wgt*dx)
+            __INCR(fy(ind),wgt*dy)
+            __INCR(fz(ind),wgt*dz)
+           enddo ! j
+         enddo ! i
+        else ! ftsm_com_on
+         do i=1, norient
+           ind=iatom_o(i)
+           fx(ind) = fx(ind) + pre1 * fopar(i,1)
+           fy(ind) = fy(ind) + pre1 * fopar(i,2)
+           fz(ind) = fz(ind) + pre1 * fopar(i,3)
+         enddo
+        endif ! ftsm_com_on
+       endif ! qorient
+      endif ! pre2>0
 !
       end subroutine ftsm_addforce
-!===========================================================================
 !===========================================================================
       subroutine ftsm_calc_M(x,y,z,mass,t)
 ! 5.2013 : TODO : debug the case qdiffrot=1 
@@ -841,8 +890,7 @@ __CHARMM_ONLY##IF STRINGM
 !
       Mt=>Mtensor(:,:,:,:,1);
 !--------------------------------------------------------------------------------------
-!      load coordinates
-! write(0,*) 'loading coordinates ...' ! aa
+!      load coordinates -- simple form (currently no support for FTSM COM)
 !
       if (.not. restraint_force_on) then ! if restraints are on coordinates already loaded
        do k=1,nforced

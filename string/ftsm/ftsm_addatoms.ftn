@@ -1,0 +1,395 @@
+! routines for adding atoms or COMs of atoms to FTSM forcing/orientation sets
+! replaces the built-in selection process inside ftsm.ftn (string ftsm set orie/rmsd)
+!
+#if (defined(__CHARMM) || defined(__PARALLEL) )
+__CHARMM_ONLY##IF STRINGM
+!=====================================================================================
+      subroutine ftsm_add_atomic_set(comlyn, comlen)
+!    implements original functionality : one ftsm bead per atom
+      use ftsm_var
+      use ftsm_util
+      __DEP_PARSER
+      __DEP_SIZE
+      __DEP_SELECT
+      __DEP_CONST
+      __DEP_MULTICOM
+!
+      __IMPNONE
+!
+      character(len=*) :: comlyn
+      int :: comlen
+      int :: iorie, irmsd
+      int :: i, j, a
+      bool :: qroot, qslave, qprint
+!
+      __IAM(FTSM_ADD_ATOMIC_SET)
+!
+#ifdef __CHARMM
+      int :: imode
+      int :: iselct(natom)
+#else
+      int :: natom
+ __DECLARE_DMOL_SELECT
+#endif
+ __DECL_MSGBUF
+!
+      qroot=MPI_COMM_STRNG.ne.MPI_COMM_NULL
+      qslave=((MPI_COMM_LOCAL.ne.MPI_COMM_NULL).and.SIZE_LOCAL.gt.1)
+      qprint=qroot.and.ME_STRNG.eq.0
+!
+      iorie=__INDX_RM(comlyn, comlen, 'ORIE')
+      irmsd=__INDX_RM(comlyn, comlen, 'RMSD')
+!
+      if (iorie.gt.0) then
+!    process orientation atom selection
+!    determine whether a selection keyword follows orie
+         isele=__INDX(comlyn, comlen, 'SELE' ,4)
+         if (isele.ge.iorie) then
+!
+#ifdef __CHARMM
+          iselct=0
+! process selection
+          IMODE=0
+          CALL SELRPN(COMLYN,COMLEN,iselct,NATOM,1,IMODE,               &
+     &      .FALSE.,1,' ',0,RESID,RES,IBASE,SEGID,NICTOT,NSEG,          &
+     &      .TRUE.,X,Y,Z,.TRUE.,1,WMAIN)
+          IF(IMODE.NE.0) THEN
+           __WRN(whoami,'ORIENTATION ATOMS SELECTION ERROR')
+           RETURN
+          ENDIF
+#elif defined(__DMOL)
+#include "../../dmol_select_macro.def"
+          if (associated(iselct)) then ; norient=size(iselct) ; else ; norient=0 ; endif
+#endif
+! deallocate existing orientation arrays
+!
+          if (ftsm_com_on) then 
+           call int_vlist_done(iatoms_o)
+          else
+           __FREE(iatom_o)
+           allocate(iatom_o(norient)); iatom_o=0
+          endif
+          __FREE(orientWeights)
+!
+! currently we require at least three atoms for orientation
+!
+          norient=count( iselct.gt.0 )
+          if (norient.lt.3) then
+           __WRN(whoami,' FEWER THAN THREE ATOMS SELECTED FOR ORIENTATION. WILL NOT ORIENT.')
+           norient=0
+           qorient=.false.
+           return
+          else
+           qorient=.true.
+          endif
+!
+          allocate(orientWeights(norient));
+          orientWeights=one/norient ! default behavior
+!    build index array
+!
+#ifdef __CHARMM
+          norient=0
+          do i=1,natom
+           if (iselct(i).gt.0) then
+            __INC(norient)
+            if (ftsm_com_on) then
+             j=int_vlist_uadd(iatoms_o,norient,i) ! create a new list with label norient ; add to it the index i
+            else
+             iatom_o(norient)=i
+            endif ! ftsm_com_on
+!
+           endif ! iselct
+          enddo
+#else
+          if (ftsm_com_on) then
+           do i=1, norient ; j=int_vlist_uadd(iatoms_o,i,iselct(i)) ; enddo
+          else
+           iatom_o=iselct
+          endif
+          __FREE(iselct)
+#endif
+!
+!    determine whether the new orientation set is the same as the existing forcing set
+!
+          call ftsm_qdiffrot() ! compute qdiffrot
+!
+          __FREE_FTSM(r_o, r_f)
+          if (.not.qdiffrot) then
+           r_o=>r_f;
+          else
+           allocate(r_o(norient,3,num_sets)); r_o=__NAN;
+           if (nforced.gt.0) call ftsm_compute_overlap_ind()  ! compute overlap indices in iatom_both (works for ftsm_com_on)
+          endif
+!
+          if (.not. associated(rcom)) allocate(rcom(3,num_sets))
+          rcom=0d0 ! must be zero initially
+!
+! print summary
+          if (qprint) then
+            write(_MSGBUF,100) whoami, norient ; __PRINT(_MSGBUF)
+ 100  format(A,' WILL ORIENT STRUCTURES BASED ON ',i5,' ATOMS')
+            write(_MSGBUF,101) whoami  ; __PRINT(_MSGBUF)
+ 101  format(A,' ORIENTATION WEIGHTS UNIFORM.')
+            if (qdiffrot) then
+             write(_MSGBUF,102) whoami
+            else
+             write(_MSGBUF,103) whoami
+            endif
+            __PRINT(_MSGBUF)
+ 102  format (A, ' ORIENTATION AND FORCING ATOMS ARE DIFFERENT')
+ 103  format (A, ' ORIENTATION AND FORCING ATOMS ARE IDENTICAL')
+          endif ! qprint
+         else
+          __WRN(whoami,' ATOM SELECTION MUST BE SPECIFIED AFTER ORIE.')
+          return
+         endif
+         call ftsm_define_rtmd_type()
+!=======================================================================
+      elseif (irmsd.gt.0) then
+!    process forcing atom selection
+!    determine whether a selection keyword follows 'rmsd'
+         isele=__INDX(comlyn, comlen, 'SELE' ,4)
+         if (isele.gt.irmsd) then
+!
+#ifdef __CHARMM
+          iselct=0
+          IMODE=0
+          CALL SELRPN(COMLYN,COMLEN,iselct,NATOM,1,IMODE,               &
+     &      .FALSE.,1,' ',0,RESID,RES,IBASE,SEGID,NICTOT,NSEG,          &
+     &      .TRUE.,X,Y,Z,.TRUE.,1,WMAIN)
+          IF(IMODE.NE.0) THEN
+           __WRN(whoami,'FORCING ATOMS SELECTION ERROR')
+           RETURN
+          ENDIF
+          nforced=count( iselct.gt.0 )
+#elif defined(__DMOL)
+#include "../../dmol_select_macro.def"
+          if (associated(iselct)) then ; nforced=size(iselct) ; else ; nforced=0 ; endif
+#endif
+!
+          if (nforced.le.0) then
+           __WRN(whoami, 'NO FORCING ATOMS SELECTED. ABORT.')
+           return
+          endif
+!
+          if (ftsm_com_on) then 
+           call int_vlist_done(iatoms_f)
+          else
+            __FREE(iatom_f)
+           allocate(iatom_f(nforced)); iatom_f=0
+          endif
+!
+          __FREE(forcedWeights)
+          __FREE(Mtensor)
+          allocate(forcedWeights(nforced));
+          forcedWeights=one/nforced ! default behavior
+          allocate(Mtensor(3,3,nforced,nforced,2)); Mtensor=zero ; do a=1,3; do i=1, nforced ; Mtensor(a,a,i,i,:)=one ; enddo ; enddo! allocate & set to I
+!
+!    build index array
+#ifdef __CHARMM
+          nforced=0
+          do i=1,natom
+           if (iselct(i).gt.0) then
+            __INC(nforced)
+            if (ftsm_com_on) then
+             j=int_vlist_uadd(iatoms_f,nforced,i) ! create a new list with label norient ; add to it the index i
+            else
+             iatom_f(nforced)=i
+            endif ! ftsm_com_on
+!
+           endif ! iselct
+          enddo
+#else
+          if (ftsm_com_on) then
+           do i=1, nforced ; j=int_vlist_uadd(iatoms_f,i,iselct(i)) ; enddo
+          else
+           iatom_f=iselct
+          endif
+          __FREE(iselct)
+#endif
+!
+!    determine whether the new orientation set is the same as the existing forcing set
+!
+          call ftsm_qdiffrot() ! computes qdiffrot
+!
+          __FREE_FTSM(r_f, r_o) ! free/nullify r_f
+          if (.not.qdiffrot) then
+           r_f=>r_o;
+          else
+           allocate(r_f(nforced,3,num_sets)); r_f=__NAN;
+           if (norient.gt.0) call ftsm_compute_overlap_ind()  ! compute overlap indices in iatom_both
+          endif
+! print summary
+          if (qprint) then
+            write(_MSGBUF,104) whoami, nforced ; __PRINT(_MSGBUF)
+ 104  format(A,' WILL APPLY FORCES TO ',i5,' ATOMS')
+            write(_MSGBUF,105) whoami ; __PRINT(_MSGBUF)
+ 105  format(A,' FORCING WEIGHTS UNIFORM.')
+            if (qdiffrot) then
+             write(_MSGBUF,102) whoami
+             if (.not.qorient) then
+              write(_MSGBUF(2),106) whoami
+ 106  format(A,' BEST-FITTING IS DISABLED (PERHAPS ORIENTATION ATOMS ARE NOT DEFINED).')
+             endif
+            else
+             write(_MSGBUF,103) whoami
+            endif
+            __PRINT(_MSGBUF)
+          endif ! qprint
+         else
+          __WRN(whoami,'ATOM SELECTION MUST BE SPECIFIED AFTER "RMSD".')
+          return
+         endif
+!=====================================================================================
+      endif ! iorie or irmsd
+!
+      end subroutine ftsm_add_atomic_set
+!=====================================================================================
+      subroutine ftsm_add_com(comlyn, comlen)
+! COM functionality : each ftsm bead centered on the COM of a group of one or more atoms
+      use ftsm_var
+      __DEP_VECTORS
+      __DEP_OUTPUT
+      __DEP_SIZE
+      __DEP_COORDINATES
+      __DEP_PARSER
+      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
+      __DEP_MPI
+      __DEP_SELECT
+!
+      __IMPNONE
+      __IAM(FTSM_ADD_COM)
+ __DECLARE_MSGBUF
+!
+      character(len=*) comlyn
+      int :: comlen
+!
+#ifdef __CHARMM
+      int :: imode, iselct(natom)
+#elif defined(__DMOL)
+ __DECLARE_DMOL_SELECT
+#endif
+!
+      int :: i, j, nslct, ind
+      type (int_vector) :: posi_com_list ! for storing atom indices
+      type (int_vlist), pointer :: iatoms
+!
+      character(len=11) :: keyword
+!
+      __FTSM_NOT_INIT_QUIT
+!
+      keyword=__NEXTA(comlyn,comlen)  ! directive
+      if (__STRNCMP(keyword,'ORIE',4)) then
+       keyword='ORIENTATION'
+       iatoms=>iatoms_o
+       __FREE_FTSM(r_o, r_f) !    ensure that arrays that depend on the COM group definitions get reallocated
+      elseif (__STRNCMP(keyword,'RMSD',4)) then
+       keyword='FORCING'
+       iatoms=>iatoms_f
+       __FREE_FTSM(r_f, r_o)
+      else
+       __WRN(whoami, '"ADD" MUST BE FOLLOWED BY "RMSD" OR "ORIE". NOTHING DONE.')
+       return
+      endif
+!
+!     process atom selections;
+!     expecting 1 atom group
+#ifdef __CHARMM
+      imode=0
+      CALL SELRPN(COMLYN,COMLEN,ISELCT,NATOM,1,IMODE,                    &
+     &      .FALSE.,1,' ',0,RESID,RES,IBASE,SEGID,NICTOT,NSEG,          &
+     &      .TRUE.,X,Y,Z,.TRUE.,1,WMAIN)
+      IF(IMODE.NE.0) THEN
+       CALL WRNDIE(0,whoami,'ATOM SELECTION ERROR')
+       RETURN
+      ENDIF
+      NSLCT=NSELCT(NATOM,ISELCT)
+!
+#elif defined(__DMOL)
+#include "../../dmol_select_macro.def"
+      if (associated(iselct)) then ; nslct=size(iselct) ; else ; nslct=0 ; endif
+#endif
+!
+      if(nslct.eq.0) then
+       __WRN(whoami,'ZERO ATOMS SELECTED')
+      endif
+!
+      call int_vector_init(posi_com_list)
+#ifdef __CHARMM
+      do i=1,natom ! loop over all atoms
+       if (iselct(i).eq.1) then
+        j=int_vector_add(posi_com_list,i)
+        if (j.le.0) then ; __WRN(whoami,'COULD NOT ADD ATOM INDEX TO COM LIST') ; endif
+       endif
+      enddo
+#elif defined (__DMOL)
+      do i=1,size(iselct)
+       j=int_vector_add(posi_com_list,iselct(i))
+       if (j.le.0) then ; __WRN(whoami,'COULD NOT ADD ATOM INDEX TO COM LIST') ; endif
+      enddo
+      if (associated(iselct)) deallocate(iselct)
+#endif
+!
+!     print short summary
+      if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.ME_STRNG.eq.0) then
+        write(_MSGBUF, 664) whoami,trim(keyword)
+       __PRINT(_MSGBUF)
+  664 format(/A,' WILL ADD COM POSITION GROUP TO ',A,' SET.')
+      endif
+!       now attempt to add group
+! 1) sort atoms in increasing order just in case (not needed for CHARMM)
+      call int_vector_sort(posi_com_list,'i')
+!
+      ind=iatoms%last+1
+      j=int_vlist_uadd(iatoms, ind) ! add list with label "ind"
+      call int_vector_set(iatoms%v(j), posi_com_list)
+!     deallocate list
+      call int_vector_done(posi_com_list)
+!
+      ftsm_compute_qdiffrot=.true.
+      end subroutine ftsm_add_com
+!=====================================================================================
+      subroutine ftsm_clear_com(comlyn, comlen)
+      use ftsm_var
+      __DEP_OUTPUT
+      __DEP_VECTORS
+      __DEP_PARSER
+      character(len=*) :: comlyn
+      int :: comlen
+__DECL_MSGBUF
+      character(len=11) :: keyword
+!
+      __IAM(FTSM_CLEAR_COM)
+      __FTSM_NOT_INIT_QUIT
+!
+      keyword=__NEXTA(comlyn,comlen)  ! directive
+      if (__STRNCMP(keyword,'ORIE',4)) then
+       keyword='ORIENTATION'
+       call int_vlist_done(iatoms_o)
+       call real_vlist_done(wgts_o)
+       __FREE_FTSM(r_o, r_f)
+       __FREE(orientWeights)
+      elseif (__STRNCMP(keyword,'RMSD',4)) then
+       keyword='FORCING'
+       call int_vlist_done(iatoms_f)
+       call real_vlist_done(wgts_f)
+       __FREE_FTSM(r_f, r_o)
+       __FREE(forcedWeights)
+      else
+       __WRN(whoami, '"CLEAR" MUST BE FOLLOWED BY "RMSD" OR "ORIE". NOTHING DONE.')
+       return
+      endif
+!
+      ftsm_compute_qdiffrot=.true.
+!     print
+      if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.ME_STRNG.eq.0) then
+        write(_MSGBUF, 665) whoami,trim(keyword)
+       __PRINT(_MSGBUF)
+  665 format(/A,A,' COM POSITION SET CLEARED.')
+      endif
+!
+      end subroutine ftsm_clear_com
+!
+__CHARMM_ONLY##ENDIF
+#endif
+

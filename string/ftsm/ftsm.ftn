@@ -29,7 +29,6 @@ __CHARMM_ONLY##IF STRINGM
       private ftsm_init
       private ftsm_done
       private ftsm_list_atoms
-      private ftsm_set_weights
       private ftsm_lift
       private ftsm_test_grad_fd
       private ftsm_test_parallel
@@ -59,7 +58,7 @@ __CHARMM_ONLY##IF STRINGM
 ! need BNBND, BIMAG for ftsm_mini
       use bases_fcm, only : BNBND, BIMAG
 #endif
-!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!======================================================================
       character(len=*) :: comlyn
       int :: comlen
 ! local variables
@@ -72,16 +71,13 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
       float :: zval, k, step, voro_cut
       int :: ifile, c1, c2, qcor, qdcd, flen,            &
      &           num_ave_samples, irep, i, a,            &
-     &           iorie, irmsd, ierror, me
+     &           ierror, me
       float :: t, omt
 !
 #ifdef __CHARMM
-      int :: imode
-      int :: oldiol, isele
-      int :: iselct(natom)
+      int :: oldiol
 #else
       int :: natom
- __DECLARE_DMOL_SELECT
 #endif
       float, pointer :: fd_error(:,:)
 !
@@ -103,20 +99,29 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
        __WRN(whoami,' SMCV IS ON AND CANNOT BE USED WITH FTSM. NOTHING DONE.')
        return
       endif
-!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!===================================================================
       if (__STRNCMP(keyword,'INIT',4)) then
-        qver2=(__INDX_RM(comlyn, comlen, 'VER2').gt.0)
-        if (.not.qver2) qver2=(__INDX_RM(comlyn, comlen, 'V2').gt.0)
+!
+! NOTE : ftsm_init does not get command line, so will process here before calling ftsm_init
+!
+       qver2=(__INDX_RM(comlyn, comlen, 'VER2').gt.0)
+       if (.not.qver2) qver2=(__INDX_RM(comlyn, comlen, 'V2').gt.0)
 !===== ! check for distance scaling
-        ftsm_scaledist = .not.(__INDX_RM(comlyn, comlen, 'NOSC').gt.0) ! distance scaling is on by default
+       ftsm_scaledist = .not.(__INDX_RM(comlyn, comlen, 'NOSC').gt.0) ! distance scaling is on by default
 !===== for now, unscaled distances are only supported in version 2
-        if (qver2.and..not.ftsm_scaledist) then
+       if (qver2.and..not.ftsm_scaledist) then
          __WRN(whoami, ' ABSOLUTE (UNSCALED) DISTANCES ARE ONLY SUPPORTED IN FTSM VERSION 2. TURNING SCALING ON.')
          ftsm_scaledist=.true.
-        endif
+       endif
 !
-        call ftsm_init()
-        return
+       if (__INDX_RM(comlyn, comlen, 'COM').gt.0) ftsm_com_on=.true. ! preserve initial state specified in ftsm_var
+       if (ftsm_com_on.and.qprint) then
+         write(_MSGBUF,'(2A)') whoami, ' USING FTSM IN CENTER-OF-MASS COORDINATES. SOME FEATURES ARE NOT SUPPORTED.'
+          __PRINT(_MSGBUF)
+       endif
+!
+       call ftsm_init()
+       return
       endif
 !===================================================================
       if (.not.ftsm_initialized) then
@@ -126,6 +131,20 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
       if (__STRNCMP(keyword,'DONE',4)) then
         call ftsm_done()
 !===================================================================
+      elseif (__STRNCMP(keyword,'ADD',3)) then
+       if (ftsm_com_on) then
+        call ftsm_add_com(comlyn, comlen)
+       else
+        __WRN(whoami, '"ADD" COMMAND ONLY WORKS WITH FTSM IN COM COORDINATES.')
+       endif
+!===================================================================
+      elseif (__STRNCMP(keyword,'CLEA',3)) then
+       if (ftsm_com_on) then
+        call ftsm_clear_com(comlyn, comlen)
+       else
+        __WRN(whoami, '"CLEAR" COMMAND ONLY WORKS WITH FTSM IN COM COORDINATES.')
+       endif
+!===================================================================
       elseif (__STRNCMP(keyword,'REPA',4)) then
        if (comlen.gt.0) then ! this is an initialization call!
         call ftsm_repa_init(comlyn, comlen)
@@ -134,29 +153,33 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
        endif
 !===================================================================
       elseif (__STRNCMP(keyword,'MINI',4)) then
-       if (comlen.gt.0 .or. .not. ftsm_mini_initialized ) then ! this is an initialization call
-        call ftsm_mini_init(comlyn, comlen)
+       if (ftsm_com_on) then 
+        __WRN(whoami, 'IMAGE MINIMIZATION IS NOT SUPPORTED FOR FTSM IN COM COORDINATES.')
        else
-        if (ftsm_check(qorient)) then
-         if (qorient.and.any(__XX(iatom_o(1:norient)).eq.__NAN)) then
-         __WRN(whoami,'MAIN ORIENTATION X-SET HAS UNDEFINED VALUES. NOTHING DONE.')
-         else
-          call ftsm_mini(__XX(1:natom), __YY(1:natom), __ZZ(1:natom) &
+        if (comlen.gt.0 .or. .not. ftsm_mini_initialized ) then ! this is an initialization call
+         call ftsm_mini_init(comlyn, comlen)
+        else
+         if (ftsm_check(qorient)) then
+          if (qorient.and.any(__XX(iatom_o(1:norient)).eq.__NAN)) then
+          __WRN(whoami,'MAIN ORIENTATION X-SET HAS UNDEFINED VALUES. NOTHING DONE.')
+          else
+           call ftsm_mini(__XX(1:natom), __YY(1:natom), __ZZ(1:natom) &
 #ifdef __CHARMM
-     &                                         ,WMAIN(1:natom), BNBND, BIMAG     &
+     &                                          ,WMAIN(1:natom), BNBND, BIMAG     &
 #endif
-     &                                         )
-         endif ! qorient
-        endif ! ftsm_check
-       endif ! comlen
-!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+     &                                          )
+          endif ! qorient
+         endif ! ftsm_check
+        endif ! comlen
+       endif ! ftsm_com_on
+!===================================================================
       elseif (__STRNCMP(keyword,'RECO',4)) then
        if (comlen.gt.0 .or. .not. ftsm_connect_initialized ) then ! process options or initialize
         call ftsm_reconnect_parse(comlyn, comlen)
        else
         if (ftsm_check(qorient)) call ftsm_reconnect(-ione) ! pass phony time
        endif
-!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!===================================================================
       elseif (__STRNCMP(keyword,'ORIE',4)) then
 ! perform a best-fit orientation of all instantaneous coordinates using 
 ! specified coordinates for orientation;
@@ -168,14 +191,14 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
 !
 ! this _may_ be useful for ftsm without bestfit orientation
        call ftsm_orient(comlyn, comlen)
-!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!===================================================================
       elseif (__STRNCMP(keyword,'STAT',4)) then
        if (comlen.gt.0) then ! this is an initialization call!
         call ftsm_stat_init(comlyn, comlen)
        else
         call ftsm_stat()
        endif
-!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!===================================================================
       elseif (__STRNCMP(keyword,'DYNA',4)) then
 #ifdef __CHARMM
 !ccccc will assume that other distributions specify dynamics elsewhere ccccccc
@@ -190,7 +213,9 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
 !      force LEAP DYNAMICS
        call joinwd(comlyn, mxcmsz, comlen, 'LEAP ', 5)
 #endif
-!ccccccccccccccc PARSE OTHER DYNAMICS OPTIONS
+!================= CHECK THAT COORDINATE ARRAYS AND WEIGHTS HAVE BEEN ALLOCATED
+       __FTSM_UNALLOC_QUIT
+!===================== PARSE DYNAMICS OPTIONS
 ! code from SMCV
        voronoi_hist_on=(__INDX_RM(comlyn,comlen,'VORO').gt.0)
        if (voronoi_hist_on) then
@@ -452,7 +477,7 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
 !    print summary
 !cccccccccccccccccc STRING METHOD OPTIONS cccccccccccccccccccccc
        if (qprint) then
-        WRITE (_MSGBUF,'(2A)') whoami, ' STRING METHOD ENABLED.'; __PRINT(_MSGBUF)
+        WRITE (_MSGBUF,'(2A)') whoami, ' FINITE TEMPERATURE STRING METHOD ENABLED.'; __PRINT(_MSGBUF)
         if (evolve_ftsm_on) then
             WRITE (_MSGBUF,'(/,2A,/,2A,I7,A)')                          &
      &      whoami, ' STRING EVOLUTION ENABLED.',                       &
@@ -479,7 +504,7 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
 
             endif
         endif ! evolve_ftsm_on
-!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!===================================================================
         if (update_on) then
           WRITE (_MSGBUF,666) whoami, update_freq ;      __PRINT(_MSGBUF)
  666  format(A,' WILL UPDATE IMAGES AFTER EVERY ',I7,' ITERATIONS.')
@@ -521,19 +546,19 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
         else
 !
         endif !restrained
-!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!===================================================================
         if (stat_on) then
             write(_MSGBUF,668) whoami, stat_freq ;                __PRINT(_MSGBUF)
  668  format(A, ' WILL OUTPUT STRING STATISTICS AFTER EVERY ',I7, ' STEPS.')
         endif
-!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!===================================================================
         if (repl_x_on) then
             write(_MSGBUF,691) whoami, whoami, repl_x_freq, repl_x_temp
             __PRINT(_MSGBUF)
  691  format(A, ' WILL ATTEMPT TO EXCHANGE NEIGHBORING REPLICAS ',/     &
      &       A, ' ONCE IN EVERY ',I6,' ITERATIONS AT ',F11.3, ' K.')
         endif ! repl_x_on
-!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!===================================================================
         if (voronoi_hist_on) then
             write(_MSGBUF,670) whoami ; __PRINT(_MSGBUF)
  670  format(A, ' WILL COMPUTE FREE ENERGY ALONG STRING USING VORONOI TESSELLATION.' )
@@ -591,6 +616,7 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
           if (qprint) then ; write(_MSGBUF,6010) whoami ; 
           __PRINT(_MSGBUF) ; endif
  6010 format(A,' WILL CALCULATE VORONOI MAP FROM MAIN COORDINATES.')
+          __FTSM_UNALLOC_QUIT
           call ftsm_voronoi_whereami_compute(__X,__Y,__Z)
 !    put 'whereami' into the map
           if (qroot.and.SIZE_STRNG.gt.1) then
@@ -682,7 +708,9 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
          endif ! flen
        endif ! VMAP
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-      elseif (__STRNCMP(keyword,'FILL',4)) then ! set path from current coordinates
+      elseif (__STRNCMP(keyword,'FILL',4)) then ! compute ftsm coordinates from current instantaneous coordinates
+!
+       __FTSM_ALLOC
 !
        qcomp=(__INDX_RM(comlyn, comlen, 'COMP').gt.0)
 !
@@ -697,6 +725,7 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
        endif ! qcomp
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       elseif (__STRNCMP(keyword,'CALC',4)) then ! calculate parallel and perpendicular distances
+       __FTSM_ALLOC
 !
        qcomp=(__INDX_RM(comlyn, comlen, 'COMP').gt.0)
 !
@@ -716,31 +745,37 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
         endif
        endif ! qcomp
  6670 format(/A,' WILL COMPUTE DISTANCE FROM STRING IMAGE USING ',A,' COORDINATES.')
-!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!=======================================================================================
 !     the option below will be useful to perform usual charmm operations on the STRING (if desired)
       elseif (__STRNCMP(keyword,'LIFT',4)) then ! force string into current coordinates
+       if (ftsm_com_on) then
+        __WRN(whoami, 'LIFTING FROM STRING IS NOT SUPPORTED FOR FTSM IN COM COORDINATES.')
+        return
+       else
 !
-       qcomp=(__INDX_RM(comlyn, comlen, 'COMP').gt.0)
+        qcomp=(__INDX_RM(comlyn, comlen, 'COMP').gt.0)
 !
-       if (qcomp) then
-        if (qprint) then ; write(_MSGBUF,6658) whoami ; __PRINT(_MSGBUF) ; endif
+        if (qcomp) then
+         if (qprint) then ; write(_MSGBUF,6658) whoami ; __PRINT(_MSGBUF) ; endif
  6658 format(/A,' WILL COPY STRING INTO COMPARISON COORDINATES.')
-        if (qorient.and.any(__XXCOMP(iatom_o(1:norient)).eq.__NAN)) then
-         __WRN(whoami,'COMPARISON ORIENTATION X-SET HAS UNDEFINED VALUES. NOTHING DONE.')
-        else
-         call ftsm_lift(__XCOMP,__YCOMP,__ZCOMP)
-        endif
-       else ! ~qcomp -- use main coordinates
-        if (qprint) then ; write(_MSGBUF,6661) whoami ; __PRINT(_MSGBUF) ; endif
+         if (qorient.and.any(__XXCOMP(iatom_o(1:norient)).eq.__NAN)) then
+          __WRN(whoami,'COMPARISON ORIENTATION X-SET HAS UNDEFINED VALUES. NOTHING DONE.')
+         else
+          call ftsm_lift(__XCOMP,__YCOMP,__ZCOMP)
+         endif
+        else ! ~qcomp -- use main coordinates
+         if (qprint) then ; write(_MSGBUF,6661) whoami ; __PRINT(_MSGBUF) ; endif
  6661 format(/A,' WILL COPY STRING INTO MAIN COORDINATES.')
-        if (qorient.and.any(__XX(iatom_o(1:norient)).eq.__NAN)) then
-         __WRN(whoami,'MAIN ORIENTATION X-SET HAS UNDEFINED VALUES. NOTHING DONE.')
-        else
-         call ftsm_lift(__X,__Y,__Z)
-        endif
-       endif ! qcomp
+         if (qorient.and.any(__XX(iatom_o(1:norient)).eq.__NAN)) then
+          __WRN(whoami,'MAIN ORIENTATION X-SET HAS UNDEFINED VALUES. NOTHING DONE.')
+         else
+          call ftsm_lift(__X,__Y,__Z)
+         endif
+        endif ! qcomp
+       endif ! ftsm_com_on
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       elseif (__STRNCMP(keyword,'TEST',4)) then !
+       __FTSM_UNALLOC_QUIT
        if (__INDX_RM(comlyn,comlen,'GRAD').gt.0) then ! finite-difference gradient test
 ! check fd spec
         step=__GET_RM_F(comlyn, comlen, 'STEP', finite_difference_d)
@@ -890,6 +925,7 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
 !
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       elseif (__STRNCMP(keyword,'PRIN',4)) then
+       __FTSM_UNALLOC_QUIT
 !      can write both coordinate files and a global dcd file
 !      local is specified with 'COR'; global is the default
 #ifdef __CHARMM
@@ -956,6 +992,7 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
        endif ! qroot
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       elseif (__STRNCMP(keyword,'READ',4)) then
+       __FTSM_ALLOC
 !      can read from both coordinate files and a global dcd file (see above)
 !      can also read a frame in the DCD: specify FRAM for frame;
        qcor=__INDX_RM(comlyn,comlen,'COR'); qcor = min(qcor,1)
@@ -1056,6 +1093,7 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
        endif
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       elseif (__STRNCMP(keyword,'SWAP',4)) then ! swap two columns
+        __FTSM_UNALLOC_QUIT
 !       read column spec
         c1=__NEXTI(comlyn, comlen)
         c2=__NEXTI(comlyn, comlen)
@@ -1064,6 +1102,7 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
         call ftsm_swap(c1, c2)
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       elseif (__STRNCMP(keyword,'COPY',4)) then ! copy form c1 to c2
+        __FTSM_UNALLOC_QUIT
 !       read column spec
         c1=__NEXTI(comlyn, comlen)
         c2=__NEXTI(comlyn, comlen)
@@ -1073,202 +1112,16 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       elseif (__STRNCMP(keyword,'SET ',4)) then ! modify k, etc
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-        iorie=__INDX_RM(comlyn, comlen, 'ORIE')
-        irmsd=__INDX_RM(comlyn, comlen, 'RMSD')
-!
-        if (iorie.gt.0) then
-!    process orientation atom selection
-!    determine whether a selection keyword follows orie
-         isele=__INDX(comlyn, comlen, 'SELE' ,4)
-         if (isele.ge.iorie) then
-!
-#ifdef __CHARMM
-          iselct=0
-! process selection
-          IMODE=0
-          CALL SELRPN(COMLYN,COMLEN,iselct,NATOM,1,IMODE,               &
-     &      .FALSE.,1,' ',0,RESID,RES,IBASE,SEGID,NICTOT,NSEG,          &
-     &      .TRUE.,X,Y,Z,.TRUE.,1,WMAIN)
-          IF(IMODE.NE.0) THEN
-           __WRN(whoami,'ORIENTATION ATOMS SELECTION ERROR')
-           RETURN
-          ENDIF
-#elif defined(__DMOL)
-#include "../../dmol_select_macro.def"
-          if (associated(iselct)) then ; norient=size(iselct) ; else ; norient=0 ; endif
-#endif
-! deallocate existing orientation arrays
-!
-          if (qdiffrot) then; if (associated(r_o)) deallocate(r_o)
-                              if(associated(iatom_o)) deallocate(iatom_o)
-          else              ; nullify(r_o) ; nullify(iatom_o)
-          endif
-          if (associated(orientWeights)) deallocate(orientWeights)
-!
-! currently we require at least three atoms for orientation
-!
-          norient=count( iselct.gt.0 )
-          if (norient.lt.3) then
-           __WRN(whoami,' FEWER THAN THREE ATOMS SELECTED FOR ORIENTATION. WILL NOT ORIENT.')
-           norient=0
-           qorient=.false.
-           qdiffrot=.true.
-           return
-          endif
-!
-          qorient=.true.
-!
-          allocate(iatom_o(norient)); iatom_o=0
-          allocate(orientWeights(norient));
-          orientWeights=one/norient ! default behavior
-!    build index array
-          norient=0
-!
-#ifdef __CHARMM
-          do i=1,natom
-           if (iselct(i).gt.0) then
-            norient=norient+1
-            iatom_o(norient)=i
-           endif
-          enddo
-#else
-          iatom_o=iselct
-          if (associated(iselct)) deallocate(iselct)
-#endif
-!
-!    determine whether the new orientation set is the same as the existing forcing set
-!
-          qdiffrot=.not. ( norient .eq. nforced )
-          if (.not.qdiffrot)  qdiffrot=.not.(associated(iatom_f))
-          if (.not.qdiffrot)  qdiffrot=any(iatom_f.ne.iatom_o)
-!
-          if (.not.qdiffrot) then
-           deallocate(iatom_o); iatom_o=>iatom_f; r_o=>r_f;
-          else
-           allocate(r_o(norient,3,num_sets)); r_o=__NAN;
-           if (nforced.gt.0) call ftsm_compute_overlap_ind()  ! compute overlap indices in iatom_both
-          endif
-!
-          if (.not. associated(rcom)) allocate(rcom(3,num_sets))
-          rcom=0d0 ! must be zero initially
-!
-! print summary
-          if (qprint) then
-            write(_MSGBUF,100) whoami, norient ; __PRINT(_MSGBUF)
- 100  format(A,' WILL ORIENT STRUCTURES BASED ON ',i5,' ATOMS')
-            write(_MSGBUF,101) whoami ;  ; __PRINT(_MSGBUF)
- 101  format(A,' ORIENTATION WEIGHTS UNIFORM.')
-            if (qdiffrot) then
-             write(_MSGBUF,102) whoami
-            else
-             write(_MSGBUF,103) whoami
-            endif
-            __PRINT(_MSGBUF)
- 102  format (A, ' ORIENTATION AND FORCING ATOMS ARE DIFFERENT')
- 103  format (A, ' ORIENTATION AND FORCING ATOMS ARE IDENTICAL')
-          endif ! qprint
-         else
-          __WRN(whoami,' ATOM SELECTION MUST BE SPECIFIED AFTER ORIE.')
-          return
-         endif
-         call ftsm_define_rtmd_type()
-!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-        elseif (irmsd.gt.0) then
-!    process forcing atom selection
-!    determine whether a selection keyword follows 'rmsd'
-         isele=__INDX(comlyn, comlen, 'SELE' ,4)
-         if (isele.gt.irmsd) then
-!
-#ifdef __CHARMM
-          iselct=0
-          IMODE=0
-          CALL SELRPN(COMLYN,COMLEN,iselct,NATOM,1,IMODE,               &
-     &      .FALSE.,1,' ',0,RESID,RES,IBASE,SEGID,NICTOT,NSEG,          &
-     &      .TRUE.,X,Y,Z,.TRUE.,1,WMAIN)
-          IF(IMODE.NE.0) THEN
-           __WRN(whoami,'RMSD ATOMS SELECTION ERROR')
-           RETURN
-          ENDIF
-          nforced=count( iselct.gt.0 )
-#elif defined(__DMOL)
-#include "../../dmol_select_macro.def"
-          if (associated(iselct)) then ; nforced=size(iselct) ; else ; nforced=0 ; endif
-#endif
-!
-          if (nforced.le.0) then
-           __WRN(whoami, 'NO RMSD ATOMS SELECTED. ABORT.')
-           return
-          endif
-!
-!
-          if (qdiffrot) then; if (associated(r_f)) deallocate(r_f)
-                             if(associated(iatom_f)) deallocate(iatom_f)
-          else              ; nullify(r_f) ; nullify(iatom_f)
-          endif
-          if (associated(forcedWeights)) deallocate(forcedWeights)
-          if (associated(Mtensor)) deallocate(Mtensor)
-!
-          allocate(iatom_f(nforced)); iatom_f=0
-          allocate(forcedWeights(nforced));
-          forcedWeights=1d0/nforced ! default behavior
-          allocate(Mtensor(3,3,nforced,nforced,2)); Mtensor=zero ; do a=1,3; do i=1, nforced ; Mtensor(a,a,i,i,:)=one ; enddo ; enddo! allocate & set to I
-!
-!    build index array
-          nforced=0
-!
-#ifdef __CHARMM
-          do i=1,natom
-           if (iselct(i).gt.0) then
-            nforced=nforced+1
-            iatom_f(nforced)=i
-           endif
-          enddo
-#else
-          iatom_f=iselct
-          if (associated(iselct)) deallocate(iselct)
-#endif
-!
-!    determine whether the new orientation set is the same as the existing forcing set
-!
-          qdiffrot=.not. ( norient .eq. nforced )
-          if (.not.qdiffrot)  qdiffrot=.not.(associated(iatom_o))
-          if (.not.qdiffrot)  qdiffrot=any(iatom_f.ne.iatom_o)
-!
-          if (.not.qdiffrot) then
-           deallocate(iatom_f); iatom_f=>iatom_o; r_f=>r_o;
-          else
-           allocate(r_f(nforced,3,num_sets)); r_f=__NAN;
-           if (norient.gt.0) call ftsm_compute_overlap_ind()  ! compute overlap indices in iatom_both
-          endif
-! print summary
-          if (qprint) then
-            write(_MSGBUF,104) whoami, nforced ; __PRINT(_MSGBUF)
- 104  format(A,' WILL APPLY FORCES TO ',i5,' ATOMS')
-            write(_MSGBUF,105) whoami ; __PRINT(_MSGBUF)
- 105  format(A,' FORCING WEIGHTS UNIFORM.')
-            if (qdiffrot) then
-             write(_MSGBUF,102) whoami
-             if (.not.qorient) then
-              write(_MSGBUF(2),106) whoami
- 106  format(A,' BEST-FITTING IS DISABLED (PERHAPS ORIENTATION ATOMS ARE NOT DEFINED).')
-             endif
-            else
-             write(_MSGBUF,103) whoami
-            endif
-            __PRINT(_MSGBUF)
-          endif ! qprint
-         else
-          __WRN(whoami,'ATOM SELECTION MUST BE SPECIFIED AFTER RMSD.')
-          return
-         endif
-!**************************************************************
-!==============================================================
+        if ( ( __INDX(comlyn, comlen,'ORIE',4).gt.0 ) .or. ( __INDX(comlyn, comlen,'RMSD',4) ).gt.0 ) then
+!    inlined selectioni functionality moved to subroutine
+         call ftsm_add_atomic_set(comlyn, comlen)
+!!==============================================================
 ! scaling output macro
 #define __IS_DISTANCE_SCALED then;write(_MSGBUF,6758)whoami;else;write(_MSGBUF,6759)whoami;endif;__PRINT(_MSGBUF);
  6758 format(A,'( LENGTH SCALE ASSUMED TO BE IN ANGSTROMS AND WILL BE SCALED INTERNALLY.)')
  6759 format(A,'( LENGTH SCALE ASSUMED TO BE SCALED BY TWICE THE INTER-REPLICA DISTANCE.)')
-!==============================================================
 !
+!==============================================================
 !      set k parallel to path (for off-path dynamics)
         elseif (__INDX(comlyn,comlen,'KPAR',4).gt.0) then
           k=__GET_RM_F(comlyn,comlen,'KPAR',-1d0)
@@ -1286,7 +1139,7 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
            if (qprint) then ; write(_MSGBUF,6757) whoami, k ; __PRINT(_MSGBUF) ; endif
  6757 format(A,' NEGATIVE FORCE CONSTANT SPECIFIED: ',F11.5, '. NOT SET.')
           endif
-!*************************************************************
+!==============================================================
 !      set k perpendicular to path (for off-path dynamics)
         elseif (__INDX(comlyn,comlen,'KPRP',4).gt.0) then
           k=__GET_RM_F(comlyn,comlen,'KPRP',-one)
@@ -1302,7 +1155,7 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
           else
            if (qprint) then ; write(_MSGBUF,6757) whoami, k ; __PRINT(_MSGBUF) ; endif
           endif
-!**************************************************************
+!==============================================================
         elseif (__INDX(comlyn,comlen,'KRMS',4).gt.0) then
           k=__GET_RM_F(comlyn,comlen,'KRMS',-one)
           if (k.ge.0d0) then
@@ -1313,8 +1166,10 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
           else
            if (qprint) then ; write(_MSGBUF,6757) whoami, k ; __PRINT(_MSGBUF) ; endif
           endif
-!***************************************************************
+!==============================================================
         elseif (__INDX_RM(comlyn,comlen,'MASS').gt.0) then ! mass-weighting
+          __FTSM_ALLOC
+!
           keyword=__NEXTA(comlyn, comlen)
           klen=len(keyword)
           __TRIMA(keyword,klen)
@@ -1347,8 +1202,8 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
             __WRN(whoami,'UNKNOWN OPTION SPECIFIED')
           end select
  8001 format(A,' WEIGHTS ',A,'.')
-!*********************************************************************
-        elseif (__INDX_RM(comlyn,comlen,'PROJ').gt.0) then ! mass-weighting
+!==============================================================
+        elseif (__INDX_RM(comlyn,comlen,'PROJ').gt.0) then
           keyword=__NEXTA(comlyn, comlen)
           klen=len(keyword)
           __TRIMA(keyword,klen)
@@ -1365,7 +1220,7 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
            case default
             __WRN(whoami,'UNKNOWN OPTION SPECIFIED')
           end select
-!*********************************************************************
+!==============================================================
         elseif (__INDX(comlyn,comlen,'DPAR',4).gt.0) then ! normalized distance parallel to vector between neighboring replicas at which this system is restrained
           zval=__GET_RM_F(comlyn, comlen, 'DPAR', -1.0d0)
           qkperp_angstrom = __INDX_RM(comlyn, comlen, 'ANGS').gt.0
@@ -1384,7 +1239,7 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
  6774 format(A,' WILL SET RERERENCE VALUE FOR PARALLEL RESTRAINT ',     &
      &   'ON REPLICA ',I5,' TO ',F7.3,'.')
         ! DPAR
-!******************************************************************************************
+!==============================================================
         elseif (__INDX(comlyn,comlen,'DPRPF',5).gt.0) then ! final perpendicular distance at which the replicas are restrained
           qangstrom = __INDX_RM(comlyn, comlen, 'ANGS').gt.0 ! scaled/unscaled units
 !
@@ -1413,7 +1268,7 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
 67762 format(A,' WILL SET FINAL OFFSET DISTANCE FOR PERPENDICULAR RESTRAINT ',&
      &   'ON REPLICA ',I5,' TO ',E10.3,'.')
           endif ! zval valid
-!******************************************************************************************
+!==============================================================
         elseif (__INDX(comlyn,comlen,'DPRPITER',8).gt.0) then ! number of iterations to adjust to final perpendicular restraint value
           i=__GET_RM_I(comlyn, comlen, 'DPRPITER', nint(__NAN))
 !
@@ -1436,7 +1291,7 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
 67764 format(A,' WILL SET NUMBER OF ADJUSTMENT ITERATIONS FOR PERPENDICULAR RESTRAINT ',&
      &   'ON REPLICA ',I5,' TO ',I9,'.')
           endif ! i valid
-!****************************************************************************************
+!==============================================================
         elseif (__INDX(comlyn,comlen,'DPRP',4).gt.0) then ! (initial) distance perpendicular to vector between neighboring replicas 
           qangstrom = __INDX_RM(comlyn, comlen, 'ANGS').gt.0 ! scaled/unscaled units
           zval=__GET_RM_F(comlyn, comlen, 'DPRP', __NAN)
@@ -1464,7 +1319,7 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
 67766 format(A,' WILL SET OFFSET DISTANCE FOR PERPENDICULAR RESTRAINT ',&
      &   'ON REPLICA ',I5,' TO ',E10.3,'.')
           endif ! zval valid
-!*****************************************************************************************
+!==============================================================
         elseif (__INDX(comlyn,comlen,'DRMS',4).gt.0) then ! RMS distance between simulation and reference structure
           zval=__GET_RM_F(comlyn, comlen, 'DRMS', -one)
 !    check replica spec
@@ -1487,7 +1342,7 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
           if (qrms_upper_bound.and.qprint) then ; write(_MSGBUF,6781) whoami ; __PRINT(_MSGBUF) ; endif
  6781 format(A,' RESTRAINT WILL BE APPLIED ONLY IF RMSD EXCEEDS REFERENCE VALUE.')
 !
-!*****************************************************************************************
+!==============================================================
         elseif (__INDX(comlyn,comlen,'VCUT',4).gt.0) then
          voro_cut=__GET_RM_F(comlyn, comlen, 'VCUT', zero)
 ! replica spec
@@ -1512,6 +1367,12 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
 !      done with 'SET' parsing
 !==================================== M tensor ======================================
       elseif (__STRNCMP(keyword,'MMAT',4)) then
+!
+       if (ftsm_com_on) then
+        __WRN(whoami, 'FTSM IN COM COORDINATES DOES NOT CURRENTLY SUPPORT M TENSOR FUNCTIONALITY')
+        return
+       endif
+!
        if (ftsm_check(qorient)) then
         if (__INDX_RM(comlyn, comlen, 'CALC').gt.0) then
 !
@@ -1545,6 +1406,12 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
 !
 !==================================== Jacobian ======================================
       elseif (__STRNCMP(keyword,'JACO',4)) then
+!
+       if (ftsm_com_on) then
+        __WRN(whoami, 'FTSM IN COM COORDINATES DOES NOT CURRENTLY SUPPORT JACOBIAN CALCULATION.')
+        return
+       endif
+!
        if (ftsm_check(qorient)) then
         if (__INDX_RM(comlyn, comlen, 'CALC').gt.0) then
 !
@@ -1575,28 +1442,37 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
        endif
 !
 !cccccccccccccccccccccccccccccccccccc CV WEIGHTS cccccccccccccccccccccccccccccccccccc
-      elseif (__STRNCMP(keyword,'LIST',4)) then ! list forcing and orientation atoms
-       if (qprint) then ; write(_MSGBUF,6762) whoami ; __PRINT(_MSGBUF) ; endif
+      elseif (__STRNCMP(keyword,'LIST',4)) then ! list forcing and orientation atom groups
+       if (qprint) then 
+        if (ftsm_com_on) then 
+         write(_MSGBUF,6763) whoami
+        else
+         write(_MSGBUF,6762) whoami
+        endif
+        __PRINT(_MSGBUF)
+       endif
  6762 format(/A,' WILL LIST REPLICA ATOMS.')
+ 6763 format(/A,' WILL LIST REPLICA ATOM GROUPS.')
        call ftsm_list_atoms()
-!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!=====================================================================================
       else
             __WARN(whoami,'UNRECOGNIZED SUBCOMMAND: ',keyword)
       endif
 !
       end subroutine ftsm_parse
-!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!===================================================================
       subroutine ftsm_init()
       __DEP_OUTPUT
-      __DEP_PARSER 
+      __DEP_PARSER
       __DEP_MULTICOM       __CHARMM_ONLY !##MULTICOM
-      __DEP_MPI 
+      __DEP_MPI
       __DEP_NUMBER
+      __DEP_VECTORS
 !
  __DECLARE_MSGBUF
 #include "../../mpitype.def"
       int :: ierror
-      bool :: qroot, qslave
+      bool :: qroot, qslave, qprint
 !
       __IAM(FTSM_INIT)
 !
@@ -1615,19 +1491,17 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
 !
       qroot=ME_STRNG.ne.MPI_UNDEFINED
       qslave=ME_LOCAL.ne.MPI_UNDEFINED ! (also includes roots)
+      qprint=qroot.and.ME_STRNG.eq.0
 !
       if (ftsm_initialized) then
-       if (qroot) then
-        if (ME_STRNG.eq.0) then
+       if (qprint) then
           write(_MSGBUF,'(2A)')                                            &
      &    whoami, ' FTSM ALREADY INITIALIZED. CALL "DONE" TO CLEAN UP.' ; __PRINT(_MSGBUF);
-        endif ! ME_STRNG
        endif ! qroot
        return
       endif
-!
-      nstring=1 ! safe (hopefully) default
-      mestring=-1 ! safe (hopefully) default
+      nstring=1
+      mestring=-1
 !
       if (qroot) then
         nstring=SIZE_STRNG
@@ -1651,27 +1525,34 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
 ! disabling procedure pointer due to limited compiler compatibility
 !      if (qver2) then ; ftsm_calc=>ftsmv2_calc ;  else ; ftsm_calc=>ftsmv1_calc ; endif
 !
-      if (qroot) then
-        if (ME_STRNG.eq.0) then
+      if (qprint) then
           write(_MSGBUF,'(2A,I5, A)')                                      &
      &    whoami, ' FOUND ',nstring,' REPLICAS.'
           if (qver2) then
            write(_MSGBUF(2),'(2A)') whoami, ' FTSM VERSION 2 WILL BE USED TO SAMPLE HYPERPLANES.' ; 
           endif
           __PRINT(_MSGBUF)
-        endif
       endif
 !
       MPI_RTMD_TYPE =MPI_DATATYPE_NULL
-      MPI_RTMD_TYPE_=MPI_DATATYPE_NULL
 !    initialize free energy arrays
-      if (allocated(fe)) deallocate(fe)
-      if (allocated(feav)) deallocate(feav)
-      if (allocated(ds)) deallocate(ds)
-      if (allocated(curv)) deallocate(curv)
+      __DEALL(fe)
+      __DEALL(feav)
+      __DEALL(ds)
+      __DEALL(curv)
       allocate(fe(nstring), feav(nstring),                              &
      &         ds(nstring-1), curv(nstring-2))
-
+!
+      allocate(iatoms_a)
+      call int_vector_init(iatoms_a)
+      if (ftsm_com_on) then
+       allocate(iatoms_o, iatoms_f, wgts_o, wgts_f)
+       call int_vlist_init(iatoms_o)
+       call int_vlist_init(iatoms_f)
+!       call real_vlist_init(wgts_o)
+!       call real_vlist_init(wgts_f)
+      endif
+!
       fe=0d0; feav=0d0; avforce=0d0; ds=0d0; curv=0d0
 !
       num_evolve_samples=0
@@ -1717,7 +1598,7 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
       __DEP_MULTICOM       __CHARMM_ONLY !##MULTICOM
       __DEP_MPI 
 !
-      character(len=11), parameter :: whoami=' FTSM_DONE>'
+      __IAM(FTSM_DONE)
 !
  __DECLARE_MSGBUF
 !
@@ -1738,23 +1619,54 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
       nforced=0
       __FREE(r_f)
       __FREE(iatom_f)
-      __FREE(iatom_a)
+      __FREE(iatom_o)
       __FREE(orientWeights)
       __FREE(forcedWeights)
       __FREE(Mtensor)
 !
       if (qdiffrot) then
        __FREE(r_o)
-       __FREE(iatom_o)
        __FREE(iatom_both)
       endif
 !
+      if (ftsm_com_on) then
+       if (associated(iatoms_f)) then
+        if (iatoms_f%initialized) call int_vlist_done(iatoms_f)
+        deallocate(iatoms_f)
+       endif
+!
+       if (associated(iatoms_o)) then
+        if (iatoms_o%initialized) call int_vlist_done(iatoms_o)
+        deallocate(iatoms_o)
+       endif
+!
+       if (associated(wgts_f)) then
+        if (wgts_f%initialized) call real_vlist_done(wgts_f)
+        deallocate(wgts_f)
+       endif
+!
+       if (qdiffrot) then
+        if (associated(wgts_o)) then
+         if (wgts_o%initialized) call real_vlist_done(wgts_o)
+         deallocate(wgts_o)
+        endif
+       else
+        nullify(wgts_o)
+       endif
+!
+      endif ! ftsm_com_on
+!
       nullify(r_o)
-      nullify(iatom_o)
+      nullify(iatom_o) ! will not be associated with ftsm_com_on, but does not matter
       norient=0
       nboth=0
 !
       nany=0
+!
+      if (associated(iatoms_a)) then
+       if (iatoms_a%initialized) call int_vector_done(iatoms_a)
+       deallocate(iatoms_a)
+      endif
 !
       __FREE(rcom)
       __DEALL(ds)
@@ -1786,403 +1698,54 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
       __DEP_OUTPUT
       __DEP_PARSER
       __DEP_MULTICOM       __CHARMM_ONLY !##MULTICOM
-      __DEP_MPI
       __DEP_ATOMID
 !
- __DECLARE_MSGBUF
+ __DECL_MSGBUF
 !
-      int :: j
+      int :: i, j
       character(len=8) :: sid, rid, ren, ac
       __IAM(FTSM_LIST_ATOMS)
 !
-      if (MPI_COMM_STRNG.eq.MPI_COMM_NULL) return ! only replica heads stay
-!
       if (ME_STRNG.eq.0) then
 !
-       write(_MSGBUF,'(A)') '\t ORIENTATION ATOMS:'
+        write(_MSGBUF,'(A)') '\t ORIENTATION ATOMS:'
         do j=1, norient;
-         __ATOMID(iatom_o(j), sid, rid, ren, ac)
-         write(_MSGBUF,667) '\t',j, iatom_o(j), sid, rid, ren, ac
-        enddo
+         if (ftsm_com_on) then
+          write(_MSGBUF,666) whoami, j ; __PRINT(_MSGBUF)
+ 666  format(A,' COM GROUP # ',I8,':')
+          do  i=1, iatoms_o%v(j)%last
+           __ATOMID(iatoms_o%v(j)%i(i), sid, rid, ren, ac)
+           write(_MSGBUF,667) '\t',j, iatoms_o%v(j)%i(i), sid, rid, ren, ac; __PRINT(_MSGBUF)
+          enddo ! i
+         else ! ftsm_com_on
+          __ATOMID(iatom_f(j), sid, rid, ren, ac)
+           write(_MSGBUF,667) '\t',j, iatom_o(j), sid, rid, ren, ac; __PRINT(_MSGBUF)
+         endif
+         __PRINT(_MSGBUF)
+        enddo ! j
 !
         if (qdiffrot) then
          write(_MSGBUF,'(A)') '\t FORCING ATOMS'
          do j=1, nforced;
-          __ATOMID(iatom_f(j), sid, rid, ren, ac)
-          write(_MSGBUF,667) '\t',j, iatom_f(j), sid, rid, ren, ac ; __PRINT(_MSGBUF)
-         enddo
+          if (ftsm_com_on) then
+           write(_MSGBUF,666) whoami, j ; __PRINT(_MSGBUF)
+           do  i=1, iatoms_f%v(j)%last
+            __ATOMID(iatoms_f%v(j)%i(i), sid, rid, ren, ac)
+            write(_MSGBUF,667) '\t',j, iatoms_f%v(j)%i(i), sid, rid, ren, ac; __PRINT(_MSGBUF)
+           enddo
+          else ! ftsm_com_on
+           __ATOMID(iatom_f(j), sid, rid, ren, ac)
+           write(_MSGBUF,667) '\t',j, iatom_f(j), sid, rid, ren, ac; __PRINT(_MSGBUF)
+          endif ! ftsm_com_on
+         enddo ! j
         else
          write(_MSGBUF,'(A)') '\t FORCING AND ORIENTATION ATOMS ARE THE SAME' ; __PRINT(_MSGBUF)
-        endif
+        endif ! qdiffrot
       endif ! ME_STRING
 !
  667  format(A,2I8,' ',4A)
 !
       end subroutine ftsm_list_atoms
-!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-      subroutine ftsm_set_weights(w,n)
-      __DEP_OUTPUT
-      __DEP_NUMBER
-      __DEP_PARSER
-      __DEP_MULTICOM       __CHARMM_ONLY !##MULTICOM
-!
-      int :: i, j, n
-      float :: w(n), a
-      __IAM(FTSM_SET_WEIGHTS)
-!
- __DECLARE_MSGBUF
-!
-      if (qorient.and.ME_STRNG.eq.0.and.ME_LOCAL.eq.0) then
-       write(_MSGBUF,668)                                               &
-     & whoami,' A CHANGE IN THE ORIENTATION WEIGHTS REQUIRES ',         &
-     & whoami,' REDEFINING IMAGES (e.g. USING FILL)' ; __PRINT(_MSGBUF)
-      endif
- 668  format(/2A,/2A)
-!
-      if (norient.eq.0.and.nforced.eq.0) then
-       __WRN(whoami,'NO STRING ATOMS FOUND. NOTHING DONE.')
-       return
-      endif
-!
-!      if (norient.eq.0)
-!     & __WRN(whoami,'NO ORIENTATION ATOMS FOUND.')
-      if (associated(orientWeights).and.associated(iatom_o)) then
-       do i=1,norient
-        j=iatom_o(i)
-        if (j.le.n) then
-         orientWeights(i)=w(j)
-        else
-         __WRN(whoami,'WEIGHT ARRAY BOUNDS EXCEEDED. ABORT.')
-         return
-        endif
-       enddo
-!
-       a=sum(orientWeights);
-       if (a.gt.__ERRTOL) then ; orientWeights=orientWeights/a;
-       else
-        __WRN(whoami,'SUM OF ORIENTATION WEIGHTS IS VERY SMALL. ABORT.')
-        return
-       endif
-!
-      endif ! weights associated
-!
-!      if (nforced.eq.0)
-!     & __WRN(whoami,'NO FORCED ATOMS FOUND.')
-      if (associated(forcedWeights).and.associated(iatom_f)) then
-       do i=1,nforced
-        j=iatom_f(i)
-        if (j.le.n) then
-         forcedWeights(i)=w(j)
-        else
-         __WRN(whoami,'WEIGHT ARRAY BOUNDS EXCEEDED. ABORT.')
-         return
-        endif
-       enddo
-!
-       a=sum(forcedWeights);
-       if (a.gt.__ERRTOL) then ; forcedWeights=forcedWeights/a;
-       else
-        __WRN(whoami,'SUM OF FORCING WEIGHTS IS VERY SMALL. ABORT.')
-        return
-       endif
-!
-      endif ! weights associated
-!
-      end subroutine ftsm_set_weights
-!
-!====================================================================================
-      subroutine ftsm_compute_overlap_ind() ! compute overlap indices in iatom_both
-      int :: i, j
-      int, allocatable :: temp(:,:)
-!
-!   note: both index arrays are assumed to be sorted !
-!
-      if (associated(iatom_both)) deallocate(iatom_both)
-      nboth=0
-      if ( .not. ( qorient .and. qdiffrot .and. ftsm_check(qorient))) return
-!
-      i=1; j=1
-      allocate(temp(2,max(nforced, norient)))
-      do while (i.le.nforced .and. j.le.norient)
-!
-       do while (  j.lt.norient .and. ( iatom_f(i) .gt. iatom_o(j) ) ) ! N.B.: looks like indices assumed to be ordered here
-        j=j+1
-       enddo
-       if (iatom_f(i).eq.iatom_o(j)) then
-        nboth=nboth+1;
-        temp(1,nboth)=i; temp(2,nboth)=j;
-        j=j+1; ! i-indices are unique, so safe to increment j
-       endif
-       i=i+1
-      enddo
-!
-      if (nboth.gt.0) then
-       allocate(iatom_both(2,nboth))
-       iatom_both(:,1:nboth)=temp(:,1:nboth)
-      endif
-      deallocate(temp)
-!
-      end subroutine ftsm_compute_overlap_ind
-!================================================================
-      function ftsm_test_grad_fd(x,y,z,h) result(error)
-      float :: x(:), y(:), z(:)
-      float :: h
-      float, pointer :: error(:,:)
-      int :: i, j, jj
-      float :: d, ap, am, bp, bm
-      float :: s
-!
-      __IAM(FTSM_TEST_GRAD_FD)
-!
-      allocate(error(2,3))
-      ap=0d0; am=0d0; bp=0d0; bm=0d0; error(1,1)=9999d0
-!
-      if (.not.ftsm_check(qorient)) return
-!
-      if (h.eq.0d0) then
-       __WRN(whoami,'COORDINATE PERTURBATION ZERO.')
-       return
-      endif
-!
-      s=1d0
-!      s=0.5d0
-! compute projection and derivatives analytically
-      __FTSM_CALC(x,y,z,.true.,s)
-!
-! IMPORTANT: if the o and f atoms are different and overlapping, the o and f gradient arrays
-! will each have partial contributions to the total derivative for the overlapping atoms
-! (whereas, the FD calculation will include both contributions)
-! therefore, I am "reducing" the different gradient contributions below (which invalidates
-! the contents of the arrays); the need to do this arises because I chose to keep two
-! possibly overlapping coordinate arrays, even though the corresponding atoms are unique
-!
-      if (qdiffrot) then
-       do i=1, nboth
-         r_o(iatom_both(2,i), :, fpar) =                                &
-     &   r_o(iatom_both(2,i), :, fpar) + r_f(iatom_both(1,i), :, fpar)
-         r_f(iatom_both(1,i), :, fpar) = r_o(iatom_both(2,i), :, fpar)
-       enddo
-       if (proj_on) then
-        do i=1, nboth
-         r_o(iatom_both(2,i), :, fperp) =                               &
-     &   r_o(iatom_both(2,i), :, fperp) + r_f(iatom_both(1,i), :, fperp)
-         r_f(iatom_both(1,i), :, fperp) = r_o(iatom_both(2,i), :, fperp)
-        enddo
-       endif
-      endif
-!
-! no need for this because not overwriting force arrays
-!      r_f(:,:,left_cur)=r_f(:,:,fpar)
-!      if (qorient.and.qdiffrot) r_o(:,:,left_cur)=r_o(:,:,fpar)
-!      if (proj_on) then
-!       r_f(:,:,right_cur)=r_f(:,:,fperp)
-!       if (qorient.and.qdiffrot) r_o(:,:,right_cur)=r_o(:,:,fperp)
-!      endif
-! aa
-!        write(mestring+500,*) dpar, dperp
-!        write(mestring+500,*) r_f(:,1,fpar)
-!        write(mestring+500,*) r_f(:,1,fperp)
-!
-! loop over all coordinates and compute finite differences
-      error=0d0
-!
-      do jj=1, nforced
-       j=iatom_f(jj)
-! x-derivatives *******************************************
-       d=x(j) ; x(j)=d-h
-       __FTSM_CALC(x,y,z,.false.,s)
-       if (proj_on) then; am=dpar;  bm=dperp; else; am=drms ; endif
-       x(j)=d+h
-       __FTSM_CALC(x,y,z,.false.,s) ! overwrite zold cv value array (warn about this elsewhere)
-       if (proj_on) then; ap=dpar;  bp=dperp; else; ap=drms ; endif
-       x(j)=d ! restore correct value
-! compute largest absolute error
-!         r_f(jj,1,ref)=0.5d0/h*(ap-am) ! aa
-!         r_f(jj,1,rave)=0.5d0/h*(bp-bm) ! aa
-!
-       error(1,1) = max (error(1,1),                                    &
-     &         abs(0.5d0/h*(ap-am)-r_f(jj,1,fpar) ) )
-       if (proj_on)                                                     &
-     & error(2,1) = max (error(2,1),                                    &
-     &        abs(0.5d0/h*(bp-bm)-r_f(jj,1,fperp) ) )
-! y-derivatives *******************************************
-       d=y(j) ; y(j)=d-h
-       __FTSM_CALC(x,y,z,.false.,s)
-       if (proj_on) then; am=dpar;  bm=dperp; else; am=drms ; endif
-       y(j)=d+h
-       __FTSM_CALC(x,y,z,.false.,s) ! overwrite zold cv value array (warn about this elsewhere)
-       if (proj_on) then; ap=dpar;  bp=dperp; else; ap=drms ; endif
-       y(j)=d ! restore correct value
-! compute largest absolute error
-!         r_f(jj,2,ref)=0.5d0/h*(ap-am) ! aa
-!         r_f(jj,2,rave)=0.5d0/h*(bp-bm) ! aa
-!
-       error(1,2) = max (error(1,2),                                    &
-     &          abs(0.5d0/h*(ap-am)-r_f(jj,2,fpar) ) )
-       if (proj_on)                                                     &
-     & error(2,2) = max (error(2,2),                                    &
-     &         abs(0.5d0/h*(bp-bm)-r_f(jj,2,fperp) ) )
-! z-derivatives *******************************************
-       d=z(j) ; z(j)=d-h
-       __FTSM_CALC(x,y,z,.false.,s)
-       if (proj_on) then; am=dpar;  bm=dperp; else; am=drms ; endif
-       z(j)=d+h
-       __FTSM_CALC(x,y,z,.false.,s) ! overwrite zold cv value array (warn about this elsewhere)
-       if (proj_on) then; ap=dpar;  bp=dperp; else; ap=drms ; endif
-       z(j)=d ! restore correct value
-! compute largest absolute error
-!         r_f(jj,3,ref)=0.5d0/h*(ap-am) ! aa
-!         r_f(jj,3,rave)=0.5d0/h*(bp-bm) ! aa
-!
-       error(1,3) = max (error(1,3),                                    &
-     &         abs(0.5d0/h*(ap-am)-r_f(jj,3,fpar) ) )
-       if (proj_on)                                                     &
-     & error(2,3) = max (error(2,3),                                    &
-     &         abs(0.5d0/h*(bp-bm)-r_f(jj,3,fperp) ) )
-      enddo ! forced atoms
-!
-!        write(mestring+500,*) r_f(:,1,ref) ! aa
-!        write(mestring+500,*) r_f(:,1,rave) ! aa
-!           close(mestring+500)
-! orientation atoms:
-      if (qorient.and.qdiffrot) then
-       do jj=1, norient
-        j=iatom_o(jj)
-! x-derivatives *******************************************
-        d=x(j) ; x(j)=d-h
-        __FTSM_CALC(x,y,z,.false.,s)
-        if (proj_on) then; am=dpar;  bm=dperp; else; am=drms ; endif
-        x(j)=d+h
-        __FTSM_CALC(x,y,z,.false.,s) ! overwrite zold cv value array (warn about this elsewhere)
-        if (proj_on) then; ap=dpar;  bp=dperp; else; ap=drms ; endif
-        x(j)=d ! restore correct value
-! compute largest absolute error
-        error(1,1) = max(error(1,1),                                    &
-     &         abs(0.5d0/h*(ap-am)-r_o(jj,1,fpar) ) )
-        if (proj_on)                                                    &
-     &  error(2,1) = max(error(2,1),                                    &
-     &         abs(0.5d0/h*(bp-bm)-r_o(jj,1,fperp) ) )
-! y-derivatives *******************************************
-        d=y(j) ; y(j)=d-h
-        __FTSM_CALC(x,y,z,.false.,s)
-        if (proj_on) then; am=dpar;  bm=dperp; else; am=drms ; endif
-        y(j)=d+h
-        __FTSM_CALC(x,y,z,.false.,s) ! overwrite zold cv value array (warn about this elsewhere)
-        if (proj_on) then; ap=dpar;  bp=dperp; else; ap=drms ; endif
-        y(j)=d ! restore correct value
-! compute largest absolute error
-        error(1,2) = max (error(1,2),                                   &
-     &         abs(0.5d0/h*(ap-am)-r_o(jj,2,fpar) ) )
-        if (proj_on)                                                    &
-     &  error(2,2) = max (error(2,2),                                   &
-     &         abs(0.5d0/h*(bp-bm)-r_o(jj,2,fperp) ) )
-! z-derivatives *******************************************
-        d=z(j) ; z(j)=d-h
-        __FTSM_CALC(x,y,z,.false.,s)
-        if (proj_on) then; am=dpar;  bm=dperp; else; am=drms ; endif
-        z(j)=d+h
-        __FTSM_CALC(x,y,z,.false.,s) ! overwrite zold cv value array (warn about this elsewhere)
-        if (proj_on) then; ap=dpar;  bp=dperp; else; ap=drms ; endif
-        z(j)=d ! restore correct value
-! compute largest absolute error
-        error(1,3) = max (error(1,3),                                   &
-     &         abs(0.5d0/h*(ap-am)-r_o(jj,3,fpar) ) )
-        if (proj_on)                                                    &
-     &  error(2,3) = max (error(2,3),                                   &
-     &         abs(0.5d0/h*(bp-bm)-r_o(jj,3,fperp) ) )
-       enddo ! orientation atoms
-      endif ! qdiffrot and qorient
-!
-      end function ftsm_test_grad_fd
-!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-      function ftsm_test_parallel(x,y,z) result(error)
-      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
-      __DEP_MPI 
-!
-      float :: x(:), y(:), z(:)
-      float, pointer :: error(:,:)
-      float :: am, bm
-!
-      bool :: qpara
-      bool :: qgrp
-!
-      __IAM(FTSM_TEST_PARALLEL)
-      allocate(error(2,4)) ! first column contains the CV values; then maximum derivative error (x,y,z)
-      error(2,:)=0d0; error(1,:)=9999d0
-!
-      if (.not.ftsm_check(qorient)) return
-!
-      qgrp=(MPI_COMM_LOCAL.ne.MPI_COMM_NULL)                            &
-     & .and.(SIZE_LOCAL.gt.1)
-      if (.not. qgrp) then ! quit if cannot run in parallel
-       __WRN(whoami,'CANNOT PERFORM TEST ON 1-PROCESSOR GROUPS')
-       return
-      endif
-! save values & force a serial calculation
-      qpara=calc_bestfit_grad_para; calc_bestfit_grad_para=.false.
-!
-! 1) compute serially
-      __FTSM_CALC(x,y,z,.true.)
-! using left_cur array : it should not be used unless an additional parameter is passed to calc
-! save gradients
-      r_f(:,:,left_cur)=r_f(:,:,fpar); r_f(:,:,fpar)=0d0;
-      if (qorient.and.qdiffrot) then
-       r_o(:,:,left_cur)=r_o(:,:,fpar); r_o(:,:,fpar)=0d0
-      endif
-!
-      if (proj_on) then
-       r_f(:,:,right_cur)=r_f(:,:,fperp); r_f(:,:,fperp)=0d0
-       if (qorient.and.qdiffrot) then
-        r_o(:,:,right_cur)=r_o(:,:,fperp); r_o(:,:,fperp)=0d0
-       endif
-      endif
-!        write(me_GLOBAL+500,*) drms, dpar, dperp
-!        write(me_GLOBAL+500,*) r_o(:,2,left_cur)
-! save projections
-      if (proj_on) then; am=dpar;  bm=dperp; else; am=drms ; endif
-!
-! 2) compute in (fully) parallel
-      calc_bestfit_grad_para=.true.
-!
-      __FTSM_CALC(x,y,z,.true.)
-!        write(me_GLOBAL+500,*) drms, dpar, dperp
-!        write(me_GLOBAL+500,*) r_o(:,2,fpar)
-!         close(me_GLOBAL+500)
-! compute largest absolute error
-! parallel component (or drms)
-      error(1,1) = maxval ( abs (r_f(:,1,left_cur)-r_f(:,1,fpar) ) )
-      error(1,2) = maxval ( abs (r_f(:,2,left_cur)-r_f(:,2,fpar) ) )
-      error(1,3) = maxval ( abs (r_f(:,3,left_cur)-r_f(:,3,fpar) ) )
-      if (proj_on) then
-       error(2,1) = maxval ( abs (r_f(:,1,right_cur)-r_f(:,1,fperp) ) )
-       error(2,2) = maxval ( abs (r_f(:,2,right_cur)-r_f(:,2,fperp) ) )
-       error(2,3) = maxval ( abs (r_f(:,3,right_cur)-r_f(:,3,fperp) ) )
-       error(2,4) = abs ( dperp - bm )
-       error(1,4) = abs ( dpar  - am )
-      else
-       error(1,4) = abs ( drms  - am )
-      endif
-!
-      if (qdiffrot.and.qorient) then
-       error(1,1) = max(error(1,1),                                     &
-     &              maxval ( abs (r_o(:,1,left_cur)-r_o(:,1,fpar) ) ) )
-       error(1,2) = max(error(1,2),                                     &
-     &              maxval ( abs (r_o(:,2,left_cur)-r_o(:,2,fpar) ) ) )
-       error(1,3) = max(error(1,3),                                     &
-     &              maxval ( abs (r_o(:,3,left_cur)-r_o(:,3,fpar) ) ) )
-       if (proj_on) then
-        error(2,1) = max(error(2,1),                                    &
-     &              maxval ( abs (r_o(:,1,right_cur)-r_o(:,1,fperp) ) ))
-        error(2,2) = max(error(2,2),                                    &
-     &              maxval ( abs (r_o(:,2,right_cur)-r_o(:,2,fperp) ) ))
-        error(2,3) = max(error(2,3),                                    &
-     &              maxval ( abs (r_o(:,3,right_cur)-r_o(:,3,fperp) ) ))
-       endif
-      endif
-! restore original option
-      calc_bestfit_grad_para=qpara
-!
-      end function ftsm_test_parallel
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 ! VO 1/2013 modifying function call to include string minimization option
       subroutine ftsm_main(x,y,z,xcomp,ycomp,zcomp,fx,fy,fz,mass,iteration           & ! include comparison set for voronoi calculations
@@ -2418,11 +1981,12 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
       subroutine ftsm_evolve(x,y,z)
       __DEP_NUMBER
       float :: x(:), y(:), z(:)
-      int :: ind, j, k
-      float :: t, omt
+      int :: ind, i, j, k
+      float :: t, omt, d
       float :: u (3,3)= Id3
-      float, pointer :: r_com(:), ow(:)
+      float, pointer :: r_com(:), ow(:), wgts(:)
       float, pointer, dimension(:,:) :: roi, roc, rfi, rfc
+      int, pointer :: inds(:)
 !
       roi=>r_o(:,:,instant)
       ow=>orientWeights
@@ -2444,22 +2008,13 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
       endif
 !
       if (.not. restraint_force_on) then ! load coordinates unless restraints on, in which case they are loaded
-!
-       do k=1,nforced
-        ind=iatom_f(k)
-        rfi(k,1)=x(ind)
-        rfi(k,2)=y(ind)
-        rfi(k,3)=z(ind)
-       enddo
+#define _RF rfi
+#include "ftsm_load_fcor.def"
 !
        if (qorient) then
         if (qdiffrot) then
-         do k=1,norient
-          ind=iatom_o(k)
-          roi(k,1)=x(ind)
-          roi(k,2)=y(ind)
-          roi(k,3)=z(ind)
-         enddo
+#define _RO roi
+#include "ftsm_load_ocor.def"
         endif ! qdiffrot (otherwise rfi and roi point to the same thing)
 !
 !       translate forced atoms to centroid
@@ -2537,7 +2092,7 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
 !       endif
 !
       end subroutine ftsm_compute_fe_fd
-!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!================================================================
       subroutine ftsm_orient(comlyn, comlen)
 ! based on sm0k_repa_init
       __DEP_OUTPUT
@@ -2720,9 +2275,9 @@ __CHARMM_ONLY       deallocate(iselct)
       enddo
 !
 ! done !
-      if (associated(iselct)) deallocate(iselct)
-      if (associated(rcurrent_o)) deallocate(rcurrent_o)
-      if (associated(ow)) deallocate(ow)
+      __FREE(iselct)
+      __FREE(rcurrent_o)
+      __FREE(ow)
 !
       end subroutine ftsm_orient
 !=================================================================

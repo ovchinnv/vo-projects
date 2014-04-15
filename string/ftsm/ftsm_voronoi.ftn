@@ -32,7 +32,7 @@ __CHARMM_ONLY##IF STRINGM
       int, dimension(:), pointer, save   :: occupancyO
 !
       int, dimension(:), pointer :: ftsm_voronoi_map ! holds map between process rank and voronoi cell
-      type (int_vector) :: ftsm_voro_log             ! logs the history of crossing attempts ( which cells and when ); local to each replica
+      type (int_vector), save :: ftsm_voro_log       ! logs the history of crossing attempts ( which cells and when ); local to each replica
       int :: ftsm_voronoi_whereami                   ! the voronoi cell this replica is inside
       float :: ftsm_voronoi_cut                      ! voronoi cell cutoff in path-perpendicular direction (beyond which MD replicas are not allowed)
 !
@@ -190,7 +190,9 @@ __CHARMM_ONLY##ENDIF
 !
        float, pointer, dimension(:,:,:) :: rall_new_f, rall_new_o, rall_temp_f, rall_temp_o
        float, pointer, dimension(:,:) :: rfi, roi, rfi_old, roi_old
-       float, pointer, dimension(:) :: r_com, r_com_old, ow
+       float, pointer, dimension(:) :: r_com, r_com_old, ow, wgts
+       int, pointer :: inds(:)
+       float :: d
 !
        bool :: correct_cell_me, correct_cell
        int :: iter, max_iter
@@ -242,21 +244,22 @@ __CHARMM_ONLY##ENDIF
         endif ! qorient
 !
         me=mestring+1
-! load coordinates (code dup, alas) ;  this happens infrequently enough that we`ll repeat the code
+! load coordinates via macro
 ! forcing
         rfi=>r_f(:,:,instant); rfi_old=>r_f(:,:,dummy)
-        do k=1, nforced; ind=iatom_f(k); 
-         rfi    (k,1)=x   (ind); rfi    (k,2)=y   (ind); rfi    (k,3)=z   (ind);
-         rfi_old(k,1)=xold(ind); rfi_old(k,2)=yold(ind); rfi_old(k,3)=zold(ind);
-        enddo
+#define _RF rfi
+#define _RF2 rfi_old
+#define _X2 xold
+#define _Y2 yold
+#define _Z2 zold
+#include "ftsm_load_fcor.def"
 ! orientation
+#define _RO roi
+#define _RO2 roi_old
         roi=>r_o(:,:,instant); roi_old=>r_o(:,:,dummy)
         if (qorient) then ; 
          if (qdiffrot) then
-          do k=1, norient; ind=iatom_o(k); 
-           roi    (k,1)=x   (ind); roi    (k,2)=y   (ind); roi    (k,3)=z   (ind);
-           roi_old(k,1)=xold(ind); roi_old(k,2)=yold(ind); roi_old(k,3)=zold(ind);
-          enddo
+#include "ftsm_load_ocor.def"
          endif
          ow=>orientWeights
          r_com=>rcom(:,instant);         r_com_old=>rcom(:,dummy)
@@ -529,8 +532,10 @@ __CHARMM_ONLY##ENDIF
        float :: x(:), y(:), z(:)
 !     locals
        float, pointer, dimension(:,:) :: rfi, roi
-       float, pointer, dimension(:) :: r_com, ow
-       int :: j, k, ind
+       float, pointer, dimension(:) :: r_com, ow, wgts
+       int :: i, j, k, ind
+       int, pointer :: inds(:)
+       float :: d
 !
 !       __IAM(FTSM_VORONOI_WHEREAMI_COMPUTE)
 !      make sure string coordinates have been defined
@@ -541,16 +546,14 @@ __CHARMM_ONLY##ENDIF
 ! load coordinates (code dup, alas)
 ! forcing
        rfi=>r_f(:,:,instant)
-       do k=1, nforced; ind=iatom_f(k); 
-         rfi(k,1)=x(ind); rfi(k,2)=y(ind); rfi(k,3)=z(ind);
-       enddo
+#undef _RF2
+#include "ftsm_load_fcor.def"
 ! orientation
        roi=>r_o(:,:,instant)
-       if (qorient) then ; 
+#undef _RO2
+       if (qorient) then ;
          if (qdiffrot) then
-          do k=1, norient; ind=iatom_o(k); 
-           roi(k,1)=x(ind); roi(k,2)=y(ind); roi(k,3)=z(ind);
-          enddo
+#include "ftsm_load_ocor.def"
          endif
          r_com=>rcom(:,instant)
          ow=>orientWeights

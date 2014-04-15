@@ -10,13 +10,13 @@ CFLAGS =-O3 -fno-math-errno -g -c -fPIC
 #FFLAGS= -O0 -c -g -check all -debug extended -debug-parameters all -traceback -no-ipo #-fast -fno-math-errno -finline -fp-model fast=2 -xhost -no-ipo #-ipo 
 #FFLAGS= -O3 -c -fast -fno-math-errno -finline -fp-model fast=2 -xSSE3 -ipo # -no-inline-factor -no-inline-min-size #-ipo #xSSE3 for pentium
 #FFLAGS= -O2 -c -fast -fno-math-errno -finline -fp-model fast=2 -xhost -no-ipo # -no-inline-factor -no-inline-min-size #-ipo 
-#MPI_HOME=/usr/local/mpich2-intel
+MPI_HOME=/usr/local/mpich2-intel
 #---GNU
-FC=gfortran
-FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  -Wall  #-fopenmp 
+#FC=gfortran
+#FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  -Wall  #-fopenmp 
 #FFLAGS=-O1 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  -Wall  #-fopenmp 
 #FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno #-fbounds-check -frange-check
-MPI_HOME=/usr/local/mpich2-gnu
+#MPI_HOME=/usr/local/mpich2-gnu
 #MPI_HOME=/usr/lib/openmpi
 #---PATHSCALE
 #FC=pathf95
@@ -24,13 +24,14 @@ MPI_HOME=/usr/local/mpich2-gnu
 #FFLAGS=-Ofast -fno-math-errno -extend-source -ffortran-bounds-check -OPT:Olimit=8753 -INLINE -ipa -c
 #FFLAGS=-extend-source -OPT:Olimit=8753 -INLINE -c
 #MPI_HOME=/usr/local/mpich2-path64
-#FC=/usr/bin/g95
-#FFLAGS=-O3 -c -g -ffree-line-length-huge -ffixed-line-length-132 -fno-second-underscore -cpp
-#MPI_HOME=/usr/local/mpich2-g95
+FC=/usr/bin/g95
+FFLAGS=-O3 -c -g -ffree-line-length-huge -ffixed-line-length-132 -fno-second-underscore -cpp
+MPI_HOME=/usr/local/mpich2-g95
 #
 # G95 reguires no space between "-D" and the name
+FORTRAN_COMPILER=$(notdir $(FC))
 DEFS+=-Dint=integer -Dfloat=real*8 -Dbool=logical -Dmpiint=MPI_INTEGER -Dmpifloat=MPI_REAL8 -Dmpichar=MPI_CHARACTER -Dmpiint4=MPI_INTEGER4\
-     -Dmpibool=MPI_LOGICAL -Dint1="integer(kind=KIND('a'))" -D__DMOL -D__RCOMP -D__DMOL -D__CHES -D__EDDIE -D__$(FC) \
+     -Dmpibool=MPI_LOGICAL -Dint1="integer(kind=KIND('a'))" -D__DMOL -D__RCOMP -D__DMOL -D__CHES -D__EDDIE -D__$(FORTRAN_COMPILER) \
      -Dint4mpi=integer -D__DEBUG -D__TIMER -D__PARALLEL #-D__PATHSCALE #-Dint4mpi="integer(KIND=MPI_INTEGER_KIND)" 
 
 # ! note: the VEC routines are probably slower
@@ -42,7 +43,7 @@ DEFS+=-Dint=integer -Dfloat=real*8 -Dbool=logical -Dmpiint=MPI_INTEGER -Dmpifloa
 # preprocess with C++ style preprocessor
 # -C flag preserves comments
 
-AR=xiar
+#AR=xiar
 AR=ar
 AFLAGS=rvcs
 
