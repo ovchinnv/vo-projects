@@ -18,5 +18,6 @@ ftsm.o: ftsm_var.o ftsm_rex.o ftsm_voronoi.o ftsm_compute.o ftsmv2_compute.o fts
 ftsm_connect.o: $(COMMON)/tsp.mod
 ftsm_compute.o ftsmv2_compute.o ftsm_util.o ftsm_min.o ftsm_rex.o ftsm_voronoi.o ftsm_rep.o ftsm_connect.o ftsm_addatoms.o ftsm_io.o ftsm_stats.o : \
  ftsm_var.o
-ftsm_stats.o: ftsm_rex.o ftsm_voronoi.o ftsm_io.o ftsm_connect.o
-ftsm_addatoms.o ftsm_io.o: ftsm_util.o
+ftsm_stats.o: ftsm_rex.o ftsm_voronoi.o ftsm_io.o ftsm_connect.o ftsm_util.o ftsm_compute.o
+ftsm_addatoms.o ftsm_io.o ftsm_min.o ftsm_stats.o : ftsm_util.o
+ftsm_util.o: ftsm_compute.o ftsmv2_compute.o

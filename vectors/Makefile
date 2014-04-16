@@ -11,6 +11,7 @@ include $(ROOT)/Makefile.inc
 LOCALDEFS=-D'__CHARMM_ONLY=!'
 CHARMM_SOURCES=ivector.src ivector_list.src rvector.src rvector_list.src isort.src rsort.src
 
+LINKOBJS=output.o
 #####################################################
 ivector.o:  isort.o ivector.F90
 ivector.F90: vector_template.ftn

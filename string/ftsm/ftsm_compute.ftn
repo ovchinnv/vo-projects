@@ -16,6 +16,7 @@ __CHARMM_ONLY##IF STRINGM
       public ftsm_calc_M
       public ftsm_calc_J
       public ftsm_addforce
+      public ftsm_compute_fe_fd
 !
       contains
 !======================================================================
@@ -840,6 +841,51 @@ __CHARMM_ONLY##IF STRINGM
       endif ! pre2>0
 !
       end subroutine ftsm_addforce
+!============================================================================
+      subroutine ftsm_compute_fe_fd()
+      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
+      __DEP_MPI
+      __DEP_NUMBER
+!
+#include "../../mpitype.def"
+!
+      float :: avforces(3,nstring), qcurv
+      int :: ierror, i
+      __IAM(FTSM_COMPUTE_FE_FD)
+!
+      if (proj_on) then
+       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.                         &
+     &                         SIZE_STRNG.gt.1) then
+
+        call MPI_GATHER(avforce, 3, mpifloat,               &
+     &                 avforces, 3, mpifloat,               &
+     &                 0, MPI_COMM_STRNG, ierror)
+        fe(1)=0d0
+!
+        if (fe_curvature) then ; qcurv=one ; else ; qcurv=zero ; endif
+!
+        if (ftsm_scaledist) then
+         do i=2, nstring
+          fe(i)  =fe(i-1) - half * ( avforces(1,i-1) + avforces(1,i) + qcurv*( avforces(2,i-1) + avforces(2,i) ) )
+!          fe(i-1)=fe(i-1) - ( avforces(2,i-1) - avforces(2,1) )
+         enddo
+!        fe(nstring)=fe(nstring) - ( avforces(2,nstring) - avforces(2,1))
+        else ! integrate along curve using arclength in ds
+         do i=2, nstring
+          fe(i)  =fe(i-1) - ds(i-1) * half * ( avforces(1,i-1) + avforces(1,i) + qcurv*( avforces(2,i-1) + avforces(2,i) ) )
+         enddo
+        endif
+!
+       endif ! qroot
+      endif ! proj_on
+!
+!      send free energy to slaves -- no need at present time
+!       if (MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.
+!     &                         SIZE_LOCAL.gt.1) then
+!        call __BROADCAST_LOCAL_8B(fe,nstring)
+!       endif
+!
+      end subroutine ftsm_compute_fe_fd
 !===========================================================================
       subroutine ftsm_calc_M(x,y,z,mass,t)
 ! 5.2013 : TODO : debug the case qdiffrot=1 
