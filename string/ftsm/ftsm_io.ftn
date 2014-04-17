@@ -88,6 +88,8 @@ __CHARMM_ONLY##IF STRINGM
 !
       if (qroot) then
 !
+      call ftsm_update_overlap_coor(ione)
+!
       if (ME_STRNG.eq.0) then
 !
 #ifndef __CHARMM
@@ -97,8 +99,16 @@ __CHARMM_ONLY##IF STRINGM
        allocate(stringatoms(natom), string_inds(natom))
        stringatoms=0
 !
-       stringatoms(iatom_f)=1
-       if (qorient.and.qdiffrot) stringatoms(iatom_o)=1
+       if (ftsm_com_on) then
+        do i=1, nforced ; stringatoms(iatoms_f%v(i)%i(1)) = 1 ; enddo ! put in index of first atom in each COM group
+        if (qorient.and.qdiffrot) then
+         do i=1, norient ; stringatoms(iatoms_o%v(i)%i(1)) = 1 ; enddo
+        endif
+       else
+        stringatoms(iatom_f)=1
+        if (qorient.and.qdiffrot) stringatoms(iatom_o)=1
+       endif
+!
        k=0
        do i = 1, natom
         if (stringatoms(i).gt.0) then; k=k+1; string_inds(k)=i; endif ! need this array for dcd writer below
@@ -119,10 +129,15 @@ __CHARMM_ONLY##IF STRINGM
        r3(:,3)=r(:,3)-r_com(3)
 #endif
 !
-       call ftsm_update_overlap_coor(ione)
-       do j=1,nforced;ind=iatom_f(j);r3(ind,:)=r_f(j,:,c);enddo
+       do j=1,nforced
+        if (ftsm_com_on) then ; ind=iatoms_f%v(j)%i(1) ; else ; ind=iatom_f(j) ; endif
+        r3(ind,:)=r_f(j,:,c)
+       enddo
        if (qorient.and.qdiffrot) then
-       do j=1,norient;ind=iatom_o(j);r3(ind,:)=r_o(j,:,c);enddo
+        do j=1,norient
+         if (ftsm_com_on) then ; ind=iatoms_o%v(j)%i(1) ; else ; ind=iatom_o(j) ; endif
+         r3(ind,:)=r_o(j,:,c)
+        enddo
        endif
 ! call trajectory writer
 #ifdef __CHARMM
@@ -152,16 +167,21 @@ __CHARMM_ONLY##IF STRINGM
 !    repeat a few times to write out entire string
        do i=2, nstring
 !
-        call MPI_RECV(r_f(:,:,dummy),3*nforced,rtype,i-1,i-1,           &
-     &       MPI_COMM_STRNG,stat,ierror)
-        if (qdiffrot.and.qorient)                                       &
-     &       call MPI_RECV(r_o(:,:,dummy),3*norient,rtype,i-1,i-1,      &
-     &       MPI_COMM_STRNG,stat,ierror)
+        call MPI_RECV(r_f(:,:,dummy),3*nforced,rtype,i-1,i-1,MPI_COMM_STRNG,stat,ierror)
 !    extract coordinates
-        do j=1, nforced; ind=iatom_f(j); r3(ind,:)=r_f(j,:,dummy); enddo
+        do j=1,nforced
+         if (ftsm_com_on) then ; ind=iatoms_f%v(j)%i(1) ; else ; ind=iatom_f(j) ; endif
+         r3(ind,:)=r_f(j,:,dummy)
+        enddo
+!
         if (qdiffrot.and.qorient) then
-         do j=1, norient; ind=iatom_o(j); r3(ind,:)=r_o(j,:,dummy);enddo
+         call MPI_RECV(r_o(:,:,dummy),3*norient,rtype,i-1,i-1,MPI_COMM_STRNG,stat,ierror)
+         do j=1,norient
+          if (ftsm_com_on) then ; ind=iatoms_o%v(j)%i(1) ; else ; ind=iatom_o(j) ; endif
+          r3(ind,:)=r_o(j,:,dummy)
+         enddo
         endif
+!
 !    write next frame
 #ifdef __CHARMM
         call writcv(r3(:,1), r3(:,2), r3(:,3),                          &
@@ -183,7 +203,7 @@ __CHARMM_ONLY##IF STRINGM
        if (qdiffrot.and.qorient)                                        &
      &  call MPI_SEND(r_o(:,:,c),3*norient,rtype,0,ME_STRNG,            &
      &                      MPI_COMM_STRNG, ierror)
-      endif
+      endif ! string root
 !
       endif ! qroot
 !
@@ -192,7 +212,7 @@ __CHARMM_ONLY##IF STRINGM
       if (associated(r3)) deallocate(r3)
 !
       end subroutine ftsm_write_dcd
-!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!===============================================================
       subroutine ftsm_read_dcd(ifile, col)
 #ifdef __CHARMM
       __DEP_PSF
@@ -204,7 +224,7 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_MPI
       __DEP_COORIO
       use ftsm_util
-! ugly fix for CHARMM compilation (mnodule dependency tree generation part)
+! ugly fix for CHARMM compilation (module dependency tree generation part)
 #ifdef __CHARMM
 ##USE coorio_mod
 ##USE ctitla
@@ -250,10 +270,17 @@ __CHARMM_ONLY##IF STRINGM
 !
       r3=0d0; stringatoms=0
 !
-      stringatoms(iatom_f)=1
-      if (qorient.and.qdiffrot) stringatoms(iatom_o)=1
-      k=0
+      if (ftsm_com_on) then
+       do i=1, nforced ; stringatoms(iatoms_f%v(i)%i(1)) = 1 ; enddo ! put in index of first atom in each COM group
+       if (qorient.and.qdiffrot) then
+        do i=1, norient ; stringatoms(iatoms_o%v(i)%i(1)) = 1 ; enddo
+       endif
+      else
+       stringatoms(iatom_f)=1
+       if (qorient.and.qdiffrot) stringatoms(iatom_o)=1
+      endif
 !
+      k=0
       do i = 1, natom
        if (stringatoms(i).gt.0) then ; k=k+1 ; string_inds(k)=i ; endif ! need this array for dcd reader below
       enddo
@@ -331,12 +358,14 @@ __CHARMM_ONLY##IF STRINGM
 !
 !
        do j=1, nforced
-        ind=iatom_f(j);   r_f(j,:,c)=r3(ind,:)
+        if (ftsm_com_on) then ; ind=iatoms_f%v(j)%i(1) ; else ; ind=iatom_f(j) ; endif
+        r_f(j,:,c)=r3(ind,:)
        enddo
 !
        if (qorient.and.qdiffrot) then
         do j=1, norient
-         ind=iatom_o(j);  r_o(j,:,c)=r3(ind,:)
+         if (ftsm_com_on) then ; ind=iatoms_o%v(j)%i(1) ; else ; ind=iatom_o(j) ; endif
+         r_o(j,:,c)=r3(ind,:)
         enddo
        endif
 !
@@ -363,12 +392,14 @@ __CHARMM_ONLY##IF STRINGM
      &                MPI_COMM_STRNG,stat,ierror)
 !
        do j=1, nforced
-         ind=iatom_f(j);   r_f(j,:,c)=r3(ind,:)
+        if (ftsm_com_on) then ; ind=iatoms_f%v(j)%i(1) ; else ; ind=iatom_f(j) ; endif
+        r_f(j,:,c)=r3(ind,:)
        enddo
 !
        if (qorient.and.qdiffrot) then
         do j=1, norient
-          ind=iatom_o(j);  r_o(j,:,c)=r3(ind,:)
+         if (ftsm_com_on) then ; ind=iatoms_o%v(j)%i(1) ; else ; ind=iatom_o(j) ; endif
+         r_o(j,:,c)=r3(ind,:)
         enddo
        endif
       endif
@@ -439,18 +470,26 @@ __CHARMM_ONLY##IF STRINGM
       allocate(r3(natom,3),stringatoms(natom))
       r3=0d0; stringatoms=0
 !
-      stringatoms(iatom_f)=1
-      if (qorient.and.qdiffrot) stringatoms(iatom_o)=1
-!      k=sum(stringatoms)
+      if (ftsm_com_on) then
+       do j=1, nforced ; stringatoms(iatoms_f%v(j)%i(1)) = 1 ; enddo ! put in index of first atom in each COM group
+       if (qorient.and.qdiffrot) then
+        do j=1, norient ; stringatoms(iatoms_o%v(j)%i(1)) = 1 ; enddo
+       endif
+      else
+       stringatoms(iatom_f)=1
+       if (qorient.and.qdiffrot) stringatoms(iatom_o)=1
+      endif
 !
       call ftsm_update_overlap_coor(ione)
       do j=1, nforced
-       ind=iatom_f(j);   r3(ind,:)=r_f(j,:,c)
+       if (ftsm_com_on) then ; ind=iatoms_f%v(j)%i(1) ; else ; ind=iatom_f(j) ; endif
+       r3(ind,:)=r_f(j,:,c)
       enddo
 !
       if (qorient.and.qdiffrot) then
        do j=1, norient
-        ind=iatom_o(j);   r3(ind,:)=r_o(j,:,c)
+        if (ftsm_com_on) then ; ind=iatoms_o%v(j)%i(1) ; else ; ind=iatom_o(j) ; endif
+        r3(ind,:)=r_o(j,:,c)
        enddo
       endif
 !
@@ -526,9 +565,15 @@ __CHARMM_ONLY##IF STRINGM
       allocate(r3(natom,3),stringatoms(natom))
       r3=0d0; stringatoms=0
 !
-      stringatoms(iatom_f)=1
-      if (qorient.and.qdiffrot) stringatoms(iatom_o)=1
-!      k=sum(stringatoms)
+      if (ftsm_com_on) then
+       do j=1, nforced ; stringatoms(iatoms_f%v(j)%i(1)) = 1 ; enddo ! put in index of first atom in each COM group
+       if (qorient.and.qdiffrot) then
+        do j=1, norient ; stringatoms(iatoms_o%v(j)%i(1)) = 1 ; enddo
+       endif
+      else
+       stringatoms(iatom_f)=1
+       if (qorient.and.qdiffrot) stringatoms(iatom_o)=1
+      endif
 !    call reader
 !    formatted coor card files
 #ifdef __CHARMM
@@ -554,13 +599,15 @@ __CHARMM_ONLY##IF STRINGM
 #endif
 !
       do j=1, nforced
-         ind=iatom_f(j);   r_f(j,:,c)=r3(ind,:)
+       if (ftsm_com_on) then ; ind=iatoms_f%v(j)%i(1) ; else ; ind=iatom_f(j) ; endif
+       r_f(j,:,c)=r3(ind,:)
       enddo
 !
       if (qorient.and.qdiffrot) then
-        do j=1, norient
-          ind=iatom_o(j);  r_o(j,:,c)=r3(ind,:)
-        enddo
+       do j=1, norient
+        if (ftsm_com_on) then ; ind=iatoms_o%v(j)%i(1) ; else ; ind=iatom_o(j) ; endif
+        r_o(j,:,c)=r3(ind,:)
+       enddo
       endif
 !
       call ftsm_save_com(c) ! compute remove center of mass
