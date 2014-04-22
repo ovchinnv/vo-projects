@@ -25,6 +25,7 @@ __CHARMM_ONLY##IF STRINGM
       public ftsm_coor_wgt_alloc ! relevant for COM version :  allocate coordinate and weight arrays after FTSM groups have been defined
       public ftsm_test_grad_fd
       public ftsm_test_parallel
+      public ftsm_scale_parameters
 !
 !==================================================================================
       contains
@@ -1033,8 +1034,74 @@ __CHARMM_ONLY##IF STRINGM
       calc_bestfit_grad_para=qpara
 !
       end function ftsm_test_parallel
-
-
+!=========================================================================
+      subroutine ftsm_scale_parameters
+      use ftsm_rep, only : ftsm_compute_arcl_curv
+      __DEP_CONST
+      __DEP_PARSER
+      __DEP_MULTICOM
+      __DEP_MPI
+      __DEP_OUTPUT
+__DECL_MSGBUF
+      float :: zval
+      character(len=80) :: fname
+      bool :: qprint
+      __IAM(FTSM_SCALE_PARAMETERS)
+!
+      qprint = MPI_COMM_STRNG .ne. MPI_COMM_NULL .and. ME_STRNG .eq. 0
+!
+      if (.not.ftsm_scaledist.or.  &
+&                                  qkpara_angstrom.or.qkperp_angstrom.or.qdperp_angstrom.or.qdperpf_angstrom) then
+        call ftsm_compute_arcl_curv(linear)
+!writE(0,*) 'DARCL : ', ds ! aa
+        zval = sum(ds) / ( max( nstring-1 , 1 ) ) * sqrt3 ; ! sqrt(3) makes the arclength correspond to the RMSD in 3D
+!
+        if (.not.ftsm_scaledist) then ! need to compute reference distance from string length
+          if (mestring.eq.0) then ; dpar0=zero ; else ; dpar0 = zval ; endif ; dpar0i=dpar0 ! left endpoint uses one sided tangent (see ftsm14 paper)
+          if (qprint) then ; write(_MSGBUF,6713) whoami, ftoa(zval)
+          __PRINT(_MSGBUF) ;
+          endif
+ 6713 format(A,' AVERAGE COMPUTED ARCLENGTH INCREMENT IS ',A,' ANG.')
+          ftsm_reset_dpar0f=.true.
+!
+        else ! options valid for scaled version
+          zval=two*zval ! gives 2L/(M-1) , i.e. || q-p ||
+!
+          if (qkpara_angstrom) then
+           fname='PARALLEL FORCE CONSTANT (KPAR)' ; kpara = kpara * zval**2 ;
+           if (qprint) then ; write(_MSGBUF,6712) whoami, trim(fname), ftoa(zval), ftoa(kpara)
+           __PRINT(_MSGBUF) ;
+           endif
+           qkpara_angstrom=.false. ! make sure no additional scaling will occur if there are multiple runs per initialization
+          endif
+          if (qkperp_angstrom) then
+           fname='PERPENDICULAR FORCE CONSTANT (KPRP)' ; kperp = kperp * zval**2 ;
+           if (qprint) then ; write(_MSGBUF,6712) whoami, trim(fname), ftoa(zval), ftoa(kperp)
+           __PRINT(_MSGBUF)
+           endif
+           qkperp_angstrom=.false.
+          endif
+          if (qdperp_angstrom) then
+           fname='REFERENCE TUBE WIDTH (DPRP)' ; dperp0 = dperp0 / zval ; dperp0i = dperp0i / zval ;
+           if (qprint) then ; write(_MSGBUF,6712) whoami, trim(fname), ftoa(zval), ftoa(dperp0)
+           __PRINT(_MSGBUF)
+           endif
+           qdperp_angstrom=.false.
+          endif
+          if (qdperpf_angstrom) then
+           fname='FINAL REFERENCE TUBE WIDTH (DPRPF)' ; dperp0f = dperp0f / zval ;
+           if (qprint) then ; write(_MSGBUF,6712) whoami, trim(fname), ftoa(zval), ftoa(dperp0f)
+           __PRINT(_MSGBUF)
+           endif
+           qdperpf_angstrom=.false.
+          endif
+        endif ! .not. ftsm_scaledist
+!
+ 6712 format(A,' SCALING ',A,' BY 2 x INTER-REPLICA DS (',A,' ANG). NEW VALUE IS ',A)
+      endif ! ftsm_scaledist .or. ...
+!
+      end subroutine ftsm_scale_parameters
+!==========================================================================================
 __CHARMM_ONLY##ENDIF
 #endif
       end module ftsm_util
