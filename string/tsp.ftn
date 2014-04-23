@@ -25,13 +25,17 @@ module tsp
   function tsp_anneal_path(D, route, nmove, itemp_, ftemp_, dtemp_, gettemp_) result(newroute)
 ! macro to compute total length
 !===================================================================
-#define __PLEN(_R,_D) _D=zero; do i=2,n;_D=_D+D(_R(i-1),_R(i));enddo
+#define __PLEN(_R,_D) _D=zero; do i=2,n; __INCR(_D, D(_R(i-1),_R(i)));enddo
 ! macro for length change due to swapping vertices _I and _J : this involves redrawing at maximum four edges
 ! the special cases in which i and j are adjacent or separated by one vertex are not considered (they would save a small amount of computation time)
 !===================================================================
 #define __DPLEN(_R,_I,_J,_DD) _DD=\
  (D(_R(_J),_R(_I-1))+D(_R(_J),_R(_I+1))+D(_R(_I),_R(_J-1))+D(_R(_I),_R(_J+1)))\
--(D(_R(_I),_R(_I-1))+D(_R(_I),_R(_I+1))+D(_R(_J),_R(_J-1))+D(_R(_J),_R(_J+1)))
+-(D(_R(_I),_R(_I-1))+D(_R(_I),_R(_I+1))+D(_R(_J),_R(_J-1))+D(_R(_J),_R(_J+1)))\
++max(0,min(1,2-abs(_I-_J)))*two*D(_R(_I),_R(_J))
+! NOTE: the last term above is a correction when adjacent vertices are being switched
+! the first multiplier is 1 if _I and _J are connected, and zero otherwise
+!
 ! macro for simple path move : swapping two vertices at random
 !===================================================================
 #define __SHIFTPATH_SIMPLE(_N,_I,_J)\
@@ -111,13 +115,13 @@ module tsp
 !=========================== now, if gettemp is set, get the initial temperature
   allocate(iroute(n)); iroute=route;   ! original route
 !
-  __PLEN(route,dist)
+  __PLEN(iroute,dist)
   if (gettemp) then
    mind=dist
    maxd=dist
    do i=1, gettemp_niter
     __SHIFTPATH_SIMPLE(n,ind1,ind2)
-    __DPLEN(route, ind1, ind2, dd)
+    __DPLEN(iroute, ind1, ind2, dd)
     newd=dist+dd
     if (newd<mind) then ;  mind=newd; elseif (newd>maxd) then ; maxd=newd; endif
    enddo
@@ -157,6 +161,7 @@ module tsp
 !=========================================================
 ! perform annealing
   allocate(minroute(n))
+  iroute=route; ! reset iroute if it was modified to compute temperature
   minroute=iroute;
   mind=dist;
 !
@@ -169,16 +174,15 @@ module tsp
      __SHIFTPATH_SIMPLE(n,ind1,ind2)
    endif
    __DPLEN(iroute, ind1, ind2, dd)
-   newd=dist+dd
 !
-   if ( newd .le. dist ) then
+   if ( dd .le. zero ) then
     __SWAPI(iroute(ind1), iroute(ind2)) ! swap vertices
-    dist=newd;
+    __INCR(dist,dd);
     if (dist.lt.mind) then; mind=dist; minroute=iroute; endif
 !
-   elseif ( exp ( - (newd - dist)/temp ) .gt. __RANDOMU(__SEED)  ) then ! Metropolis criterion
+   elseif ( exp ( - dd/temp ) .gt. __RANDOMU(__SEED)  ) then ! Metropolis criterion
     __SWAPI(iroute(ind1), iroute(ind2)) ! swap vertices
-    dist=newd;
+    __INCR(dist,dd);
     if (dist.lt.mind) then; mind=dist; minroute=iroute; endif
    endif
 !  change temperature (annealing)
