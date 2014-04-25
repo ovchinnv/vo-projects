@@ -138,19 +138,19 @@ __CHARMM_ONLY##IF STRINGM
       end subroutine ftsm_copy
 !
 !=================================================================================
-      subroutine ftsm_fill(x,y,z)
+      subroutine ftsm_fill(x,y,z,col)
       __DEP_NUMBER 
       __DEP_MULTICOM       __CHARMM_ONLY !##MULTICOM
       __IAM(FTSM_FILL)
 !
       float :: x(:), y(:), z(:)
-
+      int, optional :: col
+!
       float, pointer :: wgts(:), rf(:,:), ro(:,:)
       float :: d
       int, pointer :: inds(:)
 !
-      int :: i,k,ind
-!
+      int :: i,k,ind, c
       if (.not.ftsm_check(qorient)) return
 !
       if (any(x.eq.__NAN).or.any(y.eq.__NAN).or.any(z.eq.__NAN)) then
@@ -158,30 +158,42 @@ __CHARMM_ONLY##IF STRINGM
        return
       else
 !
-       rf=>r_f(:,:,center)
+      if (present(col)) then 
+       if (col .gt. zero .and. col .le. num_sets) then
+        c=col
+       else
+        __WRN(whoami, 'INVALID COLUMN SPECIFIED. ABORT.')
+        return
+       endif
+      else
+       c=center
+      endif
+!
+       rf=>r_f(:,:,c)
 #define _RF rf
 #define __OOBWARN
 #include "ftsm_load_fcor.def"
 !
        if (qorient.and.qdiffrot) then ! technically, qorient not needed because of norient below
-        ro=>r_o(:,:,center)
+        ro=>r_o(:,:,c)
 #define _RO ro
 #include "ftsm_load_ocor.def"
        endif ! qdiffrot
 
       endif ! x.eq.__NAN
 !     remove and save center of mass of orientation atoms
+      call ftsm_save_com(c)
 !
-      call ftsm_save_com()
+      if (c.eq.center) then
+       call ftsm_swap_bc(.true.) ! .true. : send to slaves
 !
-      call ftsm_swap_bc(.true.) ! .true. : send to slaves
-!
-      r_f(:,:,left_old:right_old)=r_f(:,:,left:right)
-      r_f(:,:,center_new)=r_f(:,:,center)
-      if (qorient.and.qdiffrot) then
-       r_o(:,:,left_old:right_old)=r_o(:,:,left:right)
-       r_o(:,:,center_new)=r_o(:,:,center)
-      endif
+       r_f(:,:,left_old:right_old)=r_f(:,:,left:right)
+       r_f(:,:,center_new)=r_f(:,:,center)
+       if (qorient.and.qdiffrot) then
+        r_o(:,:,left_old:right_old)=r_o(:,:,left:right)
+        r_o(:,:,center_new)=r_o(:,:,center)
+       endif
+      endif ! c
 !
       end subroutine ftsm_fill
 !=================================================================================
