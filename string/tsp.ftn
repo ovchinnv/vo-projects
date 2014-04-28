@@ -46,7 +46,7 @@ module tsp
 !
 ! macro for swapping two integers in place
 !===================================================================
-#define __SWAPI(_a, _b) _a=ieor(_a,_b) ; _b=ieor(_a,_b) ; _a=ieor(_a,_b)
+#define __SWAPI(_a, _b) _a=ieor(_a,_b) ; _b=ieor(_a,_b) ; _a=ieor(_a,_b) //! will not work for __SWAPI(a,a)
 
 !
   float, intent(in) :: D(:,:)   ! matrix of distances between all vertices
@@ -65,7 +65,7 @@ module tsp
   int :: i,n
   float :: itemp, ftemp, dtemp, temp
   bool :: gettemp
-  int, pointer, dimension(:) :: minroute, iroute
+  int, pointer, dimension(:) :: minroute, r ! minimum path, temporary path
   float :: mind, maxd, dist, newd, dd
   int :: ind1, ind2
 !
@@ -113,15 +113,15 @@ module tsp
    endif ! present (itemp)
   endif ! present(gettemp)
 !=========================== now, if gettemp is set, get the initial temperature
-  allocate(iroute(n)); iroute=route;   ! original route
+  allocate(r(n)); r=route;   ! original route
 !
-  __PLEN(iroute,dist)
+  __PLEN(r,dist)
   if (gettemp) then
    mind=dist
    maxd=dist
    do i=1, gettemp_niter
     __SHIFTPATH_SIMPLE(n,ind1,ind2)
-    __DPLEN(iroute, ind1, ind2, dd)
+    __DPLEN(r, ind1, ind2, dd)
     newd=dist+dd
     if (newd<mind) then ;  mind=newd; elseif (newd>maxd) then ; maxd=newd; endif
    enddo
@@ -161,35 +161,35 @@ module tsp
 !=========================================================
 ! perform annealing
   allocate(minroute(n))
-  iroute=route; ! reset iroute if it was modified to compute temperature
-  minroute=iroute;
+  r=route; ! reset iroute if it was modified to compute temperature
+  minroute=r;
   mind=dist;
 !
   temp=itemp;
 
   do i=1,nmove
    if (mod(i,2).eq.0) then
-     call shiftpath(D,n,iroute, ind1, ind2)
+     call shiftpath(D,n,r, ind1, ind2)
    else
      __SHIFTPATH_SIMPLE(n,ind1,ind2)
    endif
-   __DPLEN(iroute, ind1, ind2, dd)
+   __DPLEN(r, ind1, ind2, dd)
 !
    if ( dd .le. zero ) then
-    __SWAPI(iroute(ind1), iroute(ind2)) ! swap vertices
+    __SWAPI(r(ind1), r(ind2)) ! swap vertices
     __INCR(dist,dd);
-    if (dist.lt.mind) then; mind=dist; minroute=iroute; endif
+    if (dist.lt.mind) then; mind=dist; minroute=r; endif
 !
    elseif ( exp ( - dd/temp ) .gt. __RANDOMU(__SEED)  ) then ! Metropolis criterion
-    __SWAPI(iroute(ind1), iroute(ind2)) ! swap vertices
+    __SWAPI(r(ind1), r(ind2)) ! swap vertices
     __INCR(dist,dd);
-    if (dist.lt.mind) then; mind=dist; minroute=iroute; endif
+    if (dist.lt.mind) then; mind=dist; minroute=r; endif
    endif
 !  change temperature (annealing)
    temp=max(temp-dtemp,ftemp)
   enddo ! nmove
 !
-  __FREE(iroute)
+  __FREE(r)
   newroute=>minroute; nullify(minroute);
 !
   end function tsp_anneal_path
@@ -219,7 +219,9 @@ module tsp
 !find a vertex that is closest to indj and that is not indi
   Di=D(ind2,:)
   dmax=maxval(Di) + one
-  Di(ind1)=dmax ; Di(ind2)=dmax ; Di(r(1))=dmax ; Di(r(n))=dmax ; ! exclude corresponding indices from minimization below
+  dmax=maxval(Di) + two
+  Di(ind2)=dmax-one ; Di(ind1)=dmax ;  Di(r(1))=dmax ; Di(r(n))=dmax ;  ! exclude corresponding indices from minimization below
+                                                                        ! BUT if all lengths are equal choose ind2 (only safe option) 
   indk1 = rinv(minloc(Di)); ! index in r of the vertex that is closest to the vertex r(indi)
   indk=indk1(1) ! minloc needs an array
 !
