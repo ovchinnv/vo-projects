@@ -31,8 +31,10 @@ __CHARMM_ONLY##IF NEWBESTFIT
        bool, private :: qdebug=__DEBUG
        bool, private :: qcheckdet=__CHKDET
        bool, private :: qdetfailtrace=__DETFAILTRACE
-       bool, private :: qiter_refine_eval=.false.
-       bool, private :: qiter_refine_evec=.true.
+!       bool, private :: qiter_refine_eval=.true.
+!       bool, private :: qiter_refine_evec=.true.
+!       bool, private :: qiter_refine_eval=.false.
+!       bool, private :: qiter_refine_evec=.false.
       !
       !parameters
        float, parameter :: zero=0d0
@@ -40,6 +42,7 @@ __CHARMM_ONLY##IF NEWBESTFIT
        float, parameter :: two=2d0
        float, parameter :: three=3d0
        float, parameter :: half=0.5d0
+       float, parameter :: fifth=0.2d0
        float, parameter :: oo3=0.3333333333333333d0
        float, parameter :: oo6=0.1666666666666666d0
        float, parameter :: oo9=0.1111111111111111d0
@@ -224,8 +227,8 @@ __DBGCOMM        __DEBUG_OUT(*, ' Det(M) [must be >=0] : ', dummy)
        if (qiter_refine_eval) then
         do j=1,3
          d=eval(j)
-         do k=1,2
-          a=(d**3+a2*d**2+a1*d+a0)/(three*d**2+two*a2*d+a1) ! * half ! slow down deliberately
+         do k=1,1
+          a=(d**3+a2*d**2+a1*d+a0)/(three*d**2+two*a2*d+a1) * errtol_ ! newton-raphson iteration
 !         if (abs(a).lt.errtol_) a=0.9*sign(errtol_,a) ! make sure we take a finite step
          __DBGCOMM write(0,*) 'CHARACTERISTIC DETERMINANT:',d,a
           d=d-a
@@ -361,6 +364,11 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
        end subroutine eig3s
       !#########################################################
        subroutine RMSBestFit(x0,y0,w,u,ibeg_,iend_,gradu,eigval,qdimswap_)
+#ifdef __FDSELFTEST
+      __DEP_PARSER
+      __DEP_MULTICOM ! parallel debugging
+      use multicom, only : multicom_init, multicom_main, multicom_initialized
+#endif
        __IMPNONE
       ! fit structure in x0 onto y0 in the sense of least RMSD
       ! implementation of the algorithm by Kabsch 1976 (plus reflection modification)
@@ -371,6 +379,8 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
       ! gradients are computed only for the indices ibeg -- iend for
       ! easy parallelization (which is, therefore, not done in this routine)
       ! note that the _entire_ Grad U array is assumed to be passed in
+      ! NOTE 5/2/2014 : will stress again that the derivatives are computed wrt y0
+      ! derivatives wrt x0 are obtained by transposition (take care to remove COM)
       !***************************************************************
       ! x0 -- orientation structure
       ! y0 -- template structure
@@ -379,14 +389,14 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
       ! u -- rotation matrix [ such that x = u . x0 ]
       ! ibeg -- index of first atom with respect to whose coords the gradients are to be computed
       ! iend -- index of last atom with respect to whose coords the gradients are to be computed
-      ! gradu -- gradient array
+      ! gradu -- gradient array, computed with respect to y0 (previously, erroneously, stated as w.r.t x0)
       ! eigval -- square root of eigenvalues of the correlation matrix
       ! qdimswap -- if false, the shapes of coordinate arrays are (1:natom,1:3); if true, (1:3,1:natom)
 !
        float, intent(in), target :: x0(:,:), y0(:,:), w(:)
        float, intent(out) :: u(3,3)
        int, optional, intent(in) :: ibeg_, iend_
-       float, optional, intent(out) :: gradu(:,:,:,:) ! gradient of rotation matrix wrt x0
+       float, optional, intent(out) :: gradu(:,:,:,:) ! gradient of rotation matrix wrt y0 (previously, erroneously, stated as w.r.t x0)
        float, optional, intent(out) :: eigval(3) ! eigenvalues
 !
        float, pointer, dimension(:) :: x1, x2, x3, y1, y2, y3
@@ -402,12 +412,19 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
        bool :: qgrad
        float :: invA(3,3),detA,e,v(3),c(3),dvdrr(3,3,3,3),dmudrr(3,3,3)
        float :: gradb(3,3,3)
-!       float :: dvdrrfd(3,3,3,3), dmudrrfd(3,3,3), dum(3,3) ! FD
        float :: a11, a12, a13, a21, a22, a23, a31, a32, a33
        int :: p, q, s
        float, allocatable :: grada(:,:,:,:), gradmu(:,:,:)
        float :: x, y, z, wgt, mu1, mu2, errtol_
        float :: G(3,3,3)
+#ifdef __FDSELFTEST
+       float, pointer :: gradu_fd(:,:,:,:)
+       int :: fdgrad_unit=500, fdmaxerr_unit=600
+       float, parameter :: fdh=1d-5, oofdh=one/fdh
+       float :: fderr(3), dx, dy, dz, xsave, ysave, zsave
+       float :: ufd(3,3,2) ! rotation matrices for finite difference calculations
+       float :: dvdrrfd(3,3,3,3), dmudrrfd(3,3,3) ! derivatives of eigenvectors and eigenvalues
+#endif
 !
        __DECL_QDIMSWAP
 !
@@ -603,7 +620,7 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
 !    1) compute derivative of A w.r.t. RR (and Mu w.r.t RR)
 !    2) compute derivative of RR w.r.t. atom coordinates
 !    3) combine 1 and 2 to produce the derivative of u w.r.t coordinates
-!       dvdrr=0d0; dmudrr=0d0 ! aardvark (for FD test)
+       dvdrr=zero; dmudrr=zero ! unnecessary
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 !
         allocate(grada(3,3,3,ibeg:iend), gradmu(3,3,ibeg:iend))
@@ -655,7 +672,7 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
          do p=1,3
           do q=1,p
 !     compute eigenvalue derivative (actually, dmu/drr_pq + dmu/drr_qp together); OK because rr is always symmetric, so rr_pq and rr_qp change identically
-           dmudrr(j,p,q)=(2d0-Kd(p,q))*v(p)*v(q)
+           dmudrr(j,p,q)=(two-Kd(p,q))*v(p)*v(q)
 !     construct right hand side vector (c)
            do s=2,3
              c(s-1)=v(q) * ( v(p)*v(s)-Kd(s,p) ) +                      & ! d[rr]_pq contribution
@@ -675,28 +692,8 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
         enddo ! j
 !
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-!   aardvark: compute derivatives d()drr by finite differences & compare : PASSED
-!        dvdrrfd=0d0;
-!        detA=0.00001
-!        do p=1,3
-!         do q=1,p
-!           invA=rr;
-!           invA(p,q)=invA(p,q)+detA;
-!           invA(q,p)=invA(p,q);
-!           call eig3s(invA, v, b);
-!           dmudrrfd(:,p,q)=-(mu-v)/detA; !evec
-!           dvdrrfd(:,:,p,q)=-(a-b)/detA; !eval
-!         enddo
-!        enddo
-!        write(700,*) 'ANAL: ',dmudrr(:,3,:)
-!        write(600,*) 'FDIF: ',dmudrrfd(:,3,:)
-!        write(700,*) 'ANAL: ',dvdrr(:,:,3,:)
-!        write(600,*) 'FDIF: ',dvdrrfd(:,:,3,:)
-!        stop
-!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 !    compute derivatives w.r.t. relative coordinates
-        gradu(:,:,:,ibeg:iend)=0d0
+        gradu(:,:,:,ibeg:iend)=zero
         do q=ibeg, iend
          x=x1(q)-xcom(1); y=x2(q)-xcom(2); z=x3(q)-xcom(3); wgt=w(q)
 !
@@ -758,41 +755,41 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
      &         a32 * ( y*r33 + z*r32 ) )
            enddo ! j
          enddo ! i
-!%%%%%%%%%%%%%%%%%%%%%%%%% computed gradients of A, MU w.r.t. translated coordinates  i.e. x=x0-xcom %%%%%%%%%%%%
+!%%%%%%%%%%%%%%%%%%%%%%%%% computed gradients of A, MU w.r.t. translated coordinates  i.e. y=y0-ycom %%%%%%%%%%%%
 !    compute gradient of u w.r.t. relative(translated) coordinates
 !
-        G(:,:,1)=matmul(r,grada(:,:,1,q))
-        G(:,:,2)=matmul(r,grada(:,:,2,q))
-        G(:,:,3)=matmul(r,grada(:,:,3,q))
+         G(:,:,1)=matmul(r,grada(:,:,1,q))
+         G(:,:,2)=matmul(r,grada(:,:,2,q))
+         G(:,:,3)=matmul(r,grada(:,:,3,q))
 !    first, compute gradients of B=RAM^{-1/2}
 !    do this for the first two column vectors corresponding to the two largest e-values
 !    obtain the third component by using orthogonality (this also treats mu(3)-->0).
-        do k=1,2 ! columns of b
-         mu1 = roomu(k); mu2=-0.5d0*oomu(k)
-         a11=wgt * (x*a(1,k) + y*a(2,k) + z*a(3,k) ) ! dummy
-         do l=1,3 ! component of gradient: 1:ddx 2:ddy 3:ddz
-          do i=1,3 ! component of vector b_k
+         do k=1,2 ! columns of b
+          mu1 = roomu(k); mu2=-half*oomu(k)
+          a11=wgt * (x*a(1,k) + y*a(2,k) + z*a(3,k) ) ! dummy
+          do l=1,3 ! component of gradient: 1:ddx 2:ddy 3:ddz
+           do i=1,3 ! component of vector b_k
             gradb(i,k,l)=mu1*(mu2*gradmu(k,l,q)*b0(i,k)+                &
      &      a11*Kd(i,l)+                                                &
      &      G(i,k,l))
 !    make a contribution to gradu in this inner loop
-           do j=1,3
-            gradu(i,j,l,q)=gradu(i,j,l,q)+                              &
-     &       gradb(i,k,l)*a(j,k)+grada(j,k,l,q)*b(i,k)
-           enddo ! j
-          enddo ! i
-         enddo ! l
-        enddo ! k
+            do j=1,3
+             gradu(i,j,l,q)=gradu(i,j,l,q)+                              &
+     &        gradb(i,k,l)*a(j,k)+grada(j,k,l,q)*b(i,k)
+            enddo ! j
+           enddo ! i
+          enddo ! l
+         enddo ! k
 !    treat b_3 separately below
-        do l=1,3
-         gradb(:,3,l)=veccross3(gradb(:,1,l),b(:,2))-                   &
+         do l=1,3
+          gradb(:,3,l)=veccross3(gradb(:,1,l),b(:,2))-                   &
      &                veccross3(gradb(:,2,l),b(:,1))
 !    compute the rest of the sum
-         do i=1,3; do j=1,3
+          do i=1,3; do j=1,3
             gradu(i,j,l,q)=gradu(i,j,l,q)+                              &
      &        gradb(i,3,l)*a(j,3)+grada(j,3,l,q)*b(i,3)
-         enddo;    enddo  ! i,j
-        enddo ! l
+          enddo;    enddo  ! i,j
+         enddo ! l
 ! OLD CODE; INACCURATE FOR MU_3 --> ZERO
 !        do i=1,3
 !         do j=1,3
@@ -832,8 +829,176 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
 !          enddo ! j
 !         enddo ! i
 !     otherwise, parallelization is meaningless
-        enddo ! q
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        enddo ! q
+!================================================================
+! direct finite-difference test of rotation gradients
+#ifdef __FDSELFTEST
+        if (.not. multicom_initialized) then
+         call multicom_init()
+         _MSGBUF(1)='SET GLOBAL 1'; i_=12
+         call multicom_main(_MSGBUF(1),i_)
+        endif
+        __INCR(fdgrad_unit,ME_GLOBAL)
+        __INCR(fdmaxerr_unit,ME_GLOBAL)
+!
+        allocate(gradu_fd(3,3,3,ibeg:iend))
+        fderr=zero
+! compare analytical derivatives with fd
+! dump a trace oon failure
+        do k=ibeg, iend ! over orientation atoms
+         xsave=y1(k) ; ysave=y2(k) ; zsave=y3(k) ! save coordinates
+         do j=1,3 ! over components
+          dx=Kd(j,1)*fdh; dy=Kd(j,2)*fdh; dz=Kd(j,3)*fdh;
+          do l = -1, 1, 2
+           y1(k)=xsave + dx*l
+           y2(k)=ysave + dy*l
+           y3(k)=zsave + dz*l
+! recompute rotation matrix
+           r11=zero; r12=zero; r13=zero; r21=zero; r22=zero; r23=zero; r31=zero; r32=zero; r33=zero;
+!
+           do i=1,n
+            x1w = (x1(i)-xcom(1)) * w(i)
+            x2w = (x2(i)-xcom(2)) * w(i)
+            x3w = (x3(i)-xcom(3)) * w(i)
+            y1s = (y1(i)-ycom(1) - dx*l*w(k) ) ! propagate coordinate modification to COM-free coordinates
+            y2s = (y2(i)-ycom(2) - dy*l*w(k) )
+            y3s = (y3(i)-ycom(3) - dz*l*w(k) )
+            r11=r11+y1s*x1w
+            r12=r12+y1s*x2w
+            r13=r13+y1s*x3w
+            r21=r21+y2s*x1w
+            r22=r22+y2s*x2w
+            r23=r23+y2s*x3w
+            r31=r31+y3s*x1w
+            r32=r32+y3s*x2w
+            r33=r33+y3s*x3w
+           enddo ! i
+           r=RESHAPE( (/r11,r21,r31,r12,r22,r32,r13,r23,r33/),(/3,3/))
+!       rr=matmul(transpose(r),r) ! r`r
+           ___MATMUL3T3(rr,r,r)
+           call eig3s(rr, mu, a) ! mu -- evalues a -- evectors
+! ad hoc treatment of degenerate (collinear) case
+           if (abs(mu(2) + mu(3)).lt.errtol_) then ; mu(2)=zero ; mu(3)=zero ; endif; ! two zero evals appear symmetric around zero
+           ___MATMUL33(b0,r,a)
+!     handle three zero eigenvalues (single point)
+!     note that the eigenvalues are sorted in decreasing order
+           if (mu(1) .lt. errtol_) then 
+            b=Kd
+!    handle two zero eigenvalues (line)
+           elseif (mu(2) .lt. errtol_) then
+            b(:,1)=b0(:,1)/sqrt(mu(1))
+!    b(:,2-3) are not unique, so we pick arbitrary vectors
+            !    try (1,0,0)
+            if ( abs(b(1,1)) .lt. half ) then ! scalar product of b with (1,0,0) is relatively small
+! project b1 out of b2 :
+             b(:,2)=&
+     &       unit3( (/ one-b(1,1)*b(1,1), -b(1,1)*b(2,1), -b(1,1)*b(3,1)/) )
+            else ! use (0,1,0)
+             b(:,2)=&
+     &       unit3( (/ -b(2,1)*b(1,1), one-b(2,1)*b(2,1), -b(2,1)*b(3,1)/) )
+            endif
+           else ! one or fewer zero eigenvalues
+            b(:,1)=b0(:,1)/sqrt(mu(1))
+            b(:,2)=b0(:,2)/sqrt(mu(2))
+           endif
+!    third vector is determined by the first two
+           b(:,3)=veccross3(b(:,1),b(:,2))
+!       u=matmul(b, transpose(a)) ! this is the rotation matrix; apply using: x_new = U . x_old
+           ___MATMUL33T(ufd(:,:,(l+3)/2),b,a)
+          enddo ! l
+          gradu_fd(:,:,j,k)=half*oofdh*(ufd(:,:,2) - ufd(:,:,1)) ! fd gradient
+          fderr(j) = max(fderr(j) , maxval ( abs (gradu_fd(:,:,j,k) - gradu(:,:,j,k)) ))
+!    restore coordinate value
+          y1(k)=xsave ; y2(k)=ysave ; y3(k)=zsave
+         enddo ! j
+        enddo ! k
+! output
+        write(fdmaxerr_unit,*) fderr
+        if (any(fderr.gt.fdh)) then ! dump matrix and derivative differences
+         __WARN(whoami, 'FD TEST FAILED (MAX ERROR = ', ftoa(maxval(fderr)),'). DUMPING TRACE TO UNIT ', itoa(fdgrad_unit))
+         write(fdgrad_unit, *) 'R matrix :'
+         write(fdgrad_unit, *) '================='
+         write(fdgrad_unit, '(3F20.15)') r
+         write(fdgrad_unit, *) '================='
+         write(fdgrad_unit, *) 'RR matrix :'
+         write(fdgrad_unit, *) '================='
+         ___MATMUL3T3(rr,r,r) ; write(fdgrad_unit, '(3F20.15)') rr
+         write(fdgrad_unit, *) '================='
+         write(fdgrad_unit, *) 'Eigenvalues (raw) :'
+         write(fdgrad_unit, *) '================='
+         call eig3s(rr, mu, a) ! mu -- evalues a -- evectors
+         write(fdgrad_unit, '(3F20.15)') mu
+         write(fdgrad_unit, *) '================='
+         write(fdgrad_unit, *) 'Eigenvalues (positive) :'
+         write(fdgrad_unit, *) '================='
+         if (abs(mu(2) + mu(3)).lt.errtol_) then ; mu(2)=zero ; mu(3)=zero ; endif; ! two zero evals appear symmetric around zero
+         write(fdgrad_unit, '(3F20.15)') mu
+         write(fdgrad_unit, *) '================='
+         write(fdgrad_unit, *) 'Eigenvectors :'
+         write(fdgrad_unit, *) '================='
+         write(fdgrad_unit, '(3F20.15)') a
+         write(fdgrad_unit, *) '================='
+!     verify directly that matrix orthonormal:
+         write(fdgrad_unit, *) 'Orthonormality : U x U^T - I (should be 0)'
+         write(fdgrad_unit, *) '================='
+         write(fdgrad_unit, '(3F20.15)') matmul(a,transpose(a)) - Kd
+         write(fdgrad_unit, *) '================='
+         write(fdgrad_unit, *) 'Diagonalization accuracy : RR - U x M x U^T (should be 0)'
+         b0(:,1)=mu(1)*a(:,1);b0(:,2)=mu(2)*a(:,2);b0(:,3)=mu(3)*a(:,3)! aa
+         write(fdgrad_unit, '(3F20.15)') matmul(b0,transpose(a))-rr
+         write(fdgrad_unit, *) '================='
+!
+! compute finite difference derivatives of eigenvectors and eigenvalues of rr matrix wrt to rr matrix entries
+         dvdrrfd=zero;
+         dmudrrfd=zero;
+         invA=rr;
+         do p=1,3
+          do q=1,p
+           __INCR(invA(p,q),fdh)
+           invA(q,p)=invA(p,q);
+           call eig3s(invA, v, b);
+           __INCR(invA(p,q),-two*fdh)
+           invA(q,p)=invA(p,q);
+           call eig3s(invA, c, b0);
+           invA(p,q)=rr(p,q)
+           dmudrrfd(:,p,q)=(v-c)*half*oofdh; ! eval
+           dvdrrfd(:,:,p,q)=(b-b0)*half*oofdh; ! evec
+          enddo
+         enddo
+         write(fdgrad_unit, *) 'Gradients of RR matrix eigenvalues w.r.t RR components'
+         write(fdgrad_unit, *) '================='
+         __INCR(dmudrrfd,-dmudrr)
+         do p=1,3
+          write(fdgrad_unit,'(3(3F15.10,";"))') dmudrrfd(1,p,:), dmudrrfd(2,p,:), dmudrrfd(3,p,:)
+         enddo
+         write(fdgrad_unit, *) '================='
+         write(fdgrad_unit, *) 'Gradients of RR matrix eigenvectors w.r.t RR components'
+         write(fdgrad_unit, *) '================='
+         __INCR(dvdrrfd,-dvdrr)
+         do i=1,3
+          write(fdgrad_unit, *) '=== v('//itoa(i)//'):'
+          do p=1,3
+           write(fdgrad_unit,'(3(3F15.10,";"))') dvdrrfd(1,i,p,:), dvdrrfd(2,i,p,:), dvdrrfd(3,i,p,:)
+          enddo
+         enddo
+         write(fdgrad_unit, *) '================='
+!
+         write(fdgrad_unit, *) 'Gradient differences (dx, dy, dz) :'
+         write(fdgrad_unit, *) '================='
+         __INCR(gradu_fd(:,:,:,ibeg:iend), (-gradu(:,:,:,ibeg:iend)) ) ! subtract analytical gradient
+         do k=ibeg,iend
+          write(fdgrad_unit,*) 'atom:', k
+           write(fdgrad_unit, '(3(3F15.10,";"))')  gradu_fd(1,:,1,k),  gradu_fd(1,:,2,k),  gradu_fd(1,:,3,k),&
+     &                                             gradu_fd(2,:,1,k),  gradu_fd(2,:,2,k),  gradu_fd(2,:,3,k),&
+     &                                             gradu_fd(3,:,1,k),  gradu_fd(3,:,2,k),  gradu_fd(3,:,3,k)
+         enddo
+         close(fdgrad_unit)
+        endif
+!
+      __FREE(gradu_fd)
+#endif
+!======================= finite difference test
         deallocate(grada, gradmu)
 !
        endif ! qgrad
@@ -841,7 +1006,7 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
 !     done
 !
        end subroutine RMSBestFit
-      !
+!
   end module bestfit
 !
 __CHARMM_ONLY##ENDIF

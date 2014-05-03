@@ -1,7 +1,7 @@
 ROOT=..
 OBJS=bestfit.o
 NAME=bestfit
-DEPS=constants output
+DEPS=constants output parser multicom vectors parselist
 #
 CBINDOBJS=bestfit_c.o
 BINDSOURCES=$(OBJS:%.o=%_.F90) $(CBINDOBJS:%.o=%_.F90)
@@ -13,7 +13,7 @@ LOCALMACROS=-include source.defs
 LOCALDEPS=source.defs
 # additional objects for linking test.o executable
 
-LINKOBJS=constants.o output.o
+LINKOBJS=constants.o output.o parser.o cmd.o prm.o multicom_aux.o multicom.o ivector.o parselist.o isort.o
 PYTHONH=-I /usr/include/python2.7/
 LPYTHON=-lpython2.7
 
