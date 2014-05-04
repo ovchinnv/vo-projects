@@ -683,7 +683,8 @@ __CHARMM_ONLY##IF STRINGM
       float :: fx(:), fy(:), fz(:)
       float, pointer, dimension(:,:) :: ffpar, ffprp, fopar, foprp
       float :: pre1, pre2
-      float :: fac, fac2, t, omt, wgt, dx, dy, dz
+      float :: fac, fac2, t, omt, wgt, dx, dy, dz, kbt=0.6d0 ! for now, hardwired at room temperature
+!
       int, pointer :: inds(:)
       float, pointer :: wgts(:)
       int :: i, j, ind
@@ -705,7 +706,7 @@ __CHARMM_ONLY##IF STRINGM
 !
       if (ftsm_scaledist) then
 ! lowering the force constants for endpoints is necessary to get the equivalent fluctuations
-! can think of either scaling the force constants, or scaling the distances (and gradients) by 0.5 and keeping the same force constans
+! can think of either scaling the force constants, or scaling the distances (_and gradients_) by 0.5 and keeping the same force constans
 ! perpendicular component normalized by physical interimage dist. (which is halved for endpoints); so it appears too large, and is halved below
 !
 ! for the internal points, integrating the force through one inter-image distance is equivalent to multiplying
@@ -724,6 +725,11 @@ __CHARMM_ONLY##IF STRINGM
 ! restraint force parallel to string
        pre1 = kpara * fac * fac * ( dpar-dpar0 )                ! scale down the force constant of endpoints (one for d, one for gradients)
        pre2 = kperp * fac * max   ( fac * dperp - dperp0, zero ) ! ignore negative values; dperp0 criterion in inner-replica d-metric
+! force limiting
+       if (ftsm_flim_coeff.gt.zero) then
+        pre1=sign( min(abs(pre1),sqrt(two*fac*kbt*kpara*ftsm_flim_coeff)),pre1) ! limit pre1 magnitude taking care of sign
+        pre2=min(pre2,sqrt(two*fac*kbt*kperp*ftsm_flim_coeff)) ! pre2 > 0
+       endif
 ! update force: for inner points, multiply force by 0.5; for boundary use 1d0; the FE is then simply the sum of the forces along the string
        avforce(1) = t * avforce(1) + omt * pre1 * fac2 ! force acting on dpar0 is pre1 (integrate negative to get f.e.)
        avforce(2) = t * avforce(2) - omt * pre1 * fac2 * (fe_curv * fac * fac) ! force due to curvature (note: either fac=1 or curv=0)
@@ -732,6 +738,10 @@ __CHARMM_ONLY##IF STRINGM
       else ! .not.  proj_on
        pre1 = krms * ( drms-drms0 )
        if (qrms_upper_bound) pre1=max(pre1,zero) ! apply if force exceeds threshold
+! force limiting
+       if (ftsm_flim_coeff.gt.zero) then 
+        pre1=sign( min(abs(pre1),sqrt(two*fac*kbt*krms*ftsm_flim_coeff)),pre1) ! limit pre1 magnitude taking care of sign
+       endif
        pre2=zero
 ! update force (which will not likely be used)
        avforce(1) = t * avforce(1) + omt * pre1 ! force acting on dpar0 is pre1 (integrate negative to get f.e.)
