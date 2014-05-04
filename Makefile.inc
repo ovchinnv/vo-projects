@@ -90,6 +90,8 @@ VPATH=$(ROOT) #this is necessary to prevent recompilation under %.stamp rule
 FPP=cpp
 FPPFLAGS = -P -C -I $(ROOT) -nostdinc # -nostdinc : avoid including files automatically
 
+DEBUG = -g
+
 .SUFFIXES:
 .SUFFIXES: .o .F90 .a .H .h .c .f .F .stamp
 
@@ -138,9 +140,9 @@ $(ROOT)/$(NAME).stamp:: $(OBJS) $(DISTRIB)
 	$(FPP) $(FPPFLAGS)         -D__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(CHMSG) -P $< > $@
 ########################## TEST PROGRAM ######################
 test.F90:test.ftn $(LOCALDEPS) $(GLOBALDEPS) $(ROOT)/test.msg
-	$(FPP) $(FPPFLAGS) $(DEFS) -U__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(TESTMSG) -P $< > $@
+	$(FPP) $(FPPFLAGS) $(DEFS) -U__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(TESTMSG) $(DEBUG) -P $< > $@
 test :: $(OBJS) test.o force_look
-	$(LD) $(LDFLAGS) test.o $(OBJS) $(LOBJS) $(LIBS) $(MPI_LIBS) -o test
+	$(LD) $(LDFLAGS) test.o $(OBJS) $(LOBJS) $(LIBS) $(MPI_LIBS) $(DEBUG) -o test
 	echo "==================================================="
 	echo "Running test :"
 	echo "==================================================="

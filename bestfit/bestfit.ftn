@@ -26,15 +26,18 @@ __CHARMM_ONLY##IF NEWBESTFIT
       !
       __DEPMOD
       !
+      __IMPNONE
       private
       !
        bool, private :: qdebug=__DEBUG
        bool, private :: qcheckdet=__CHKDET
        bool, private :: qdetfailtrace=__DETFAILTRACE
-!       bool, private :: qiter_refine_eval=.true.
-!       bool, private :: qiter_refine_evec=.true.
+       bool, private :: qiter_refine_eval=.true.
+       bool, private :: qiter_refine_evec=.true.
 !       bool, private :: qiter_refine_eval=.false.
 !       bool, private :: qiter_refine_evec=.false.
+       bool, private :: qdiag_inverse=.true.
+!       bool, private :: qdiag_inverse=.false.
       !
       !parameters
        float, parameter :: zero=0d0
@@ -60,6 +63,7 @@ __CHARMM_ONLY##IF NEWBESTFIT
        __DECLARE_MATMUL33_VARS
       !
        public eig3s ! eigenvalues + eigenvectors of a symmetric 3x3 PosDef matrix
+       public eig3s_ref ! extra steps to try for a better solution
        public RMSBestFit ! superpose one structure onto another (best-fit in the sense of weighted RMSD)
        public rmsd ! calculate weighted RMSD between two structures
       ! auxiliary routines
@@ -72,20 +76,17 @@ __CHARMM_ONLY##IF NEWBESTFIT
        contains
       !###############################################################
        subroutine setdebug(switch);
-       __IMPNONE
        bool :: switch
        qdebug=switch
        end subroutine setdebug
       !###############################################################
        function norm3(v)
-       __IMPNONE
        float :: v(3), norm3
        norm3=sqrt(v(1)*v(1)+v(2)*v(2)+v(3)*v(3))
        if (norm3.lt.__ERRTOL) norm3=zero
        end function norm3
       !###############################################################
        function unit3(v)
-       __IMPNONE
        float :: v(3), norm, unit3(3)
       ! need to be careful with roundoff error
        norm=sqrt(v(1)*v(1)+v(2)*v(2)+v(3)*v(3))
@@ -94,7 +95,6 @@ __CHARMM_ONLY##IF NEWBESTFIT
        end function unit3
       !###############################################################
        function veccross3(v1,v2)
-       __IMPNONE
        float, intent(in) :: v1(3), v2(3)
        float :: veccross3(3)
        veccross3=(/v1(2)*v2(3)-v1(3)*v2(2),                             &
@@ -103,7 +103,6 @@ __CHARMM_ONLY##IF NEWBESTFIT
        end function veccross3
       !###############################################################
        function com(x,w,qdimswap_)
-       __IMPNONE
       ! note: assuming sum(w)=1
        float :: x(:,:), w(:), com(3)
        __DECL_QDIMSWAP
@@ -116,7 +115,6 @@ __CHARMM_ONLY##IF NEWBESTFIT
        end function com
       !###############################################################
        function rmsd(x,y,w,qroot_,qdimswap_)
-       __IMPNONE
       ! note: assuming sum(w)=1
        float :: x(:,:), y(:,:), w(:), rmsd ! , wsum
        int :: n, m, i, j
@@ -148,14 +146,13 @@ __CHARMM_ONLY##IF NEWBESTFIT
        subroutine eig3s(M, eval, evec) 
       ! Exact diagonalization of a 3X3 SYMMETRIC matrix
       ! The symmetry is used in the assumption that all of the eigenvalues are REAL
-       __IMPNONE
       !
        float :: M(3,3)
        float :: a11, a12, a13, a21, a22, a23, a31, a32, a33
        float :: a0, a1, a2, Qq, Rr, Dd, rootQ, rootQ3, theta
        float :: a,b,c,d,e,f,g,h,i,det13,det12
        float :: eval(3), evec(3,3), p(3), q(3), r(3), v(3), &
-     &                   dummy, pn, qn
+     &                   dummy, pn, qn, trace
        int :: j,k
       !
        float:: errtol_
@@ -175,6 +172,7 @@ __DBGCOMM        __DEBUG_OUT(*, ' Det(M) [must be >=0] : ', dummy)
        a21=M(2,1); a22=M(2,2); a23=M(2,3)
        a31=M(3,1); a32=M(3,2); a33=M(3,3)
       !
+       trace = a11 + a22 + a33
       ! solve the characteristic equation
        a2=-(a11+a22+a33)
        a1= (a11*a22+a11*a33+a22*a33-a23*a32-a12*a21-a13*a31)
@@ -221,23 +219,6 @@ __DBGCOMM        __DEBUG_OUT(*, ' Det(M) [must be >=0] : ', dummy)
         eval(3)=two*rootQ*(a*cos_2pi_o3+b)-a2*oo3
 !        eval(3)=two*rootQ*(a*cos_4pi_o3-b*sin_4pi_o3)-a2*oo3
        endif
-! ad hoc : try to refine eigenvalues using Newton-Raphson
-! for most cases, turns out that the correction is already machine precision, so no improvement is possible
-!      __DBGCOMM write(0,*) 'EVAL:', eval
-       if (qiter_refine_eval) then
-        do j=1,3
-         d=eval(j)
-         do k=1,1
-          a=(d**3+a2*d**2+a1*d+a0)/(three*d**2+two*a2*d+a1) * errtol_ ! newton-raphson iteration
-!         if (abs(a).lt.errtol_) a=0.9*sign(errtol_,a) ! make sure we take a finite step
-         __DBGCOMM write(0,*) 'CHARACTERISTIC DETERMINANT:',d,a
-          d=d-a
-         enddo
-         eval(j)=d
-!        stop
-        enddo
-       endif
-!
       __DBGCOMM write(0,*) 'EVAL:', eval
       __DBGCOMM Dd=Rr/rootQ3
       __DBGCOMM write(0,'(A,5E30.20)') 'test:', theta, rootQ3, Dd, acos(Dd), acos(1d0)
@@ -245,13 +226,33 @@ __DBGCOMM        __DEBUG_OUT(*, ' Det(M) [must be >=0] : ', dummy)
        if (abs(eval(1)) .lt. errtol_) eval(1)=zero
        if (abs(eval(2)) .lt. errtol_) eval(2)=zero
        if (abs(eval(3)) .lt. errtol_) eval(3)=zero
-      ! sort eigen-values in the order of DECREASING MAGNITUDE
+      !############# sort eigenvalues in the order of DECREASING MAGNITUDE
        if (abs(eval(1)).lt.abs(eval(2))) then;
         dummy=eval(1); eval(1)=eval(2); eval(2)=dummy; endif
        if (abs(eval(1)).lt.abs(eval(3))) then;
         dummy=eval(1); eval(1)=eval(3); eval(3)=dummy; endif
        if (abs(eval(2)).lt.abs(eval(3))) then;
         dummy=eval(2); eval(2)=eval(3); eval(3)=dummy; endif
+      !#################################################################
+! ad hoc : try to refine eigenvalues using Newton-Raphson
+! for most cases, turns out that the correction is already machine precision, so no improvement is possible
+!      __DBGCOMM write(0,*) 'EVAL:', eval
+       if (qiter_refine_eval) then
+        do j=1,2
+         d=eval(j)
+         do k=1,1
+          a=(d**3+a2*d**2+a1*d+a0)/(three*d**2+two*a2*d+a1) * errtol_ ! newton-raphson iteration
+!         if (abs(a).lt.errtol_) a=0.9*sign(errtol_,a) ! make sure we take a finite step
+         __DBGCOMM write(0,*) 'CHARACTERISTIC DETERMINANT:',d,a
+          d=d-a
+         enddo ! k
+         eval(j)=d
+!        stop
+        enddo ! j
+!       compute last evalue from trace : 
+        eval(3)=trace - eval(1) - eval(2)
+       endif
+!
       !######################### now compute eigenvectors ############
       !
        do j=1,3
@@ -334,26 +335,26 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
         endif
        endif
 !
-! optional power iterations to improve pesky eigenvectors (not recommended -- in nearly singular cases make things worse)
+! optional power iterations to improve pesky eigenvectors (in some cases might make things worse)
        if (qiter_refine_evec) then
 ! first eigenvalue/vector pair
         if (abs(eval(1)).gt.errtol_) then
          a=evec(1,1); b=evec(2,1); c=evec(3,1)
-         dummy=one/eval(1)
+!         dummy=one/eval(1)
          do j=1,1
-          d = a11*a + a12*b + a13*c; e = a21*a + a22*b + a23*c; f = a31*a + a32*b + a33*c; a=d*dummy ; b=e*dummy ; c=f*dummy
+          d = a11*a + a12*b + a13*c; e = a21*a + a22*b + a23*c; f = a31*a + a32*b + a33*c; ! a=d*dummy ; b=e*dummy ; c=f*dummy
          enddo
-         v=unit3((/a,b,c/)) ; evec(:,1)=v ;
+         v=unit3((/d,e,f/)) ; evec(:,1)=v ;
 ! second eigenvalue/vector pair
          if (abs(eval(2)).gt.errtol_) then
           a=evec(1,1); b=evec(2,1); c=evec(3,1)
           d=evec(1,2); e=evec(2,2); f=evec(3,2)
-          theta=one/eval(2)
-          do j=1,2
+!          theta=one/eval(2)
+          do j=1,1
            dummy=a*d+b*e+c*f;
            d=d-dummy*a ; e=e-dummy*b ; f=f-dummy*c
-           g = a11*d + a12*e + a13*f; h = a21*d + a22*e + a23*f; i = a31*d + a32*e + a33*f; d=g*theta ; e=h*theta ; f=i*theta
-          enddo ; r=unit3((/d,e,f/)) ; evec(:,2)=r ;
+           g = a11*d + a12*e + a13*f; h = a21*d + a22*e + a23*f; i = a31*d + a32*e + a33*f; ! d=g*theta ; e=h*theta ; f=i*theta
+          enddo ; r=unit3((/g,h,i/)) ; evec(:,2)=r ;
          endif
 ! obtain third vector using a cross product
          evec(:,3)=veccross3(evec(:,1),evec(:,2))
@@ -369,7 +370,6 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
       __DEP_MULTICOM ! parallel debugging
       use multicom, only : multicom_init, multicom_main, multicom_initialized
 #endif
-       __IMPNONE
       ! fit structure in x0 onto y0 in the sense of least RMSD
       ! implementation of the algorithm by Kabsch 1976 (plus reflection modification)
       ! 10.09: compute gradients of u w.r.t. y0-com(y0);
@@ -501,6 +501,31 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
         ___MATMUL3T3(rr,r,r)
       ! diagonalize rr
        call eig3s(rr, mu, a) ! mu -- evalues a -- evectors
+!
+       if (qdiag_inverse) then
+        detr= &
+     &  r(1,1)*(r(2,2)*r(3,3)-r(2,3)*r(3,2))+ &
+     &  r(1,2)*(r(2,3)*r(3,1)-r(2,1)*r(3,3))+ &
+     &  r(1,3)*(r(2,1)*r(3,2)-r(2,2)*r(3,1))
+        if (detr*detr.gt.errtol_) then
+! also diagonalize inverse matrix to get more accurate evalues
+         u(1,1)=rr(2,2)*rr(3,3)-rr(2,3)*rr(3,2);
+         u(1,2)=rr(1,3)*rr(3,2)-rr(1,2)*rr(3,3);
+         u(1,3)=rr(2,3)*rr(1,2)-rr(2,2)*rr(1,3);
+         u(2,1)=u(1,2)
+         u(2,2)=rr(1,1)*rr(3,3)-rr(1,3)*rr(3,1);
+         u(2,3)=rr(1,3)*rr(2,1)-rr(1,1)*rr(2,3);
+         u(3,1)=u(1,3)
+         u(3,2)=u(2,3)
+         u(3,3)=rr(1,1)*rr(2,2)-rr(1,2)*rr(2,1);
+         call eig3s(u, v, b) ! v -- evalues b -- evectors
+         mu(3)=detr*detr/v(1) ! smallest eigenvalue
+         mu(2)=rr(1,1) + rr(2,2) + rr(3,3) - mu(1) - mu(3) ! compute second ev from trace invairant
+         a(:,3)=b(:,1)                   ! eigenvector corresponding to mu(3) / v(1)
+         a(:,2)=veccross3(a(:,3),a(:,1)) ! obtain via cross product
+        endif
+       endif
+!
 ! ad hoc treatment of degenerate (collinear) case
       if (abs(mu(2) + mu(3)).lt.errtol_) then ; mu(2)=zero ; mu(3)=zero ; endif; ! two zero evals appear symmetric around zero
 !       mu=max(mu,zero) ; ! prevent small negative values
@@ -601,10 +626,10 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
        if (present(eigval)) then 
       ! return square root of eigenvalues
       ! determinant of r
-        detr=                                                           &
-     &  r(1,1)*(r(2,2)*r(3,3)-r(2,3)*r(3,2))+                           &
-     &  r(1,2)*(r(2,3)*r(3,1)-r(2,1)*r(3,3))+                           &
-     &  r(1,3)*(r(2,1)*r(3,2)-r(2,2)*r(3,1))
+        if (.not. qdiag_inverse) detr=                                   & ! otherwise, already computed
+     &   r(1,1)*(r(2,2)*r(3,3)-r(2,3)*r(3,2))+                           &
+     &   r(1,2)*(r(2,3)*r(3,1)-r(2,1)*r(3,3))+                           &
+     &   r(1,3)*(r(2,1)*r(3,2)-r(2,2)*r(3,1))
         if (detr.lt.0) rmu(3)=-rmu(3)
         eigval=rmu
        endif
@@ -877,7 +902,7 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
            r=RESHAPE( (/r11,r21,r31,r12,r22,r32,r13,r23,r33/),(/3,3/))
 !       rr=matmul(transpose(r),r) ! r`r
            ___MATMUL3T3(rr,r,r)
-           call eig3s(rr, mu, a) ! mu -- evalues a -- evectors
+           call eig3s_ref(rr, mu, a) ! mu -- evalues a -- evectors
 ! ad hoc treatment of degenerate (collinear) case
            if (abs(mu(2) + mu(3)).lt.errtol_) then ; mu(2)=zero ; mu(3)=zero ; endif; ! two zero evals appear symmetric around zero
            ___MATMUL33(b0,r,a)
@@ -950,6 +975,7 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
          write(fdgrad_unit, *) '================='
 !
 ! compute finite difference derivatives of eigenvectors and eigenvalues of rr matrix wrt to rr matrix entries
+! (reuse variables when convenient)
          dvdrrfd=zero;
          dmudrrfd=zero;
          invA=rr;
@@ -957,10 +983,10 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
           do q=1,p
            __INCR(invA(p,q),fdh)
            invA(q,p)=invA(p,q);
-           call eig3s(invA, v, b);
+           call eig3s_ref(invA, v, b);
            __INCR(invA(p,q),-two*fdh)
            invA(q,p)=invA(p,q);
-           call eig3s(invA, c, b0);
+           call eig3s_ref(invA, c, b0);
            invA(p,q)=rr(p,q)
            dmudrrfd(:,p,q)=(v-c)*half*oofdh; ! eval
            dvdrrfd(:,:,p,q)=(b-b0)*half*oofdh; ! evec
@@ -1003,9 +1029,39 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
 !
        endif ! qgrad
 !
-!     done
-!
        end subroutine RMSBestFit
+!=============================================================================
+! subroutine that calls eigensolver twice
+       subroutine eig3s_ref(rr, mu, a)
+       float :: rr(3,3), a(3,3), mu(3)
+       float :: detrr, rrinv(3,3), muinv(3), b(3,3)
+!
+       call eig3s(rr, mu, a) ! mu -- evalues a -- evectors
+!
+       if (qdiag_inverse) then
+        detrr= &
+     &  rr(1,1)*(rr(2,2)*rr(3,3)-rr(2,3)*rr(3,2))+ &
+     &  rr(1,2)*(rr(2,3)*rr(3,1)-rr(2,1)*rr(3,3))+ &
+     &  rr(1,3)*(rr(2,1)*rr(3,2)-rr(2,2)*rr(3,1))
+        if (detrr.gt.__ERRTOL) then
+! also diagonalize inverse matrix to get more accurate evalues
+         rrinv(1,1)=rr(2,2)*rr(3,3)-rr(2,3)*rr(3,2);
+         rrinv(1,2)=rr(1,3)*rr(3,2)-rr(1,2)*rr(3,3);
+         rrinv(1,3)=rr(2,3)*rr(1,2)-rr(2,2)*rr(1,3);
+         rrinv(2,1)=rrinv(1,2)
+         rrinv(2,2)=rr(1,1)*rr(3,3)-rr(1,3)*rr(3,1);
+         rrinv(2,3)=rr(1,3)*rr(2,1)-rr(1,1)*rr(2,3);
+         rrinv(3,1)=rrinv(1,3)
+         rrinv(3,2)=rrinv(2,3)
+         rrinv(3,3)=rr(1,1)*rr(2,2)-rr(1,2)*rr(2,1);
+         call eig3s(rrinv, muinv, b) ! v -- evalues b -- evectors
+         mu(3)=detrr/muinv(1) ! smallest eigenvalue
+         mu(2)=rr(1,1) + rr(2,2) + rr(3,3) - mu(1) - mu(3) ! compute second ev from trace invairant
+         a(:,3)=b(:,1)                   ! eigenvector corresponding to me(3) / v(1)
+         a(:,2)=veccross3(a(:,3),a(:,1)) ! obtain via cross product
+        endif
+       endif
+       end subroutine eig3s_ref
 !
   end module bestfit
 !
