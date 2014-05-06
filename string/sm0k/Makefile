@@ -4,8 +4,10 @@ NAME=string/sm0k
 DEPS=constants bestfit output dynamol multicom parser confcons
 COMMON=..
 
-LOCALMACROS=-include ../source.defs -include $(ROOT)/dmol.defs
-LOCALDEPS=source.defs ../source.defs $(ROOT)/dmol.defs
+LOCALMACROS=-include $(COMMON)/source.defs
+LOCALMACROS+= -include $(ROOT)/dmol.defs
+LOCALDEPS=$(ROOT)/mpitype.def $(COMMON)/source.defs 
+LOCALDEFS+=$(ROOT)/dmol.defs
 
 include $(ROOT)/Makefile.inc
 include $(COMMON)/Makefile.inc

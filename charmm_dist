@@ -1,0 +1,139 @@
+#!/bin/bash
+# create directory with string method code for charmm 39
+# this directory contains "stringm", which has a Makefile to generate .src files and a patching script
+# the user will put this directory into the charmm tree, run "make" to generate the .src files
+# and run the "patch_xx.sh" script.  After these steps the CHARMM installation proceeds as usual;
+# the keyword STRINGM must be added to the parameter line to install.com
+#
+CHARMM_VERSION=39a2
+PREFLX2CPP=0 ; # indicate whether to replace charmm preflx macros with CPP macros
+CHARMM_DISTRIB_DIR="c"$CHARMM_VERSION
+CHARMM_SOURCE_DIR=$CHARMM_DISTRIB_DIR"/source"
+CHARMM_STRING_DIR=$CHARMM_SOURCE_DIR"/stringm"
+
+OUT="===>";
+BREAK="===================================================================================";
+
+CHARMM_DIRS="bestfit lu multicom multidiag confcons parselist string string/ftsm string/sm0k string/smcv vectors"
+RM_NONCH_FILES="bestfit/bfit.ftn bestfit/test.ftn bestfit/bestfit_c.ftn"
+
+function get_rules_from_makefile() {
+ tgt=$1
+ mf=$2
+ awk -v tgt="$tgt" \
+ ' BEGIN {rules=""; rule_active=0;}
+ { if ( index ( $0, tgt ) >0 ) { 
+    rules=rules""$0"\n"
+    rule_active=1;
+   } else if ( (rule_active==1) && ( (substr($0,1,1)=="\t") || (substr($0,1,2)~/["if"|"el"|"en"]/) ) ) {
+    rules=rules""$0"\n"
+   } else {
+    rule_active=0;
+   }
+ }
+ END { print rules;}
+ ' < $mf
+}
+
+echo $BREAK
+echo "$OUT Will prepare string source code package for CHARMM version $CHARMM_VERSION"
+echo "$OUT Creating directory \"$CHARMM_STRING_DIR\""
+#create string directory
+rm -fr $CHARMM_DISTRIB_DIR
+mkdir -p $CHARMM_SOURCE_DIR
+#create subdirectories and copy files
+for d in $CHARMM_DIRS; do
+ locald=${d##*/}
+ newd=$CHARMM_STRING_DIR/$locald
+ echo $BREAK
+ echo $OUT Creating directory \"$newd\"
+ mkdir -p $newd
+# copy files
+ for f in `ls $d/*ftn`; do
+  newf=${f##*/}
+  echo "$OUT Copying $f ===> $newd/$newf"
+  cp $f $newd/$newf
+ done
+# copy def files, if any
+ for f in `ls $d/*def* 2> /dev/null`; do
+  newf=${f##*/}
+  echo "$OUT Copying $f ===> $newd/$newf"
+  cp $f $newd/$newf
+ done
+# copy Makefile
+ oldm=$d/Makefile
+ newm=$newd/Makefile
+ echo -n > $newm
+ echo "$OUT Writing $newm"
+ echo -n > $newm
+ echo "# THIS MAKEFILE IS GENERATED AUTOMATICALLY FROM A MASTER SOURCE CODE TREE" >> $newm
+ echo "ROOT=.." >> $newm
+ echo "COMMON=\$(ROOT)/scommon" >> $newm
+ n1=`grep "OBJ" $oldm -n |head -n1`
+ n1=${n1%:*} ;# first line
+ n2=`grep "NAME=" $oldm -n |head -n1`
+ n2=${n2%:*} ;# second line
+ dn=$(($n2-$n1))
+ tail -n +$n1 $oldm | head -n $dn >> $newm
+ grep "LOCAL[^\+]*=" $oldm >> $newm
+ echo "CHARMM_SOURCES=\$(OBJS:%.o=%.src)" >> $newm
+ grep "^include.*ROOT*" $oldm >> $newm
+ echo "#### RULES:####" >> $newm
+  echo "charmm : \$(CHARMM_SOURCES)" >> $newm
+# add rules from makefile
+ get_rules_from_makefile ".src:" $oldm >> $newm
+ get_rules_from_makefile ".tmp:" $oldm >> $newm
+ echo "clean ::" >> $newm
+ echo "	rm -f \$(CHARMM_SOURCES) *tmp" >> $newm
+done
+# remove some files that were copied unnecessarily (done automatically above)
+# rename string to string_common
+stringdir=$CHARMM_STRING_DIR/scommon
+rm -rf $stringdir
+mv -f $CHARMM_STRING_DIR/string $stringdir
+#
+for f in $RM_NONCH_FILES; do
+ fname=$CHARMM_STRING_DIR/$f
+ echo   "Removing unnecessary file "$fname
+ rm -f $fname
+done
+# create $(ROOT)/Makefile.inc
+oldm=Makefile.inc
+newd=$CHARMM_STRING_DIR
+newm=$newd/Makefile.inc
+echo "SHELL=/bin/sh" > $newm
+grep "GLOBALMACROS[^\+]*=" $oldm >> $newm
+grep "^MSG=" $oldm >> $newm
+grep "CHMSG=" $oldm >> $newm
+grep "FPP=" $oldm >> $newm
+grep "FPPFLAGS.*=" $oldm >> $newm
+echo "#### RULES:####" >> $newm
+get_rules_from_makefile ".src:" $oldm >> $newm
+# copy aux. files to main source directory
+cp -L source.defs charmm.msg mpitype.def prefx2cpp $newd/
+#
+# now create root Makefile
+newm=$newd/Makefile
+dirs="";
+for d in $CHARMM_DIRS; do
+ locald=${d##*/}
+ dirs=$dirs" "$locald
+done
+dirs=`echo $dirs | sed -e "s/string/${stringdir##*/}/"` ; # replace string by scommon
+echo "SUBDIRS="$dirs > $newm
+echo "CHARMM_DIR=." >> $newm
+echo "PREFLX2CPP=$PREFLX2CPP" >> $newm
+get_rules_from_makefile "charmm:" string/Makefile | sed 's/charmm:/charmm::/'>> $newm ;# this rule fits our need
+echo "
+ifeq (\$(PREFLX2CPP),1)
+charmm::
+	/bin/sh -c 'for file in \`ls *.src 2>/dev/null\`; do  ./prefx2cpp \$\$file >_tmp ; cat _tmp > \$\$file; done ; rm -f _tmp'
+endif
+" >> $newm
+get_rules_from_makefile "clean:" string/Makefile >> $newm
+
+
+#
+### end of generic processing
+### now additio
+

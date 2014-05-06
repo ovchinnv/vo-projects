@@ -6,9 +6,10 @@ COMMON=..
 DEPS=constants bestfit output vectors dynamol multicom parser lu
 INCLUDES= -I $(COMMON)
 
-LOCALMACROS=-include source.defs -include ../source.defs -include $(ROOT)/dmol.defs
-LOCALDEPS=source.defs ../source.defs $(ROOT)/dmol.defs ftsm_load_fcor.def ftsm_load_ocor.def
-
+LOCALMACROS=-include source.defs -include $(COMMON)/source.defs 
+LOCALMACROS+=-include $(ROOT)/dmol.defs
+LOCALDEPS=source.defs $(ROOT)/mpitype.def $(COMMON)/source.defs ftsm_load_fcor.def ftsm_load_ocor.def
+LOCALDEPS+= $(ROOT)/dmol.defs 
 include $(ROOT)/Makefile.inc
 include $(COMMON)/Makefile.inc
 
