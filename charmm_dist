@@ -6,7 +6,7 @@
 # the keyword STRINGM must be added to the parameter line to install.com
 #
 CHARMM_VERSION=39a2
-PREFLX2CPP=0 ; # indicate whether to replace charmm preflx macros with CPP macros
+PREFLX2CPP=1 ; # indicate whether to replace charmm preflx macros with CPP macros
 CHARMM_DISTRIB_DIR="c"$CHARMM_VERSION
 CHARMM_SOURCE_DIR=$CHARMM_DISTRIB_DIR"/source"
 CHARMM_STRING_DIR=$CHARMM_SOURCE_DIR"/stringm"
@@ -94,13 +94,14 @@ mv -f $CHARMM_STRING_DIR/string $stringdir
 #
 for f in $RM_NONCH_FILES; do
  fname=$CHARMM_STRING_DIR/$f
- echo   "Removing unnecessary file "$fname
+ echo "$OUT Removing unnecessary file "$fname
  rm -f $fname
 done
 # create $(ROOT)/Makefile.inc
 oldm=Makefile.inc
 newd=$CHARMM_STRING_DIR
 newm=$newd/Makefile.inc
+ echo "$OUT Writing $newm"
 echo "SHELL=/bin/sh" > $newm
 grep "GLOBALMACROS[^\+]*=" $oldm >> $newm
 grep "^MSG=" $oldm >> $newm
@@ -110,10 +111,13 @@ grep "FPPFLAGS.*=" $oldm >> $newm
 echo "#### RULES:####" >> $newm
 get_rules_from_makefile ".src:" $oldm >> $newm
 # copy aux. files to main source directory
-cp -L source.defs charmm.msg mpitype.def prefx2cpp $newd/
+files="source.defs charmm.msg mpitype.def prefx2cpp"
+echo $OUT" Copying auxiliary files "$files" to "$newd
+cp -L $files $newd/
 #
 # now create root Makefile
 newm=$newd/Makefile
+ echo "$OUT Writing $newm"
 dirs="";
 for d in $CHARMM_DIRS; do
  locald=${d##*/}
@@ -122,18 +126,67 @@ done
 dirs=`echo $dirs | sed -e "s/string/${stringdir##*/}/"` ; # replace string by scommon
 echo "SUBDIRS="$dirs > $newm
 echo "CHARMM_DIR=." >> $newm
-echo "PREFLX2CPP=$PREFLX2CPP" >> $newm
-get_rules_from_makefile "charmm:" string/Makefile | sed 's/charmm:/charmm::/'>> $newm ;# this rule fits our need
-echo "
-ifeq (\$(PREFLX2CPP),1)
-charmm::
-	/bin/sh -c 'for file in \`ls *.src 2>/dev/null\`; do  ./prefx2cpp \$\$file >_tmp ; cat _tmp > \$\$file; done ; rm -f _tmp'
-endif
-" >> $newm
-get_rules_from_makefile "clean:" string/Makefile >> $newm
-
-
+if [ $PREFLX2CPP -gt "0" ]; then
+ echo "PREFLX2CPP=./prefx2cpp" >> $newm
+else
+ echo "PREFLX2CPP=cat" >> $newm
+fi
 #
-### end of generic processing
-### now additio
+get_rules_from_makefile "charmm:" string/Makefile | sed 's/charmm:/charmm::/'>> $newm ;# this rule fits our need
+# add additional rules for CHARMM source code
+echo "
+charmm::
+	/bin/sh -c 'for file in \`ls *.src 2>/dev/null\`;\\
+	do \\
+	flag=\`grep -i \"! automatically protect all code\" \$\$file\`;\\
+	if [ -z \"\$\$flag\" ];then \\
+	echo \"##IF STRINGM ! automatically protect all code\" > _tmp;\\
+	cat \$\$file >>_tmp;\\
+	echo \"##ENDIF ! automatically protect all code\" >> _tmp;\\
+	\$(PREFLX2CPP) _tmp > \$\$file;\\
+	rm -f _tmp __tmp;\\
+	fi;\\
+	done ;'\\
+" >> $newm
 
+#endif
+#ifeq (\$(PREFLX2CPP),1)
+#	/bin/sh -c 'for file in \`ls *.src 2>/dev/null\`; do  ./prefx2cpp \$\$file >_tmp ; cat _tmp > \$\$file; done ; rm -f _tmp'
+#
+
+get_rules_from_makefile "clean:" string/Makefile >> $newm
+#
+# add an INSTALL
+#
+readme=$newd"/INSTALL"
+echo "$OUT Writing file $readme"
+echo -n > $readme
+date >> $readme
+echo $BREAK>> $readme
+echo "\
+This directory contains the necessary source code to compile the string
+method with CHARMM. This distribution targets CHARMM version
+c$CHARMM_VERSION, but may work with other versions that are not \`too
+different' (e.g. the same major version but different minor version). To
+compile, follow the steps below: 
+
+1) Copy the present directory tree into the CHARMM source tree, possibly
+replacing the existing \`stringm' directory. (The string documentation
+will be placed in doc/stringm.doc, and the test cases, in test/c$CHARMM_VERSION ) 
+
+2) In the stringm directory, type 'make'. This will
+generate CHARMM-compatible source code files (*.src extension)
+
+3) Patch the source code by executing the shell script \`patch_${CHARMM_VERSION}'.
+
+CHARMM can now be compiled as usual, including the additional keyword
+'STRINGM' passed to the installation script install.com. Make certain
+that the install.com executes \`setmk.com', which is required to
+generate the  correct dependencies between source code files (this is
+typically the default behavior in CHARMM). Note, also, that the string
+method uses a special communication scheme, which needs to be invoked at
+runtime using the flag '-stringm' (e.g. mpirun charmm
+-stringm <simulation parameters>)"\
+\
+>> $readme
+echo $BREAK>> $readme
