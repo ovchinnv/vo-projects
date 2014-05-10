@@ -59,8 +59,11 @@ __CHARMM_ONLY##IF MULTICOM
 #ifndef __CHARMM
       public  multicom_done
 #endif
+      public  multicom_safe_reset ! set some communicators to safe values
       private multicom_barrier ! call MPI_BARRIER on any of the known communicators
+#ifdef __STRINGM
       public  multicom_permute_string_ranks
+#endif
 !
       contains
 #ifndef __CHARMM
@@ -552,9 +555,9 @@ __CHARMM_ONLY##IF MULTICOM
        endif
 !
 !     reset communicators 
-#ifdef __CHARMM
-       call parcomm_reset() ! MPI_COMMs correct, but numnod is not updated
-#endif // __CHARMM
+!#ifdef __CHARMM
+       call multicom_safe_reset()
+!#endif // __CHARMM
        call multicom_parinit()
 !
        multicom_initialized=.false.
@@ -905,7 +908,7 @@ __CHARMM_ONLY##IF MULTICOM
        endif ! .not.found
 !
        end subroutine multicom_set
-!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!====================================================================
 #ifdef __STRINGM
 __CHARMM_ONLY##IF STRINGM
        subroutine multicom_permute_string_ranks(ranks)
@@ -1016,9 +1019,47 @@ __CHARMM_ONLY##IF STRINGM
 !
        end subroutine multicom_permute_string_ranks
 __CHARMM_ONLY##ENDIF
+#endif // __STRINGM
+!====================================================================
+       subroutine multicom_safe_reset()
+       use multicom_aux
+       __DEP_MPI
+!      guess reset failsafe communicator values ; called after multicom_cleanup
+!      to avoid problems if multicom finalized in the middle of a program
+#ifdef __BASIC
+       MPI_COMM_LOCAL=MPI_COMM_GLOBAL
+       SIZE_LOCAL=SIZE_GLOBAL
+       ME_LOCAL=ME_GLOBAL
+!
+! reset parser communicator to global
+       MPI_COMM_PARSER=MPI_COMM_GLOBAL
+       SIZE_PARSER=SIZE_GLOBAL
+       ME_PARSER=ME_GLOBAL
+!
+#define __RESET(__COMM) MPI_COMM_ ## __COMM =MPI_COMM_NULL; ME_ ## __COMM=MPI_UNDEFINED; SIZE_ ## __COMM=1;
+!
+!  Other communicators
+#ifdef __ENSEMBLE
+  __RESET(ENSBL) !__CHARMM_ONLY##ENSEMBLE
 #endif
-!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+#ifdef __STRINGM
+  __RESET(STRNG) !__CHARMM_ONLY##STRINGM
 #endif
+#ifdef __DMOL
+  __RESET(DMOL)
+#endif
+#ifdef __CHES
+  __RESET(CHES)
+#endif
+#ifdef __EDDIE
+  __RESET(EDDIE)
+#endif
+#endif // __BASIC
+! add lines as new communicator names are defined
+!
+       end subroutine multicom_safe_reset
+!====================================================================
+#endif // __PARALLEL || __CHARMM
       end module multicom
-!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!====================================================================
 __CHARMM_ONLY##ENDIF

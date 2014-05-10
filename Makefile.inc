@@ -87,6 +87,7 @@ DEPS+=$(addprefix $(NAME)/,$(SUBDIRS))
 
 SOURCES=$(OBJS:%.o=%.F90)
 CHARMM_SOURCES=$(OBJS:%.o=%.src)
+CHARMM_MAJOR_VERSION=37
 
 VPATH=$(ROOT) #this is necessary to prevent recompilation under %.stamp rule
 
@@ -140,7 +141,7 @@ $(ROOT)/$(NAME).stamp:: $(OBJS) $(DISTRIB)
 %.F90:%.ftn $(LOCALDEPS) $(GLOBALDEPS)
 	$(FPP) $(FPPFLAGS) $(DEFS) -U__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(MSG) $(INCLUDES) -P $< > $@
 %.src:%.ftn $(LOCALDEPS) $(GLOBALDEPS) $(ROOT)/charmm.msg
-	$(FPP) $(FPPFLAGS)         -D__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(CHMSG) -P $< > $@
+	$(FPP) $(FPPFLAGS)         -D__CHARMM -D__CHARMM_VER=$(CHARMM_MAJOR_VERSION) $(GLOBALMACROS) $(LOCALMACROS) $(CHMSG) -P $< > $@
 ########################## TEST PROGRAM ######################
 test.F90:test.ftn $(LOCALDEPS) $(GLOBALDEPS) $(ROOT)/test.msg
 	$(FPP) $(FPPFLAGS) $(DEFS) -U__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(TESTMSG) $(DEBUG) -P $< > $@
