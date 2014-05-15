@@ -1,0 +1,327 @@
+!
+#if (defined(__CHARMM) || defined(__PARALLEL) )
+__CHARMM_ONLY##IF STRINGM
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      SUBROUTINE sm_main(COMLYN,COMLEN)
+      __DEP_PARSER
+      use sm0k, only: sm0k_main
+      use ftsm, only: ftsm_parse
+      __IMPNONE
+!-----------------------------------------------
+! calls string method parsers
+!-----------------------------------------------
+      character(len=*) :: comlyn
+      int :: comlen
+!
+! local variables
+!
+      character(len=8) :: keyword
+ __DECLARE_MSGBUF
+!
+      __IAM(SM_MAIN)
+!
+      keyword=__NEXTA(comlyn,comlen)
+!     there are two parsers, 0K , CV , and FTSM
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      if (__STRNCMP(keyword,'ZERO',4)) then
+        call sm0k_main(comlyn, comlen) ! SM0K parser
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      elseif (__STRNCMP(keyword,'SM0K',4)) then
+        call sm0k_main(comlyn, comlen) ! SM0K parser
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      elseif (__STRNCMP(keyword,'COLV',4)) then
+        call smcv(comlyn, comlen) ! SMCV parser
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      elseif (__STRNCMP(keyword,'FTSM',4)) then
+        call ftsm_parse(comlyn, comlen) ! FTSM parser
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      elseif (__STRNCMP(keyword,'OPEN',4)) then
+        call sm_open(comlyn, comlen, .true.)    ! open a file on each replica
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      elseif (__STRNCMP(keyword,'CLOS',4)) then
+        call sm_close(comlyn, comlen)        ! close a file on each replica
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      else
+            __WARN(whoami,'UNRECOGNIZED SUBCOMMAND: ',keyword)
+      endif
+!
+      end subroutine sm_main
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       SUBROUTINE SM_OPEN(COMLYN,COMLEN, loud)
+!-----------------------------------------------------------------------
+! Opens 1 file per replica process
+!-----------------------------------------------------------------------
+! much of this code is duplicated from the main charmm open routine (vopen)
+       use sm_var, only: smcv_initialized
+       use sm0k, only: sm0k_initialized
+       use ftsm_var, only: ftsm_initialized
+!
+       __DEPMOD
+       __DEP_MPI
+       __DEP_MULTICOM
+!
+       __IMPNONE
+!
+       character(len=*) :: COMLYN
+       int :: comlen
+#ifdef __CHARMM
+!********************** CHARMM *************************************************
+       integer MXFILE, MXPREF, MXSUFF
+       integer FLEN, L, UNUM, UNUM2, I
+       LOGICAL ERR, QOPEN, QFORM, QWRITE, QENS
+!
+##IF UNIX OS2
+       PARAMETER (MXFILE=128)
+##ELSE
+       PARAMETER (MXFILE=256)
+##ENDIF
+       integer FMLEN, IPT, STSLEN, FACCL
+       PARAMETER (FMLEN=11,STSLEN=8,FACCL=7)
+       CHARACTER*(MXFILE) FILEX, JUNKNM, FNAM2
+       CHARACTER*(FMLEN) FORMT
+       CHARACTER*(STSLEN) FSTAT
+       CHARACTER*(FACCL) FACC
+!
+       integer :: oldiol
+!********************** END CHARMM *********************************************
+#else
+       character(len=132) :: filex, formt, facc
+       int :: unum, flen
+#endif
+!
+       bool :: loud
+       int :: ierror
+       __IAM(SM_OPEN)
+__CHARMM_ONLY __DECL_MSGBUF
+!
+       if (.not.(smcv_initialized                                       &
+     &       .or.sm0k_initialized                                       &
+     &       .or.ftsm_initialized)) then
+        if (ME_GLOBAL.eq.0) &
+        __WRN(whoami,' STRING METHOD NOT INITIALIZED. NOTHING DONE.')
+        return
+       endif
+!
+       if (ME_STRNG.ne.MPI_UNDEFINED) then ! only roots work
+! unum
+        UNUM=__GET_RM_I(COMLYN,COMLEN,'UNIT',-1)
+        IF (UNUM.LT.0) THEN
+         __WRN(whoami,' NO UNIT NUMBER SPECIFIED')
+#ifdef __CHARMM
+         return
+        elseif (unum.gt.size(ifreeu)) then
+         __WARN(whoami,' MAXIMUM UNIT NUMBER IS LIMITED TO SIZE(IFREEU)=',itoa(size(ifreeu)),'. ABORT.')
+         return
+#endif
+        ENDIF
+! filename
+        __GET_RM_A(COMLYN, COMLEN, 'NAME', 4, FILEX, MXFILE, FLEN)
+        IF (FLEN.LE.0) THEN
+         __WRN(whoami, 'NO FILE NAME GIVEN')
+         return
+        ENDIF
+#ifdef __CHARMM
+!********************** CHARMM *************************************************
+! remove quotes
+        IPT=0
+        DO I=1,FLEN
+          IF(FILEX(I:I).NE.'"') THEN
+             IPT=IPT+1
+             FILEX(IPT:IPT)=FILEX(I:I)
+          ENDIF
+        ENDDO
+        FILEX = FILEX(1:IPT)
+        FLEN=IPT
+!
+        IF(LOWER) CALL CNVTLC(FILEX,FLEN)
+!
+        fnam2=filex
+        call expnam(filex, flen, err)
+!      modify iolev so that vinquire works
+        oldiol=iolev
+        iolev=1 
+!
+!     unit already open?
+        CALL VINQRE('UNIT',JUNKNM,MXFILE,I,QOPEN,QFORM,QWRITE,UNUM)
+        IF (QOPEN) THEN
+         IF(WRNLEV.GE.2.AND.IOLEV.GT.0.and.loud) WRITE(OUTU,'(2A)')     &
+     &        whoami//' Unit already open.',                            &
+     &        ' The old file will be closed first.'
+         CLOSE(UNIT=UNUM)
+         IFREEU(UNUM) = 0
+        ENDIF
+!     file already in use
+        CALL VINQRE('FILE',FILEX,I,I,QOPEN,QFORM,QWRITE,UNUM2)
+        IF (QOPEN) THEN
+         IF(WRNLEV.GE.2.AND.IOLEV.GT.0.and.loud) WRITE(OUTU,'(A,/,2A)') &
+     &    whoami//' ***** WARNING ***** another unit is already ',      &
+     &    '         assigned to the file -',                            &
+     &    ' it will be disconnected first.'
+         CLOSE(UNIT=UNUM2)
+         IFREEU(UNUM2) = 0
+        ENDIF
+!
+!********************** END CHARMM *************************************************
+#endif
+! format
+        IF (__INDX_RM(COMLYN,COMLEN,'UNFO').GT.0) THEN
+         FORMT='UNFORMATTED'
+        ELSE IF (__INDX_RM(COMLYN,COMLEN,'FILE').GT.0) THEN
+         FORMT='UNFORMATTED'
+        ELSE IF (__INDX_RM(COMLYN,COMLEN,'FORM').GT.0) THEN
+         FORMT='FORMATTED'
+        ELSE IF (__INDX_RM(COMLYN,COMLEN,'CARD').GT.0) THEN
+         FORMT='FORMATTED'
+        ELSE
+ __WRN(whoami,'NO FORMAT SPECIFIED, WILL USE "UNFORMATTED"')
+         FORMT='UNFORMATTED'
+        ENDIF
+!
+#ifdef __CHARMM
+!************************** CHARMM *************************************************
+! status
+        CALL GTRMWA(COMLYN, COMLEN, 'STAT', 4, FSTAT, STSLEN, L)
+        IF (L.LE.0) THEN
+            FSTAT = 'UNKNOWN'
+        ENDIF
+!********************** END CHARMM *************************************************
+#endif
+! access
+        IF (__INDX_RM(COMLYN,COMLEN,'APPE').GT.0) THEN
+         FACC='APPEND'
+        ELSE IF (__INDX_RM(COMLYN,COMLEN,'READ').GT.0) THEN
+         FACC='READ'
+        ELSE IF (__INDX_RM(COMLYN,COMLEN,'WRIT').GT.0) THEN
+         FACC='WRITE'
+        ELSE
+          FACC='READ'
+        ENDIF
+#ifdef __CHARMM
+!************************** CHARMM *************************************************
+        flen=mxfile
+        call trima(fnam2,flen)
+        if (loud) then
+         do i=1, SIZE_STRNG
+          if (i-1.eq.ME_STRNG) then
+          WRITE (outu, '(2A,I3,3A,I3,4A)') whoami,' REPLICA: ',ME_STRNG,&
+     &  ', FILE: ',fnam2(1:FLEN),', UNIT: ',UNUM,', FORMAT: ',FORMT,    &
+     &  ', ACCESS: ', FACC
+          endif
+         enddo
+        endif ! loud
+!          if (MPI_COMM_STRNG.ne.MPI_COMM_NULL)       !__CHARMM_ONLY##MPI
+!     &     call MPI_BARRIER(MPI_COMM_STRNG, IERROR)  !__CHARMM_ONLY##MPI
+! open it
+        IF (FACC.EQ.'APPEND') THEN
+         OPEN(UNIT=UNUM,FILE=FILEX,FORM=FORMT,STATUS='OLD',             &
+     &     ACCESS='SEQUENTIAL')
+        ELSE IF (FACC.EQ.'READ') THEN
+         OPEN(UNIT=UNUM,FILE=FILEX,FORM=FORMT,STATUS='OLD',             &
+     &    ACCESS='SEQUENTIAL')
+        ELSE IF (FACC.EQ.'WRITE') THEN
+         OPEN(UNIT=UNUM,FILE=FILEX,FORM=FORMT,STATUS='UNKNOWN',         &
+     &    ACCESS='SEQUENTIAL')
+        END IF
+! update ifreeu array
+!
+        INQUIRE(FILE=FILEX,OPENED=QOPEN,NUMBER=UNUM)
+        IF (.NOT. QOPEN) THEN
+          CALL WRNDIE(0, whoami, 'Could not open file')
+        ELSE
+!
+!     put appropriate code in IFREEU array to play nicely
+!     with rest of charmm; use +/8, 80
+!        +80 string read formatted
+!        +10 read formatted
+!        +8  string write/append formatted
+!        +1  write/append formatted
+!        -1  write/append unformatted
+!        -8  string write/append unformatted
+!        -10 read unformatted
+!        -80 string read unformatted
+!       i.e. ifreeu(unum)%8 tells whether we have a string file
+         IF (FORMT.EQ.'FORMATTED') THEN
+           IFREEU(UNUM)=8
+         ELSE
+           IFREEU(UNUM)=-8
+         ENDIF
+         IF (FACC.EQ.'READ') IFREEU(UNUM)=IFREEU(UNUM)*10
+        ENDIF
+! restore iolev
+        iolev=oldiol
+       endif ! ME_STRNG undefined
+!     propagate changes to slaves
+!
+       call PSNDC(COMLYN,1) ! updated command line (since slaves did not read)
+       call PSND4(COMLEN,1) !##.not.INTEGER8
+       call PSND8(COMLEN,1) !##INTEGER8
+!       call PSND4(IFREE(UNUM),1) ! slaves should know nothing about the open file
+!********************** END CHARMM *************************************************
+#else
+       call files_open(unum,filex,formt,facc)
+       __TRIMA(comlyn, comlen)
+       endif
+       __BROADCAST_LOCAL(comlyn,len(comlyn),mpichar)
+#endif
+!
+       END SUBROUTINE SM_OPEN
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       subroutine sm_close(comlyn, comlen)
+!
+       use sm_var, only: smcv_initialized
+       use sm0k, only: sm0k_initialized
+       use ftsm_var, only: ftsm_initialized
+!
+       __DEPMOD
+       __DEP_MPI
+       __DEP_MULTICOM
+!
+       implicit none
+!
+       CHARACTER(len=*) :: COMLYN
+       int :: COMLEN
+!
+       int :: UNUM
+!
+       __IAM(SM_CLOSE)
+!
+       if (.not.(smcv_initialized                                       &
+     &       .or.sm0k_initialized                                       &
+     &       .or.ftsm_initialized)) then
+        if (ME_GLOBAL.eq.0) &
+        __WRN(whoami,' STRING METHOD NOT INITIALIZED. NOTHING DONE.')
+        return
+       endif
+!
+       UNUM=__GET_RM_I(COMLYN,COMLEN,'UNIT',-1)
+!
+       if(ME_STRNG.ne.MPI_UNDEFINED) then ! only ensemble heads work
+!
+#ifdef __CHARMM
+!**********************************************
+!       if ((MOD(IFREEU(UNUM),8).EQ.0).AND.
+        if (IFREEU(UNUM).NE.0) THEN
+         CLOSE(UNIT=UNUM)
+         IFREEU(UNUM) = 0
+        endif
+!**********************************************
+#else
+        call files_close(unum)
+#endif
+       endif
+!
+       end subroutine sm_close
+!**********************************************************************
+#ifdef __CHARMM
+__CHARMM_ONLY##ELSE ! string not compiled
+      subroutine sm_main(COMLYN,COMLEN)
+!----------------------------------------------------------------------
+      use stream
+      implicit none
+      CHARACTER*(*) COMLYN
+      integer :: COMLEN
+      WRITE(OUTU,'(A)') 'STRING METHOD NOT COMPILED'
+      end subroutine sm_main
+#endif
+__CHARMM_ONLY##ENDIF
+#endif

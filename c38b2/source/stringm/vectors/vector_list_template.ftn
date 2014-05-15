@@ -1,0 +1,217 @@
+#define __CONCAT(__A,__B) __CONCAT1(__A,__B)
+#define __CONCAT1(__A,__B) __A##__B
+#define __MODNAME  __CONCAT(__DATANAME,vector)
+#define __TNAME    __CONCAT(__TYPENAME,_vector)
+#define __MODLNAME __CONCAT(__MODNAME,_list)
+#define __TLNAME   __CONCAT(__TYPENAME,_vlist)
+!
+      module __MODLNAME
+      use __MODNAME
+      __CHARMM_ONLY __DEP_KINDS
+      implicit none
+!
+      type __TLNAME
+       int, dimension(:), pointer :: i            ! int label
+       type (__TNAME), dimension(:), pointer :: v  ! list of vectors
+       int :: length ! length of the vector
+       int :: last ! index of last element
+       bool :: initialized=.false. ! has the vector been initialized
+#ifndef __CHARMM
+#if !(defined(__pathf90) || defined(__pathf77) || defined(__pathf95) || defined (__g95))
+      contains
+       procedure :: init   => __CONCAT(__TLNAME,_init)
+       procedure :: done   => __CONCAT(__TLNAME,_done)
+       procedure :: add    => __CONCAT(__TLNAME,_uadd)
+       procedure :: uadd   => __CONCAT(__TLNAME,_uaddu)
+       procedure :: delete => __CONCAT(__TLNAME,_delete)
+       procedure :: getind => __CONCAT(__TLNAME,_getind)
+       procedure :: data   => __CONCAT(__TLNAME,_get)
+#define __TYPE class
+#else
+#define __TYPE type
+#endif
+#else
+#define __TYPE type
+#endif
+      end type __TLNAME
+!
+      private __CONCAT(__TLNAME,_expand)
+      int, parameter, private :: expand_incr=20
+!
+      contains
+
+       subroutine __CONCAT(__TLNAME,_init( vl, length ))
+       int, optional :: length
+       int :: i, llength
+       __TYPE (__TLNAME) :: vl
+       if (vl%initialized) return ! do not reinitialize
+       if (present(length)) then  ; llength=length; 
+       else ; llength=expand_incr ; endif
+       allocate(vl%v(llength))
+       allocate(vl%i(llength))
+       vl%length=llength
+       vl%last=0
+! allocate new vectors and point to them
+       do i=1,vl%length ; call __CONCAT(__TNAME,_init(vl%v(i))) ; enddo
+       vl%i=0
+       vl%initialized=.true.
+       end subroutine __CONCAT(__TLNAME,_init)
+!
+       subroutine __CONCAT(__TLNAME,_reinit( vl, length ))
+       int, optional :: length
+       __TYPE (__TLNAME) :: vl
+       if (vl%initialized) call __CONCAT(__TLNAME,_done(vl))
+       if (present(length)) then ; call __CONCAT(__TLNAME,_init(vl, length)) ; else ; call __CONCAT(__TLNAME,_init(vl)) ; endif
+       end subroutine __CONCAT(__TLNAME,_reinit)
+!
+       subroutine __CONCAT(__TLNAME,_done( vl ))
+       int :: i
+       __TYPE (__TLNAME) :: vl
+       if (.not.vl%initialized) return ! do nothing if list not initialized
+       if (associated(vl%v)) then
+        do i=1,vl%length ; call __CONCAT(__TNAME,_done(vl%v(i))) ; enddo
+        deallocate(vl%v)
+        vl%length=0
+        vl%last=0
+       endif
+       if (associated(vl%i)) deallocate(vl%i)
+       vl%initialized=.false.
+       end subroutine __CONCAT(__TLNAME,_done)
+!
+       subroutine __CONCAT(__TLNAME,_expand( vl ))
+       __TYPE (__TLNAME) :: vl
+       int :: newlength, i
+!
+       type (__TLNAME) :: wl ! temporary list
+!
+       if (.not.vl%initialized) then
+        call __CONCAT(__TLNAME,_init(vl))
+       else
+        newlength=vl%length+expand_incr
+!
+        call __CONCAT(__TLNAME,_init(wl,newlength)) ! initialize a new list with larger size
+!
+        wl%i(1:vl%length)=vl%i     ! copy old labels
+        wl%v(1:vl%length)=vl%v     ! copy old pointers
+        deallocate(vl%i)           ! delete old labels
+        deallocate(vl%v)           ! delete old pointers
+!
+        do i=vl%length+1,newlength;call __CONCAT(__TNAME,_init(wl%v(i)));enddo ! allocate space for additional vectors
+        wl%last=vl%length
+!        vl=wl ! copy static data & pointers
+        vl%i=>wl%i
+        vl%v=>wl%v
+        vl%last=wl%last
+        vl%length=wl%length
+        vl%initialized=wl%initialized
+       endif
+       end subroutine __CONCAT(__TLNAME,_expand)
+!
+       function __CONCAT(__TLNAME,_add( vl, i, j )) !   add a new list labeled 'i' ; then add element 'j' to it & return index of label i
+       __TYPE (__TLNAME) :: vl
+       int :: i, k, l, __CONCAT(__TLNAME,_add)
+       __DATATYPE, optional :: j
+!
+       if (.not.vl%initialized) call __CONCAT(__TLNAME,_init(vl))
+       if (vl%last.eq.vl%length) call __CONCAT(__TLNAME,_expand(vl))
+       k=vl%last+1
+       vl%i(k)=i                                           !    new list label
+       if (present(j)) l=__CONCAT(__TNAME,_add(vl%v(k),j)) !    add element to the list
+
+       vl%last=k
+       __CONCAT(__TLNAME,_add)=k
+       end function __CONCAT(__TLNAME,_add)
+!
+       function __CONCAT(__TLNAME,_uadd( vl, i, j )) ! add a new element to the list and return the index of the list
+       __TYPE (__TLNAME) :: vl
+       int :: i, k, l, __CONCAT(__TLNAME,_uadd)
+       __DATATYPE, optional :: j
+!
+       if (.not.vl%initialized) call __CONCAT(__TLNAME,_init(vl))
+       do k=1,vl%last
+        if (vl%i(k).eq.i) then
+         __CONCAT(__TLNAME,_uadd)=k
+         if (present(j)) l=__CONCAT(__TNAME,_add(vl%v(k),j))
+         return
+        endif
+       enddo
+! if we are here, that means a matching entry was not found; we can safely call regular add (not unique)
+       if (present(j)) then
+        __CONCAT(__TLNAME,_uadd)=__CONCAT(__TLNAME,_add( vl, i, j ))
+       else
+        __CONCAT(__TLNAME,_uadd)=__CONCAT(__TLNAME,_add( vl, i ))
+       endif
+!
+       end function __CONCAT(__TLNAME,_uadd)
+!
+       function __CONCAT(__TLNAME,_uaddu( vl, i, j )) ! add a UNIQUE new element to the list and return the index of the list
+       __TYPE (__TLNAME) :: vl
+       int :: i, k, l, __CONCAT(__TLNAME,_uaddu)
+       __DATATYPE, optional :: j
+!
+       if (.not.vl%initialized) call __CONCAT(__TLNAME,_init(vl))
+       do k=1,vl%last
+        if (vl%i(k).eq.i) then
+         __CONCAT(__TLNAME,_uaddu)=k
+         if (present(j)) l=__CONCAT(__TNAME,_uadd(vl%v(k),j))
+         return
+        endif
+       enddo
+! if we are here, that means a matching entry was not found; we can safely call regular add
+       if (present(j)) then
+        __CONCAT(__TLNAME,_uaddu)=__CONCAT(__TLNAME,_add( vl, i, j ))
+       else
+        __CONCAT(__TLNAME,_uaddu)=__CONCAT(__TLNAME,_add( vl, i ))
+       endif
+!
+       end function __CONCAT(__TLNAME,_uaddu)
+!
+       function __CONCAT(__TLNAME,_get( vl, i )) result(list) ! if i is found, returns the corresponding list
+       __TYPE (__TLNAME) :: vl
+       int :: i, k
+       __DATATYPE, pointer :: list(:)
+       nullify(list)
+       do k=1,vl%last
+         if (vl%i(k).eq.i) then
+          allocate(list(vl%v(k)%last))
+          list=vl%v(k)%__DATANAME(1:vl%v(k)%last) ! note: returning copy of data because otherwise calling sub does not know the list length !
+          return
+         endif
+       enddo
+       end function __CONCAT(__TLNAME,_get)
+!
+       function __CONCAT(__TLNAME,_getind( vl,i )) result(j) ! returns j for the first "vl%i(j)=i" match
+       __TYPE (__TLNAME) :: vl
+       int :: i, j
+       j=-1
+       if (vl%initialized) then
+        do j=1,vl%last
+         if (vl%i(j).eq.i) exit
+        enddo
+        if (j.eq.vl%last) then ; if (vl%i(j).ne.i) j=-1 ; endif ! not found entry, just ran to end of loop ! 
+       endif
+       end function __CONCAT(__TLNAME,_getind)
+!
+       function __CONCAT(__TLNAME,_delete( vl,i )) ! delete list that corresponds to the tag 'i'
+       __TYPE (__TLNAME) :: vl
+       bool :: __CONCAT(__TLNAME,_delete)
+       int :: i, k, l
+       __CONCAT(__TLNAME,_delete)=.false.
+       l=vl%last
+       do k=1,l
+         if (vl%i(k).eq.i) then ! found match at index k
+          vl%i(k)=vl%i(l)       ! copy label from l into position k
+          call __CONCAT(__TNAME,_done(vl%v(k))) ! deallocate vector v(k)
+          vl%v(k)=vl%v(l)       ! copy pointer to vector v(l) into v(k)
+          vl%last=vl%last-1     ! decrement list length
+! reinitialize list at position l (the length of the list stays the same)
+          nullify(vl%v(l)%__DATANAME)
+          call __CONCAT( __TNAME,_reinit(vl%v(l))) ! need reinit because v(l)%initialized = .true. (despite nullify)
+          __CONCAT(__TLNAME,_delete)=.true.
+          exit
+         endif
+       enddo
+!
+       end function __CONCAT(__TLNAME,_delete)
+!
+      end module __MODLNAME
