@@ -32,10 +32,10 @@ __CHARMM_ONLY##IF NEWBESTFIT
        bool, private :: qdebug=__DEBUG
        bool, private :: qcheckdet=__CHKDET
        bool, private :: qdetfailtrace=__DETFAILTRACE
-       bool, private :: qiter_refine_eval=.true.
-       bool, private :: qiter_refine_evec=.true.
-!       bool, private :: qiter_refine_eval=.false.
-!       bool, private :: qiter_refine_evec=.false.
+!       bool, private :: qiter_refine_eval=.true.
+!       bool, private :: qiter_refine_evec=.true.
+       bool, private :: qiter_refine_eval=.false.
+       bool, private :: qiter_refine_evec=.false.
        bool, private :: qdiag_inverse=.true.
 !       bool, private :: qdiag_inverse=.false.
       !
@@ -240,13 +240,15 @@ __DBGCOMM        __DEBUG_OUT(*, ' Det(M) [must be >=0] : ', dummy)
        if (qiter_refine_eval) then
         do j=1,2
          d=eval(j)
-         do k=1,1
-          a=(d**3+a2*d**2+a1*d+a0)/(three*d**2+two*a2*d+a1) * errtol_ ! newton-raphson iteration
+         if ( abs(d) .gt. errtol_ ) then ! do not attempt to refine zero evals
+          do k=1,1
+           a=(d**3+a2*d**2+a1*d+a0)/(three*d**2+two*a2*d+a1) * errtol_ ! newton-raphson iteration
 !         if (abs(a).lt.errtol_) a=0.9*sign(errtol_,a) ! make sure we take a finite step
-         __DBGCOMM write(0,*) 'CHARACTERISTIC DETERMINANT:',d,a
-          d=d-a
-         enddo ! k
-         eval(j)=d
+          __DBGCOMM write(0,*) 'CHARACTERISTIC DETERMINANT:',d,a
+           d=d-a
+          enddo ! k
+          eval(j)=d
+         endif ! (abs(d)>0)
 !        stop
         enddo ! j
 !       compute last evalue from trace : 
@@ -279,23 +281,23 @@ __DBGCOMM        __DEBUG_OUT(*, ' Det(M) [must be >=0] : ', dummy)
 !          v=unit3((/(b*f-c*e)*det12, (d*c-a*f)*det12, one/))   __DBGCOMM;write(0,*) 209, det12, errtol_,&
 !                                                               __DBGCOMM unit3( (/  (b*f-c*e)*det12, (d*c-a*f)*det12, one /) )
 ! more stable & faster (?):
-          v=unit3((/(b*f-c*e), (d*c-a*f), det12/))             __DBGCOMM;write(0,*) 209, det12, det13, &
-                                                               __DBGCOMM ( (/  (b*f-c*e), (d*c-a*f), det12 /) )
+          v=unit3((/(b*f-c*e), (d*c-a*f), det12/))             __DBGCOMM;write(0,*) 209, j, det12, det13, &
+                                                               __DBGCOMM ( (/  (b*f-c*e), (d*c-a*f), det12 /) ), v
          elseif (abs(det13) .gt. errtol_) then
 !          det13=one/det13;
 !          v=unit3((/(b*i-c*h)*det13, (g*c-a*i)*det13, one/))             __DBGCOMM;write(0,*) 212, det13
-          v=unit3((/(b*i-c*h), (g*c-a*i), det13/))             __DBGCOMM;write(0,*) 212, det13
+          v=unit3((/(b*i-c*h), (g*c-a*i), det13/))             __DBGCOMM;write(0,*) 212, j, det13
          endif
         else
          ! otherwise there is a vector with z = 0 try setting x=1
 !         if     (abs(b) .gt. errtol_ .and. abs(a) .gt. errtol_ ) then; v=unit3((/one, -a/b, zero/)) __DBGCOMM;write(0,*) 216, b
 !         elseif (abs(e) .gt. errtol_ .and. abs(d) .gt. errtol_ ) then; v=unit3((/one, -d/e, zero/)) __DBGCOMM;write(0,*) 217, e
 !         elseif (abs(h) .gt. errtol_ .and. abs(g) .gt. errtol_ ) then; v=unit3((/one, -g/h, zero/)) __DBGCOMM;write(0,*) 218, h
-         if     (abs(b) .gt. errtol_  ) then; v=unit3((/one, -a/b, zero/)) __DBGCOMM;write(0,*) 216, b
-         elseif (abs(e) .gt. errtol_  ) then; v=unit3((/one, -d/e, zero/)) __DBGCOMM;write(0,*) 217, e
-         elseif (abs(h) .gt. errtol_  ) then; v=unit3((/one, -g/h, zero/)) __DBGCOMM;write(0,*) 218, h
+         if     (abs(b) .gt. errtol_  ) then; v=unit3((/one, -a/b, zero/)) __DBGCOMM;write(0,*) 216, j, b, v
+         elseif (abs(e) .gt. errtol_  ) then; v=unit3((/one, -d/e, zero/)) __DBGCOMM;write(0,*) 217, j, e, v
+         elseif (abs(h) .gt. errtol_  ) then; v=unit3((/one, -g/h, zero/)) __DBGCOMM;write(0,*) 218, j, h, v
          else ! Q=0 this should not be possible because P Q R are checked above !
-           v=(/zero, one, zero/)                                         __DBGCOMM;write(0,*) 220
+           v=(/zero, one, zero/)                                         __DBGCOMM;write(0,*) 220, j
          endif
         endif
         evec(:,j)=v
@@ -340,25 +342,28 @@ __DBGCOMM __DEBUG_OUT(*, " *EIG: ", evec(:,3))
 ! first eigenvalue/vector pair
         if (abs(eval(1)).gt.errtol_) then
          a=evec(1,1); b=evec(2,1); c=evec(3,1)
-!         dummy=one/eval(1)
+         dummy=one/eval(1)
          do j=1,1
-          d = a11*a + a12*b + a13*c; e = a21*a + a22*b + a23*c; f = a31*a + a32*b + a33*c; ! a=d*dummy ; b=e*dummy ; c=f*dummy
+          d = a11*a + a12*b + a13*c; e = a21*a + a22*b + a23*c; f = a31*a + a32*b + a33*c;  a=d*dummy ; b=e*dummy ; c=f*dummy
          enddo
-         v=unit3((/d,e,f/)) ; evec(:,1)=v ;
+         v=unit3((/a,b,c/)) ; evec(:,1)=v ;
 ! second eigenvalue/vector pair
          if (abs(eval(2)).gt.errtol_) then
           a=evec(1,1); b=evec(2,1); c=evec(3,1)
           d=evec(1,2); e=evec(2,2); f=evec(3,2)
-!          theta=one/eval(2)
+          theta=one/eval(2)
           do j=1,1
            dummy=a*d+b*e+c*f;
            d=d-dummy*a ; e=e-dummy*b ; f=f-dummy*c
-           g = a11*d + a12*e + a13*f; h = a21*d + a22*e + a23*f; i = a31*d + a32*e + a33*f; ! d=g*theta ; e=h*theta ; f=i*theta
-          enddo ; r=unit3((/g,h,i/)) ; evec(:,2)=r ;
+           g = a11*d + a12*e + a13*f; h = a21*d + a22*e + a23*f; i = a31*d + a32*e + a33*f;  d=g*theta ; e=h*theta ; f=i*theta
+          enddo ; r=unit3((/d,e,f/)) ; evec(:,2)=r ;
          endif
 ! obtain third vector using a cross product
          evec(:,3)=veccross3(evec(:,1),evec(:,2))
         endif
+__DBGCOMM if (qdebug)  __DEBUG_OUT(*, " *REF EIG: ", evec(:,1))
+__DBGCOMM if (qdebug)  __DEBUG_OUT(*, " *REF EIG: ", evec(:,2))
+__DBGCOMM if (qdebug)  __DEBUG_OUT(*, " *REF EIG: ", evec(:,3))
        endif ! qiter_refine
 !
       !
