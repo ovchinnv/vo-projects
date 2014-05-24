@@ -14,8 +14,8 @@ STRIng COLVar [INITialize [{MAXCV}]                                             
                    [ANGLE_COM [{FORCe<real>}][{<WEIGht<real>}][{GAMMa<real>}]<atom_selection><x3> ] |
                    [DIST_COM [{FORCe<real>}][{<WEIGht<real>}][{GAMMa<real>}]<atom_selection><x2> ]  |
                    [ANGLVEC [{FORCe<real>}][{<WEIGht<real>}][{GAMMa<real>}] -
-                            [P1 <atom_selection>] [P2 <atom_selection>] -
-                            [P3 <atom_selection>] [P4 <atom_selection>] -
+                            [P1 [<atom_selection> | 3<real>]] [P2 [<atom_selection> | 3<real>]] -
+                            [P3 [<atom_selection> | 3<real>]] [P4 [<atom_selection> | 3<real>]] -
                             [{FR1<int>}] [{FR2<int>}] ] |
                    [FRAME <atom_selection>] |
                    [QUATERNION [{FORCe<real>}][{<WEIGht<real>}][{GAMMa<real>}][{FRA1<int>}][{FRA2<int>}]] |
@@ -109,6 +109,71 @@ replicas, respectively.
 --------------------------------------------------------------------------
 
 [DONE] Finalize SMCV module
+--------------------------------------------------------------------------
+
+[ADD [<CV_specification>]]  Define a collective variable.  The following
+CV are supported.
+
+1)POSI_COM_X : X-component of COM of atom group
+2)POSI_COM_Y : Y-component of COM of atom group
+3)POSI_COM_Z : Z-component of COM of atom group
+4)DIST       : Distance between two COM groups 
+5)ANGL       : Angle between two COM groups 
+6)ANGLVEC    : Angle between two vectors 
+7)DIHE       : Dihedral angle between two COM groups 
+8)RMSD       : Root-mean-square distance to a reference
+               coordinate set of an atom group 
+9)DRMSD      : Difference between RMSDs to two coordinate sets
+10)PROJ      : Fraction of distance between two coordiante sets
+               (projected onto vector connecting the two sets,
+               accounting for rotation)
+
+11)QUATERNION : quaternion representation of rotation transformation
+between two frames.  When a quaternion CV is specified, four CVs will
+actually be created, corresponding to the components of the quaternion.
+
+A new coordinate reference frame can be specified on the basis of an
+atom selection using ADD FRAME <atom_selection>; the frame axes will be
+defined as the eigenvectors of the moment of intertia tensor of the
+selected coordinates.
+
+The following (optional) keywords are valid for all CV:
+
+[{FORCe<real>}] Set harmonic force constant.
+[{<WEIGht<real>}] Set CV weight in distance computation (this is akin to
+atomic mass in the case of absolute position CV.
+[{GAMMa<real>}] Set the CV friction coefficient for the evolution of the
+CV in inverse AKMA time units (see EVOL keyword for the evolution equation)
+
+NOTE: Each CV definition requires a corresponding number of atom
+selections as indicated in teh syntax section above.
+
+RMSD, DRMSD and PROJ CVs take an optional orientation set slecified by
+the keyword ORIE after the main (RMSD) selection. The MASS keyword
+causes mass-weighting to be used in the RMSD computation ans in best-fit
+superpositions.
+
+POSI_COM_[X|Y|Z] CVs take a optional frame number via `FRAMe <int>`
+(default 0 for absolute frame) in which the positions will be expressed. 
+To use a non-absolute frame, such a frame must first be defined via `ADD
+FRAMe <atom_selection>`; frame indices correspond to the order in which
+frames have been defined.
+
+The ANGLVEC CV specifies the angle between two vectors. The vectors are
+defined using four coordinate triplets.  Each coordinate triplet can be
+defined either using an atom selection or three real numbers. The first
+vector is defined by coordinates P1 and P2, and the second vector, by
+coordinates P3 and P4.  In addition, each vector can be defined in a
+different reference frame, specified optionally as `FR1<int>` and
+`FR2<int>`; the default frame is zero for each vector, which corresponds
+to the absolute coordinate frame. The angle and its derivatives are
+computed after the vectors are implicitly rotated into the same
+reference frame.
+
+The QUATERNION CV definition requires the specification of two
+coordinate frames FR1<int> and FR2<int>; the quaternion that is defined
+corresponds to the rotation of frame 2 into frame 1.  Frames must be
+different (otherwise the quaternion is the identity rotation).
 --------------------------------------------------------------------------
 
 [REPA] Call reparametriation (Repa) module.  The supported
@@ -249,20 +314,47 @@ instantaneous coordinates according to the atom selection specified in
 ADD FRAME command. Because frame vectors are defined as eigenvectors of
 moment of inertia tensors of a set of atoms, frame vectors are only
 unique up to a sign.  Considering only right-handed coordinate frames,
-there are three definitions of a frame.  To ensure that different
+there are three possible definitions of a frame.  To ensure that different
 replicas define the frame vectors consistently, the option ALIGn is
 provided. When ALIGn is present, a reference coordinate set is assumed
 to be present in the comparison set, and the frame vectors computed from
-the main coordinate set are consistent with those computed from teh
-comparison set. If the comparison set has the same structure for all
+the main coordinate set are consistent with those computed from the
+comparison set. If the comparison set has the same coordinates for all
 string replicas, this almost surely implies that the frames are also
 defined consistently between the different replicas. COMP swaps the
 roles of the main and the comparison sets.
 
-[PRINt[{ALL}] [{UNIT<int>}] [{NAME<character*>}]] |
-[READ [{ALL}] [{UNIT<int>}] [{NAME<character*>}]] |
-[LIST] |
-[ALIGn [{RMSD | VORO}]] ]                                                               |
+[PRINt[{ALL}] [{UNIT<int>}] [{NAME<character*>}]] Write frame vectors to
+file with specified name and optional unit number.  If ALL is specified,
+teh root node of each string group/image will write a separate file with
+the frame vectors corresponding to the image.  If ALL is omitted, frame
+vectors will be written for all replicas by the root node for the entire
+string.  Each line in the files consists of nine entries corresponding
+to the three frame vectors (written out columnwise).  The frame axes
+corresponding to different replicas are written on consecutive lines. 
+If more than one frame is defined, the first frame is written out as a
+block of M lines (where M is the number of replicas); for N frames,
+there will be N such consecutive blocks.
+
+[READ [{ALL}] [{UNIT<int>}] [{NAME<character*>}]] Read frame vectors to
+file with specified name and optional unit number.  File format and
+`ALL` option is as described for PRINt above.
+
+[LIST] List all defined frames and their constituent atoms.
+
+[ALIGn [{RMSD | VORO}]] Align frames along the string, making sure that
+the frames are defined consistently on different replicas.  RMSD will
+cause the code to find the frame vectors such that the (position) CV
+values computed from the coordinates are closest to the string (in the
+notation of ref. [1] ||\theta(x) - z || is minimum).  if VORO is
+specified, the code will select frame vectors such that the (position)
+CV values computed from the coordinates are closest to the string in the
+sense of the Voronoi metric,  i.e. that each instantaneous coordinate
+set is within its corresponding Voronoi cell.
+
+The ALIGn oiptions should not normally be needed if the frame vectors
+are written out and read in during successive simulation, because in
+that case there is no ambiguity in their definition.
 
 --------------------------------------------------------------------------
 [PARA [QUAT [YES|ON|TRUE|T|yes|on|true|t|NO|OFF|FALSE|F|no|off|false|f]]]
@@ -462,6 +554,35 @@ least 10% is recommended).  REXT can be increased beyond the simulation
 temperature to facilitate exchanges, but this will cause the
 thermodynamic ensemble to deviate from the Boltzmann distribution.
 
+------------------------------------------------------------------------
+[STATistics] Call statistics module. Specify statistics options when
+arguments are present. When called without arguments, an instance of
+statistics output will be written out. The SMCV STAT module has similar
+syntax to the zero-temperature (SM0K) and finite-temperature (FTSM) STAT
+modules.  The specification of keywords RMSD RMSA DELS ARCL CURV FREE
+FORC VORO VMAP VLOG REXM REXL is as described for the SM0K and FTSM STAT
+routines.  Keywords MMAT and COLV are described below.
 
+[STAT MMAT [MNAM <character*>]] Indicate that the metric tensor is to be
+output at each statistics call.  The output file with the specified name
+will contain a column of N MxM matrices where N is the number of string
+replicas and M is the number of CV.
 
+[STAT COLV [CNAM <character*> {CVAP}]] Indicate that CV values are to be
+output at each statistics iteration to the fiel with the specified name,
+appending to an existing file (e.g. from previous calculations) is CVAP
+is set.  Each line of the file corresponds to a single CV and contains N
+values for the N replicas. Successive lines correspond to different CV.
 
+------------------------------------------------------------------------
+References:
+
+[1] L. Maragliano, A. Fischer, E. Vanden-Eijnden, and G. Ciccotti, J.
+Chem.Phys. 125, 024106 (2006).
+[2] L. Maragliano and E. Vanden-Eijnden, Chem. Phys. Lett. 426, 168
+(2006).
+[3] V. Ovchinnikov, M. Karplus, and E. Vanden-Eijnden, J. Chem. Phys.
+134, 085103 (2011).
+
+If you find the CHARMM SMCV code useful in preparing a manuscript,
+please cite the implementation reference 3 above.
