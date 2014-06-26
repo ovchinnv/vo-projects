@@ -506,9 +506,9 @@ STRIng COLVar [INITialize [{MAXCV}]                                             
                              [{ITER <int>}] -
                              [{LINE | SPLI | BSPL | DST [{WNCT <real>}] | LIN2}]                            |
               [TEST [GRAD {STEP <real>} | PARA | MINV] ]                                                    |
-              [FILL {COL <int>} {COMP} ]                                                                    |
-              [SWAP <int> <int>]                                                                            |
-              [COPY <int> <int>]                                                                            |
+              [FILL {MAIN|REF|OLD} {COMP} ]                                                                 |
+              [SWAP 2x[MAIN|REF|OLD] ]                                                                      |
+              [COPY 2x[MAIN|REF|OLD] ]                                                                      |
               [PRINt[{ALL}] {UNIT <int>} {NAME <character*>} {COL}]                                         |
               [READ [{ALL | SCOL<int> TCOL<int>}] {UNIT <int>} {NAME <character*>} {COL}]                   |
               [SET  [{IND<int> | ALL }] -
@@ -555,7 +555,7 @@ STRIng COLVar [INITialize [{MAXCV}]                                             
                               [{EVOS <int>}] -
                               [{EVOStep <real>}] -
                               [{EXPO {MEMO <real>} | AVER {NAVE <int> }]]
-                       [{RSTR [REEQ <int>]}] -
+                       [{RSTR [REEQ <int>] {SMD|STEER}}] -
                        [{REX [REXF <int>] [REXT <real>]}] -
                        <regular dynamics options>]                                       |
               [STATistics[{COUNt <int>]} -
@@ -673,16 +673,24 @@ CPU is assigned to a string image. The MINV test is provided for
 cross-validation.
 --------------------------------------------------------------------------
 
-[FILL {COL<int>} {COMP} ] Calculate values of the CV from instantaneous
-coordinates and put into string column specified by COL<int>.  This is
-how an initial string is defined in the beginning of a set of
-optimizations.  Omission of COL<int> will result in the main column (#1)
-being populated.  Reference coordinates for statistics (see e.g. STAT
-RMSD) are assumed to be in column #3.  There are currently 12 CV
-coordinate sets, which are used for various parts of the SMCV
-calculations; the user should not normally need to use the columns other
-than the main and the reference. COMP specified that CHARMM comparison
-coordinates are to be used for computing CV.
+[FILL {MAIN|REF|OLD} {COMP} ] Calculate values of the CV from
+instantaneous coordinates and put into string column specified by one of
+"MAIN", "REF" or "OLD".  This is how an initial string is defined in the
+beginning of a set of optimizations.  Omission of column will result in
+the main CV coordinates being populated.  Reference coordinates for
+statistics (see e.g. STAT RMSD) are assumed to be in the reference
+column (REF). The OLD column is used internally during string evolution,
+and contains the previous CV values (i.e. those prior to the most recent
+instance of 'EVOL'); the old values are used to linearly adjust CV
+coordinates from the old values to new values to avoid numerical
+instabilities.  The user can also populate the OLD column manually, as
+can be useful in performing steered molecular dynamics (SMD).  In this
+case, 'SMD' or 'STEERED' must be included in the 'STRING COLVAR DYNA'
+command.
+
+ 
+COMP indicates that CHARMM comparison coordinates are to be used for
+computing CV.
 --------------------------------------------------------------------------
 
 [PRINt {ALL} {UNIT <int>} {NAME <character*>} {COL}] Write current CV
@@ -707,10 +715,10 @@ column); TCOL must be provided along with SCOL, and indicates the number
 of columns (string images) in the file.
 --------------------------------------------------------------------------
 
-[SWAP <int> <int>] Swap string coordinates in the specified columns.
+[SWAP 2x[MAIN|REF|OLD]] Swap string coordinates in the specified columns.
 --------------------------------------------------------------------------
 
-[COPY <int> <int>] Copy string coordinates from the first column to the
+[COPY 2x[MAIN|REF|OLD]] Copy string coordinates from the first column to the
 second column.
 --------------------------------------------------------------------------
 
@@ -963,8 +971,8 @@ MFPT between different Voronoi cells.
 
 
 [{EVOL [EVOF <int>] [{EVOS <int>}] [{EXPO {MEMO <real>}|AVER [NAVE
-<int>] {MAXAVE <int>}}]}] Specify string evolution options. EVOL turns
-on string evolution during dynamics. 
+<int>] }]}] Specify string evolution options. EVOL turns
+on string evolution during dynamics.
 
 EVOF <int> specifies the frequency at which the evolution is to be
 performed. A reasonable value for EVOF is 10, implying, essentially that
@@ -1000,24 +1008,28 @@ instantaneous CV values computed from MD coordinates, and MEMO is a
 memory parameter in the range [0, 1]. Reasonable values for MEMO are
 0.999 - 0.9999.
 
-EXPO AVER {NAVE <int>} Evolution will use simple averaging, i.e.,
-PHI(N)=AVERAGE_{i=0}^{N}(X_i).  To dampen oscillations at the beginning
+AVER {NAVE <int>} Evolution will use simple averaging, i.e.,
+PHI(N)=AVERAGE_{i=1}^{N}(X_i).  To dampen oscillations at the beginning
 of a simulation, NAVE can be used to set an artificial number of samples
 in the average. That is, the average is updated using  PHI(N+1) = ( NAVE
 * PHI(N) + X_INST ) / (NAVE++) ; therefore a high value for NAVE will
-decrease | PHI(N+1)-PHI(N) |.
+decrease | PHI(N+1)-PHI(N) |. [{REPA [REPF <int>]}] indicates that
+reparametrization is to be performed after each block of REPF<int>
+iterations. REPA options must be set prior to dynamics.
 
-[{REPA [REPF <int>]}] indicates that reparametrization is to be
-performed after each block of REPF<int> iterations. REPA options must be
-set prior to dynamics.
-
-RSTR [REEQ <int>] RSTR specifies that SMCV restraints are to be turned
-on during dynamics.  REEQ specifies the number of simulation steps
-during which the restraint potentials will switch to the EVOLved
-CV coordinates from previous CV coordinates (during each evolution,
-if EVOL EVOF<i> is set). This option prevents abrupt changes in the
+RSTR [REEQ <int>] {SMD|STEER} RSTR specifies that SMCV restraints are to
+be turned on during dynamics.  REEQ specifies the number of simulation
+steps during which the restraint potentials will switch to the EVOLved
+CV coordinates from previous CV coordinates (during each evolution, if
+EVOL EVOF<i> is set). This option prevents abrupt changes in the
 restraints which can lead to instability. Values in the range 10 -- 500
-are reasonable, depending on the system.
+are reasonable, depending on the system.  When SMD or, equivalently,
+STEER are included, the OLD CV coordinate set (which can be FILLed
+manually, as described above) is not initialized prior to launching
+dynamics.  This can be used to perform steered MD, whereby the CV values
+to which the MD replicas are restrained are computed by interpolating
+linearly between the OLD and MAIN CV sets.  The steering is performed
+over the number of iterations set by REEQ.
 
 REX [REXF <int>] [REXT <real>] Instructs the code to attempt to swap MD
 coordinates between adjacent replicas at frequency REXF <i> using
@@ -1080,12 +1092,12 @@ STRIng FTSM [INITialize]                                                        
                             [{LINE | SPLI | BSPL | DST [{WNCT <real>}] | LIN2}]         |
             [ORIE <atom selection> {MASS}]                                              |
             [TEST [GRAD {STEP <real>}|PARA]                                             |
-            [FILL {COL<int>} {COMP} ]                                                   |
+            [FILL {MAIN|REF} {COMP} ]                                                   |
             [COMM [ALLGather|HYPERcube|GATHERBroadcast]]                                |
             [PRINt [COR|DCD] {UNIT <int>} {NAME <character*>} {COL}]                    |
             [READ  [COR|DCD] {UNIT <int>} {NAME <character*>} {COL}]                    |
-            [SWAP <int> <int>]                                                          |
-            [COPY <int> <int>]                                                          |
+            [SWAP 2x[MAIN|REF]]                                                         |
+            [COPY 2x[MAIN|REF]]                                                         |
             [SET  [ORIE <atom_selection>]  | -
                   [RMSD <atom_selection>]  | -
                   [KPAR <real> {ANGStrom}] | -
@@ -1178,16 +1190,13 @@ difference interval to use with GRAD. Parallel force computation test
 will work only when more than one CPU is assigned to a string image.
 --------------------------------------------------------------------------
 
-[FILL {COL<int>} {COMP} ] Calculate values of the COM positions from
-instantaneous coordinates and put into string column specified by
-COL<int>.  This is how an initial string is defined in the beginning of
-a set of optimizations.  Omission of COL<int> will result in the main
-column (#2) being populated.  Reference coordinates for statistics (see
-e.g. STAT RMSD) are assumed to be in column #8.  There are currently 22
-coordinate sets, which are used for various parts of the FTSM
-calculations; the user should not normally need to use the columns other
-than the main and the reference. COMP specified that CHARMM comparison
-coordinates are to be used for computing COM positions.
+[FILL {MAIN|REF} {COMP} ] Calculate values of the COM positions from
+instantaneous coordinates and put into string column specified by MAIN
+or REF.  This is how an initial string is defined in the beginning of a
+set of optimizations.  Omission of column will result in the main column
+being populated.  Reference coordinates for statistics (see e.g. STAT
+RMSD) are assumed to be in column REF.  COMP specifies that CHARMM
+comparison coordinates are to be used for computing COM positions.
 --------------------------------------------------------------------------
 
 [COMM [ALLGather|HYPERcube|GATHERBroadcast]] Specify parallel
@@ -1215,10 +1224,10 @@ groups contain more than one atom, the coordinate of the COM group will
 be found as the coordinate of the first atom in the COM group.
 --------------------------------------------------------------------------
 
-[SWAP <int> <int>] Swap string coordinates in the specified columns.
+[SWAP 2x[MAIN|REF]] Swap string coordinates in the specified columns.
 --------------------------------------------------------------------------
 
-[COPY <int> <int>] Copy string coordinates from the first column to the
+[COPY 2x[MAIN|REF]] Copy string coordinates from the first column to the
 second column.
 --------------------------------------------------------------------------
 
@@ -1373,7 +1382,7 @@ orientation set is non-empty), and MEMO is a memory parameter in the
 range [0, 1]. Reasonable values for MEMO are 0.999 - 0.9999.
 
 EXPO AVER {NAVE <int>} {MAXAVE <int>} Evolution will use simple
-averaging, i.e., PHI(N)=AVERAGE_{i=0}^{N}(X_i).  To dampen oscillations
+averaging, i.e., PHI(N)=AVERAGE_{i=1}^{N}(X_i).  To dampen oscillations
 at the beginning of a simulation, NAVE can be used to set an artificial
 number of samples in the average. That is, the average is updated using 
 PHI(N+1) = ( NAVE * PHI(N) + X_INST ) / (NAVE++) ; therefore a high

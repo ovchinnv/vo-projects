@@ -23,6 +23,7 @@ __CHARMM_ONLY##IF STRINGM
       use smcv_master, only: smcv_fill, smcv_compute_wgt, smcv_add_hist,&
      &    smcv_list, smcv_compute_M, smcv_voronoi_whereami,             &
      &    smcv_test_grad_fd, smcv_test_parallel, smcv_test_Minv
+      use ftsm_var, only : ftsm_initialized
 !
       __DEP_OUTPUT
       __DEP_SIZE
@@ -138,6 +139,14 @@ __CHARMM_ONLY##IF STRINGM
         int, optional :: maxcv
        end subroutine smcv_init
 !
+       function sm_get_column(cmd_, l, qcoltag, missing) result(C)
+        __IMPNONE
+        character(len=*) :: cmd_
+        int :: l, missing
+        bool :: qcoltag
+        int :: C
+       end function sm_get_column
+!
       end interface
 !
       __IAM(SMCV)
@@ -147,6 +156,13 @@ __CHARMM_ONLY##IF STRINGM
       qroot=MPI_COMM_STRNG.ne.MPI_COMM_NULL
       qslave=((MPI_COMM_LOCAL.ne.MPI_COMM_NULL).and.SIZE_LOCAL.gt.1)
       qprint=qroot.and.ME_STRNG.eq.0
+!
+! check for ftsm initialization; quit if initialized
+!
+      if (ftsm_initialized) then
+       __WRN(whoami,' FTSM IS ON AND CANNOT BE USED WITH SMCV. NOTHING DONE.')
+       return
+      endif
 !
       if (SIZE_STRNG.gt.1) call MPI_BARRIER(MPI_COMM_STRNG,ierror)    !__CHARMM_ONLY##MPI
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -308,6 +324,10 @@ __CHARMM_ONLY##IF STRINGM
 !
        restrained_on=(__INDX_RM(comlyn,comlen, 'RSTR').gt.0)
        if (restrained_on) then
+!
+        steering_on=( (__INDX_RM(comlyn, comlen, 'SMD').gt.0) .or. (__INDX_RM(comlyn, comlen, 'STEE').gt.0) )
+        if (.not.steering_on) call cv_common_copy(main, comp)
+!
         restrained_eq_steps=__GET_RM_I(comlyn,comlen,'REEQ',0)
         restrained_eq0=0
 !       for off-path sampling
@@ -325,7 +345,6 @@ __CHARMM_ONLY##IF STRINGM
          unrestrained_on=.false.
         endif
        endif
-!
        repl_x_on=(__INDX_RM(comlyn,comlen,'REX').gt.0)
        if (repl_x_on) then
         repl_x_freq=__GET_RM_I(comlyn,comlen,'REXF',0)
@@ -389,7 +408,7 @@ __CHARMM_ONLY##IF STRINGM
             elseif (evolve_aver_on) then
                write(_MSGBUF,6710) whoami, whoami, num_ave_cv_samples ; __PRINT(_MSGBUF)
  6710 format(A,' CV EVOLUTION WILL BE OF THE FORM:',/,                  &
-     &A,' Z(N+1)=AVERAGE(THETA).  INITIAL NUMBER OF SAMPLES IS ',I5,'.')
+     &A,' Z(N+1)=AVERAGE_1^N(THETA).  INITIAL NUMBER OF SAMPLES IS ',I5,'.')
             elseif (evolve_smooth_on) then
                write(_MSGBUF,672) whoami, whoami, evolve_smooth_d ; __PRINT(_MSGBUF)
  672  format(A,' WILL EVOLVE CV BY SMOOTHING MD TRAJECTORY',/,          &
@@ -417,6 +436,18 @@ __CHARMM_ONLY##IF STRINGM
         if (restrained_on) then
             WRITE (_MSGBUF,'(2A)')                                         &
      &      whoami, ' WILL USE RESTRAINED DYNAMICS.' ; __PRINT(_MSGBUF)
+!
+            if (steering_on) then
+             write(_MSGBUF(1), '(2A)') &
+             whoami, ' WILL NOT INITIALIZE COMPARISON CV SET TO SIMULATE STEERED DYNAMICS (SMD).'
+             write(_MSGBUF(2), '(2A)') &
+             whoami, ' USER MUST INITIALIZE MAIN SET TO FINAL CV VALUES'
+             write(_MSGBUF(3), '(2A)') &
+             whoami, ' AND COMPARISON SET TO INITIAL CV VALUES'
+             write(_MSGBUF(4), '(2A,I7,A)') &
+             whoami, ' STEERING SPEED IS GOVERNED BY "REEQ"(=',restrained_eq_steps,')'
+             __PRINT(_MSGBUF)
+            endif
 !
             if (unrestrained_on) then
              WRITE (_MSGBUF,'(2A)')                                         &
@@ -488,6 +519,16 @@ __CHARMM_ONLY##IF STRINGM
         endif ! voronoi_hist_on
        endif ! root writes
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+! check cv values for NAN
+!
+       if (restrained_on) then
+        if (any(cv%r(1:cv%num_cv,main).eq.__NAN)) then
+         __WARN(whoami, 'MAIN CV SET APPEARS TO BE UNDEFINED ON GLOBAL RANK ',ME_GLOBAL,'. BEWARE.');
+        elseif (any(cv%r(1:cv%num_cv,comp).eq.__NAN)) then
+         __WARN(whoami, 'COMPARISON/OLD CV SET APPEARS TO BE UNDEFINED ON GLOBAL RANK ',ME_GLOBAL,'. BEWARE.');
+        endif
+       endif ! restrained on
+!
 !      turn on string for dynamics
        smcv_on=.true.
 #ifdef __CHARMM
@@ -965,7 +1006,7 @@ __CHARMM_ONLY##IF STRINGM
          if (qprint) then ; write(_MSGBUF,6657) whoami ; __PRINT(_MSGBUF) ; endif
  6657 format(/A,' WILL OBTAIN CV VALUES FROM COMPARISON COORDINATES.')
 !     check for column spec
-         c1=__GET_RM_I(comlyn, comlen, 'COL', -1)
+         c1=sm_get_column(comlyn, comlen, qcoltag=.true., missing=-1)
          if (c1.gt.0) then
           if (qprint) then ; write(_MSGBUF,6661) whoami, c1 ; __PRINT(_MSGBUF) ; endif
           call smcv_fill(__XCOMP,__YCOMP,__ZCOMP,__MASS,c1)
@@ -987,7 +1028,7 @@ __CHARMM_ONLY##IF STRINGM
          if (qprint) then ; write(_MSGBUF,6660) whoami ; __PRINT(_MSGBUF) ; endif
  6660 format(/A,' WILL OBTAIN CV VALUES FROM MAIN COORDINATES.')
 !     check for column spec
-         c1=__GET_RM_I(comlyn, comlen, 'COL', -1)
+         c1=sm_get_column(comlyn, comlen, qcoltag=.true., missing=-1)
          if (c1.gt.0) then
           if (qprint) then ; write(_MSGBUF,6661) whoami, c1 ; __PRINT(_MSGBUF) ; endif
  6661  format(/A,' WILL FILL COLUMN ',I3,'.')
@@ -1235,7 +1276,7 @@ __CHARMM_ONLY##IF STRINGM
         if (ifile .eq. -1) ifile=__OSTREAM ! write to output stream
 !---------------------------- assume file is open, write -------------------------
 !     check for column spec
-        c1=__GET_RM_I(comlyn, comlen, 'COL', -1)
+        c1=sm_get_column(comlyn, comlen, qcoltag=.true., missing=-1)
         if (c1.gt.0) then
          if (qprint) then ; write(_MSGBUF,6679) whoami, c1 ; __PRINT(_MSGBUF) ; endif
  6679 format(/A,' WRITING COORDINATES FROM COLUMN ',I3)
@@ -1283,7 +1324,7 @@ __CHARMM_ONLY##IF STRINGM
        __GET_RM_A(COMLYN,COMLEN,'NAME',4,FNAME,80,FLEN)
 !        note: flen will be UPPER CASE
 !     check for column spec
-       c1=__GET_RM_I(comlyn, comlen, 'COL', -1)
+       c1=sm_get_column(comlyn, comlen, qcoltag=.true., missing=-1)
        if (qroot) then
 !cccccccccccccccccccccccccccc OPEN FILE ccccccccccccccccccccccc
         if (all.gt.0.or.qprint) then
@@ -1352,16 +1393,16 @@ __CHARMM_ONLY##IF STRINGM
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       elseif (__STRNCMP(keyword,'SWAP',4)) then ! swap two columns
 !       read column spec
-        c1=__NEXTI(comlyn, comlen)
-        c2=__NEXTI(comlyn, comlen)
+        c1=sm_get_column(comlyn, comlen, qcoltag=.false., missing=-1)
+        c2=sm_get_column(comlyn, comlen, qcoltag=.false., missing=-1)
         if (qprint) then ; write(_MSGBUF,6729) whoami, c1, c2 ; __PRINT(_MSGBUF) ; endif
  6729 format(/A,' WILL SWAP COLUMNS ',I3,' AND ',I3,' ')
         call cv_common_swap(c1,c2)
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       elseif (__STRNCMP(keyword,'COPY',4)) then ! copy form c1 to c2
 !       read column spec
-        c1=__NEXTI(comlyn, comlen)
-        c2=__NEXTI(comlyn, comlen)
+        c1=sm_get_column(comlyn, comlen, qcoltag=.false., missing=-1)
+        c2=sm_get_column(comlyn, comlen, qcoltag=.false., missing=-1)
         if (qprint) then ; write(_MSGBUF,6739) whoami, c1, c2 ; __PRINT(_MSGBUF) ; endif
  6739 format(/A,' WILL COPY COLUMN ',I3,' TO ',I3,' ')
         call cv_common_copy(c1,c2)
@@ -1535,7 +1576,7 @@ __CHARMM_ONLY##IF STRINGM
            __WRN(whoami,'REPLICA NUMBER INVALID OR UNSPECIFIED.')
           else
 !    check column spec
-           c1=__GET_RM_I(comlyn, comlen, 'COL', -1)
+           c1=sm_get_column(comlyn, comlen, qcoltag=.true., missing=-1)
            if (c1.gt.0) then
             if (qprint) then 
              write(_MSGBUF,6774) whoami, irep,c1, zval
