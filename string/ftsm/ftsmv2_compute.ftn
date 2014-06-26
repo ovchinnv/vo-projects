@@ -2,6 +2,10 @@
 ! version 2, in which a different, computationally simpler method is employed
 ! for projection calculations
 !
+! curvature version (compile time)
+#define FTSM_CURV_V2
+!
+!
       module ftsmv2_compute
 !
 #if (defined(__CHARMM) || defined(__PARALLEL) )
@@ -34,7 +38,12 @@ __CHARMM_ONLY##IF STRINGM
 !
       int :: ind, i, j, k, obeg, oend, p, q, ierror
 !
-      float, dimension(3,3) :: u, um, up, du ! rotation matrices
+      float, dimension(3,3) :: u, um, up &        ! rotation matrices
+#ifndef FTSM_CURV_V2
+     & , du &
+#endif
+     & ;
+!
       float, pointer :: r_com(:)
       float :: rho, rho1, rho2, r1(3), r2(3), r3(3), d, d1, d2
       float :: omdpar
@@ -42,7 +51,12 @@ __CHARMM_ONLY##IF STRINGM
       float, pointer, dimension(:,:) :: roi,rol,ror,roc,               &
      &    rol_old,roc_old,ror_old,rol_cur,roc_cur,ror_cur
       float, pointer, dimension(:,:) :: rfi,rfl,rfr,rfc,rfi_rot,&
-     &    rfl_old,rfc_old,rfr_old,rfl_cur,rfc_cur,rfr_cur, rfl_rot, rfr_rot, drf
+     &    rfl_old,rfc_old,rfr_old,rfl_cur,rfc_cur,rfr_cur, rfl_rot, rfr_rot, &
+#ifndef FTSM_CURV_V2
+     & drf
+#else
+     & rfrot_p, rfrot_m
+#endif
       float, pointer, dimension(:,:) :: fopar, foprp, ffpar, ffprp
       float, pointer, dimension(:,:) :: ropar, roprp, rfpar, rfprp
 !
@@ -91,7 +105,12 @@ __CHARMM_ONLY##IF STRINGM
       rfl_rot=>r_f(:,:,left_rot);  rfr_rot=>r_f(:,:,right_rot);      ! used as swap arrays
       ffpar=>r_f(:,:,fpar);  ffprp=>r_f(:,:,fperp)
       rfpar=>r_f(:,:,vpar);  rfprp=>r_f(:,:,vperp)
+#ifndef FTSM_CURV_V2
       drf=>r_f(:,:,scratch); ! for curvature computation
+#else /* ver 2 */
+      rfrot_p=>r_f(:,:,scratch);
+      rfrot_m=>r_f(:,:,scratch2);
+#endif
 !
 !      load coordinates
 #define _RF rfi
@@ -182,16 +201,31 @@ __CHARMM_ONLY##IF STRINGM
        if (fe_curvature) then
          call RMSBestFit(rol,roi,ow,um)
          call RMSBestFit(ror,roi,ow,up)
+#ifndef FTSM_CURV_V2
          du=up-um
          drf=fourth*matmul(rfi,du) ! note : x 0.25 because we normalize by dpar, rather than ds (=dpar/2) in the loop below
-       else
+       else ! curvature
          drf=zero
        endif
-!
+#else
+         up=half*(up+u)
+         um=half*(um+u)
+         rfrot_p=matmul(rfi, up)
+         rfrot_m=matmul(rfi, um)
+       else ! curvature
+         rfrot_p=zero
+         rfrot_m=zero
+       endif
+#endif
        rfi_rot=matmul(rfi,u)
       else ! not qorient
        rfi_rot=>rfi
+#ifndef FTSM_CURV_V2
        drf=zero
+#else /* v2 */
+       rfrot_p=zero
+       rfrot_m=zero
+#endif
       endif ! qorient
 !
 !     compute projection (delta)
@@ -210,8 +244,13 @@ __CHARMM_ONLY##IF STRINGM
 !
                      rfpar(j,k) = d    ! displacement to first reference
                      rfprp(j,k) = d-d1 ! displacement to second reference : rfi_rot - rfr
-                     fe_curv = fe_curv + fw(j) * (  ( d1-2d0*d2 ) * (d-d2 ) & ! curvature correction (see equation 21 in ftsm paper)
+#ifndef FTSM_CURV_V2
+                     fe_curv = fe_curv + fw(j) * (  ( d1-two*d2 ) * (d-d2 ) & ! curvature correction (see equation 21, l4  in ftsm paper)
 &                                                   + d1 * drf(j,k)    )
+#else
+                     fe_curv = fe_curv + fw(j) * (  (d1-d2) * rfrot_p(j,k) - d2 * rfrot_m(j,k) &
+                                                  - (d1-two*d2) * rfc(j,k) ) ! curvature correction (see equation 21, l5 in ftsm paper)
+#endif
 !
                      rho1=rho1 + d1*d1 * fw(j) ! denominator in dpar
                      d1 = d1 * fw(j)
@@ -374,8 +413,13 @@ __CHARMM_ONLY##IF STRINGM
 !
                      rfpar(j,k) = d    ! displacement to first reference
                      rfprp(j,k) = d-d1 ! displacement to second reference : rfi_rot - rfr
-                     fe_curv = fe_curv + fw(j) * (  ( d1-2d0*d2 ) * (d-d2 ) & ! curvature correction (see equation 21 in ftsm paper)
+#ifndef FTSM_CURV_V2
+                     fe_curv = fe_curv + fw(j) * (  ( d1-two*d2 ) * (d-d2 ) & ! curvature correction (see equation 21, l4 in ftsm paper)
 &                                                   + d1 * drf(j,k)    )
+#else
+                     fe_curv = fe_curv + fw(j) * (  (d1-d2) * rfrot_p(j,k) - d2 * rfrot_m(j,k) &
+                                                  - (d1-two*d2) * rfc(j,k) ) ! curvature correction (see equation 21, l5 in ftsm paper)
+#endif
 !
                      rho =rho  + d *d1 *fw(j) ! numerator
                      rho1=rho1 + d1*d1 *fw(j) ! denominator
