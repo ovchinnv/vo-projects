@@ -169,7 +169,7 @@ __CHARMM_ONLY##ENDIF
     if (.not.initialized) call pnm_init() ! default initialization
     ! can only add a new model if the present model has at least one network !
     if ( num_enm .ge. models(num_models) ) then 
-! make sure there will be anough room to add network(s) to the model
+! make sure there will be enough room to add network(s) to the model
      if (num_enm.ge.max_num_enm) then
        __WRN(whoami,' MAXIMUM NUMBER OF ALLOWED NETWORKS EXCEEDED (REINITIALIZE).')
      else
@@ -187,7 +187,7 @@ __CHARMM_ONLY##ENDIF
    end subroutine pnm_main
 !====================================================================
    subroutine pnm_done()
-   __DEP_PARSER
+   __DEP_OUTPUT
 !====================================================================
    __IAM(PNM_DONE)
    int :: i
@@ -470,23 +470,26 @@ __CHARMM_ONLY##ENDIF
   __DEP_CONST
   __DEP_NUMBER
 !
+#if (defined(__CHARMM) || defined (__PARALLEL))
+
 #ifdef __CHARMM
 ##IF PARALLEL
   use parallel, only : numnod, mynod
 #define __NCPU numnod
 #define __ME mynod
-##ENDIF
 #elif defined(__PARALLEL)
   __DEP_MPI
   __DEP_MULTICOM
 #endif //__CHARMM
 !
-  int :: ibeg, iend
   bool :: qgrp
+__CHARMM_ONLY##ENDIF
 !
+#endif // parallel or charmm
 !     Subroutine that returns the elastic network forces of the network (INET)
   float, dimension(*) ::  X, Y, Z
   int :: inet ! network index
+  int :: ibeg, iend
   int :: i, j, ii, jj, iii, jjj
   float :: deu, dist, dref, ddx, ddy, ddz
   float :: d, kf
@@ -509,7 +512,7 @@ __CHARMM_ONLY##IF PARALLEL
   if (qgrp) then
    j=ceiling(one*enm%r0%last/__NCPU)   ! bonds / cpu
    ibeg=min(j*__ME,enm%r0%last-1) + 1 ! index of first bond for this cpu
-   iend=ibeg - 1 + max(0,min(j,enm%r0%last-j*__NCPU )) ! index of last bond for this cpu
+   iend=ibeg - 1 + max(0,min(j,enm%r0%last-j*__ME )) ! index of last bond for this cpu
   else ! not qgrp
    ibeg=1; iend=enm%r0%last
   endif ! qgrp
@@ -518,9 +521,8 @@ __CHARMM_ONLY##ELSE
 #endif
 #if (!defined(__PARALLEL) || defined(__CHARMM) )
   ibeg=1; iend=enm%r0%last
-#endif
-!
 __CHARMM_ONLY##ENDIF
+#endif
 !
   do i=ibeg, iend      ! over all bonds on this CPU
    jj=2*i; ii=jj-1 ;   ! indices into list of pairs
@@ -569,20 +571,22 @@ __CHARMM_ONLY##ENDIF
   __DEP_PARSER
 !
 #if (defined(__CHARMM) || defined(__PARALLEL))
- __CHARMM_ONLY use parallel, only : numnod, mynod, mynodp, iparpt, comm_charmm !##PARALLEL
 !
-#ifdef __PARALLEL
+#ifdef __CHARMM
+##IF PARALLEL
+  use parallel, only : numnod, mynod, mynodp, iparpt
+#elif defined(__PARALLEL)
   __DEP_MPI
   __DEP_MULTICOM
-#endif
-__CHARMM_ONLY##IF PARALLEL
-  float :: pnmeneg(num_enm) ! reduced energies
-__CHARMM_ONLY##ENDIF
 #endif
 !
   int :: afirst, alast
   bool :: qgrp
+  float :: pnmeneg(num_enm) ! reduced energies
   float, dimension(:,:), pointer :: fc    ! atomic pnm force arrays
+__CHARMM_ONLY##ENDIF
+!
+#endif
 !
   __IAM(PNM_ENE)
   float :: eu, deu ! total energy, energy from a particular PNM

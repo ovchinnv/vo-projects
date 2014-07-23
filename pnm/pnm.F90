@@ -1,6 +1,5 @@
 ! ********************************************************************************!
-! This source file was was generated automatically from a master source code tree !
-! using the GNU preprocessor. !
+! Preprocessed by GNU CPP !
 ! ********************************************************************************!
 ! Plastic Network Model.
 !
@@ -22,6 +21,7 @@ module pnm
   use constants
 !
 !
+
 
 
 
@@ -156,7 +156,7 @@ module pnm
     if (.not.initialized) call pnm_init() ! default initialization
     ! can only add a new model if the present model has at least one network !
     if ( num_enm .ge. models(num_models) ) then
-! make sure there will be anough room to add network(s) to the model
+! make sure there will be enough room to add network(s) to the model
      if (num_enm.ge.max_num_enm) then
        call warning(whoami, ' MAXIMUM NUMBER OF ALLOWED NETWORKS EXCEEDED (REINITIALIZE).', -1)
      else
@@ -174,7 +174,7 @@ module pnm
    end subroutine pnm_main
 !====================================================================
    subroutine pnm_done()
-   use cmd, only: maxlinelen; use prm, only : vartaglen; use parser
+   use output
 !====================================================================
    character(len=len("PNM_DONE") ),parameter::whoami="PNM_DONE" ! for maximum compatibility
    integer :: i
@@ -476,19 +476,10 @@ module pnm
   use constants
   use constants
 !
-
-  use mpi
-  use multicom_aux;
-
-!
-  integer :: ibeg, iend
-  logical :: qgrp
-!
-!**CHARMM_ONLY**!##ENDIF
-!
 ! Subroutine that returns the elastic network forces of the network (INET)
   real*8, dimension(*) :: X, Y, Z
   integer :: inet ! network index
+  integer :: ibeg, iend
   integer :: i, j, ii, jj, iii, jjj
   real*8 :: deu, dist, dref, ddx, ddy, ddz
   real*8 :: d, kf
@@ -504,24 +495,7 @@ module pnm
   deu=zero;
   do i=1, enm%nodes%last ; dx(i)=zero; dy(i)=zero ; dz(i)=zero; econt(i)=zero ; enddo
 !
-
-!**CHARMM_ONLY**!##IF PARALLEL
-!
-  qgrp=calc_para.and.SIZE_DMOL.gt.1
-  if (qgrp) then
-   j=ceiling(one*enm%r0%last/SIZE_DMOL) ! bonds / cpu
-   ibeg=min(j*ME_DMOL,enm%r0%last-1) + 1 ! index of first bond for this cpu
-   iend=ibeg - 1 + max(0,min(j,enm%r0%last-j*SIZE_DMOL )) ! index of last bond for this cpu
-  else ! not qgrp
-   ibeg=1; iend=enm%r0%last
-  endif ! qgrp
-!
-!**CHARMM_ONLY**!##ELSE
-
-
-
-
-!
+  ibeg=1; iend=enm%r0%last
 !**CHARMM_ONLY**!##ENDIF
 !
   do i=ibeg, iend ! over all bonds on this CPU
@@ -570,28 +544,11 @@ module pnm
   use constants
   use cmd, only: maxlinelen; use prm, only : vartaglen; use parser
 !
-
- !**CHARMM_ONLY**! use parallel, only : numnod, mynod, mynodp, iparpt, comm_charmm !##PARALLEL
-!
-
-  use mpi
-  use multicom_aux;
-
-!**CHARMM_ONLY**!##IF PARALLEL
-  real*8 :: pnmeneg(num_enm) ! reduced energies
-!**CHARMM_ONLY**!##ENDIF
-
-!
-  integer :: afirst, alast
-  logical :: qgrp
-  real*8, dimension(:,:), pointer :: fc ! atomic pnm force arrays
 !
   character(len=len("PNM_ENE") ),parameter::whoami="PNM_ENE" ! for maximum compatibility
   real*8 :: eu, deu ! total energy, energy from a particular PNM
-
   integer :: natom
   real*8, dimension(natom) :: X, Y, Z, DX, DY, DZ ! coordinates and forces
-
   logical :: qecont ! decomposition flag
   real*8 :: econt(*) ! decomposition array
 !
@@ -599,9 +556,7 @@ module pnm
   integer ::imodel, emodel, num_enm_this ! beginning and ending indices of ENMs in the pnm model, number of ENMs in PNM
   real*8 :: dref
 !
-
   integer :: ierr
-
 !
   real*8, pointer, dimension(:) :: fx, fy, fz, edecomp ! short-hand pointers
 ! variables for diagonalization
@@ -623,14 +578,7 @@ module pnm
 ! note : num_models is less than or equal to num_enm (equality with one ENM per model)
   do j=1, num_enm ! over all networks (in all models)
 !
-
-!**CHARMM_ONLY**!##IF PARALLEL
-   call enm_ene(pnmeneg(j),X,Y,Z,j)
-!**CHARMM_ONLY**!##ELSE
-
-
-
-
+   call enm_ene(pnmene(j,j),X,Y,Z,j)
 !**CHARMM_ONLY**!##ENDIF
 !
   enddo ! j: over all networks
@@ -640,22 +588,6 @@ module pnm
 ! using the default diagonalized in CHARMM, which may only work for symmetric
 ! matrices; this is OK as long as the interaction matrix is kept symmetric
 ! for the exponential version of the model, diagonalization is not needed (see below)
-
-!**CHARMM_ONLY**!##IF PARALLEL
-!
-  qgrp=calc_para .and.SIZE_DMOL.gt.1
-  if (qgrp) &
-
-
-
- & call MPI_ALLREDUCE (MPI_IN_PLACE, pnmeneg, num_enm, MPI_REAL8, MPI_SUM, MPI_COMM_DMOL, i)
-
-  do j=1, num_enm ; pnmene(j,j)=pnmeneg(j); enddo ! update diagonal entries (energies)
-!
-  if (qecont) then ; allocate(fc(natom,4)) ; else ; allocate(fc(natom,3)); endif ; fc=zero ! initialize force arrays
-!
-!**CHARMM_ONLY**!##ENDIF
-
 !
 ! now loop over all models and diagonalize
   do k=1, num_models ! over all pnm models
@@ -686,10 +618,6 @@ module pnm
     allocate(M(num_enm_this, num_enm_this), evec(num_enm_this, num_enm_this), eval(num_enm_this))
     M=pnmene(imodel:emodel,imodel:emodel); ! copy part of interaction matrix corresponding to this PNM
 ! diagonalize matrix
-
-
-
-
 ! adopted from pca.ftn
     if (.not. associated(wlapack)) then
      qdouble=(kind(eval).eq.kind(1d0));
@@ -722,8 +650,6 @@ module pnm
     else
 ! should be impossible to get here
     endif
-
-
 !
     ii=1; deu=eval(ii); do i=2, num_enm_this ; if ( eval(i) .lt. deu ) then ; ii=i ; deu=eval(ii) ; endif ; enddo ! scan all evals to find lowest
 ! compute corresponding eigenvalue (energy) derivatives w.r.t individual ENM energies (diagonal matrix components);
@@ -749,12 +675,12 @@ module pnm
     do i=1, enm%nodes%last
      ii=enm%nodes%i(i) ! index
 !
-
-!**CHARMM_ONLY**!##IF PARALLEL
-     fc(ii,1) = fc(ii,1) + deval(j) * fx(i);
-     fc(ii,2) = fc(ii,2) + deval(j) * fy(i);
-     fc(ii,3) = fc(ii,3) + deval(j) * fz(i);
-     fc(ii,4) = fc(ii,4) + edecomp(i);
+!**CHARMM_ONLY**!##ELSE
+     dx(ii) = dx(ii) + deval(j) * fx(i);
+     dy(ii) = dy(ii) + deval(j) * fy(i);
+     dz(ii) = dz(ii) + deval(j) * fz(i);
+     econt(ii) = econt(ii) + edecomp(i);
+!**CHARMM_ONLY**!##ENDIF
 !
     enddo ! over nodes
    enddo ! over networks
@@ -765,34 +691,16 @@ module pnm
     do i=1, enm%nodes%last
      ii=enm%nodes%i(i)
 !
-!**CHARMM_ONLY**!##IF PARALLEL
-     fc(ii,1) = fc(ii,1) + deval(j) * fx(i);
-     fc(ii,2) = fc(ii,2) + deval(j) * fy(i);
-     fc(ii,3) = fc(ii,3) + deval(j) * fz(i);
-!
+!**CHARMM_ONLY**!##ELSE
+     dx(ii) = dx(ii) + deval(j) * fx(i)
+     dy(ii) = dy(ii) + deval(j) * fy(i)
+     dz(ii) = dz(ii) + deval(j) * fz(i)
+!**CHARMM_ONLY**!##ENDIF
 !
     enddo ! over nodes
    enddo ! over networks
   endif
 !
-!
-  afirst=1
-  alast=natom
-!**CHARMM_ONLY**!##ENDIF
-! reduce gradients and scatter
-  if (qgrp) &
- & call mpi_reduce_scatter(MPI_IN_PLACE, fc, natom*3, MPI_REAL8, MPI_SUM, MPI_COMM_DMOL, i)
-! add to main force array
-  do i=afirst, alast
-   dx(i)=dx(i)+fc(i,1);
-   dy(i)=dy(i)+fc(i,2);
-   dz(i)=dz(i)+fc(i,3);
-  enddo
-  if(associated(fc))deallocate(fc)
-!
-!**CHARMM_ONLY**! if (mynod.gt.0) eu=zero ! energies will be reduced outside of this routine
-!
-!**CHARMM_ONLY**!##ENDIF (parallel)
 !
   end subroutine pnm_ene
 !

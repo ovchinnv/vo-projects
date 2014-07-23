@@ -30,3 +30,5 @@ vectors: $(ROOT)/getcode
 clean ::
 	rm -f *.mod *.o *.a $(CHARMM_SOURCES) vectors_var vectors_sub \
 	$(ROOT)/$(NAME).stamp
+
+.SILENT : vectors
