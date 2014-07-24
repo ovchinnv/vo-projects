@@ -8,8 +8,10 @@ DEPS=output
 
 include $(ROOT)/Makefile.inc
 
+
 LOCALDEFS=-D'__CHARMM_ONLY=!'
 CHARMM_SOURCES=ivector.src ivector_list.src rvector.src rvector_list.src isort.src rsort.src
+$(ROOT)/$(NAME).stamp:: $(CHARMM_SOURCES)
 
 LINKOBJS=output.o
 #####################################################

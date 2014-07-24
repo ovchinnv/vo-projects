@@ -37,6 +37,14 @@ module pnm
   implicit none
   private
 !
+
+
+
+
+
+
+
+!
   type enet ! elastic network type
    type(int_vector) :: nodes ! pnm node list (no connectivity)
    type(int_vector) :: bonds ! pnm bond list (interacting pairs in tandem)
@@ -71,12 +79,17 @@ module pnm
   real*8, private, save, pointer :: beta(:)=>null() ! array of PNM temperatures (only for the exponential version)
   integer, private :: num_models ! number of pnm models
 !
+
   real*8, pointer,save :: wlapack(:)=>NULL()
   logical :: qdouble, qsingle
+
+
   public pnm_main
   public pnm_add
   public pnm_ene
+
   contains
+
 !===================================================================
    subroutine pnm_main(comlyn,comlen) ! parser
    use cmd, only: maxlinelen; use prm, only : vartaglen; use parser
@@ -142,7 +155,7 @@ module pnm
         else
          beta(num_models)=one/(kboltzmann*t)
         endif
-        write(msg___,7010) whoami, itoa(num_models), ftoa(t) ; do i_=1,size(msg___);if(msg___(i_)=='')exit;call plainmessage(msg___(i_),3);enddo;msg___=''
+        write(msg___,7010) whoami, itoa(num_models), ftoa(t); do i_=1,size(msg___);if(msg___(i_)=='')exit;call plainmessage(msg___(i_),3);enddo;msg___=''
        case('NO','OFF','FALSE','F','no','off','false','f')
         qexp(num_models)=.false.
         write(msg___,7011) whoami, itoa(num_models) ; do i_=1,size(msg___);if(msg___(i_)=='')exit;call plainmessage(msg___(i_),3);enddo;msg___=''
@@ -168,7 +181,7 @@ module pnm
     endif ! initialized
 !====================================================================
    else
-    write(msg___(i_),*)'UNRECOGNIZED SUBCOMMAND: ',keyword;call warning(whoami, msg___(i_), -1)
+    write(msg___(1),*)'UNRECOGNIZED SUBCOMMAND: ',keyword;call warning(whoami, msg___(1), -1)
    endif
 !
    end subroutine pnm_main
@@ -188,7 +201,9 @@ module pnm
    if(associated(models))deallocate(models)
    if(associated(qexp))deallocate(qexp)
    if(associated(beta))deallocate(beta)
+
    if(associated(wlapack))deallocate(wlapack)
+
 !
    do i=1, num_enm ! over all networks
     enm=>networks(i)
@@ -203,7 +218,7 @@ module pnm
     call real_vector_done(enm%r0)
     call real_vector_done(enm%econt)
    enddo
-   deallocate(networks)
+   if(associated(networks))deallocate(networks)
 !
    num_enm=0
    num_models=0
@@ -230,11 +245,11 @@ module pnm
    if (present(n_)) then ; n=n_ ; else ; n=2; endif
 !
    if (n.gt.0) then
-     allocate(pnmene(n,n)) ! allocate mixing coefficients
-     allocate(networks(n)) ! allocate network data storage
-     allocate(models(n+1)) ! allocate models array; this is `overdimensioned` for technical simplicity in pnm_ene
-     allocate(qexp(n)) ! exponential PNM flags
-     allocate(beta(n)) ! temperatures for exponential PNM
+     allocate(pnmene(n,n), ) ! allocate mixing coefficients
+     allocate(networks(n), ) ! allocate network data storage
+     allocate(models(n+1), ) ! allocate models array; this is `overdimensioned` for technical simplicity in pnm_ene
+     allocate(qexp(n), ) ! exponential PNM flags
+     allocate(beta(n), ) ! temperatures for exponential PNM
      do i=1, n
       enm=>networks(i)
 !associate(nodes=>networks(i)%nodes, r0=>networks(i)%r0, xn=>networks(i)%x, yn=>networks(i)%y, zn=>networks(i)%z)
@@ -270,7 +285,7 @@ module pnm
  101 format(' ',A,': INITIALIZED PNM MODULE WITH ',A,' NETWORKS (MAX.)')
      initialized=.true.
     else
-     write(msg___(i_),*)' PNM MODULE INVOKED WITH AN INVALID NUMBER OF NETWORKS(',itoa(n),').';call warning(whoami, msg___(i_), -1)
+     write(msg___(1),*)' PNM MODULE INVOKED WITH AN INVALID NUMBER OF NETWORKS(',itoa(n),').';call warning(whoami, msg___(1), -1)
      return
     endif
 !
@@ -288,10 +303,13 @@ module pnm
   use output
   use system, only : system_getind
   use psf
+
   character(len=len("PNM_ADD") ),parameter::whoami="PNM_ADD" ! for maximum compatibility
   integer, pointer, dimension(:) :: islct, jslct, kslct
+
   integer :: isele, i__, iend; integer, pointer::dmolselect(:);character(LEN=20)::word__
   integer :: natom
+
   character(len=*) :: comlyn
   integer :: comlen
 !
@@ -302,7 +320,9 @@ module pnm
   type(enet), pointer :: enm
 !
   character(len=200) :: msg___(21)=(/'','','','','','','','','','','','','','','','','','','','',''/); integer :: i_=1
+
   natom=psf_natom()
+
 !
   if (.not.initialized) then
    call warning(whoami, ' PNM MODULE NOT INITIALIZED. INITIALIZING WITH DEFAULTS.', -1)
@@ -495,8 +515,14 @@ module pnm
   deu=zero;
   do i=1, enm%nodes%last ; dx(i)=zero; dy(i)=zero ; dz(i)=zero; econt(i)=zero ; enddo
 !
+
+
+
+
+
   ibeg=1; iend=enm%r0%last
 !**CHARMM_ONLY**!##ENDIF
+
 !
   do i=ibeg, iend ! over all bonds on this CPU
    jj=2*i; ii=jj-1 ; ! indices into list of pairs
@@ -627,19 +653,19 @@ module pnm
      elseif (qsingle) then ! single precision
       call ssyev('V','L', num_enm, eval, num_enm, eval, eval, iminusone, ierr)
      else
-      write(msg___(i_),*)'Cannot find compatible LAPACK diagonalization routine for kind "',itoa(kind(eval)),'". Trying to abort';call warning(whoami, msg___(i_), -1);
+      write(msg___(1),*)'Cannot find compatible LAPACK diagonalization routine for kind "',itoa(kind(eval)),'". Trying to abort';call warning(whoami, msg___(1), -1);
       call pnm_done()
       return
      endif
 !
      if (ierr.ne.0) then
-      write(msg___(i_),*)'Error calculating work array size for LAPACK diagonalizer. Trying to abort';call warning(whoami, msg___(i_), -1);
+      write(msg___(1),*)'Error calculating work array size for LAPACK diagonalizer. Trying to abort';call warning(whoami, msg___(1), -1);
       call pnm_done()
       return
      endif
 !
      i=nint(eval(1)) ; ! dimension of work array
-     allocate(wlapack(i)) ;
+     allocate(wlapack(i), ) ;
 !
     endif ! associated
 !
