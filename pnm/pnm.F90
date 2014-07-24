@@ -180,6 +180,27 @@ module pnm
      endif ! num_enm > max
     endif ! initialized
 !====================================================================
+   elseif ( ( keyword(1:4).eq.'HELP'(1:4) )) then ! print short help screen
+    i=0;
+ i=i+(1);;write(msg___(i),'(2A)') whoami, ' _______________________________________________________________________'
+ i=i+(1);;write(msg___(i),'(2A)') whoami, ' DESCRIPTION: Plastic Network Model'
+ i=i+(1);;write(msg___(i),'(2A)') whoami, ' _______________________________________________________________________'
+ i=i+(1);;write(msg___(i),'(2A)') whoami, ' SYNTAX:'
+ i=i+(1);;write(msg___(i),'(2A)') whoami, ' PNM  [{ INITialize int }] | // initialize'
+ i=i+(1);;write(msg___(i),'(2A)') whoami, '     [{ DONE }]           | // finalize'
+ i=i+(1);;write(msg___(i),'(2A)') whoami, '     [{ NEWModel }]       | // start a new PNM'
+ i=i+(1);;write(msg___(i),'(2A)') whoami, '     [{ EXP <on|true|t|yes|off|false|f|no> [TEMP real] }]| //turn on/off exponential version and set temperature'
+ i=i+(1);;write(msg___(i),'(2A)') whoami, '     [{ ADD [FORC real  // Add ENM to current PNM ; ENM force constant'
+ i=i+(1);;write(msg___(i),'(2A)') whoami, '            [CUT real]  // ENM cutoff (Ang)'
+ i=i+(1);;write(msg___(i),'(2A)') whoami, '            [ZERO real] // ENM minimum energy value'
+ i=i+(1);;write(msg___(i),'(2A)') whoami, '            [PMIX real] // ENM mixing coefficient'
+ i=i+(1);;write(msg___(i),'(2A)') whoami, '            [atom-selection] // ENM atom selection'
+ i=i+(1);;write(msg___(i),'(2A)') whoami, '            [REMO atom-selection atom-selection] //ENM : interactions between these selections are off'
+ i=i+(1);;write(msg___(i),'(2A)') whoami, '            [COMP] }]     | ENM : take reference structure from comparison set// '
+ i=i+(1);;write(msg___(i),'(2A)') whoami, '            [ { PARA <on|true|t|yes|off|false|f|no> } ] // parallelization on/off'
+ i=i+(1);;write(msg___(i),'(2A)') whoami, ' _______________________________________________________________________'
+ do i_=1,size(msg___);if(msg___(i_)=='')exit;call plainmessage(msg___(i_),3);enddo;msg___='';
+!====================================================================
    else
     write(msg___(1),*)'UNRECOGNIZED SUBCOMMAND: ',keyword;call warning(whoami, msg___(1), -1)
    endif
