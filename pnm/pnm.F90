@@ -27,23 +27,15 @@ module pnm
 
 
 
-
+!**CHARMM_ONLY**!##IF STRINGM ! VO can use either string method routines or local routines (below)
   use ivector
   use rvector
-
-
+!**CHARMM_ONLY**!##ENDIF
 
 !
   implicit none
   private
 !
-
-
-
-
-
-
-
 !
   type enet ! elastic network type
    type(int_vector) :: nodes ! pnm node list (no connectivity)
@@ -79,17 +71,15 @@ module pnm
   real*8, private, save, pointer :: beta(:)=>null() ! array of PNM temperatures (only for the exponential version)
   integer, private :: num_models ! number of pnm models
 !
-
   real*8, pointer,save :: wlapack(:)=>NULL()
   logical :: qdouble, qsingle
-
-
+!
+  character(len=200) :: msg___(21)=(/'','','','','','','','','','','','','','','','','','','','',''/); integer :: i_=1
+!
   public pnm_main
   public pnm_add
   public pnm_ene
-
   contains
-
 !===================================================================
    subroutine pnm_main(comlyn,comlen) ! parser
    use cmd, only: maxlinelen; use prm, only : vartaglen; use parser
@@ -103,7 +93,6 @@ module pnm
    integer :: i, j
    real*8 :: t
 !
-   character(len=200) :: msg___(21)=(/'','','','','','','','','','','','','','','','','','','','',''/); integer :: i_=1
 !
    keyword=pop_string(comlyn,comlen) ; comlen=len_trim(comlyn)
 !====================================================================
@@ -186,7 +175,7 @@ module pnm
  i=i+(1);;write(msg___(i),'(2A)') whoami, ' DESCRIPTION: Plastic Network Model'
  i=i+(1);;write(msg___(i),'(2A)') whoami, ' _______________________________________________________________________'
  i=i+(1);;write(msg___(i),'(2A)') whoami, ' SYNTAX:'
- i=i+(1);;write(msg___(i),'(2A)') whoami, ' PNM  [{ INITialize int }] | // initialize'
+ i=i+(1);;write(msg___(i),'(2A)') whoami, ' PNM [{ INITialize int }] | // initialize with the specified maximum total no. of ENMs'
  i=i+(1);;write(msg___(i),'(2A)') whoami, '     [{ DONE }]           | // finalize'
  i=i+(1);;write(msg___(i),'(2A)') whoami, '     [{ NEWModel }]       | // start a new PNM'
  i=i+(1);;write(msg___(i),'(2A)') whoami, '     [{ EXP <on|true|t|yes|off|false|f|no> [TEMP real] }]| //turn on/off exponential version and set temperature'
@@ -214,17 +203,13 @@ module pnm
    integer :: i
    type(enet), pointer :: enm
 !
-   character(len=200) :: msg___(21)=(/'','','','','','','','','','','','','','','','','','','','',''/); integer :: i_=1
-!
    if (.not.initialized) return
 !
    if(associated(pnmene))deallocate(pnmene)
    if(associated(models))deallocate(models)
    if(associated(qexp))deallocate(qexp)
    if(associated(beta))deallocate(beta)
-
    if(associated(wlapack))deallocate(wlapack)
-
 !
    do i=1, num_enm ! over all networks
     enm=>networks(i)
@@ -256,7 +241,6 @@ module pnm
    use constants
    use output
 !===========================================================================
-   character(len=200) :: msg___(21)=(/'','','','','','','','','','','','','','','','','','','','',''/); integer :: i_=1
    character(len=len("PNM_INIT") ),parameter::whoami="PNM_INIT" ! for maximum compatibility
    integer, optional :: n_
    integer :: i, n
@@ -324,13 +308,10 @@ module pnm
   use output
   use system, only : system_getind
   use psf
-
   character(len=len("PNM_ADD") ),parameter::whoami="PNM_ADD" ! for maximum compatibility
   integer, pointer, dimension(:) :: islct, jslct, kslct
-
   integer :: isele, i__, iend; integer, pointer::dmolselect(:);character(LEN=20)::word__
   integer :: natom
-
   character(len=*) :: comlyn
   integer :: comlen
 !
@@ -340,10 +321,7 @@ module pnm
 !
   type(enet), pointer :: enm
 !
-  character(len=200) :: msg___(21)=(/'','','','','','','','','','','','','','','','','','','','',''/); integer :: i_=1
-
   natom=psf_natom()
-
 !
   if (.not.initialized) then
    call warning(whoami, ' PNM MODULE NOT INITIALIZED. INITIALIZING WITH DEFAULTS.', -1)
@@ -536,14 +514,8 @@ module pnm
   deu=zero;
   do i=1, enm%nodes%last ; dx(i)=zero; dy(i)=zero ; dz(i)=zero; econt(i)=zero ; enddo
 !
-
-
-
-
-
   ibeg=1; iend=enm%r0%last
 !**CHARMM_ONLY**!##ENDIF
-
 !
   do i=ibeg, iend ! over all bonds on this CPU
    jj=2*i; ii=jj-1 ; ! indices into list of pairs
@@ -611,7 +583,6 @@ module pnm
   real*8, pointer, dimension(:) :: eval ! eigenvalues
   real*8 :: deval(num_enm) ! force prefactor for individual enms
 !
-  character(len=200) :: msg___(21)=(/'','','','','','','','','','','','','','','','','','','','',''/); integer :: i_=1
   type(enet), pointer :: enm
 !
   if (num_enm.le.0) return
