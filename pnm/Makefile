@@ -1,7 +1,8 @@
 ROOT=..
 OBJS=pnm.o
 NAME=pnm
-DEPS=vectors parser output constants
+DEPS=vectors parser output constants dynamol
+CHMDEPS=vectors
 
 LOCALMACROS=-include source.defs
 LOCALMACROS+=-include $(ROOT)/dmol.defs
@@ -11,8 +12,8 @@ LOCALDEPS+= $(ROOT)/dmol.defs
 
 include $(ROOT)/Makefile.inc
 
-charmm: vectors $(CHARMM_SOURCES)
-vectors: $(ROOT)/getcode
+charmm:: vectors $(CHARMM_SOURCES) 
+vectors : $(ROOT)/getcode force_look
 	/bin/sh -c 'source $(ROOT)/getcode;\
 	get_typedef_from_file int_vector $(ROOT)/vectors/ivector.src > vectors_var ;\
 	get_typedef_from_file real_vector $(ROOT)/vectors/rvector.src >> vectors_var ;\

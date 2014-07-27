@@ -22,7 +22,7 @@ include $(ROOT)/Makefile.inc
 SWIGC=swig
 SFLAGS=
 
-charmm: $(CHARMM_SOURCES)
+charmm:: $(CHARMM_SOURCES)
 
 %_.F90:%.ftn $(LOCALDEPS) $(GLOBALDEPS) $(ROOT)/source.msg
 	$(FPP) $(FPPFLAGS) $(DEFS) -D__BINDC $(GLOBALMACROS) $(LOCALMACROS) -P $< > $@

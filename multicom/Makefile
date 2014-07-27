@@ -9,4 +9,4 @@ LOCALDEPS=source.defs
 include $(ROOT)/Makefile.inc
 
 multicom.o:multicom_aux.o
-charmm: $(CHARMM_SOURCES)
+charmm:: $(CHARMM_SOURCES)

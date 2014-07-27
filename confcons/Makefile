@@ -10,4 +10,4 @@ LOCALDEPS+=$(ROOT)/dmol.defs
 
 include $(ROOT)/Makefile.inc
 
-charmm: $(CHARMM_SOURCES)
+charmm:: $(CHARMM_SOURCES)

@@ -40,7 +40,7 @@ clean::
 	rm -f *.mod *.o *.a ivector.F90 rvector.F90 ivector_list.F90 isort.F90 rvector_list.F90 isort.F90 rsort.F90 $(CHARMM_SOURCES) *.tmp \
 	$(ROOT)/$(NAME).stamp
 
-charmm: $(CHARMM_SOURCES)
+charmm:: $(CHARMM_SOURCES)
 %.src:%.tmp $(GLOBALDEPS)
 	$(FPP) $(FPPFLAGS) -D__CHARMM $(GLOBALMACROS) $< > $@
 ivector.tmp: vector_template.ftn

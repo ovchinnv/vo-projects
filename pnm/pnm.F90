@@ -74,7 +74,7 @@ module pnm
   real*8, pointer,save :: wlapack(:)=>NULL()
   logical :: qdouble, qsingle
 !
-  character(len=200) :: msg___(21)=(/'','','','','','','','','','','','','','','','','','','','',''/); integer :: i_=1
+  character(len=200):: msg___(21)=(/'','','','','','','','','','','','','','','','','','','','',''/); integer:: i_=1
 !
   public pnm_main
   public pnm_add
@@ -89,7 +89,7 @@ module pnm
    integer :: comlen
 ! local variables
    character(len=8) :: keyword
-   character(len=len("PNM_MAIN") ),parameter::whoami="PNM_MAIN" ! for maximum compatibility
+   character(len=len("PNM_MAIN") ),parameter::whoami="PNM_MAIN";!macro
    integer :: i, j
    real*8 :: t
 !
@@ -170,24 +170,24 @@ module pnm
     endif ! initialized
 !====================================================================
    elseif ( ( keyword(1:4).eq.'HELP'(1:4) )) then ! print short help screen
-    i=0;
- i=i+(1);;write(msg___(i),'(2A)') whoami, ' _______________________________________________________________________'
- i=i+(1);;write(msg___(i),'(2A)') whoami, ' DESCRIPTION: Plastic Network Model'
- i=i+(1);;write(msg___(i),'(2A)') whoami, ' _______________________________________________________________________'
- i=i+(1);;write(msg___(i),'(2A)') whoami, ' SYNTAX:'
- i=i+(1);;write(msg___(i),'(2A)') whoami, ' PNM [{ INITialize int }] | // initialize with the specified maximum total no. of ENMs'
- i=i+(1);;write(msg___(i),'(2A)') whoami, '     [{ DONE }]           | // finalize'
- i=i+(1);;write(msg___(i),'(2A)') whoami, '     [{ NEWModel }]       | // start a new PNM'
- i=i+(1);;write(msg___(i),'(2A)') whoami, '     [{ EXP <on|true|t|yes|off|false|f|no> [TEMP real] }]| //turn on/off exponential version and set temperature'
- i=i+(1);;write(msg___(i),'(2A)') whoami, '     [{ ADD [FORC real  // Add ENM to current PNM ; ENM force constant'
- i=i+(1);;write(msg___(i),'(2A)') whoami, '            [CUT real]  // ENM cutoff (Ang)'
- i=i+(1);;write(msg___(i),'(2A)') whoami, '            [ZERO real] // ENM minimum energy value'
- i=i+(1);;write(msg___(i),'(2A)') whoami, '            [PMIX real] // ENM mixing coefficient'
- i=i+(1);;write(msg___(i),'(2A)') whoami, '            [atom-selection] // ENM atom selection'
- i=i+(1);;write(msg___(i),'(2A)') whoami, '            [REMO atom-selection atom-selection] //ENM : interactions between these selections are off'
- i=i+(1);;write(msg___(i),'(2A)') whoami, '            [COMP] }]     | ENM : take reference structure from comparison set// '
- i=i+(1);;write(msg___(i),'(2A)') whoami, '            [ { PARA <on|true|t|yes|off|false|f|no> } ] // parallelization on/off'
- i=i+(1);;write(msg___(i),'(2A)') whoami, ' _______________________________________________________________________'
+ write(msg___,'(2A)')&
+& whoami, ' _______________________________________________________________________'&
+& , whoami, ' DESCRIPTION: Plastic Network Model'&
+& , whoami, ' _______________________________________________________________________'&
+& , whoami, ' SYNTAX:'&
+& , whoami, ' PNM [{ INITialize int }] | // initialize with the specified maximum total no. of ENMs'&
+& , whoami, '     [{ DONE }]           | // finalize'&
+& , whoami, '     [{ NEWModel }]       | // start a new PNM'&
+& , whoami, '     [{ EXP <on|true|t|yes|off|false|f|no> [TEMP real] }]| //turn on/off exponential version and set temperature'&
+& , whoami, '     [{ ADD [FORC real  // Add ENM to current PNM ; ENM force constant'&
+& , whoami, '            [CUT real]  // ENM cutoff (Ang)'&
+& , whoami, '            [ZERO real] // ENM minimum energy value'&
+& , whoami, '            [PMIX real] // ENM mixing coefficient'&
+& , whoami, '            [atom-selection] // ENM atom selection'&
+& , whoami, '            [REMO atom-selection atom-selection] //ENM : interactions between these selections are off'&
+& , whoami, '            [COMP] }]     | ENM : take reference structure from comparison set// '&
+& , whoami, '            [ { PARA <on|true|t|yes|off|false|f|no> } ] // parallelization on/off'&
+& , whoami, ' _______________________________________________________________________'
  do i_=1,size(msg___);if(msg___(i_)=='')exit;call plainmessage(msg___(i_),3);enddo;msg___='';
 !====================================================================
    else
@@ -199,7 +199,7 @@ module pnm
    subroutine pnm_done()
    use output
 !====================================================================
-   character(len=len("PNM_DONE") ),parameter::whoami="PNM_DONE" ! for maximum compatibility
+   character(len=len("PNM_DONE") ),parameter::whoami="PNM_DONE";!macro
    integer :: i
    type(enet), pointer :: enm
 !
@@ -241,7 +241,7 @@ module pnm
    use constants
    use output
 !===========================================================================
-   character(len=len("PNM_INIT") ),parameter::whoami="PNM_INIT" ! for maximum compatibility
+   character(len=len("PNM_INIT") ),parameter::whoami="PNM_INIT";!macro
    integer, optional :: n_
    integer :: i, n
    type(enet), pointer :: enm
@@ -308,7 +308,7 @@ module pnm
   use output
   use system, only : system_getind
   use psf
-  character(len=len("PNM_ADD") ),parameter::whoami="PNM_ADD" ! for maximum compatibility
+  character(len=len("PNM_ADD") ),parameter::whoami="PNM_ADD";!macro
   integer, pointer, dimension(:) :: islct, jslct, kslct
   integer :: isele, i__, iend; integer, pointer::dmolselect(:);character(LEN=20)::word__
   integer :: natom
@@ -353,7 +353,6 @@ module pnm
 ! PNM node selection
   allocate(islct(natom), jslct(natom), kslct(natom))
   islct=0; jslct=0; kslct=0;
-          if(associated(dmolselect))deallocate(dmolselect)
           isele=find_tag(comlyn, 'SELE', comlen)
           msg___ (1)=comlyn(isele:comlen) ! part of string that begins with the selection
           i__=comlen-isele+1
@@ -375,7 +374,6 @@ module pnm
 ! auxiliary selections to generate exclusions between two sub-selections
   qrem = ( remove_tag(COMLYN,'REMO',COMLEN) .gt. 0)
   if (qrem) then
-          if(associated(dmolselect))deallocate(dmolselect)
           isele=find_tag(comlyn, 'SELE', comlen)
           msg___ (1)=comlyn(isele:comlen) ! part of string that begins with the selection
           i__=comlen-isele+1
@@ -393,8 +391,9 @@ module pnm
           comlyn(isele+1:)=msg___ (1) ! selection has been removed from command
           comlen=len_trim(comlyn)
 !#undef dmolselect
+
+
    jslct(dmolselect)=1
-          if(associated(dmolselect))deallocate(dmolselect)
           isele=find_tag(comlyn, 'SELE', comlen)
           msg___ (1)=comlyn(isele:comlen) ! part of string that begins with the selection
           i__=comlen-isele+1
@@ -495,6 +494,19 @@ module pnm
   use constants
   use constants
 !
+
+
+
+
+
+  use mpi
+  use multicom_aux;
+
+!
+  logical :: qgrp
+!**CHARMM_ONLY**!##ENDIF
+!
+
 ! Subroutine that returns the elastic network forces of the network (INET)
   real*8, dimension(*) :: X, Y, Z
   integer :: inet ! network index
@@ -514,8 +526,24 @@ module pnm
   deu=zero;
   do i=1, enm%nodes%last ; dx(i)=zero; dy(i)=zero ; dz(i)=zero; econt(i)=zero ; enddo
 !
-  ibeg=1; iend=enm%r0%last
-!**CHARMM_ONLY**!##ENDIF
+
+!**CHARMM_ONLY**!##IF PARALLEL
+!
+  qgrp=calc_para.and.SIZE_DMOL.gt.1
+  if (qgrp) then
+   j=ceiling(one*enm%r0%last/SIZE_DMOL) ! bonds / cpu
+   ibeg=min(j*ME_DMOL,enm%r0%last-1) + 1 ! index of first bond for this cpu
+   iend=ibeg - 1 + max(0,min(j,enm%r0%last-j*ME_DMOL )) ! index of last bond for this cpu
+  else ! not qgrp
+   ibeg=1; iend=enm%r0%last
+  endif ! qgrp
+!
+!**CHARMM_ONLY**!##ELSE
+
+
+
+
+
 !
   do i=ibeg, iend ! over all bonds on this CPU
    jj=2*i; ii=jj-1 ; ! indices into list of pairs
@@ -563,11 +591,30 @@ module pnm
   use constants
   use cmd, only: maxlinelen; use prm, only : vartaglen; use parser
 !
+
 !
-  character(len=len("PNM_ENE") ),parameter::whoami="PNM_ENE" ! for maximum compatibility
+
+
+
+
+  use mpi
+  use multicom_aux;
+
+!
+  integer :: afirst, alast
+  logical :: qgrp
+  real*8 :: pnmeneg(num_enm) ! reduced energies
+  real*8, dimension(:,:), pointer :: fc ! atomic pnm force arrays
+!**CHARMM_ONLY**!##ENDIF
+!
+
+!
+  character(len=len("PNM_ENE") ),parameter::whoami="PNM_ENE";!macro
   real*8 :: eu, deu ! total energy, energy from a particular PNM
+
   integer :: natom
   real*8, dimension(natom) :: X, Y, Z, DX, DY, DZ ! coordinates and forces
+
   logical :: qecont ! decomposition flag
   real*8 :: econt(*) ! decomposition array
 !
@@ -575,7 +622,9 @@ module pnm
   integer ::imodel, emodel, num_enm_this ! beginning and ending indices of ENMs in the pnm model, number of ENMs in PNM
   real*8 :: dref
 !
+
   integer :: ierr
+
 !
   real*8, pointer, dimension(:) :: fx, fy, fz, edecomp ! short-hand pointers
 ! variables for diagonalization
@@ -596,7 +645,14 @@ module pnm
 ! note : num_models is less than or equal to num_enm (equality with one ENM per model)
   do j=1, num_enm ! over all networks (in all models)
 !
-   call enm_ene(pnmene(j,j),X,Y,Z,j)
+
+!**CHARMM_ONLY**!##IF PARALLEL
+   call enm_ene(pnmeneg(j),X,Y,Z,j)
+!**CHARMM_ONLY**!##ELSE
+
+
+
+
 !**CHARMM_ONLY**!##ENDIF
 !
   enddo ! j: over all networks
@@ -606,6 +662,22 @@ module pnm
 ! using the default diagonalized in CHARMM, which may only work for symmetric
 ! matrices; this is OK as long as the interaction matrix is kept symmetric
 ! for the exponential version of the model, diagonalization is not needed (see below)
+
+!**CHARMM_ONLY**!##IF PARALLEL
+!
+  qgrp=calc_para .and.SIZE_DMOL.gt.1
+  if (qgrp) &
+
+
+
+ & call MPI_ALLREDUCE (MPI_IN_PLACE, pnmeneg, num_enm, MPI_REAL8, MPI_SUM, MPI_COMM_DMOL, i)
+
+  do j=1, num_enm ; pnmene(j,j)=pnmeneg(j); enddo ! update diagonal entries (energies)
+!
+  if (qecont) then ; allocate(fc(natom,4), ) ; else ; allocate(fc(natom,3), ); endif ; fc=zero ! initialize force arrays
+!
+!**CHARMM_ONLY**!##ENDIF
+
 !
 ! now loop over all models and diagonalize
   do k=1, num_models ! over all pnm models
@@ -636,6 +708,10 @@ module pnm
     allocate(M(num_enm_this, num_enm_this), evec(num_enm_this, num_enm_this), eval(num_enm_this))
     M=pnmene(imodel:emodel,imodel:emodel); ! copy part of interaction matrix corresponding to this PNM
 ! diagonalize matrix
+
+
+
+
 ! adopted from pca.ftn
     if (.not. associated(wlapack)) then
      qdouble=(kind(eval).eq.kind(1d0));
@@ -668,6 +744,8 @@ module pnm
     else
 ! should be impossible to get here
     endif
+
+
 !
     ii=1; deu=eval(ii); do i=2, num_enm_this ; if ( eval(i) .lt. deu ) then ; ii=i ; deu=eval(ii) ; endif ; enddo ! scan all evals to find lowest
 ! compute corresponding eigenvalue (energy) derivatives w.r.t individual ENM energies (diagonal matrix components);
@@ -693,12 +771,12 @@ module pnm
     do i=1, enm%nodes%last
      ii=enm%nodes%i(i) ! index
 !
-!**CHARMM_ONLY**!##ELSE
-     dx(ii) = dx(ii) + deval(j) * fx(i);
-     dy(ii) = dy(ii) + deval(j) * fy(i);
-     dz(ii) = dz(ii) + deval(j) * fz(i);
-     econt(ii) = econt(ii) + edecomp(i);
-!**CHARMM_ONLY**!##ENDIF
+
+!**CHARMM_ONLY**!##IF PARALLEL
+     fc(ii,1) = fc(ii,1) + deval(j) * fx(i);
+     fc(ii,2) = fc(ii,2) + deval(j) * fy(i);
+     fc(ii,3) = fc(ii,3) + deval(j) * fz(i);
+     fc(ii,4) = fc(ii,4) + edecomp(i);
 !
     enddo ! over nodes
    enddo ! over networks
@@ -709,16 +787,34 @@ module pnm
     do i=1, enm%nodes%last
      ii=enm%nodes%i(i)
 !
-!**CHARMM_ONLY**!##ELSE
-     dx(ii) = dx(ii) + deval(j) * fx(i)
-     dy(ii) = dy(ii) + deval(j) * fy(i)
-     dz(ii) = dz(ii) + deval(j) * fz(i)
-!**CHARMM_ONLY**!##ENDIF
+!**CHARMM_ONLY**!##IF PARALLEL
+     fc(ii,1) = fc(ii,1) + deval(j) * fx(i);
+     fc(ii,2) = fc(ii,2) + deval(j) * fy(i);
+     fc(ii,3) = fc(ii,3) + deval(j) * fz(i);
+!
 !
     enddo ! over nodes
    enddo ! over networks
   endif
 !
+!
+  afirst=1
+  alast=natom
+!**CHARMM_ONLY**!##ENDIF
+! reduce gradients and scatter
+  if (qgrp) &
+ & call mpi_reduce_scatter(MPI_IN_PLACE, fc, natom*3, MPI_REAL8, MPI_SUM, MPI_COMM_DMOL, i)
+! add to main force array
+  do i=afirst, alast
+   dx(i)=dx(i)+fc(i,1);
+   dy(i)=dy(i)+fc(i,2);
+   dz(i)=dz(i)+fc(i,3);
+  enddo
+  if(associated(fc))deallocate(fc)
+!
+!**CHARMM_ONLY**! if (mynod.gt.0) eu=zero ! energies will be reduced outside of this routine
+!
+!**CHARMM_ONLY**!##ENDIF (parallel)
 !
   end subroutine pnm_ene
 !

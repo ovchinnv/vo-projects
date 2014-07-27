@@ -14,7 +14,7 @@ include $(ROOT)/Makefile.inc
 
 sm_util.o : splines.o
 
-charmm: $(CHARMM_SOURCES)
+charmm:: $(CHARMM_SOURCES)
 ifneq ($(CHARMM_DIR),.)
 	mkdir -p $(CHARMM_DIR)
 	/bin/sh -c 'for file in `ls *.src 2>/dev/null`; do  ln -fs `pwd`/$$file $(CHARMM_DIR)/$$file; done'

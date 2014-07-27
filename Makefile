@@ -1,4 +1,5 @@
-DIRS=driver state bestfit constants dynamol erf files lu multicom multidiag output parselist parser random string timer vectors confcons enm continua
+DIRS=driver state bestfit constants dynamol erf files lu multicom multidiag output parselist parser random string timer vectors \
+ confcons enm continua pnm
 DISTRIB=include obj lib
 
 
