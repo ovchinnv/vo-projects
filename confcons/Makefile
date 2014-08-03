@@ -4,8 +4,10 @@ OBJS=chirality.o confcons.o
 NAME=confcons
 DEPS=constants output multicom parser dynamol
 
-# using += vs. = to avoid including in charmm distrib per charmm_distrib script in root
+# NOTE : use += vs. = to avoid including in charmm distrib per charmm_distrib script in root (a trick)
+LOCALMACROS=-include source.defs
 LOCALMACROS+=-include $(ROOT)/dmol.defs
+LOCALDEPS=source.defs
 LOCALDEPS+=$(ROOT)/dmol.defs
 
 include $(ROOT)/Makefile.inc
