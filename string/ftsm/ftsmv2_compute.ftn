@@ -2,6 +2,10 @@
 ! version 2, in which a different, computationally simpler method is employed
 ! for projection calculations
 !
+! curvature version (compile time)
+!#define FTSM_CURV_V2
+!
+!
       module ftsmv2_compute
 !
 #if (defined(__CHARMM) || defined(__PARALLEL) )
@@ -19,7 +23,6 @@ __CHARMM_ONLY##IF STRINGM
 !
       contains
 !======================================================================
-!======================================================================
 !    compute RC value and derivatives
       subroutine ftsmv2_calc(x,y,z,deriv,t)
 !
@@ -35,7 +38,12 @@ __CHARMM_ONLY##IF STRINGM
 !
       int :: ind, i, j, k, obeg, oend, p, q, ierror
 !
-      float :: u(3,3)
+      float, dimension(3,3) :: u, um, up &        ! rotation matrices
+#ifndef FTSM_CURV_V2
+     & , du &
+#endif
+     & ;
+!
       float, pointer :: r_com(:)
       float :: rho, rho1, rho2, r1(3), r2(3), r3(3), d, d1, d2
       float :: omdpar
@@ -43,15 +51,21 @@ __CHARMM_ONLY##IF STRINGM
       float, pointer, dimension(:,:) :: roi,rol,ror,roc,               &
      &    rol_old,roc_old,ror_old,rol_cur,roc_cur,ror_cur
       float, pointer, dimension(:,:) :: rfi,rfl,rfr,rfc,rfi_rot,&
-     &    rfl_old,rfc_old,rfr_old,rfl_cur,rfc_cur,rfr_cur, rfl_rot, rfr_rot
+     &    rfl_old,rfc_old,rfr_old,rfl_cur,rfc_cur,rfr_cur, rfl_rot, rfr_rot, &
+#ifndef FTSM_CURV_V2
+     & drf
+#else
+     & rfrot_p, rfrot_m
+#endif
       float, pointer, dimension(:,:) :: fopar, foprp, ffpar, ffprp
       float, pointer, dimension(:,:) :: ropar, roprp, rfpar, rfprp
 !
-      int4mpi, allocatable :: orient_count(:), orient_displ(:) ! if declared as int*8 parallelization will break
+      int4mpi, pointer :: orient_count(:), orient_displ(:) ! if declared as int*8 parallelization will break
 !
       float :: tol
 !
-      float, pointer :: ow(:), fw(:)
+      float, pointer :: ow(:), fw(:), wgts(:)
+      int, pointer :: inds(:)
 !
       interface
        subroutine hypercube_allgatherv(message,count,displ,type,        &
@@ -91,23 +105,21 @@ __CHARMM_ONLY##IF STRINGM
       rfl_rot=>r_f(:,:,left_rot);  rfr_rot=>r_f(:,:,right_rot);      ! used as swap arrays
       ffpar=>r_f(:,:,fpar);  ffprp=>r_f(:,:,fperp)
       rfpar=>r_f(:,:,vpar);  rfprp=>r_f(:,:,vperp)
+#ifndef FTSM_CURV_V2
+      drf=>r_f(:,:,scratch); ! for curvature computation
+#else /* ver 2 */
+      rfrot_p=>r_f(:,:,scratch);
+      rfrot_m=>r_f(:,:,scratch2);
+#endif
 !
 !      load coordinates
-      do k=1,nforced
-       ind=iatom_f(k)
-       rfi(k,1)=x(ind)
-       rfi(k,2)=y(ind)
-       rfi(k,3)=z(ind)
-      enddo
+#define _RF rfi
+#include "ftsm_load_fcor.def"
 !
       if (qorient) then
        if (qdiffrot) then
-        do k=1,norient ! when qorient false, norient zero
-         ind=iatom_o(k)
-         roi(k,1)=x(ind)
-         roi(k,2)=y(ind)
-         roi(k,3)=z(ind)
-        enddo
+#define _RO roi
+#include "ftsm_load_ocor.def"
        endif ! qdiffrot (otherwise rfi and roi point to the same thing)
 !
 !       translate forced atoms to centroid
@@ -127,7 +139,7 @@ __CHARMM_ONLY##IF STRINGM
        endif ! qdiffrot
 !
       else ! not qorient -- define u here
-       u = RESHAPE( (/one,zero,zero,zero,one,zero,zero,zero,one/), (/3,3/) ) ! rotation matrix
+       u = Id3 ! rotation matrix
       endif ! qorient
 !
       if (qcombine) then ! use a combination of old and new reference structures for mild restart
@@ -144,7 +156,7 @@ __CHARMM_ONLY##IF STRINGM
        rol_old=>r_o(:,:,left_old); ror_old=>r_o(:,:,right_old); roc_old=>r_o(:,:,center_old);
        rol_cur=>r_o(:,:,left_cur); ror_cur=>r_o(:,:,right_cur); roc_cur=>r_o(:,:,center_cur);
 !
-       if (qdiffrot) then
+       if (qorient.and.qdiffrot) then
         rol_cur = s * rol + oms * rol_old ! old left
         roc_cur = s * roc + oms * roc_old ! old center
         ror_cur = s * ror + oms * ror_old ! old right
@@ -185,9 +197,35 @@ __CHARMM_ONLY##IF STRINGM
        else ! not deriv
          call RMSBestFit(roc,roi,ow,u)
        endif ! deriv
+! compute adjacent rotation matrices for curvature
+       if (fe_curvature) then
+         call RMSBestFit(rol,roi,ow,um)
+         call RMSBestFit(ror,roi,ow,up)
+#ifndef FTSM_CURV_V2
+         du=up-um
+         drf=fourth*matmul(rfi,du) ! note : x 0.25 because we normalize by dpar, rather than ds (=dpar/2) in the loop below
+       else ! curvature
+         drf=zero
+       endif
+#else
+         up=half*(up+u)
+         um=half*(um+u)
+         rfrot_p=matmul(rfi, up)
+         rfrot_m=matmul(rfi, um)
+       else ! curvature
+         rfrot_p=zero
+         rfrot_m=zero
+       endif
+#endif
        rfi_rot=matmul(rfi,u)
       else ! not qorient
        rfi_rot=>rfi
+#ifndef FTSM_CURV_V2
+       drf=zero
+#else /* v2 */
+       rfrot_p=zero
+       rfrot_m=zero
+#endif
       endif ! qorient
 !
 !     compute projection (delta)
@@ -206,7 +244,13 @@ __CHARMM_ONLY##IF STRINGM
 !
                      rfpar(j,k) = d    ! displacement to first reference
                      rfprp(j,k) = d-d1 ! displacement to second reference : rfi_rot - rfr
-                     fe_curv = fe_curv + fw(j) * ( d1-2d0*d2 ) * (d-d2 ) ! curvature
+#ifndef FTSM_CURV_V2
+                     fe_curv = fe_curv + fw(j) * (  ( d1-two*d2 ) * (d-d2 ) & ! curvature correction (see equation 21, l4  in ftsm paper)
+&                                                   + d1 * drf(j,k)    )
+#else
+                     fe_curv = fe_curv + fw(j) * (  (d1-d2) * rfrot_p(j,k) - d2 * rfrot_m(j,k) &
+                                                  - (d1-two*d2) * rfc(j,k) ) ! curvature correction (see equation 21, l5 in ftsm paper)
+#endif
 !
                      rho1=rho1 + d1*d1 * fw(j) ! denominator in dpar
                      d1 = d1 * fw(j)
@@ -219,7 +263,6 @@ __CHARMM_ONLY##IF STRINGM
         if (rho1.le.tol) then ; rho1=1d0 ; else ; rho1=1d0/rho1 ; endif ! a rather unlikely event
         dpar=rho*rho1 ! length of projection along line connecting left and right structures
         rho=sqrt(rho1)! for normalization of perpendicular derivatives (p.24 in notes)
-        fe_curv = fe_curv * rho1 * 4d0 ! for internal pts will need x 4 because rho1 is (2)^2 times the string length increment ds
         omdpar=1d0-dpar
 ! the next loop is required for the perpendicular component
         r2=0d0;
@@ -237,7 +280,23 @@ __CHARMM_ONLY##IF STRINGM
 !
         dperp=sqrt(rho2) ! unnormalized perp component
         if (dperp.le.tol) then; rho2=1d0; else; rho2=1d0/dperp; endif ! length of perpendicular component
-        dperp=dperp*rho ! normalize perp component
+!
+! scale curvature : for internal pts will need x 4 because rho1 is (2)^2 times the string length increment ds
+! for endpoints no scaling is needed, but the curvature correction is (supposed to be) ignored for them
+        fe_curv = fe_curv * rho1 * four 
+!     distance scaling
+        if (ftsm_scaledist) then
+         dperp = dperp * rho             ! normalize perp component
+        else
+         dpar = dpar / rho ! multiply by || q - p || to unscale
+         if (ftsm_reset_dpar0f) then
+          if (mestring.eq.nstring-1) then ; dpar0f=one/rho ; elseif (mestring .gt. 0) then ; dpar0f=half/rho ; endif ; dpar0i=dpar0
+          ftsm_reset_dpar0f=.false.
+         endif
+        endif
+!
+!       for unscaled version, replace 1/||q - p||^2 by 1/||q-p||, and the latter by 1 
+        if (.not.ftsm_scaledist) then ; rho1=rho ; rho=one ; endif ! divide by rho to unscale
 !
         if (qorient) then ! contributes only if orientation is on
 !    contribution from quadratics
@@ -251,7 +310,7 @@ __CHARMM_ONLY##IF STRINGM
              d2=ffprp(j,p)
              do q=1,3
 !
-              r3=rfi(j,q) * ugrad(q,p,:,k)  ! note the transposition in ugrad: p <==> q consistens with u vs. u^T
+              r3=rfi(j,q) * ugrad(q,p,:,k)  ! note the transposition in ugrad: p <==> q consistent with u vs. u^T
               ropar(k,:)=ropar(k,:) + d1*r3 ! gradient w.r.t. orientation atoms
               roprp(k,:)=roprp(k,:) + d2*r3
 !
@@ -286,7 +345,7 @@ __CHARMM_ONLY##IF STRINGM
           do k=obeg, oend
            ffpar(k,:) = rfl_rot(k,:)
            ffprp(k,:) = rfr_rot(k,:)
-           fopar(k,:) = fopar(k,:) + ropar(k,:)
+           fopar(k,:) = fopar(k,:) + ropar(k,:) ! fopar and ffpar point to the same thing, but I prefer this notation
            foprp(k,:) = foprp(k,:) + roprp(k,:)
           enddo
          endif ! qdiffrot
@@ -354,14 +413,19 @@ __CHARMM_ONLY##IF STRINGM
 !
                      rfpar(j,k) = d    ! displacement to first reference
                      rfprp(j,k) = d-d1 ! displacement to second reference : rfi_rot - rfr
-                     fe_curv = fe_curv + fw(j) * ( d1-2d0*d2 ) * (d-d2 ) ! curvature
+#ifndef FTSM_CURV_V2
+                     fe_curv = fe_curv + fw(j) * (  ( d1-two*d2 ) * (d-d2 ) & ! curvature correction (see equation 21, l4 in ftsm paper)
+&                                                   + d1 * drf(j,k)    )
+#else
+                     fe_curv = fe_curv + fw(j) * (  (d1-d2) * rfrot_p(j,k) - d2 * rfrot_m(j,k) &
+                                                  - (d1-two*d2) * rfc(j,k) ) ! curvature correction (see equation 21, l5 in ftsm paper)
+#endif
 !
                      rho =rho  + d *d1 *fw(j) ! numerator
                      rho1=rho1 + d1*d1 *fw(j) ! denominator
         enddo ;    enddo
         if (rho1.le.tol) then ; rho1=1d0 ; else ; rho1=1d0/rho1 ; endif ! a very unlikely event
         dpar=rho*rho1 ! length projection along line connecting left and right structures
-        fe_curv = fe_curv * rho1 * 4d0 ! for internal pts, will need x 4 because rho1 is (2)^2 times the string length increment ds
         omdpar=1d0-dpar
 ! perpendicular component
         do k=1,3 ; do j=1,nforced
@@ -370,6 +434,20 @@ __CHARMM_ONLY##IF STRINGM
                      rho2=rho2 + d1*d1 *fw(j) ! squared length of perpendicular vector
         enddo ;    enddo
         dperp=sqrt(rho2*rho1) ! normalized perpendicular length
+!
+! scale curvature : for internal pts will need x 4 because rho1 is (2)^2 times the string length increment ds
+! for endpoints no scaling is needed, but the curvature correction is (supposed to be) ignored for them
+        fe_curv = fe_curv * rho1 * four
+!
+        if (.not.ftsm_scaledist) then ! scale to dimensional coordinates
+         rho=one/sqrt(rho1)
+         dpar = dpar * rho        ! dimensionalize
+         dperp = dperp * rho      ! dimensionalize
+         if (ftsm_reset_dpar0f) then
+          if (mestring.eq.nstring-1) then ; dpar0f=one/rho ; elseif (mestring .gt. 0) then ; dpar0f=half/rho ; endif ; dpar0i=dpar0
+          ftsm_reset_dpar0f=.false.
+         endif
+        endif
 !
       endif ! deriv
 !

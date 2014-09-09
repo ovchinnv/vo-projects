@@ -6,4 +6,4 @@ DEPS=parser
 include $(ROOT)/Makefile.inc
 
 parselist.o : vectors.stamp
-charmm: $(CHARMM_SOURCES)
+charmm:: $(CHARMM_SOURCES)

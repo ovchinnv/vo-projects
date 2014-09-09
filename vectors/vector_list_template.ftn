@@ -16,10 +16,8 @@
        int :: length ! length of the vector
        int :: last ! index of last element
        bool :: initialized=.false. ! has the vector been initialized
-#ifdef __CHARMM
-##IFN PATHSCALE
-#endif
-#if !(defined(__pathf90) || defined(__pathf77) || defined(__pathf95))
+#ifndef __CHARMM
+#if !(defined(__pathf90) || defined(__pathf77) || defined(__pathf95) || defined (__g95))
       contains
        procedure :: init   => __CONCAT(__TLNAME,_init)
        procedure :: done   => __CONCAT(__TLNAME,_done)
@@ -32,27 +30,21 @@
 #else
 #define __TYPE type
 #endif
-#ifdef __CHARMM
-##ENDIF
+#else
+#define __TYPE type
 #endif
       end type __TLNAME
 !
       private __CONCAT(__TLNAME,_expand)
-      private __CONCAT(__TLNAME,_add)
-      int, parameter, private :: expand_incr=1
+      int, parameter, private :: expand_incr=20
 !
       contains
 
        subroutine __CONCAT(__TLNAME,_init( vl, length ))
        int, optional :: length
        int :: i, llength
-#ifndef __CHARMM
        __TYPE (__TLNAME) :: vl
-#else
-       class (__TLNAME) :: vl !##.not.PATHSCALE
-       type  (__TLNAME) :: vl !##PATHSCALE
-#endif
-!       if (associated(vl%v)) then ... ! testing unassigned pointer is an error in F90 !
+       if (vl%initialized) return ! do not reinitialize
        if (present(length)) then  ; llength=length; 
        else ; llength=expand_incr ; endif
        allocate(vl%v(llength))
@@ -65,14 +57,17 @@
        vl%initialized=.true.
        end subroutine __CONCAT(__TLNAME,_init)
 !
+       subroutine __CONCAT(__TLNAME,_reinit( vl, length ))
+       int, optional :: length
+       __TYPE (__TLNAME) :: vl
+       if (vl%initialized) call __CONCAT(__TLNAME,_done(vl))
+       if (present(length)) then ; call __CONCAT(__TLNAME,_init(vl, length)) ; else ; call __CONCAT(__TLNAME,_init(vl)) ; endif
+       end subroutine __CONCAT(__TLNAME,_reinit)
+!
        subroutine __CONCAT(__TLNAME,_done( vl ))
        int :: i
-#ifndef __CHARMM
        __TYPE (__TLNAME) :: vl
-#else
-       class (__TLNAME) :: vl !##.not.PATHSCALE
-       type  (__TLNAME) :: vl !##PATHSCALE
-#endif
+       if (.not.vl%initialized) return ! do nothing if list not initialized
        if (associated(vl%v)) then
         do i=1,vl%length ; call __CONCAT(__TNAME,_done(vl%v(i))) ; enddo
         deallocate(vl%v)
@@ -84,12 +79,7 @@
        end subroutine __CONCAT(__TLNAME,_done)
 !
        subroutine __CONCAT(__TLNAME,_expand( vl ))
-#ifndef __CHARMM
        __TYPE (__TLNAME) :: vl
-#else
-       class (__TLNAME) :: vl !##.not.PATHSCALE
-       type  (__TLNAME) :: vl !##PATHSCALE
-#endif
        int :: newlength, i
 !
        type (__TLNAME) :: wl ! temporary list
@@ -118,12 +108,7 @@
        end subroutine __CONCAT(__TLNAME,_expand)
 !
        function __CONCAT(__TLNAME,_add( vl, i, j )) !   add a new list labeled 'i' ; then add element 'j' to it & return index of label i
-#ifndef __CHARMM
        __TYPE (__TLNAME) :: vl
-#else
-       class (__TLNAME) :: vl !##.not.PATHSCALE
-       type  (__TLNAME) :: vl !##PATHSCALE
-#endif
        int :: i, k, l, __CONCAT(__TLNAME,_add)
        __DATATYPE, optional :: j
 !
@@ -138,12 +123,7 @@
        end function __CONCAT(__TLNAME,_add)
 !
        function __CONCAT(__TLNAME,_uadd( vl, i, j )) ! add a new element to the list and return the index of the list
-#ifndef __CHARMM
        __TYPE (__TLNAME) :: vl
-#else
-       class (__TLNAME) :: vl !##.not.PATHSCALE
-       type  (__TLNAME) :: vl !##PATHSCALE
-#endif
        int :: i, k, l, __CONCAT(__TLNAME,_uadd)
        __DATATYPE, optional :: j
 !
@@ -165,12 +145,7 @@
        end function __CONCAT(__TLNAME,_uadd)
 !
        function __CONCAT(__TLNAME,_uaddu( vl, i, j )) ! add a UNIQUE new element to the list and return the index of the list
-#ifndef __CHARMM
        __TYPE (__TLNAME) :: vl
-#else
-       class (__TLNAME) :: vl !##.not.PATHSCALE
-       type  (__TLNAME) :: vl !##PATHSCALE
-#endif
        int :: i, k, l, __CONCAT(__TLNAME,_uaddu)
        __DATATYPE, optional :: j
 !
@@ -192,14 +167,10 @@
        end function __CONCAT(__TLNAME,_uaddu)
 !
        function __CONCAT(__TLNAME,_get( vl, i )) result(list) ! if i is found, returns the corresponding list
-#ifndef __CHARMM
        __TYPE (__TLNAME) :: vl
-#else
-       class (__TLNAME) :: vl !##.not.PATHSCALE
-       type  (__TLNAME) :: vl !##PATHSCALE
-#endif
        int :: i, k
        __DATATYPE, pointer :: list(:)
+       nullify(list)
        do k=1,vl%last
          if (vl%i(k).eq.i) then
           allocate(list(vl%v(k)%last))
@@ -210,12 +181,7 @@
        end function __CONCAT(__TLNAME,_get)
 !
        function __CONCAT(__TLNAME,_getind( vl,i )) result(j) ! returns j for the first "vl%i(j)=i" match
-#ifndef __CHARMM
        __TYPE (__TLNAME) :: vl
-#else
-       class (__TLNAME) :: vl !##.not.PATHSCALE
-       type  (__TLNAME) :: vl !##PATHSCALE
-#endif
        int :: i, j
        j=-1
        if (vl%initialized) then
@@ -227,12 +193,7 @@
        end function __CONCAT(__TLNAME,_getind)
 !
        function __CONCAT(__TLNAME,_delete( vl,i )) ! delete list that corresponds to the tag 'i'
-#ifndef __CHARMM
        __TYPE (__TLNAME) :: vl
-#else
-       class (__TLNAME) :: vl !##.not.PATHSCALE
-       type  (__TLNAME) :: vl !##PATHSCALE
-#endif
        bool :: __CONCAT(__TLNAME,_delete)
        int :: i, k, l
        __CONCAT(__TLNAME,_delete)=.false.
@@ -245,7 +206,7 @@
           vl%last=vl%last-1     ! decrement list length
 ! reinitialize list at position l (the length of the list stays the same)
           nullify(vl%v(l)%__DATANAME)
-          call __CONCAT( __TNAME,_init(vl%v(l)))
+          call __CONCAT( __TNAME,_reinit(vl%v(l))) ! need reinit because v(l)%initialized = .true. (despite nullify)
           __CONCAT(__TLNAME,_delete)=.true.
           exit
          endif

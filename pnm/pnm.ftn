@@ -1,0 +1,867 @@
+!     Plastic Network Model.
+!
+!     Author: Jingzhi Pu & Paul Maragakis
+!
+!     Date: Fri Oct 31 15:02:20 EST 2003
+!     Date: Thu Nov  6 15:23:49 EST 2003
+!     Date: Wed Dec  3,             2003 (increased maxcon to 150)
+!     Date: Fri Apr  2,             2004 (consistency sweep: fortran indexing)
+!     Date: June                    2007 (interfaced to CHARMM)
+! overhauled by VO in Aug. 2013 :! bug fixes, parallelization, generalization to an arbitrary number of networks, 
+! multiple simultaneous plastic networks (e.g. corrsponding to different proteins/domains); NOTE : parallelization may not help in some cases
+!---------------------------------------------------------------
+module pnm
+!
+__CHARMM_ONLY##IF PNM (pnm_main)
+  __DEP_KINDS
+  __DEP_NUMBER
+  __DEP_CONST
+!
+#ifndef __CHARMM
+#define __COMMUNICATOR __PNMCOMM
+#include "setcomm.def"
+!
+#define __KBOLTZ kboltzmann
+#else
+#define __KBOLTZ kboltz 
+#endif
+
+#if ((defined(__CHARMM) && defined(__STRING_DEP)) || !defined(__CHARMM))
+__CHARMM_ONLY##IF STRINGM ! VO can use either string method routines or local routines (below)
+  use ivector
+  use rvector
+__CHARMM_ONLY##ENDIF
+#endif
+!
+  __IMPNONE
+  private
+!
+#ifdef __CHARMM
+#ifdef __STRING_DEP
+##IFN STRINGM ! VO: otherwise can use string method aux subroutines
+#endif //string_dep
+!========================= auxiliary vector types
+#include "vectors_var"
+#ifdef __STRING_DEP
+##ENDIF
+#endif //string_dep
+!========================= end auxiliary vector types
+#endif //charmm
+!
+  type enet ! elastic network type
+   type(int_vector) :: nodes ! pnm node list (no connectivity)
+   type(int_vector) :: bonds ! pnm bond list (interacting pairs in tandem)
+   type(real_vector) :: x ! x-coordinate
+   type(real_vector) :: y ! y-coordinate
+   type(real_vector) :: z ! z-coordinate
+   type(real_vector) :: fx ! gradient of energy w.r.t x
+   type(real_vector) :: fy !                          y
+   type(real_vector) :: fz !                          z
+   type(real_vector) :: econt ! energy decomposition array
+   type(real_vector) :: r0 ! equilibrium bond lengths (single list corresponding to bonds)
+   float :: k   ! force constant
+   float :: kb  ! bonded force constant
+   float :: knb ! nonbonded force constant
+   float :: cutoff ! cutoff for network
+   float :: emin   ! energy value at minimum
+   float :: eps    ! mixing constant
+   bool :: initialized
+  end type enet
+!
+  bool :: qpnm ! pnm active
+!
+  type(enet), private, save, pointer :: networks(:)    ! array of elastic network type
+  int :: num_enm                      ! number of networks
+  int :: max_num_enm                  ! max number of networks : allocated at initialization
+  bool, private :: initialized=.false. ! whether the module has been initialized (possibly with no networks)
+  bool, public :: calc_para=.true.     ! whether to calculate forces in parallel
+  float, private, save, pointer :: pnmene(:,:)=>null() ! matrix of pairwise mixing coefficeints
+!
+  int, private, save, pointer :: models(:)=>null() ! index of separate pnm models into the networks array
+  bool, private, save, pointer :: qexp(:)=>null()   ! array of flags indicating whether the exponential PNM version is used
+  float, private, save, pointer :: beta(:)=>null() ! array of PNM temperatures (only for the exponential version)
+  int, private :: num_models ! number of pnm models
+!
+#ifndef __CHARMM
+  float, pointer,save :: wlapack(:)=>NULL()
+  bool :: qdouble, qsingle
+#endif
+!
+  __DECL_MSGBUF
+!
+  public pnm_main
+  public pnm_add
+  public pnm_ene
+
+  contains
+
+!===================================================================
+   subroutine pnm_main(comlyn,comlen) ! parser
+   __DEP_PARSER
+   __DEP_OUTPUT
+!
+   character(len=*) :: comlyn
+   int ::  comlen
+! local variables
+   character(len=8) :: keyword
+   __IAM(PNM_MAIN)
+   int :: i, j
+   float :: t
+!
+!
+   keyword=__NEXTA(comlyn,comlen)
+!====================================================================
+   if (__STRNCMP(keyword,'DONE',4)) then
+     call pnm_done()
+!====================================================================
+   elseif (__STRNCMP(keyword,'INIT',4)) then
+     keyword=__NEXTA(comlyn,comlen)
+     i=-1
+     j=len(keyword)
+     __TRIMA(keyword,j)
+     if (j.gt.0) i=__ATOI(keyword,j)
+     if (i.le.0) then
+      i=2
+     write(_MSGBUF,600) whoami,i ; __PRINTL(_MSGBUF,3)
+ 600  format(/A,' VALID NUMBER OF PNM NETWORKS NOT SPECIFIED. USING ',I6)
+     endif ! i<=2
+     call pnm_init(i)
+!====================================================================
+   elseif ( __STRNCMP(keyword,'ADD',3)) then
+     call pnm_add(comlyn, comlen) ! add new rtmd restraint
+!====================================================================
+! specify parallel calculation options (lifted from string code)
+   elseif ( __STRNCMP(keyword,'PARA',4)) then
+     keyword=__NEXTA(comlyn,comlen)
+     select case(keyword)
+       case('YES','ON','TRUE','T','yes','on','true','t')
+        keyword='ENABLED '; calc_para=.true.
+        write(_MSGBUF,7009) whoami, keyword ; __PRINTL(_MSGBUF,3)
+       case('NO','OFF','FALSE','F','no','off','false','f')
+        keyword='DISABLED' ; calc_para=.false.
+        write(_MSGBUF,7009) whoami, keyword ; __PRINTL(_MSGBUF,3)
+       case default
+        __WRN( whoami, 'UNKNOWN OPTION SPECIFIED')
+     end select
+ 7009 format(' ',A,':', ' PARALLEL COMPUTATION OF FORCES ',A)
+!====================================================================
+! specify exponential version
+   elseif (__STRNCMP(keyword,'EXP',3)) then
+     if (.not.initialized) call pnm_init() ! default initialization
+     keyword=__NEXTA(comlyn,comlen)
+     select case(keyword)
+       case('YES','ON','TRUE','T','yes','on','true','t')
+        qexp(num_models)=.true.
+        t=__GET_RM_F(COMLYN, COMLEN, 'TEMP',300d0)
+        if (t.le.__ERRTOL) then 
+         __WRN(whoami, ' PNM TEMPERATURE MUST BE GREATER THAN ZERO. ABORT.')
+         return
+        else
+         beta(num_models)=one/(__KBOLTZ*t)
+        endif
+        write(_MSGBUF,7010) whoami, itoa(num_models), ftoa(t); __PRINTL(_MSGBUF,3)
+       case('NO','OFF','FALSE','F','no','off','false','f')
+        qexp(num_models)=.false.
+        write(_MSGBUF,7011) whoami, itoa(num_models) ; __PRINTL(_MSGBUF,3)
+       case default
+        __WRN( whoami, 'NO VALID "EXP" OPTION SPECIFIED')
+     end select
+ 7010 format(' ',A,': MODEL #',A,' WILL USE EXPONENTIAL PNM WITH T=',A,'K.')
+ 7011 format(' ',A,': MODEL #',A,' WILL USE STANDARD PNM.')
+!====================================================================
+   elseif ( __STRNCMP(keyword,'NEWM',4)) then ! new model
+    if (.not.initialized) call pnm_init() ! default initialization
+    ! can only add a new model if the present model has at least one network !
+    if ( num_enm .ge. models(num_models) ) then 
+! make sure there will be enough room to add network(s) to the model
+     if (num_enm.ge.max_num_enm) then
+       __WRN(whoami,' MAXIMUM NUMBER OF ALLOWED NETWORKS EXCEEDED (REINITIALIZE).')
+     else
+       num_models=num_models+1
+       models(num_models)=num_enm+1
+       write(_MSGBUF,601) whoami, itoa(num_models) ; __PRINTL(_MSGBUF,3)
+ 601  format(' ',A,': WILL CREATE A NEW PNM MODEL (#',A,').')
+     endif ! num_enm > max
+    endif ! initialized
+!====================================================================
+   elseif ( __STRNCMP(keyword,'HELP',4)) then ! print short help screen
+ write(_MSGBUF,'(2A)')&
+&   whoami, ' _______________________________________________________________________'&
+& , whoami, ' DESCRIPTION: Plastic Network Model'&
+& , whoami, ' _______________________________________________________________________'&
+& , whoami, ' SYNTAX:'&
+& , whoami, ' PNM [{ INITialize int }] | // initialize with the specified maximum total no. of ENMs'&
+& , whoami, '     [{ DONE }]           | // finalize'&
+& , whoami, '     [{ NEWModel }]       | // start a new PNM'&
+& , whoami, '     [{ EXP <on|true|t|yes|off|false|f|no> [TEMP real] }]| //turn on/off exponential version and set temperature'&
+& , whoami, '     [{ ADD [FORC real  // Add ENM to current PNM ; ENM force constant'&
+& , whoami, '            [CUT real]  // ENM cutoff (Ang)'&
+& , whoami, '            [ZERO real] // ENM minimum energy value'&
+& , whoami, '            [PMIX real] // ENM mixing coefficient'&
+& , whoami, '            [atom-selection] // ENM atom selection'&
+& , whoami, '            [REMO atom-selection atom-selection] //ENM : interactions between these selections are off'&
+& , whoami, '            [COMP] }]     | ENM : take reference structure from comparison set// '&
+& , whoami, '            [ { PARA <on|true|t|yes|off|false|f|no> } ] // parallelization on/off'&
+& , whoami, ' _______________________________________________________________________'
+ __PRINTL(_MSGBUF,3);
+!====================================================================
+   else
+    __WARN(whoami,'UNRECOGNIZED SUBCOMMAND: ',keyword)
+   endif
+!
+   end subroutine pnm_main
+!====================================================================
+   subroutine pnm_done()
+   __DEP_OUTPUT
+!====================================================================
+   __IAM(PNM_DONE)
+   int :: i
+   type(enet), pointer :: enm
+!
+   if (.not.initialized) return
+!
+   __FREE(pnmene)
+   __FREE(models)
+   __FREE(qexp)
+   __FREE(beta)
+#ifndef __CHARMM
+   __FREE(wlapack)
+#endif
+!
+   do i=1, num_enm ! over all networks
+    enm=>networks(i)
+    call int_vector_done(enm%nodes)
+    call int_vector_done(enm%bonds)
+    call real_vector_done(enm%x)
+    call real_vector_done(enm%y)
+    call real_vector_done(enm%z)
+    call real_vector_done(enm%fx)
+    call real_vector_done(enm%fy)
+    call real_vector_done(enm%fz)
+    call real_vector_done(enm%r0)
+    call real_vector_done(enm%econt)
+   enddo
+   __FREE(networks)
+!
+   num_enm=0
+   num_models=0
+   initialized=.false.
+!
+   write(_MSGBUF,99) whoami ; __PRINTL(_MSGBUF,3)
+ 99   format(' ',A,': PNM IS OFF.')
+!
+   end subroutine pnm_done
+!
+!===========================================================================
+   subroutine pnm_init(n_)
+   __DEP_PARSER
+   __DEP_NUMBER
+   __DEP_OUTPUT
+!===========================================================================
+   __IAM(PNM_INIT)
+   int, optional :: n_
+   int :: i, n
+   type(enet), pointer :: enm
+!
+   if (initialized) call pnm_done()
+   if (present(n_)) then ; n=n_ ; else ; n=2; endif
+!
+   if (n.gt.0) then
+     __ALLOC(pnmene(n,n)) ! allocate mixing coefficients
+     __ALLOC(networks(n)) ! allocate network data storage
+     __ALLOC(models(n+1)) ! allocate models array; this is `overdimensioned` for technical simplicity in pnm_ene
+     __ALLOC(qexp(n))     ! exponential PNM flags
+     __ALLOC(beta(n))     ! temperatures for exponential PNM
+     do i=1, n
+      enm=>networks(i)
+!associate(nodes=>networks(i)%nodes, r0=>networks(i)%r0, xn=>networks(i)%x, yn=>networks(i)%y, zn=>networks(i)%z)
+! initialize components
+      call int_vector_init(enm%nodes)
+      call int_vector_init(enm%bonds)
+      call real_vector_init(enm%x)
+      call real_vector_init(enm%y)
+      call real_vector_init(enm%z)
+      call real_vector_init(enm%fx)
+      call real_vector_init(enm%fy)
+      call real_vector_init(enm%fz)
+      call real_vector_init(enm%r0)
+      call real_vector_init(enm%econt)
+      enm%k=zero
+      enm%kb=zero
+      enm%knb=zero
+      enm%cutoff=zero
+      enm%emin=zero
+      enm%eps=zero
+      enm%initialized=.false.
+!end associate
+     enddo
+     num_enm=0
+     max_num_enm=n
+     pnmene=zero ! initialize mixing matrix
+     models=0    ! initialize to zero
+     qexp=.false.! off by default
+     num_models=1
+     models(num_models)=1 ! index of the first pnm model in the networks array
+!
+     write(_MSGBUF,101) whoami, itoa(n) ; __PRINTL(_MSGBUF,3)
+ 101  format(' ',A,': INITIALIZED PNM MODULE WITH ',A,' NETWORKS (MAX.)')
+     initialized=.true.
+    else
+     __WARN( whoami,' PNM MODULE INVOKED WITH AN INVALID NUMBER OF NETWORKS(',itoa(n),').')
+     return
+    endif
+!
+   end subroutine pnm_init
+!===========================================================================
+  subroutine pnm_add(comlyn, comlen) 
+!
+! add a single elastic network
+!
+  __DEP_SIZE
+  __DEP_CONST
+  __DEP_COORDINATES
+  __DEP_NUMBER
+  __DEP_PARSER
+  __DEP_OUTPUT
+  __DEP_SELECT
+  __DEP_PSF
+
+  __IAM(PNM_ADD)
+  int, pointer, dimension(:) :: islct, jslct, kslct
+#ifdef __DMOL
+  __DECLARE_DMOL_SELECT
+  int :: natom
+#endif
+  character(len=*) :: comlyn
+  int :: comlen
+!
+  float :: dist2, dref2, dx, dy, dz
+  int :: i, j, k, ii, jj, kk, l, inet
+  bool :: qrem, qcomp
+!
+  type(enet), pointer :: enm
+!
+#ifdef __DMOL
+  natom=__NATOM
+#endif
+!
+  if (.not.initialized) then
+   __WRN( whoami,' PNM MODULE NOT INITIALIZED. INITIALIZING WITH DEFAULTS.')
+   call pnm_init()
+  endif
+!
+  if (num_enm.ge.max_num_enm) then
+    __WRN(whoami,' MAXIMUM NUMBER OF ALLOWED NETWORKS EXCEEDED (REINITIALIZE).')
+    return
+  endif
+!
+! add network
+  inet=num_enm+1 ! network index
+! set network parameters
+  enm=>networks(inet);
+  enm%k     =__GET_RM_F(COMLYN,COMLEN,'FORC',ONE)               ! generic force constant
+  enm%kb    =__GET_RM_F(COMLYN,COMLEN,'FCBD',enm%k )            ! bonded atoms
+  enm%knb   =__GET_RM_F(COMLYN,COMLEN,'FCNB',enm%k )            ! non-bonded atoms
+  enm%cutoff=__GET_RM_F(COMLYN,COMLEN,'CUT' ,TEN)               ! cutoff for this 
+  enm%emin  =__GET_RM_F(COMLYN,COMLEN,'ZERO',ZERO)              ! equilibrium energy
+  enm%eps   =__GET_RM_F(COMLYN,COMLEN,'PMIX',HALF)              ! enm mixing constant
+!
+  write(_MSGBUF,*) 'PNM_ADD :   FORCE   V_0   Cutoff   Epsilon'
+  write(_MSGBUF(2),*) '------------------------------------------'
+  write(_MSGBUF(3),10)'           ',enm%k, enm%emin, enm%cutoff, enm%eps
+  __PRINTL(_MSGBUF,2)
+!
+10 FORMAT(A,4F7.2)
+! PNM node selection
+  __ALLOC(islct(natom), jslct(natom), kslct(natom))
+  islct=0; jslct=0; kslct=0;
+#ifdef __CHARMM
+! main selection
+  call SELCTA(COMLYN,COMLEN,islct,X,Y,Z,WMAIN,.TRUE.)
+#elif defined(__DMOL)
+#define __INDEX dmolselect
+#include "dmol_select_macro.def"
+  islct(dmolselect)=1
+#endif
+
+! auxiliary selections to generate exclusions between two sub-selections
+  qrem = ( __INDX_RM(COMLYN,COMLEN,'REMO') .gt. 0)
+  if (qrem) then
+#ifdef __CHARMM
+   call SELCTA(COMLYN,COMLEN,jslct,X,Y,Z,WMAIN,.TRUE.)
+   call SELCTA(COMLYN,COMLEN,kslct,X,Y,Z,WMAIN,.TRUE.)
+#elif defined(__DMOL)
+#define __INDEX dmolselect
+#include "dmol_select_macro.def"
+   jslct(dmolselect)=1
+#define __INDEX dmolselect
+#include "dmol_select_macro.def"
+   kslct(dmolselect)=1
+#endif
+  endif
+!
+! use selection array to add node indices and coordinates
+  qcomp = (__INDX_RM(COMLYN,COMLEN,'COMP') .gt. 0) ! whether to take reference coordinates from comparison set
+  if (qcomp) then
+   write(_MSGBUF,104) whoami, 'COMP'
+   do i=1,natom
+    if (islct(i) .eq. 1) then 
+!=============================================
+     l=int_vector_add(enm%nodes,i)
+     l=real_vector_add(enm%x,__XXCOMP(i))
+     l=real_vector_add(enm%y,__YYCOMP(i))
+     l=real_vector_add(enm%z,__ZZCOMP(i))
+     l=real_vector_add(enm%fx,zero);  l=real_vector_add(enm%fy,zero);  l=real_vector_add(enm%fz,zero); l=real_vector_add(enm%econt,zero); 
+    endif
+   enddo
+  else
+   write(_MSGBUF,104) whoami, 'MAIN'
+   do i=1,natom
+    if (islct(i) .eq. 1) then 
+     l=int_vector_add(enm%nodes,i)
+     l=real_vector_add(enm%x,__XX(i))
+     l=real_vector_add(enm%y,__YY(i))
+     l=real_vector_add(enm%z,__ZZ(i))
+     l=real_vector_add(enm%fx,zero);  l=real_vector_add(enm%fy,zero);  l=real_vector_add(enm%fz,zero);  l=real_vector_add(enm%econt,zero)
+!=============================================
+    endif
+   enddo
+  endif ! qcomp
+ 104  format(' ',A,': EQUILIBRIUM GEOMETRY TAKEN FROM ',A,' SET.')
+!
+  write(_MSGBUF(2),105) whoami, itoa(enm%nodes%last)
+  __PRINTL(_MSGBUF,3)
+ 105  format(' ',A,': ',A,' ENM ATOMS FOUND.')
+!
+! compute connectivity
+  dref2=enm%cutoff**2 ! for faster comparison
+! O(N^2) loop to find connectivity
+!
+  do j=1, enm%nodes%last
+    do k=j+1, enm%nodes%last
+! check for node connection exclusion;
+! fetch atom indices
+     jj=enm%nodes%i(j) ! atom index of first  node
+     kk=enm%nodes%i(k) ! atom index of second node
+     if ( .not. ( (jslct(jj).eq.1 .and. kslct(kk).eq.1) .or. (jslct(kk).eq.1 .and. kslct(jj).eq.1) ) ) then ! no exclusion
+!             distance between points i and j
+        dx=enm%x%r(j) - enm%x%r(k); dy=enm%y%r(j) - enm%y%r(k); dz=enm%z%r(j) - enm%z%r(k);
+        dist2 = dx**2 +  dy**2 + dz**2
+        if (dist2.le.dref2) then  
+!    add to the network connectivity list
+!    index negative if nodes are covalently bonded
+#ifdef __CHARMM
+         do II = 1,NBOND ! over all bonds
+          if ((JJ .EQ. IB(II) .AND. KK .EQ. IB(JJ)) .OR. (KK .EQ. IB(II) .AND. JJ .EQ. IB(JJ))) then
+           kk=-kk; exit
+          endif
+         enddo
+#elif defined (__DMOL)
+! not implemented
+#endif
+! update bond list (note that adding node and _NOT_ atom indices
+         l=int_vector_add(enm%bonds,j); l=int_vector_add(enm%bonds, sign(k,kk) );
+!                   equilibrium distance value
+         l=real_vector_add(enm%r0,sqrt(dist2));
+        endif ! dist <= dref
+     endif ! no exclusion
+    enddo ! k-nodes
+  enddo ! jnodes
+!
+! set additional interaction terms
+  do i=1, num_enm
+   pnmene(i,inet) = half * (enm%eps + networks(i)%eps )
+   pnmene(inet,i) = pnmene(i, inet)
+  enddo
+!
+  enm%initialized=.true.
+  num_enm=inet ! increment counter
+! free arrays
+  __FREE(ISLCT)
+  __FREE(JSLCT)
+  __FREE(KSLCT)
+#ifdef __DMOL
+  __FREE(dmolselect)
+#endif
+!
+  end subroutine pnm_add
+
+!----------------------------------------------------------------
+  subroutine enm_ene(DEU,X,Y,Z,INET)
+  __DEP_CONST
+  __DEP_NUMBER
+!
+#if (defined(__CHARMM) || defined (__PARALLEL))
+
+#ifdef __CHARMM
+##IF PARALLEL
+  use parallel, only : numnod, mynod
+#define __NCPU numnod
+#define __ME mynod
+#elif defined(__PARALLEL)
+  __DEP_MPI
+  __DEP_MULTICOM
+#endif //__CHARMM
+!
+  bool :: qgrp
+__CHARMM_ONLY##ENDIF
+!
+#endif // parallel or charmm
+!     Subroutine that returns the elastic network forces of the network (INET)
+  float, dimension(*) ::  X, Y, Z
+  int :: inet ! network index
+  int :: ibeg, iend
+  int :: i, j, ii, jj, iii, jjj
+  float :: deu, dist, dref, ddx, ddy, ddz
+  float :: d, kf
+  type(enet), pointer :: enm
+  float, pointer, dimension(:) :: dx, dy, dz, econt ! pointers to gradient arrays
+!
+  if (inet.gt.size(networks)) return
+!
+  enm=>networks(inet)
+!
+  dx=>enm%fx%r ;  dy=>enm%fy%r ;  dz=>enm%fz%r
+  econt=>enm%econt%r ! energy decomposition array
+  deu=zero;
+  do i=1, enm%nodes%last ; dx(i)=zero; dy(i)=zero ; dz(i)=zero; econt(i)=zero ; enddo
+!
+#if (defined(__CHARMM) || defined(__PARALLEL))
+__CHARMM_ONLY##IF PARALLEL
+!
+  qgrp=calc_para.and.__NCPU.gt.1
+  if (qgrp) then
+   j=ceiling(one*enm%r0%last/__NCPU)   ! bonds / cpu
+   ibeg=min(j*__ME,enm%r0%last-1) + 1 ! index of first bond for this cpu
+   iend=ibeg - 1 + max(0,min(j,enm%r0%last-j*__ME )) ! index of last bond for this cpu
+  else ! not qgrp
+   ibeg=1; iend=enm%r0%last
+  endif ! qgrp
+!
+__CHARMM_ONLY##ELSE
+#endif
+#if (!defined(__PARALLEL) || defined(__CHARMM) )
+  ibeg=1; iend=enm%r0%last
+__CHARMM_ONLY##ENDIF
+#endif
+!
+  do i=ibeg, iend      ! over all bonds on this CPU
+   jj=2*i; ii=jj-1 ;   ! indices into list of pairs
+   ii=enm%bonds%i( ii )    ! index of first node
+   jj=enm%bonds%i( jj )    ! index of second node
+   if (jj.lt.0) then ; kf=enm%kb ; else ; kf=enm%knb ; endif ! ( negative j-index corresponds to a bonded pair )
+   jj=abs(jj);
+   iii=enm%nodes%i(ii)  ! atom index of first node
+   jjj=enm%nodes%i(jj)  ! atom index of second node
+   ddx=(X(iii)-X(jjj)); ddy=(Y(iii)-Y(jjj)); ddz=(Z(iii)-Z(jjj));
+   dist=sqrt( ddx**2 + ddy**2 + ddz**2 ) ! distance between nodes i and j
+!
+   dref=dist-enm%r0%r(i) ! difference from equilibrium distance
+!
+   __DBGOUT(i,j,ii,jj,dist,dref)
+!
+!======= Update total energy ====================
+   d=kf * dref**2
+   deu=deu+d
+!======= Update the energy decomposition array ==
+   d=fourth*d;   ! split equally between two nodes
+   econt(ii)=econt(ii) + d ; econt(jj)=econt(jj) + d ;
+!==============================================
+!  Update forces (DX = Grad_x = -f_x in CHARMM convention)
+   d=kf*dref/( max ( abs(dist),__ERRTOL ) ); ! protect from overflow
+   dx(ii)=dx(ii) + d * ddx ;    dy(ii)=dy(ii) + d * ddy;    dz(ii)=dz(ii) + d * ddz
+   dx(jj)=dx(jj) - d * ddx ;    dy(jj)=dy(jj) - d * ddy;    dz(jj)=dz(jj) - d * ddz
+!======= forces update =======
+  enddo ! i: bondlist
+!
+!end associate
+!
+  deu = half * deu + enm%emin ! elastic energy
+!
+  __DBGOUT(eu, deu, enm%emin)
+!
+  end subroutine enm_ene
+!-------------------------------------------------------------
+  subroutine pnm_ene(EU,X,Y,Z,DX,DY,DZ,QECONT,ECONT,NATOM)
+!     The plastic network model (PNM) energy routine.
+!     Original Author: Paul Maragakis
+!     overhaul by VO 2013
+!     NOTE :  parallelization assumes that all coodinates are known
+  __DEP_NUMBER
+  __DEP_CONST
+  __DEP_PARSER
+!
+#if (defined(__CHARMM) || defined(__PARALLEL))
+!
+#ifdef __CHARMM
+##IF PARALLEL
+  use parallel, only : numnod, mynod, mynodp, iparpt
+#elif defined(__PARALLEL)
+  __DEP_MPI
+  __DEP_MULTICOM
+#endif
+!
+  int :: afirst, alast
+  bool :: qgrp
+  float :: pnmeneg(num_enm) ! reduced energies
+  float, dimension(:,:), pointer :: fc    ! atomic pnm force arrays
+__CHARMM_ONLY##ENDIF
+!
+#endif
+!
+  __IAM(PNM_ENE)
+  float :: eu, deu ! total energy, energy from a particular PNM
+
+  int :: natom
+  float, dimension(natom) ::  X, Y, Z, DX, DY, DZ ! coordinates and forces
+
+  bool :: qecont          ! decomposition flag
+  float :: econt(*)       ! decomposition array
+!
+  int :: i, j, k, ii
+  int ::imodel, emodel, num_enm_this ! beginning and ending indices of ENMs in the pnm model, number of ENMs in PNM
+  float :: dref
+!
+#ifndef __CHARMM
+  int :: ierr
+#endif
+!
+  float, pointer, dimension(:) :: fx, fy, fz, edecomp ! short-hand pointers
+! variables for diagonalization
+  float, pointer, dimension(:,:) :: M, evec  ! copy of interaction matrix, eigenvectors
+  float, pointer, dimension(:)   :: eval ! eigenvalues
+  float :: deval(num_enm) ! force prefactor for individual enms
+!
+  type(enet), pointer :: enm
+!
+  if (num_enm.le.0) return
+  if (.not.initialized) then
+   __WRN( whoami,' PNM MODULE NOT INITIALIZED. NOTHING DONE.')
+   return
+  endif
+!
+  eu=zero
+!
+! note : num_models is less than or equal to num_enm (equality with one ENM per model)
+  do j=1, num_enm    ! over all networks (in all models)
+!
+#if (defined(__PARALLEL) || defined(__CHARMM))
+__CHARMM_ONLY##IF PARALLEL
+   call enm_ene(pnmeneg(j),X,Y,Z,j)
+__CHARMM_ONLY##ELSE
+#endif
+#if (!defined(__PARALLEL) || defined(__CHARMM))
+   call enm_ene(pnmene(j,j),X,Y,Z,j)
+#endif
+__CHARMM_ONLY##ENDIF
+!
+  enddo ! j: over all networks
+! reduce energies in parallel
+! compute energy of the plastic network
+! diagonalize interaction matrix and take the lowest eigenvalue
+! using the default diagonalized in CHARMM, which may only work for symmetric
+! matrices; this is OK as long as the interaction matrix is kept symmetric
+! for the exponential version of the model, diagonalization is not needed (see below)
+#if (defined(__PARALLEL) || defined(__CHARMM))
+__CHARMM_ONLY##IF PARALLEL
+!
+  qgrp=calc_para .and.__NCPU.gt.1
+  if (qgrp) &
+#ifdef __CHARMM
+ &   call gcomb(pnmeneg, num_enm)
+#else
+ &   call MPI_ALLREDUCE (MPI_IN_PLACE, pnmeneg, num_enm, mpifloat, MPI_SUM, __COMM, i)
+#endif
+  do j=1, num_enm ; pnmene(j,j)=pnmeneg(j); enddo ! update diagonal entries (energies)
+!
+  if (qecont) then ; __ALLOC(fc(natom,4)) ; else ; __ALLOC(fc(natom,3)); endif ; fc=zero ! initialize force arrays
+!
+__CHARMM_ONLY##ENDIF
+#endif
+!
+! now loop over all models and diagonalize
+  do k=1, num_models    ! over all pnm models
+   imodel=models(k)     ! network index of first model
+   emodel=models(k+1)-1 ; if (emodel.le.0) emodel=num_enm ! network index of second model
+   num_enm_this=emodel-imodel+1; ! number of ENMs in this PNM
+!
+   if (qexp(k)) then ! code for exponential version
+!=========== exponential PNM
+    deu=zero ; dref=zero
+!=========== compute in a numerically stable way for large energies
+! 1) find minimum energy
+    ii=imodel               ! location of minimum
+    deu=pnmene(ii,ii)
+    do j=imodel+1, emodel
+     if (deu.gt.pnmene(j,j)) then ; ii=j ; deu=pnmene(j,j) ; endif
+    enddo
+! 2) compute correction to minimum energy
+    do j=imodel, emodel
+      deval(j)=exp( - beta(k) * (pnmene(j,j)-deu) ) ! relative to minimum
+      dref = dref + deval(j)
+    enddo
+    deu = deu - log ( dref ) / beta(k)
+    deval(imodel:emodel) = deval(imodel:emodel) / dref ! gradient contribution coefficients for all except ii
+__DBGOUT(beta(k), deu,  dref)
+   else
+!============ standard PNM
+    __ALLOC(M(num_enm_this, num_enm_this), evec(num_enm_this, num_enm_this), eval(num_enm_this))
+    M=pnmene(imodel:emodel,imodel:emodel); ! copy part of interaction matrix corresponding to this PNM
+! diagonalize matrix
+#ifdef __CHARMM
+! diagq is inaccurate; using diagrs
+    call diagrs('FULL',num_enm_this,M,eval,evec)
+#else
+! adopted from pca.ftn
+    if (.not. associated(wlapack)) then
+     qdouble=(kind(eval).eq.kind(1d0));
+     qsingle=(kind(eval).eq.kind(1.0));
+     if (qdouble) then       ! double precision
+      call dsyev('V','L', num_enm, eval, num_enm, eval, eval, iminusone, ierr)
+     elseif (qsingle) then   ! single precision
+      call ssyev('V','L', num_enm, eval, num_enm, eval, eval, iminusone, ierr)
+     else
+      __WARN(whoami, 'Cannot find compatible LAPACK diagonalization routine for kind "',itoa(kind(eval)),'". Trying to abort');
+      call pnm_done()
+      return
+     endif
+!
+     if (ierr.ne.0) then 
+      __WARN(whoami, 'Error calculating work array size for LAPACK diagonalizer. Trying to abort');
+      call pnm_done()
+      return
+     endif
+!
+     i=nint(eval(1)) ; ! dimension of work array
+     __ALLOC(wlapack(i)) ;
+!
+    endif ! associated
+!
+    if (qdouble) then
+     call dsyev('V','L', num_enm_this, M, num_enm_this, eval, wlapack, i, ierr)
+    elseif (qsingle) then
+     call ssyev('V','L', num_enm_this, M, num_enm_this, eval, wlapack, i, ierr)
+    else
+! should be impossible to get here
+    endif
+
+#endif
+!
+    ii=1; deu=eval(ii); do i=2, num_enm_this ; if ( eval(i) .lt. deu ) then ; ii=i ; deu=eval(ii) ; endif ; enddo ! scan all evals to find lowest
+! compute corresponding eigenvalue (energy) derivatives w.r.t individual ENM energies (diagonal matrix components);
+    deval(imodel:emodel) = evec (:, ii)**2 ;
+! make sure eigenvectors are normalized to unity:
+    dref = sum(deval(imodel:emodel)) ; if (dref .gt. __ERRTOL) deval(imodel:emodel)=deval(imodel:emodel) / dref ;
+! deallocate arrays
+    deallocate(M, evec, eval)
+   endif ! qexp
+   eu=eu+deu ! add this network`s energy contribution to total PNM energy
+  enddo ! over all models
+!
+__DBGOUT(eval)
+__DBGOUT(deval)
+__DBGOUT(evec)
+! apply forces
+! all CPUs do this (even in parallel, because in that case only partial forces are computed by each CPU)
+!
+  if (qecont) then
+   do j=1,num_enm    ! over all networks
+    enm=>networks(j)
+    fx=>enm%fx%r;    fy=>enm%fy%r;    fz=>enm%fz%r;    edecomp=>enm%econt%r;
+    do i=1, enm%nodes%last
+     ii=enm%nodes%i(i)                       ! index
+!
+#if (defined(__CHARMM) || defined(__PARALLEL))
+__CHARMM_ONLY##IF PARALLEL
+     fc(ii,1) = fc(ii,1) + deval(j) * fx(i);
+     fc(ii,2) = fc(ii,2) + deval(j) * fy(i);
+     fc(ii,3) = fc(ii,3) + deval(j) * fz(i);
+     fc(ii,4) = fc(ii,4) + edecomp(i);
+#endif
+#if (defined(__CHARMM) || !defined(__PARALLEL))
+__CHARMM_ONLY##ELSE
+     dx(ii) = dx(ii) + deval(j) * fx(i);
+     dy(ii) = dy(ii) + deval(j) * fy(i);
+     dz(ii) = dz(ii) + deval(j) * fz(i);
+     econt(ii) = econt(ii) + edecomp(i);
+__CHARMM_ONLY##ENDIF
+#endif
+!
+    enddo ! over nodes
+   enddo ! over networks
+  else
+   do j=1,num_enm    ! over all networks
+    enm=>networks(j)
+    fx=>enm%fx%r;    fy=>enm%fy%r;    fz=>enm%fz%r;
+    do i=1, enm%nodes%last
+     ii=enm%nodes%i(i)
+!
+#if (defined(__CHARMM) || defined(__PARALLEL))
+__CHARMM_ONLY##IF PARALLEL
+     fc(ii,1) = fc(ii,1) + deval(j) * fx(i);
+     fc(ii,2) = fc(ii,2) + deval(j) * fy(i);
+     fc(ii,3) = fc(ii,3) + deval(j) * fz(i);
+!
+#endif
+#if (defined(__CHARMM) || !defined(__PARALLEL))
+__CHARMM_ONLY##ELSE
+     dx(ii) = dx(ii) + deval(j) * fx(i)
+     dy(ii) = dy(ii) + deval(j) * fy(i)
+     dz(ii) = dz(ii) + deval(j) * fz(i)
+__CHARMM_ONLY##ENDIF
+#endif
+!
+    enddo ! over nodes
+   enddo ! over networks
+  endif
+!
+#if (defined(__CHARMM) || defined(__PARALLEL))
+!
+#ifdef __CHARMM
+##IF PARALLEL (parallel)
+##IF PARAFULL
+  afirst=1+IPARPT(MYNOD)
+  alast =IPARPT(MYNODP)
+##ELSE
+#endif //__CHARMM
+  afirst=1
+  alast=natom
+__CHARMM_ONLY##ENDIF
+
+! reduce gradients and scatter
+  if (qgrp) &
+#ifdef __CHARMM
+ & call vdgsum(fc(:,1), fc(:,2), fc(:,3),0)
+#elif defined(__DMOL)
+ & call mpi_reduce_scatter(MPI_IN_PLACE, fc, natom*3, mpifloat, MPI_SUM, __COMM, i)
+#endif //__CHARMM
+! add to main force array
+  do i=afirst, alast
+   dx(i)=dx(i)+fc(i,1);
+   dy(i)=dy(i)+fc(i,2);
+   dz(i)=dz(i)+fc(i,3);
+  enddo
+  __FREE(fc)
+!
+__CHARMM_ONLY  if (mynod.gt.0) eu=zero ! energies will be reduced outside of this routine
+!
+__CHARMM_ONLY##ENDIF (parallel)
+#endif //__CHARMM or __PARALLEL
+!
+  end subroutine pnm_ene
+!
+#ifdef __CHARMM
+#ifdef __STRING_DEP
+##IFN STRINGM ! VO: otherwise can use string method aux subroutines
+#endif //string_dep
+!========================= auxiliary vector subroutines follow
+#include "vectors_sub"
+#ifdef __STRING_DEP
+##ENDIF
+#endif//string_dep
+!========================= done with auxiliary vector subroutines
+#endif
+
+__CHARMM_ONLY##ENDIF (pnm_main)
+!======================================================================
+end module pnm

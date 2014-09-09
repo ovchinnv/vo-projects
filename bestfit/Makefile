@@ -1,7 +1,7 @@
 ROOT=..
 OBJS=bestfit.o
 NAME=bestfit
-DEPS=constants output
+DEPS=constants output parser multicom vectors parselist
 #
 CBINDOBJS=bestfit_c.o
 BINDSOURCES=$(OBJS:%.o=%_.F90) $(CBINDOBJS:%.o=%_.F90)
@@ -13,7 +13,7 @@ LOCALMACROS=-include source.defs
 LOCALDEPS=source.defs
 # additional objects for linking test.o executable
 
-LINKOBJS=constants.o output.o
+LINKOBJS=constants.o output.o parser.o cmd.o prm.o multicom_aux.o multicom.o ivector.o parselist.o isort.o
 PYTHONH=-I /usr/include/python2.7/
 LPYTHON=-lpython2.7
 
@@ -22,7 +22,7 @@ include $(ROOT)/Makefile.inc
 SWIGC=swig
 SFLAGS=
 
-charmm: $(CHARMM_SOURCES)
+charmm:: $(CHARMM_SOURCES)
 
 %_.F90:%.ftn $(LOCALDEPS) $(GLOBALDEPS) $(ROOT)/source.msg
 	$(FPP) $(FPPFLAGS) $(DEFS) -D__BINDC $(GLOBALMACROS) $(LOCALMACROS) -P $< > $@
@@ -35,18 +35,18 @@ static : libbestfit.a
 libbestfit.a: $(SBINDOBJS)
 	$(AR) $(AFLAGS) $@ $(SBINDOBJS)
 libbestfit.so: $(DBINDOBJS)
-	$(CC) -shared $(DBINDOBJS) $(FLIBS) -o $@
+	$(LD) -shared $(DBINDOBJS) $(FLIBS) -o $@
 
 tcl : libbestfit_tcl.so
 libbestfit_tcl.so : bestfit.i $(DBINDOBJS)
 	$(SWIGC) -D__BINDC $(SFLAGS) -tcl bestfit.i
-	$(CC) -fPIC $(CFLAGS) -D__BINDC $(LOCALMACROS) bestfit_wrap.c
+	$(CC) $(PIC) $(CFLAGS) -D__BINDC $(LOCALMACROS) bestfit_wrap.c
 	$(CC) -shared bestfit_wrap.o $(DBINDOBJS) $(FLIBS) -o $@
 
 python : _bestfit.so
 _bestfit.so : bestfit.i $(DBINDOBJS)
 	$(SWIGC) -D__BINDC $(SFLAGS) -python bestfit.i
-	$(CC) -fPIC $(CFLAGS) -D__BINDC $(LOCALMACROS) $(PYTHONH) bestfit_wrap.c
+	$(CC) $(PIC) $(CFLAGS) -D__BINDC $(LOCALMACROS) $(PYTHONH) bestfit_wrap.c
 	$(CC) -shared bestfit_wrap.o $(DBINDOBJS) $(FLIBS) $(LPYTHON) -o $@
 
 bestfit.i : bestfit.h

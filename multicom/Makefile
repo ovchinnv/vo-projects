@@ -1,11 +1,12 @@
 ROOT=..
-OBJS=multicom.o multicom_aux.o
+OBJS=multicom.o multicom_aux.o ifstack.o
 NAME=multicom
+DEPS=vectors output parser parselist
 
 LOCALMACROS=-include source.defs
 LOCALDEPS=source.defs
 
 include $(ROOT)/Makefile.inc
 
-multicom.o:multicom_aux.o output.stamp vectors.stamp parser.stamp parselist.stamp
-charmm: $(CHARMM_SOURCES)
+multicom.o:multicom_aux.o
+charmm:: $(CHARMM_SOURCES)

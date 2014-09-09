@@ -1,8 +1,4 @@
-!CHARMM Element source/stringm/sm0k.src $Revision: 1.5 $
-!
-! zero-temperature string code
-! documentation will be provided in stringm.doc
-!
+! zero-temperature string module
 !
       module sm0k ! string-method-at-0-K
 !
@@ -14,6 +10,7 @@ __CHARMM_ONLY##IF STRINGM
       private
 !
 !     VARIABLES
+ __DECL_MSGBUF
 !ccccc initialization flag
       bool, public, save :: sm0k_initialized=.false.
 !ccccc number of replicas on the string
@@ -34,19 +31,19 @@ __CHARMM_ONLY##IF STRINGM
       float, save  :: dst_cutoff=1.0d0 ! wavenumber truncation parameter for DST
 !
 !     arrays
-      float, save, allocatable ::                                      &
+      float, save, pointer ::                                      &
      &        rcurrent_m(:,:), rref_o(:,:), rcurrent_o(:,:)
 !     arclength and curvature
-      float, save, allocatable :: ds(:), curv(:) ! unavailable at first iteration
+      float, save, pointer :: ds(:), curv(:) ! unavailable at first iteration
 !     orientation weights -- for 0-temp. string
-      float, save, allocatable :: orientWeights(:), repaWeights(:)
-      int, save, allocatable :: iatom_o(:), iatom_m(:),             &
+      float, save, pointer :: orientWeights(:), repaWeights(:)
+      int, save, pointer :: iatom_o(:), iatom_m(:),             &
      &      iatom_free_o(:), iatom_free_m(:)
       int, save, pointer :: iatom_f(:)
 #ifdef __CHARMM
       int, save :: nfix_bckl
 #endif
-      bool, save, allocatable :: fixed_o(:), fixed_m(:), fixed_s(:)
+      bool, save, pointer :: fixed_o(:), fixed_m(:), fixed_s(:)
 !
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 !ccccc STATISTICS VARS cccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -79,10 +76,10 @@ __CHARMM_ONLY##IF STRINGM
       int, save :: num_average_samples=0 ! number of samples in the average set
       int, save :: rmsd0_flen=0, dsdt_flen=0, s_flen=0, rmsd_ave_flen=0, c_flen
 !     arrays
-      float, save, allocatable, dimension(:,:) ::                      &
+      float, save, pointer, dimension(:,:) ::                      &
      &      rold_s, rave_s, rcurrent_s, rcomp_s, rold_o, rave_o, rcomp_o
-      float, save, allocatable :: statWeights(:)
-      int, save, allocatable :: iatom_s(:), iatom_free_s(:)
+      float, save, pointer :: statWeights(:)
+      int, save, pointer :: iatom_s(:), iatom_free_s(:)
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 !     SUBROUTINES
 !
@@ -121,8 +118,6 @@ __CHARMM_ONLY##IF STRINGM
       int, pointer :: ifixed(:) ! pointer to fixed atoms
 #endif
 !
-  __DECLARE_MSGBUF
-!
       __IAM(SM0K_MAIN)
 !
       keyword=__NEXTA(comlyn,comlen)
@@ -137,8 +132,11 @@ __CHARMM_ONLY##IF STRINGM
         call sm0k_init()
       endif
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      if (__STRNCMP(keyword,'DONE',4)) then
+        call sm0k_done()
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 ! interpolate path
-      if (__STRNCMP(keyword,'INTE',4)) then
+      elseif (__STRNCMP(keyword,'INTE',4)) then
         call sm0k_interpolate(comlyn, comlen)
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 ! conformational consistency
@@ -298,8 +296,7 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_MPI 
 !
       __IMPNONE
- __DECLARE_MSGBUF
-#include "../../mpitype.def"
+#include "mpitype.def"
 !
       bool :: qroot, qslave
       int :: ierror
@@ -312,7 +309,7 @@ __CHARMM_ONLY##IF STRINGM
      & /,A,' BUT INVALID STRING ID (MAY BE OK).')
       elseif (ME_STRNG.ne.MPI_UNDEFINED.and.                            &
      &  (ME_LOCAL.ne.0.or.MPI_COMM_LOCAL.eq.MPI_COMM_NULL)) then
-        write(_MSGBUF, 111) whoami, ME_GLOBAL, whoami ; __PRINT(_MSGBUF)
+        write(_MSGBUF, 112) whoami, ME_GLOBAL, whoami ; __PRINT(_MSGBUF)
  112  FORMAT(A, ' WORLD REPLICA ',I5, ' HAS A VALID STRING ID',         &
      & /,A,' BUT A NONZERO GROUP ID. ABORTING.')
        return
@@ -376,7 +373,6 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
       __DEP_MPI 
       __IMPNONE
- __DECLARE_MSGBUF
 !
       __IAM(SM0K_DONE)
 !
@@ -394,10 +390,9 @@ __CHARMM_ONLY##IF STRINGM
       call setmsi('NSTRING',nstring)
       call setmsi('MESTRING',mestring)
 #endif
-      if (associated(iatom_f)) deallocate(iatom_f)
-!
-      if (allocated(ds)) deallocate(ds)
-      if (allocated(curv)) deallocate(curv)
+      __FREE(iatom_f)
+      __FREE(ds)
+      __FREE(curv)
 !
       end subroutine sm0k_done
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -409,12 +404,11 @@ __CHARMM_ONLY##IF STRINGM
       use psf 
       use tsmh, only : backls  ! TSM common blocks included because minimizer DOF depend on TSM
       use tsms_mod, only : qtsm
-!      use heap 
       use coord 
       __IMPNONE
 !
       int, pointer :: sm0k_fixed_atoms(:)
-      int, allocatable :: backlist(:)
+      int, pointer :: backlist(:)
       int :: nfix, i, j
       bool :: qfree
       allocate(backlist(natom)); backlist=0 ! need to initialize, otherwise nfix might be wrong
@@ -458,7 +452,6 @@ __CHARMM_ONLY##ENDIF
 #endif
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       __IMPNONE
- __DECLARE_MSGBUF
 !
       CHARACTER(LEN=*) :: COMLYN
       int :: COMLEN
@@ -471,21 +464,14 @@ __CHARMM_ONLY##ENDIF
       int :: i ,j, mlen
       int :: qlinear, qspline, qbspline, qdst, qlinear_exact
 #ifdef __CHARMM
-!
       int, pointer :: backlist(:) ! for nominal compatibility with TSM
       int, pointer :: ifixed(:) ! fixed atom indices
-      int, pointer :: iselct(:)
       int :: imode
       bool :: qfree
-!
 #elif defined(__DMOL)
-!
-  __DECLARE_DMOL_SELECT
-      int, pointer :: kselct(:) ! for swapping iselct/jselct
-!
+ __DECLARE_DMOL_SELECT
 #endif
-      int, pointer :: jselct(:)
-      int :: nslct
+      int, pointer :: iselct(:), jselct(:)
 !
       __IAM(SM0K_REPA_INIT)
 !
@@ -507,22 +493,19 @@ __CHARMM_ONLY##ENDIF
       num_average_samples=0
 !
 !     deallocate arrays
-      if (allocated(fixed_o)) deallocate(fixed_o) ! flags
-      if (allocated(fixed_m)) deallocate(fixed_m) ! flags
-      if (allocated(iatom_o)) deallocate(iatom_o)
-      if (allocated(iatom_m)) deallocate(iatom_m)
-      if (allocated(iatom_free_o)) deallocate(iatom_free_o)
-      if (allocated(iatom_free_m)) deallocate(iatom_free_m)
-      if (allocated(rref_o)) deallocate(rref_o)
-      if (allocated(rcurrent_o)) deallocate(rcurrent_o)
-      if (allocated(rcurrent_m)) deallocate(rcurrent_m)
-      if (allocated(orientWeights)) deallocate(orientWeights)
-      if (allocated(repaWeights)) deallocate(repaWeights)
-!
-!     deallocate arclength+curavture arrays
-      if (allocated(ds)) deallocate(ds)
-!     initialize curvature array
-      if (allocated(curv)) deallocate(curv)
+      __FREE(fixed_o)
+      __FREE(fixed_m)
+      __FREE(iatom_o)
+      __FREE(iatom_m)
+      __FREE(iatom_free_o)
+      __FREE(iatom_free_m)
+      __FREE(rref_o)
+      __FREE(rcurrent_o)
+      __FREE(rcurrent_m)
+      __FREE(orientWeights)
+      __FREE(repaWeights)
+      __FREE(ds) !     deallocate arclength+curavture arrays
+      __FREE(curv) ! deallocate curvature array
 !
       repa_initialized=.false.
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -584,7 +567,7 @@ __CHARMM_ONLY##ENDIF
 !     process selection
 !
 #ifdef __CHARMM
-      allocate(iselct(natom), jselct(natom)) ; iselct=1     ! select all atoms by default
+      allocate(iselct(natom), jselct(natom)) ; iselct=0     ! 1: select all atoms by default; 0: select no atoms
       allocate(backlist(natom))
       backlist=0  ! setting this to zero is the simplest way to provide correct default behavior (see below)
 #endif
@@ -592,7 +575,7 @@ __CHARMM_ONLY##ENDIF
       i=__INDX_RM(comlyn,comlen,'ORIE')
       if (i.gt.0) then ! only if the ORIE directive exists
 !      selection text taken from corman.src
-       orient=1
+       orient=1 ! NOTE : this implies that orientation is off by default !
        j=__INDX(comlyn, comlen, 'SELE', 4)
        if (j.gt.0.and.j.lt.i) then ! sele occurs before orie
         __WRN(whoami,'ATOM SELECTION MUST BE SPECIFIED AFTER ORIE.')
@@ -610,7 +593,8 @@ __CHARMM_ONLY##ENDIF
         RETURN
        ENDIF
 #elif defined(__DMOL)
-#include "../../dmol_select_macro.def"
+#define __INDEX iselct
+#include "dmol_select_macro.def"
 #endif
       endif ! orie specified
 !
@@ -652,10 +636,8 @@ __CHARMM_ONLY##ENDIF
       endif ! move specified
 !
 #elif defined(__DMOL)
-       kselct=>iselct ; nullify(iselct)
-#include "../../dmol_select_macro.def"
-       jselct=>iselct
-       iselct=>kselct
+#define __INDEX jselct
+#include "dmol_select_macro.def"
       else
        jselct=>__GET_IND_FROM_SELECTION('ALL') ! select all atoms by default
       endif
@@ -786,10 +768,10 @@ __CHARMM_ONLY##ENDIF
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
       if (nmove.eq.0) then ! this will occur if all of the atoms selected are fixed
         __WRN(whoami,'NO ATOMS SELECTED FOR REPARAMETRIZATION. CANNOT CONTINUE.')
-        if (associated(iselct)) deallocate(iselct)
-        if (associated(jselct)) deallocate(jselct)
+        __FREE(iselct)
+        __FREE(jselct)
 #ifdef __CHARMM
-        if (associated(backlist)) deallocate(backlist)
+        __FREE(backlist)
 #endif
         return
       endif
@@ -852,12 +834,12 @@ __TRIMA(methods(interp_method),mlen)
       endif ! orient
 !
 !     initialize arclength array
-      if (.not.allocated(ds)) then
+      if (.not.associated(ds)) then
        allocate(ds(nstring-1))
        ds=0.0d0
       endif
 !     initialize curvature array
-      if (.not.allocated(curv)) then
+      if (.not.associated(curv)) then
        allocate(curv(nstring-2))
        curv=0.0d0
       endif
@@ -865,10 +847,10 @@ __TRIMA(methods(interp_method),mlen)
       repa_initialized=.true.
 !
 !    deallocate temporary variables
-      if (associated(iselct)) deallocate(iselct)
-      if (associated(jselct)) deallocate(jselct)
+      __FREE(iselct)
+      __FREE(jselct)
 #ifdef __CHARMM
-      if (associated(backlist)) deallocate(backlist)
+       __FREE(backlist)
 #endif
 !
       end subroutine sm0k_repa_init
@@ -895,7 +877,7 @@ __TRIMA(methods(interp_method),mlen)
       int :: n                  ! NOTE: arrays as optional arguments can be a dangerous feature of F90
       float, optional :: var(*) ! ideally, n should give the dimension of n, but we live in an imperfect world
 !
-#include "../../mpitype.def"
+#include "mpitype.def"
 !
       int :: stat(MPI_STATUS_SIZE)
       int :: ierror
@@ -1101,9 +1083,6 @@ __TRIMA(methods(interp_method),mlen)
        endif
 !
 ! call by name
-! there is the following (compiler?) bug: the routine thinks that dr is present
-! even though it is not -- can survive without this but this is disturbing
-!       call interp_driver_sci_root(RIN=rcurrent_m,ROUT=rcurrent_m,
        if (interp_method.eq.linear_exact) then
         call interp_linear_exact(RIN=rcurrent_m,ROUT=rcurrent_m,        &
      &  WGT=weights,N=3*nmove, D_ARCLENGTH=ds,CURVATURE=curv)
@@ -1112,12 +1091,6 @@ __TRIMA(methods(interp_method),mlen)
      &  WGT=weights,N=3*nmove, INTERP_METHOD=interp_method,TOL=def,     &
      &  MAX_ITERATIONS=iterations,D_ARCLENGTH=ds,CURVATURE=curv,        &
      &  DST_CUTOFF=dst_cutoff)
-!
-! call by argument order
-!       call interp_driver_sci(rcurrent_m,rcurrent_m,weights,3*nmove,
-!     &  interp_method,def,iterations,ds,curv,dst_cutoff)
-!       call interp_driver_sci_root(rcurrent_m,rcurrent_m,weights,
-!     &  3*nmove,interp_method,def,iterations,ds,curv,dst_cutoff)
        endif
 !
        if (orient.eq.1) then
@@ -1164,6 +1137,7 @@ __TRIMA(methods(interp_method),mlen)
 !
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine sm0k_confcons(from_sd_,var) ! optionally, accepts variables directly from sd minimizer; no fixed atom support yet
+! conformational consistency check within SM0K
 !
       __DEP_MPI
       __DEP_OUTPUT
@@ -1185,15 +1159,13 @@ __TRIMA(methods(interp_method),mlen)
       bool :: qroot, qprint
       int :: ierror, errnum, errors(SIZE_STRNG), i, j
 !
-#include "../../mpitype.def"
+#include "mpitype.def"
 !
       int :: stat(MPI_STATUS_SIZE)
 !
 #ifdef __DMOL
       int :: natom
 #endif
-!
-      __DECLARE_MSGBUF
 !
       __IAM(SM0K_CONFCONS)
 !
@@ -1276,8 +1248,8 @@ __TRIMA(methods(interp_method),mlen)
        enddo
       endif
 !
-      if (associated(rref_)) deallocate(rref_)
-      if (associated(r_)) deallocate(r_)
+      __FREE(rref_)
+      __FREE(r_)
 !
       end subroutine sm0k_confcons
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -1304,15 +1276,11 @@ __TRIMA(methods(interp_method),mlen)
       bool :: qroot, qprint
       int :: ierror, errnum, errors(SIZE_STRNG), i, j
 !
-#include "../../mpitype.def"
-!
-      int :: stat(MPI_STATUS_SIZE)
+#include "mpitype.def"
 !
 #ifdef __DMOL
       int :: natom
 #endif
-!
-      __DECLARE_MSGBUF
 !
       __IAM(SM0K_CHIRALITY)
 !
@@ -1375,7 +1343,7 @@ __TRIMA(methods(interp_method),mlen)
        enddo
       endif
 !
-      if (associated(r_)) deallocate(r_)
+      __FREE(r_)
 !
       end subroutine sm0k_chirality
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -1405,8 +1373,6 @@ __TRIMA(methods(interp_method),mlen)
 #endif
 !
       __IMPNONE
- __DECLARE_MSGBUF
-!
       __IAM(SM0K_INTERPOLATE)
 !
       CHARACTER(LEN=*) :: COMLYN
@@ -1418,18 +1384,18 @@ __TRIMA(methods(interp_method),mlen)
       int :: len_cor_in, len_cor_out,        &
      &       length, mlen, interp_method
       int :: ibegin, istep
-      int :: i,j,k, orient=0, repa_mass=0, orient_mass=0, me, norient
+      int :: i,j,k, orient=0, repa_mass=0, orient_mass=0, norient
 !
-      float, allocatable :: rin_all(:,:,:), dr(:,:,:), rout_all(:,:,:)
-      float, allocatable :: rr(:),rr_out(:),ds(:),s(:),t(:),rrpp(:)
+      float, pointer :: rin_all(:,:,:), dr(:,:,:), rout_all(:,:,:)
+      float, pointer :: rr(:),rr_out(:),ds(:),s(:),t(:),rrpp(:)
       float :: dum
 !
-      character(len=80), allocatable :: fname_cor_in(:), fname_cor_out(:)
+      character(len=80), pointer :: fname_cor_in(:), fname_cor_out(:)
       character(len=80) :: name_cor_in, name_cor_out, dummy
       character(len=20) :: methods(4), method, form
       character(len=8)  :: keyword
 !
-      bool :: qprint, qdcd, qcor, qbase, qlist
+      bool :: qdcd, qcor, qbase, qlist __CHARMM_ONLY, qprint
 !
 #ifdef __CHARMM
 !
@@ -1454,7 +1420,9 @@ __TRIMA(methods(interp_method),mlen)
 !
 #elif defined (__DMOL)
  __DECLARE_DMOL_SELECT
-      int :: fmt, natom
+      int :: ifmt, natom
+      real*8, pointer :: unitcell(:)=>NULL()
+      bool :: ok
 #endif
       float, pointer :: orient_weights(:), weight(:)
       int :: ierror, offset
@@ -1621,7 +1589,7 @@ __TRIMA(methods(interp_method),length)
         modew=4
         if (__INDX_RM(comlyn,comlen,'RESI').gt.0) lresid=.true.
 #elif defined(__DMOL)
-        fmt=pdb
+        ifmt=pdb
 #endif
         form='FORMATTED'
 #ifdef __CHARMM
@@ -1637,7 +1605,7 @@ __TRIMA(methods(interp_method),length)
         moder=1
         modew=2
 #elif defined(__DMOL)
-        fmt=charmm
+        ifmt=charmm
 #endif
         form='FORMATTED'
       else ! default
@@ -1645,7 +1613,7 @@ __TRIMA(methods(interp_method),length)
         moder=1
         modew=2
 #elif defined(__DMOL)
-        fmt=charmm
+        ifmt=charmm
 #endif
         form='FORMATTED'
       endif
@@ -1731,8 +1699,11 @@ __TRIMA(methods(interp_method),length)
        norient=count(iselct.gt.0) 
 !
 #elif defined(__DMOL)
-#include "../../dmol_select_macro.def"
-       if (associated(iselct)) then ; norient=size(iselct) ; else ; norient=0 ; endif 
+#ifdef __INDEX
+#undef __INDEX
+#endif
+#include "dmol_select_macro.def"
+       if (associated(__INDEX)) then ; norient=size(__INDEX) ; else ; norient=0 ; endif 
 #endif
 !
        if (norient.eq.0) then
@@ -1779,9 +1750,9 @@ __TRIMA(methods(interp_method),length)
         orient_weights=(__MASS*orient_mass+(1d0-orient_mass))*iselct
 #elif defined(__DMOL)
         orient_weights=0
-        if (associated(iselct)) then
-         orient_weights(iselct) = orient_mass * __MASS(iselct) + (1d0-orient_mass) 
-         deallocate(iselct)
+        if (associated(__INDEX)) then
+         orient_weights(__INDEX) = orient_mass * __MASS(__INDEX) + (1d0-orient_mass) 
+         deallocate(__INDEX)
         endif
 #endif
 !    nomalize weights
@@ -1810,13 +1781,13 @@ __TRIMA(methods(interp_method),length)
       endif ! qprint
 !   coordinate arrays input & output
 !
-      if (allocated(rin_all)) deallocate(rin_all)
+      __FREE(rin_all)
       allocate(rin_all(natom,3,num_rep_in))
       rin_all=__NAN ! initialize
 ! allocate dr to use for dummy coords below
       allocate(dr(natom,3,1))
 !
-      if (allocated(rout_all)) deallocate(rout_all)
+      __FREE(rout_all)
       allocate(rout_all(natom,3,num_rep_out))
       rout_all=__NAN
 !
@@ -1854,7 +1825,7 @@ __TRIMA(methods(interp_method),length)
          if (i.eq.1) then ; stop_ = begin_ + skip_ * ( ibegin - 1 + num_rep_in * istep ) ; if (istats.lt.0) istats=2; endif
 !
 #elif defined(__DMOL)
-         call dcd_read_frame(ifile, dr(:,:,1), i.eq.1, FREEATOMS=stringatoms) ! read header only if i==1
+         ierror=dcd_read_frame(ifile, dr(:,:,1), i.eq.1, stringatoms, unitcell) ! read header only if i==1
 #endif
         enddo ! skip frames
        endif ! ME_STRNG==0
@@ -1874,7 +1845,7 @@ __TRIMA(methods(interp_method),length)
         if (j+ibegin.eq.2) then ; stop_ = begin_ + skip_ * ( ibegin - 1 + num_rep_in * istep ) ; if (istats.lt.0) istats=2; endif
 !      write(0,*) j+ibegin, stop_, begin_, skip_, istep, ibegin, skip_ * ( ibegin - 1 + num_rep_in * istep )
 #elif defined(__DMOL)
-        call dcd_read_frame(ifile, rin_all(:,:,1), j+ibegin.eq.2, FREEATOMS=stringatoms) ! read header only if ibegin=1 & j=1
+        ierror=dcd_read_frame(ifile, rin_all(:,:,1), j+ibegin.eq.2, stringatoms, unitcell) ! read header only if ibegin=1 & j=1
 #endif
 !====================================================================================
 ! skip requested frames (stride), unless we just read the final frame we need
@@ -1888,28 +1859,30 @@ __TRIMA(methods(interp_method),length)
      &     istep_, istats, ndof, delta, begin_, stop_, skip_,               &
      &     nsavv_, 'CORD', 'CORD', title, ntitle, qdim4, trash8, .false.)
 #elif defined(__DMOL)
-           call dcd_read_frame(ifile, dr(:,:,1), .false., FREEATOMS=stringatoms) ! no header
+           ierror=dcd_read_frame(ifile, dr(:,:,1), .false., stringatoms, unitcell) ! no header
 #endif
          enddo
         endif ! j not last
 !====================================================================================
 !
        else ! coordinate files
-        length=len_trim(fname_cor_in(j))
-        dummy=fname_cor_in(j)(1:length)
 !
-        if (qprint) then ; ifile=-1 ; __OPEN_FILE(ifile,dummy,form,'READ') ; endif
+        if (qprint) then 
+         length=len_trim(fname_cor_in(j))
+         dummy=fname_cor_in(j)(1:length)
+         ifile=-1 ; __OPEN_FILE(ifile,dummy,form,'READ') 
+        endif
 !
 #ifdef __CHARMM
         dummy=''
         call cread(ifile, titleb, ntitlb, icntrl,                       &
-     &        rin_all(1,1,j), rin_all(1,2,j), rin_all(1,3,j),           &
+     &        rin_all(:,1,j), rin_all(:,2,j), rin_all(:,3,j),           &
      &        wdum, natom, moder, iselct,              &
      &        0, res, nres, atype, ibase, 1, ifreea,               &
      &        segid, resid, nictot, nseg, lresid, .false.,              &
      &        dummy, 80, 0, .false.)
 #elif defined (__DMOL)
-        select case(fmt)
+        select case(ifmt)
          case(charmm) ; call ch_coor_read(ifile, rcomp)
          case(pdb)    ; call pdb_read(ifile, rcomp)
         end select
@@ -1920,13 +1893,15 @@ __TRIMA(methods(interp_method),length)
       enddo
 !
       if (qdcd.and.qprint) then ; __CLOSE_FILE(ifile,'KEEP',ierror) ; endif ! close dcd file
-      if (associated(stringatoms)) deallocate(stringatoms)
+      __FREE(stringatoms)
 !
 !     check for undefined coordinates
-      if (any(rin_all.eq.__NAN)) then 
+      if (qprint) then
+       if (any(rin_all.eq.__NAN)) then 
         __WRN(whoami,'WARNING: SOME INPUT COORDINATES ARE UNDEFINED AFTER READING.')
+       endif
       endif
-!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!========================================================================================
 !     orient structures if requested
 !
       if (qprint) then
@@ -1979,20 +1954,13 @@ __TRIMA(methods(interp_method),length)
 !
 !     do the actual interpolation --  simple, not self-consistent
 !      allocate memory
-        if (allocated(dr)) deallocate(dr)
-        allocate(dr(natom,3,num_rep_in-1))
-        if (allocated(ds)) deallocate(ds)
-        allocate(ds(num_rep_in-1))
-        if (allocated(s)) deallocate(s)
-        allocate(s(num_rep_in))
-        if (allocated(t)) deallocate(t)
-        allocate(t(num_rep_out))
-        if (allocated(rr)) deallocate(rr)
-        allocate(rr(num_rep_in))
-        if (allocated(rr_out)) deallocate(rr_out)
-        allocate(rr_out(num_rep_out))
-        if (allocated(rrpp)) deallocate(rrpp)
-        allocate(rrpp(num_rep_in))
+        __FREE(dr);        allocate(dr(natom,3,num_rep_in-1))
+        __FREE(ds);        allocate(ds(num_rep_in-1))
+        __FREE(s);         allocate(s(num_rep_in))
+        __FREE(t);         allocate(t(num_rep_out))
+        __FREE(rr);        allocate(rr(num_rep_in))
+        __FREE(rr_out);    allocate(rr_out(num_rep_out))
+        __FREE(rrpp);      allocate(rrpp(num_rep_in))
 !
 !     compute arclength
         dr=rin_all(:,:,2:num_rep_in)-rin_all(:,:,1:num_rep_in-1)
@@ -2064,15 +2032,15 @@ __TRIMA(methods(interp_method),length)
      &      write(titlea(ntitla+1),'(A,I5,A,I5)')                       &
      &      '* REPLICA ',j,' OF ',num_rep_out
 !
-         call CWRITE(ofile,TITLEA,min(NTITLA+1,maxtit),icntrl,          &
-     &              rout_all(1,1,j), rout_all(1,2,j), rout_all(1,3,j),  &
+         call cwrite(ofile,TITLEA,min(NTITLA+1,maxtit),icntrl,          &
+     &              rout_all(:,1,j), rout_all(:,2,j), rout_all(:,3,j),  &
      &               wdum,res,atype,ibase,                               &
      &               NRES,NATOM,iselct,modew,0,0,.false.)
 #elif defined (__DMOL)
          rcomp=transpose(rout_all(:,:,j))
-         select case(fmt)
-          case(charmm) ; call ch_coor_write(ofile, rcomp, bfactor)
-          case(pdb)    ; call pdb_write(ofile, rcomp, occupancy, bfactor)
+         select case(ifmt)
+          case(charmm) ; ok=ch_coor_write(ofile, rcomp, bfactor)
+          case(pdb)    ; ok=pdb_write(ofile, rcomp, occupancy, bfactor)
          end select
 #endif
          __CLOSE_FILE(ofile,'KEEP',ierror)
@@ -2082,18 +2050,20 @@ __TRIMA(methods(interp_method),length)
         deallocate(rr, rr_out, dr, s, t, ds, rrpp)
       endif ! qprint
 !
-      if (allocated(rin_all)) deallocate(rin_all) 
-      if (allocated(rout_all)) deallocate(rout_all)
-      if (allocated(fname_cor_in))  deallocate(fname_cor_in )
-      if (allocated(fname_cor_out)) deallocate(fname_cor_out)
-!
-      if (associated(orient_weights)) deallocate(orient_weights)
-      if (associated(weight)) deallocate(weight)
+      __FREE(rin_all)
+      __FREE(rout_all)
+      __FREE(fname_cor_in)
+      __FREE(fname_cor_out)
+#ifdef __DMOL
+      __FREE(unitcell)
+#endif
+      __FREE(weight)
+      __FREE(orient_weights)
 !
       end subroutine sm0k_interpolate
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine sm0k_stat_init(comlyn, comlen)
-!
+! statistics initialization subroutine
       __DEP_OUTPUT
       __DEP_SIZE 
       __DEP_PARSER 
@@ -2114,7 +2084,6 @@ __CHARMM_ONLY##ENDIF
       __DEP_MPI                               !__CHARMM_ONLY##MPI
 !ccccccccccccccccccccccccccccccccccccccccccccccccc
       __IMPNONE
- __DECLARE_MSGBUF
 !
       CHARACTER(len=*) :: COMLYN
       int :: COMLEN
@@ -2126,7 +2095,7 @@ __CHARMM_ONLY##ENDIF
 !
 #ifdef __CHARMM
       int, pointer :: iselct(:)
-      int, allocatable :: backlist(:) ! for nominal compatibility with TSM
+      int, pointer :: backlist(:) ! for nominal compatibility with TSM
       int, pointer :: ifixed(:)
       int :: imode
 #elif (__DMOL)
@@ -2180,17 +2149,17 @@ __CHARMM_ONLY##ENDIF
       output_arclength=.false.
 !
 !    memory allocation
-      if (allocated(fixed_s)) deallocate(fixed_s) ! flags
-      if (allocated(iatom_s)) deallocate(iatom_s)
-      if (allocated(iatom_free_s)) deallocate(iatom_free_s)
-      if (allocated(rold_s)) deallocate(rold_s)
-      if (allocated(rave_s)) deallocate(rave_s)
-      if (allocated(rcurrent_s)) deallocate(rcurrent_s)
-      if (allocated(rcomp_s)) deallocate(rcomp_s)
-      if (allocated(statWeights)) deallocate(statWeights)
-      if (allocated(rcomp_o)) deallocate(rcomp_o)
-      if (allocated(rold_o)) deallocate(rold_o)
-      if (allocated(rave_o)) deallocate(rave_o)
+      __FREE(fixed_s)
+      __FREE(iatom_s)
+      __FREE(iatom_free_s)
+      __FREE(rold_s)
+      __FREE(rave_s)
+      __FREE(rcurrent_s)
+      __FREE(rcomp_s)
+      __FREE(statWeights)
+      __FREE(rcomp_o)
+      __FREE(rold_o)
+      __FREE(rave_o)
       nstat=0
       qstat_orient=.false.
 !
@@ -2313,11 +2282,11 @@ __CHARMM_ONLY##ENDIF
       nstat=count( iselct(1:natom).gt.0 )
 !
 #elif defined (__DMOL)
-#include "../../dmol_select_macro.def"
+#include "dmol_select_macro.def"
       else
-       iselct=>__GET_IND_FROM_SELECTION('ALL') ! select all atoms by default
+       __INDEX=>__GET_IND_FROM_SELECTION('ALL') ! select all atoms by default
       endif
-      if (associated(iselct)) then ; nstat=size(iselct) ; else ; nstat=0 ; endif 
+      if (associated(__INDEX)) then ; nstat=size(__INDEX) ; else ; nstat=0 ; endif 
 #endif
 !*************************************************************************
       if (nstat.eq.0) then
@@ -2342,10 +2311,10 @@ __CHARMM_ONLY##ENDIF
        if (__INDX_RM(comlyn,comlen,'RMSD').gt.0) then ! request for RMSD
         output_rmsd0=.true.
 !
-        if (.not.allocated(rcurrent_s)) allocate(rcurrent_s(nstat,3))
-        if (.not.allocated(rcomp_s))    allocate(rcomp_s(nstat,3))
+        if (.not.associated(rcurrent_s)) allocate(rcurrent_s(nstat,3))
+        if (.not.associated(rcomp_s))    allocate(rcomp_s(nstat,3))
         if (qstat_orient) then
-         if (.not.allocated(rcomp_o))   allocate(rcomp_o(norient,3))
+         if (.not.associated(rcomp_o))   allocate(rcomp_o(norient,3))
         endif ! qstat_orient
 !
         __GET_RM_A(COMLYN,COMLEN,'RNAM',4,rmsd0_fname,80,rmsd0_flen)
@@ -2380,10 +2349,10 @@ __CHARMM_ONLY##ENDIF
        if (__INDX_RM(comlyn,comlen,'DELS').gt.0) then
         output_dsdt=.true.
 !
-        if (.not.allocated(rold_s)) then ; allocate(rold_s(nstat,3)) ; rold_s=zero ; endif          ! for storing "old" coords
-        if (.not.allocated(rcurrent_s)) allocate(rcurrent_s(nstat,3))
+        if (.not.associated(rold_s)) then ; allocate(rold_s(nstat,3)) ; rold_s=zero ; endif          ! for storing "old" coords
+        if (.not.associated(rcurrent_s)) allocate(rcurrent_s(nstat,3))
         if (qstat_orient) then
-         if (.not.allocated(rold_o)) then ; allocate(rold_o(norient,3)) ; rold_o=zero ; endif
+         if (.not.associated(rold_o)) then ; allocate(rold_o(norient,3)) ; rold_o=zero ; endif
         endif
 !
         __GET_RM_A(COMLYN,COMLEN,'DNAM',4,dsdt_fname,80,dsdt_flen)
@@ -2418,13 +2387,13 @@ __CHARMM_ONLY##ENDIF
        if (__INDX_RM(comlyn,comlen,'RMSA').gt.0) then
         output_rmsd_ave=.true.
 !
-        if (.not.allocated(rave_s)) allocate(rave_s(nstat,3)) ! for storing average coords
-        if (.not.allocated(rold_s)) allocate(rold_s(nstat,3)) ! for storing "old" coords
+        if (.not.associated(rave_s)) allocate(rave_s(nstat,3)) ! for storing average coords
+        if (.not.associated(rold_s)) allocate(rold_s(nstat,3)) ! for storing "old" coords
         rave_s=zero
-        if (.not.allocated(rcurrent_s)) allocate(rcurrent_s(nstat,3))
+        if (.not.associated(rcurrent_s)) allocate(rcurrent_s(nstat,3))
         if (qstat_orient) then
-         if (.not.allocated(rold_o))    allocate(rold_o(norient,3))
-         if (.not.allocated(rave_o))    allocate(rave_o(norient,3))
+         if (.not.associated(rold_o))    allocate(rold_o(norient,3))
+         if (.not.associated(rave_o))    allocate(rave_o(norient,3))
          rave_o=zero
         endif
 !
@@ -2458,9 +2427,9 @@ __CHARMM_ONLY##ENDIF
 !
        if (output_rmsd_ave.or.output_rmsd0.or.output_dsdt) then
 !       populate iatom array
-        if (.not.allocated(fixed_s)) allocate(fixed_s(nstat)) ! psf indices
-        if (.not.allocated(iatom_s)) allocate(iatom_s(nstat)) ! psf indices
-        if (.not.allocated(iatom_free_s)) allocate(iatom_free_s(nstat)) ! free indices for atoms with minimizer
+        if (.not.associated(fixed_s)) allocate(fixed_s(nstat)) ! psf indices
+        if (.not.associated(iatom_s)) allocate(iatom_s(nstat)) ! psf indices
+        if (.not.associated(iatom_free_s)) allocate(iatom_free_s(nstat)) ! free indices for atoms with minimizer
         nstat=0
         iatom_s=0; iatom_free_s=0;
 !
@@ -2495,11 +2464,11 @@ __CHARMM_ONLY##ENDIF
 !
 #elif defined(__DMOL)
 ! currently, no support for fixed atoms -- assume their number is zero
-      if (associated(iselct)) then 
-       iatom_s=iselct
+      if (associated(__INDEX)) then 
+       iatom_s=__INDEX
        iatom_free_s=iatom_s*3-2 ! gives 1,4,7...
        fixed_s=.false.
-       deallocate(iselct)
+       __FREE(__INDEX)
       endif
 #endif
 !
@@ -2531,7 +2500,7 @@ __CHARMM_ONLY##ENDIF
          endif ! qstat_orient
         endif
 !
-        if (.not.(allocated(statWeights))) allocate(statWeights(nstat))
+        if (.not.(associated(statWeights))) allocate(statWeights(nstat))
         statWeights=1d0
 !
 !     use mass-weighting in RMSD computation?
@@ -2622,6 +2591,7 @@ __CHARMM_ONLY##ENDIF
       end subroutine sm0k_stat_init
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine sm0k_stat(n,var)
+! statistics subroutine
       __DEP_BESTFIT
       __DEP_OUTPUT
       __DEP_SIZE 
@@ -2638,7 +2608,7 @@ __CHARMM_ONLY##ENDIF
       __DEP_MPI
 !
       __IMPNONE
-#include "../../mpitype.def"
+#include "mpitype.def"
 !
       int :: n
       float, optional :: var(*)

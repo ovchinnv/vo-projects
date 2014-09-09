@@ -1,0 +1,291 @@
+#!/bin/bash
+# create directory with string method code for charmm 39
+# this directory contains "stringm", which has a Makefile to generate .src files and a patching script
+# the user will put this directory into the charmm tree, run "make" to generate the .src files
+# and run the "patch_xx.sh" script.  After these steps the CHARMM installation proceeds as usual;
+# the keyword STRINGM must be added to the parameter line to install.com
+#
+OUT="===>";
+ERROR="WARNING:";
+BREAK="===================================================================================";
+# look for version number as the first two arguments
+if [ ! -z $1 ] ; then
+ CHARMM_MAJOR_VERSION=$1
+ echo "$OUT Specified CHARMM major version "$CHARMM_MAJOR_VERSION
+else
+ echo "$OUT USAGE : ./charmm_dist <CHARMM_MAJOR_VERSION> <CHARMM_MINOR_VERSION>  submit<optional>"
+ echo "$ERROR CHARMM version not specified, proceed with defaults ? [Y/n]"
+ read answer
+ if [ ! -z $answer ]; then
+  echo ${answer:0:1}
+  if  [ ! ${answer:0:1} == "y" ] && [ ! ${answer:0:1} == "Y" ] ; then
+   echo "$OUT quitting..."
+   exit 0
+  fi
+ fi
+#
+ CHARMM_MAJOR_VERSION=39
+ echo "$ERROR CHARMM major version unspecified. Defaulting to "$CHARMM_MAJOR_VERSION
+fi
+#
+if [ ! -z $2 ] ; then
+ CHARMM_MINOR_VERSION=$2
+ echo "$OUT Specified CHARMM minor version "$CHARMM_MINOR_VERSION
+else
+ CHARMM_MINOR_VERSION=a2-291
+ echo "$ERROR CHARMM minor version unspecified. Defaulting to "$CHARMM_MINOR_VERSION
+fi
+#
+if [ `echo $3 | grep [Ss][Uu][Bb][Mm][Ii][Tt] | wc -l` -gt "0" ] ; then
+ qsubmit=1;
+ echo "$OUT Will prepare new CHARMM source code (i.e. not patches) with string method source code"
+else
+ qsubmit=0;
+ echo "$OUT Will prepare CHARMM patch tree with string method source code"
+fi
+#
+#
+echo $BREAK
+#
+CHARMM_VERSION=${CHARMM_MAJOR_VERSION}${CHARMM_MINOR_VERSION}
+PREFLX2CPP=0 ; # indicate whether to replace charmm preflx macros with CPP macros : 1 - yes; 0 - no
+PREFLX2CPP=1 ; # 
+CHARMM_DISTRIB_DIR="c"$CHARMM_VERSION
+CHARMM_SOURCE_DIR=$CHARMM_DISTRIB_DIR"/source"
+CHARMM_STRING_DIR=$CHARMM_SOURCE_DIR"/stringm"
+
+
+CHARMM_DIRS="bestfit lu multicom multidiag confcons parselist string string/ftsm string/sm0k string/smcv vectors"
+RM_NONCH_FILES="bestfit/bfit.ftn bestfit/test.ftn bestfit/bestfit_c.ftn"
+
+function get_rules_from_makefile() {
+ tgt=$1
+ mf=$2
+ awk -v tgt="$tgt" \
+ ' BEGIN {rules=""; rule_active=0;}
+ { if ( index ( $0, tgt ) >0 ) { 
+    rules=rules""$0"\n"
+    rule_active=1;
+   } else if ( (rule_active==1) && ( (substr($0,1,1)=="\t") || (substr($0,1,2)~/["if"|"el"|"en"]/) ) ) {
+    rules=rules""$0"\n"
+   } else {
+    rule_active=0;
+   }
+ }
+ END { print rules;}
+ ' < $mf
+}
+
+echo $BREAK
+echo "$OUT Will prepare string source code package for CHARMM version $CHARMM_VERSION"
+echo "$OUT Creating directory \"$CHARMM_STRING_DIR\""
+#create string directory
+rm -fr $CHARMM_DISTRIB_DIR
+mkdir -p $CHARMM_SOURCE_DIR
+#create subdirectories and copy files
+for d in $CHARMM_DIRS; do
+ locald=${d##*/}
+ newd=$CHARMM_STRING_DIR/$locald
+ echo $BREAK
+ echo $OUT Creating directory \"$newd\"
+ mkdir -p $newd
+# copy files
+ for f in `ls $d/*ftn`; do
+  newf=${f##*/}
+  echo "$OUT Copying $f ===> $newd/$newf"
+  cp $f $newd/$newf
+ done
+# copy def files, if any
+ for f in `ls $d/*def* 2> /dev/null`; do
+  newf=${f##*/}
+  echo "$OUT Copying $f ===> $newd/$newf"
+  cp $f $newd/$newf
+ done
+# copy Makefile
+ oldm=$d/Makefile
+ newm=$newd/Makefile
+ echo -n > $newm
+ echo "$OUT Writing $newm"
+ echo -n > $newm
+ echo "# THIS MAKEFILE IS GENERATED AUTOMATICALLY FROM A MASTER SOURCE CODE TREE" >> $newm
+ echo "ROOT=.." >> $newm
+ echo "COMMON=\$(ROOT)/scommon" >> $newm
+ n1=`grep "OBJ" $oldm -n |head -n1`
+ n1=${n1%:*} ;# first line
+ n2=`grep "NAME=" $oldm -n |head -n1`
+ n2=${n2%:*} ;# second line
+ dn=$(($n2-$n1))
+ tail -n +$n1 $oldm | head -n $dn >> $newm
+ grep "LOCAL[^\+]*=" $oldm >> $newm
+ echo "CHARMM_SOURCES=\$(OBJS:%.o=%.src)" >> $newm
+ grep "^include.*ROOT*" $oldm >> $newm
+ echo "#### RULES:####" >> $newm
+  echo "charmm : \$(CHARMM_SOURCES)" >> $newm
+# add rules from makefile
+ get_rules_from_makefile ".src:" $oldm >> $newm
+ get_rules_from_makefile ".tmp:" $oldm >> $newm
+ echo "clean ::" >> $newm
+ echo "	rm -f \$(CHARMM_SOURCES) *tmp" >> $newm
+done
+# remove some files that were copied unnecessarily (done automatically above)
+# rename string to string_common
+stringdir=$CHARMM_STRING_DIR/scommon
+rm -rf $stringdir
+mv -f $CHARMM_STRING_DIR/string $stringdir
+#
+for f in $RM_NONCH_FILES; do
+ fname=$CHARMM_STRING_DIR/$f
+ echo "$OUT Removing unnecessary file "$fname
+ rm -f $fname
+done
+# create $(ROOT)/Makefile.inc
+oldm=Makefile.inc
+newd=$CHARMM_STRING_DIR
+newm=$newd/Makefile.inc
+ echo "$OUT Writing $newm"
+echo "SHELL=/bin/sh" > $newm
+grep "GLOBALMACROS[^\+]*=" $oldm >> $newm
+grep "^MSG=" $oldm >> $newm
+grep "CHMSG=" $oldm >> $newm
+grep "FPP=" $oldm >> $newm
+grep "FPPFLAGS[^[A-Za-z]]*=" $oldm >> $newm
+echo "CHARMM_MAJOR_VERSION=$CHARMM_MAJOR_VERSION" >> $newm
+echo "#### RULES:####" >> $newm
+get_rules_from_makefile ".src:" $oldm >> $newm
+# copy aux. files to main source directory
+files="source.defs charmm.msg mpitype.def chmdev/prefx2cpp"
+echo $OUT" Copying auxiliary files "$files" to "$newd
+cp -L $files $newd/
+#
+# now create root Makefile
+newm=$newd/Makefile
+ echo "$OUT Writing $newm"
+dirs="";
+for d in $CHARMM_DIRS; do
+ locald=${d##*/}
+ dirs=$dirs" "$locald
+done
+dirs=`echo $dirs | sed -e "s/string/${stringdir##*/}/"` ; # replace string by scommon
+echo "SUBDIRS="$dirs > $newm
+echo "CHARMM_DIR=." >> $newm
+if [ $PREFLX2CPP -gt "0" ]; then
+ echo "PREFLX2CPP=./prefx2cpp" >> $newm
+else
+ echo "PREFLX2CPP=cat" >> $newm
+fi
+#
+get_rules_from_makefile "charmm:" string/Makefile | sed 's/charmm:[^:]+:/charmm::/'>> $newm ;# this rule fits our need
+# add additional rules for CHARMM source code
+echo "
+charmm::
+	/bin/sh -c 'for file in \`ls *.src 2>/dev/null\`;\\
+	do \\
+	flag=\`grep -i \"automatically protect all code\" \$\$file\`;\\
+	if [ -z \"\$\$flag\" ];then \\
+	echo \"##IF STRINGM ! automatically protect all code\" > _tmp;\\
+	cat \$\$file >>_tmp;\\
+	echo \"##ENDIF ! automatically protect all code\" >> _tmp;\\
+	\$(PREFLX2CPP) _tmp > \$\$file;\\
+	rm -f _tmp __tmp;\\
+	fi;\\
+	done ;'\\
+
+install : charmm
+all : install
+" >> $newm
+
+get_rules_from_makefile "clean:" string/Makefile >> $newm
+
+# add documentation file
+docdir=$CHARMM_DISTRIB_DIR/doc
+mkdir -p $docdir
+echo "$OUT Copying documentation to $docdir/"
+cp -f string/stringm.doc $docdir/
+
+# add other files:
+patchdir=chmdev # directory with patch trees
+if [ "$qsubmit" -eq "1" ] ; then
+#===========================================
+#
+# copy modified CHARMM source code
+#
+ srcdir=$patchdir/chmnew$CHARMM_VERSION
+ if [ ! -d $srcdir ] ; then
+  echo "$ERROR Cannot access source code directory \"$srcdir\". Your distribution is incomplete."
+ else
+  pushd $srcdir >& /dev/null
+  srcdirabs=`pwd`;
+  popd >& /dev/null
+  echo "$OUT Copying modified CHARMM files \"$srcdirabs\*\" ==> \"$CHARMM_DISTRIB_DIR\""
+  cp -fr $srcdirabs/* $CHARMM_DISTRIB_DIR/
+ fi
+#===========================================
+else
+#
+# link CHARMM source code patch tree
+#
+patchtree=$patchdir/chmdiff$CHARMM_VERSION
+if [ ! -d $patchtree ] ; then
+ echo "$ERROR Cannot access patch tree \"$patchtree\". Your distribution is incomplete."
+else
+ pushd $patchtree >& /dev/null
+ patchtreeabs=`pwd`;
+ popd >& /dev/null
+ patch_script=stringm_patch_${CHARMM_VERSION} 
+ ln -fs $patchtreeabs $CHARMM_DISTRIB_DIR/
+# install patch script
+ patch_script=stringm_patch_${CHARMM_VERSION} 
+ cp -fL $patchdir/mkpatch $CHARMM_DISTRIB_DIR/$patch_script
+ pushd $CHARMM_DISTRIB_DIR >&/dev/null
+# make sure default parameters in script are correct
+ sed -i "s/dold_default=.*/dold_default=\"\.\/\"/;s/patchdir_default=.*/patchdir_default=\"chmdiff$CHARMM_VERSION\"/;\
+ s/\$rdir\/prefx2cpp/\$rdir\/source\/stringm\/prefx2cpp/" $patch_script
+fi
+# link prefx2cpp to current directory
+#
+popd>&/dev/null
+#
+# final step : add a readme
+#
+readme=$CHARMM_DISTRIB_DIR"/README.STRINGM"
+echo "$OUT Writing file $readme"
+echo -n > $readme
+date >> $readme
+echo $BREAK>> $readme
+echo "\
+\
+This directory contains the necessary files to patch CHARMM version
+c$CHARMM_VERSION to use the string method. The patches are provided
+specifically for the above CHARMM version, but may still be applied to
+other versions that are not \`too different' (e.g. the same major
+version but different minor version), most likely requiring minor user
+modification to incompletely patched files. If you attempt to patch a
+version greater than c39a2, first make sure that the string method is
+not already part of the official distribution.
+
+To compile the string method with CHARMM, follow the steps below.
+
+1) Copy the present directory tree into the CHARMM source tree.  (Files
+in the existing stringm directory may be deleted prior to this step, but
+this is not required.)
+
+2) In the CHARMM root directory (i.e. the one that contains
+\`install.com' as well as this file), patch the source code by executing
+the shell script \`$patch_script'.
+
+3) CHARMM can now be compiled as usual. To compile the string method,
+pass the additional keyword 'STRINGM' to the installation script
+install.com. To generate the correct dependencies between CHARMM and the
+string method source code, install.com will execute \`setmk.com'
+automatically."\
+\
+>> $readme
+echo $BREAK>> $readme
+#
+#create archive
+arname=stringm.patch.$CHARMM_DISTRIB_DIR.tgz
+echo "$OUT Creating archive \"$arname\""
+tar -czvhf $arname $CHARMM_DISTRIB_DIR >&/dev/null
+#
+fi ;# qsubmit
+#

@@ -16,9 +16,9 @@ __CHARMM_ONLY##IF STRINGM
       public ftsm_calc_M
       public ftsm_calc_J
       public ftsm_addforce
+      public ftsm_compute_fe_fd
 !
       contains
-!======================================================================
 !======================================================================
 !    compute RC value and derivatives
 !    renamed from ftsm to ftsmv1
@@ -52,11 +52,12 @@ __CHARMM_ONLY##IF STRINGM
       float, pointer, dimension(:,:) :: rfpar, rfprp
       float, pointer :: M(:,:)
 !
-      int4mpi, allocatable :: orient_count(:), orient_displ(:) ! if declared as int*8 parallelization will break
+      int4mpi, pointer :: orient_count(:), orient_displ(:) ! if declared as int*8 parallelization will break
 !
       float :: tol
 !
-      float, pointer :: ow(:), fw(:)
+      float, pointer :: ow(:), fw(:), wgts(:)
+      int, pointer :: inds(:)
 !
       interface
        subroutine hypercube_allgatherv(message,count,displ,type,        &
@@ -91,21 +92,13 @@ __CHARMM_ONLY##IF STRINGM
       rfpar=>r_f(:,:,vpar);  rfprp=>r_f(:,:,vperp) ! displacement vectors
 !
 !      load coordinates
-      do k=1,nforced
-       ind=iatom_f(k)
-       rfi(k,1)=x(ind)
-       rfi(k,2)=y(ind)
-       rfi(k,3)=z(ind)
-      enddo
+#define _RF rfi
+#include "ftsm_load_fcor.def"
 !
       if (qorient) then
        if (qdiffrot) then
-        do k=1,norient ! when qorient false, norient zero
-         ind=iatom_o(k)
-         roi(k,1)=x(ind)
-         roi(k,2)=y(ind)
-         roi(k,3)=z(ind)
-        enddo
+#define _RO roi
+#include "ftsm_load_ocor.def"
        endif ! qdiffrot (otherwise rfi and roi point to the same thing)
 !
 !       translate forced atoms to centroid
@@ -125,10 +118,10 @@ __CHARMM_ONLY##IF STRINGM
        endif ! qdiffrot
 !
       else
-       u = RESHAPE( (/one,zero,zero,zero,one,zero,zero,zero,one/), (/3,3/) ) ! rotation matrix
-       u1= u
-       u2= u
-       u3= u
+       u = Id3
+       u1= Id3
+       u2= Id3
+       u3= Id3
       endif ! qorient
 !
       if (qcombine) then ! use a combination of old and new reference structures for mild restart
@@ -667,7 +660,7 @@ __CHARMM_ONLY##IF STRINGM
             __BROADCAST_LOCAL_8B(fopar,3*norient)
            endif
           endif ! qgrp
-!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!===========================================================================
          else ! not qdiffrot .or. not qorient
 !     apply forces to the forcing atoms
           do j=1,nforced
@@ -683,16 +676,18 @@ __CHARMM_ONLY##IF STRINGM
       end subroutine ftsmv1_calc
 !
 !===========================================================================
-!===========================================================================
       subroutine ftsm_addforce(fx,fy,fz,addforce)
-
+      __DEP_NUMBER
 !    note: boundary points require special treatment: x0.25 force constant and x2 dperp0
 !    this is because distance between replicas is halved for the endpoints, but still corresponds to 1 (as for the inner pts)
       float :: fx(:), fy(:), fz(:)
       float, pointer, dimension(:,:) :: ffpar, ffprp, fopar, foprp
       float :: pre1, pre2
-      float :: fac, fac2, t, omt
-      int :: i, ind
+      float :: fac, fac2, t, omt, wgt, dx, dy, dz, kbt=0.6d0 ! for now, hardwired at room temperature
+!
+      int, pointer :: inds(:)
+      float, pointer :: wgts(:)
+      int :: i, j, ind
       bool :: addforce  ! whether to add forces to running force average
       bool :: qendpoint
 !
@@ -708,84 +703,202 @@ __CHARMM_ONLY##IF STRINGM
       else
        t=1d0; omt=0d0
       endif
+!
+      if (ftsm_scaledist) then
 ! lowering the force constants for endpoints is necessary to get the equivalent fluctuations
-! can think of either scaling the force constants, or scaling the distances (and gradients) by 0.5 and keeping the same force constans
+! can think of either scaling the force constants, or scaling the distances (_and gradients_) by 0.5 and keeping the same force constans
 ! perpendicular component normalized by physical interimage dist. (which is halved for endpoints); so it appears too large, and is halved below
 !
 ! for the internal points, integrating the force through one inter-image distance is equivalent to multiplying
 ! the force by 0.5 (0.5 is the scaled distance between adjacent inner images)
 ! for the endpoints, the distance between adjacent images is 1, so take the force (scaled down) and multiply by 1
-      if (qendpoint) then ; fac=0.5d0 ; fac2=1d0 ; fe_curv=0d0 ! no curvature at endpoints
-                     else ; fac=1.0d0 ; fac2=0.5d0
+       if (qendpoint) then ; fac=0.5d0 ; fac2=1d0 ; fe_curv=0d0 ! no curvature at endpoints
+                      else ; fac=1.0d0 ; fac2=0.5d0
+       endif
+!     no need to scale -- using dimensional distances
+      else
+       fac=one ; fac2=one ;
+       if (qendpoint) fe_curv=zero ; ! the endpoint curvature from ftsmv2_compute is scaled by 4 (incorrect) but we do not use it here
       endif
 !
       if (proj_on) then
 ! restraint force parallel to string
        pre1 = kpara * fac * fac * ( dpar-dpar0 )                ! scale down the force constant of endpoints (one for d, one for gradients)
-       pre2 = kperp * fac * max   ( fac * dperp - dperp0, 0d0 ) ! ignore negative values; dperp0 criterion in inner-replica d-metric
+       pre2 = kperp * fac * max   ( fac * dperp - dperp0, zero ) ! ignore negative values; dperp0 criterion in inner-replica d-metric
+! force limiting
+       if (ftsm_flim_coeff.gt.zero) then
+        pre1=sign( min(abs(pre1),sqrt(two*fac*kbt*kpara*ftsm_flim_coeff)),pre1) ! limit pre1 magnitude taking care of sign
+        pre2=min(pre2,sqrt(two*fac*kbt*kperp*ftsm_flim_coeff)) ! pre2 > 0
+       endif
 ! update force: for inner points, multiply force by 0.5; for boundary use 1d0; the FE is then simply the sum of the forces along the string
        avforce(1) = t * avforce(1) + omt * pre1 * fac2 ! force acting on dpar0 is pre1 (integrate negative to get f.e.)
        avforce(2) = t * avforce(2) - omt * pre1 * fac2 * (fe_curv * fac * fac) ! force due to curvature (note: either fac=1 or curv=0)
-       avforce(3) = t * avforce(3) + omt * pre2 * fac2 ! force acting on derp0 is pre2 ( NOTE: this is not a true force along the path)
-!                                                      ! even if I am treating it here as such; it is an orthogonal `correction`
-       if (pre2 .gt. 0d0) then
+       avforce(3) = t * avforce(3) + omt * pre2 * fac2 ! force acting on dperp0 is pre2 ( NOTE: this is not a true force along the path)
 !
-        do i=1, nforced
-         ind=iatom_f(i)
-         fx(ind) = fx(ind) + pre1 * ffpar(i,1) + pre2 * ffprp(i,1)
-         fy(ind) = fy(ind) + pre1 * ffpar(i,2) + pre2 * ffprp(i,2)
-         fz(ind) = fz(ind) + pre1 * ffpar(i,3) + pre2 * ffprp(i,3)
-        enddo
-        if (qorient.and.qdiffrot) then
-         do i=1, norient
-          ind=iatom_o(i)
-          fx(ind) = fx(ind) + pre1 * fopar(i,1) + pre2 * foprp(i,1)
-          fy(ind) = fy(ind) + pre1 * fopar(i,2) + pre2 * foprp(i,2)
-          fz(ind) = fz(ind) + pre1 * fopar(i,3) + pre2 * foprp(i,3)
-         enddo
-        endif
-       else ! parallel force only
-        do i=1, nforced
-         ind=iatom_f(i)
-         fx(ind) = fx(ind) + pre1 * ffpar(i,1)
-         fy(ind) = fy(ind) + pre1 * ffpar(i,2)
-         fz(ind) = fz(ind) + pre1 * ffpar(i,3)
-        enddo
-        if (qorient.and.qdiffrot) then
-         do i=1, norient
-          ind=iatom_o(i)
-          fx(ind) = fx(ind) + pre1 * fopar(i,1)
-          fy(ind) = fy(ind) + pre1 * fopar(i,2)
-          fz(ind) = fz(ind) + pre1 * fopar(i,3)
-         enddo
-        endif
-       endif
       else ! .not.  proj_on
        pre1 = krms * ( drms-drms0 )
-       if (qrms_upper_bound) pre1=max(pre1,0d0) ! apply of force exceeds threshold
-! update force (which will not likely be used)
-!
-       avforce(1) = t * avforce(1) + omt * pre1 ! force acting on dpar0 is pre1 (integrate negative to get f.e.)
-!
-       do i=1, nforced
-        ind=iatom_f(i)
-        fx(ind) = fx(ind) + pre1 * ffpar(i,1)
-        fy(ind) = fy(ind) + pre1 * ffpar(i,2)
-        fz(ind) = fz(ind) + pre1 * ffpar(i,3)
-       enddo
-       if (qorient.and.qdiffrot) then
-        do i=1, norient
-          ind=iatom_o(i)
-          fx(ind) = fx(ind) + pre1 * fopar(i,1)
-          fy(ind) = fy(ind) + pre1 * fopar(i,2)
-          fz(ind) = fz(ind) + pre1 * fopar(i,3)
-        enddo
+       if (qrms_upper_bound) pre1=max(pre1,zero) ! apply if force exceeds threshold
+! force limiting
+       if (ftsm_flim_coeff.gt.zero) then 
+        pre1=sign( min(abs(pre1),sqrt(two*fac*kbt*krms*ftsm_flim_coeff)),pre1) ! limit pre1 magnitude taking care of sign
        endif
+       pre2=zero
+! update force (which will not likely be used)
+       avforce(1) = t * avforce(1) + omt * pre1 ! force acting on dpar0 is pre1 (integrate negative to get f.e.)
+       avforce(2:3)=zero ! set to zero in case user runs rmsd dynamics after proj dynamics
+      endif ! proj_on
+!                                                      ! even if I am treating it here as such; it is an orthogonal `correction`
+      if (pre2 .gt. zero) then
+       if (ftsm_com_on) then
+        do i=1, nforced
+          dx=pre1 * ffpar(i,1) + pre2 * ffprp(i,1)
+          dy=pre1 * ffpar(i,2) + pre2 * ffprp(i,2)
+          dz=pre1 * ffpar(i,3) + pre2 * ffprp(i,3)
+          inds=>iatoms_f%v(i)%i
+          wgts=>wgts_f%v(i)%r
+          do j=1, iatoms_f%v(i)%last
+           ind=inds(j)
+           wgt=wgts(j)
+           __INCR(fx(ind),wgt*dx)
+           __INCR(fy(ind),wgt*dy)
+           __INCR(fz(ind),wgt*dz)
+          enddo ! j
+        enddo ! i
+       else ! ftsm_com_on
+        do i=1, nforced
+          ind=iatom_f(i)
+          fx(ind) = fx(ind) + pre1 * ffpar(i,1) + pre2 * ffprp(i,1)
+          fy(ind) = fy(ind) + pre1 * ffpar(i,2) + pre2 * ffprp(i,2)
+          fz(ind) = fz(ind) + pre1 * ffpar(i,3) + pre2 * ffprp(i,3)
+        enddo
+       endif ! ftsm_com_on
 !
-      endif
+       if (qorient.and.qdiffrot) then
+        if (ftsm_com_on) then
+         do i=1, norient
+           dx=pre1 * fopar(i,1) + pre2 * foprp(i,1)
+           dy=pre1 * fopar(i,2) + pre2 * foprp(i,2)
+           dz=pre1 * fopar(i,3) + pre2 * foprp(i,3)
+           inds=>iatoms_o%v(i)%i
+           wgts=>wgts_o%v(i)%r
+           do j=1, iatoms_o%v(i)%last
+            ind=inds(j)
+            wgt=wgts(j)
+            __INCR(fx(ind),wgt*dx)
+            __INCR(fy(ind),wgt*dy)
+            __INCR(fz(ind),wgt*dz)
+           enddo ! j
+         enddo ! i
+        else ! ftsm_com_on
+         do i=1, norient
+           ind=iatom_o(i)
+           fx(ind) = fx(ind) + pre1 * fopar(i,1) + pre2 * foprp(i,1)
+           fy(ind) = fy(ind) + pre1 * fopar(i,2) + pre2 * foprp(i,2)
+           fz(ind) = fz(ind) + pre1 * fopar(i,3) + pre2 * foprp(i,3)
+         enddo
+        endif ! ftsm_com_on
+       endif ! qorient && qdiffrot
+!
+      else ! parallel force only
+       if (ftsm_com_on) then
+        do i=1, nforced
+          dx=pre1 * ffpar(i,1)
+          dy=pre1 * ffpar(i,2)
+          dz=pre1 * ffpar(i,3)
+          inds=>iatoms_f%v(i)%i
+          wgts=>wgts_f%v(i)%r
+          do j=1, iatoms_f%v(i)%last
+           ind=inds(j)
+           wgt=wgts(j)
+           __INCR(fx(ind),wgt*dx)
+           __INCR(fy(ind),wgt*dy)
+           __INCR(fz(ind),wgt*dz)
+          enddo ! j
+        enddo ! i
+       else ! ftsm_com_on
+        do i=1, nforced
+          ind=iatom_f(i)
+          fx(ind) = fx(ind) + pre1 * ffpar(i,1)
+          fy(ind) = fy(ind) + pre1 * ffpar(i,2)
+          fz(ind) = fz(ind) + pre1 * ffpar(i,3)
+        enddo
+       endif ! ftsm_com_on
+!
+       if (qorient.and.qdiffrot) then
+        if (ftsm_com_on) then
+         do i=1, norient
+           dx=pre1 * fopar(i,1)
+           dy=pre1 * fopar(i,2)
+           dz=pre1 * fopar(i,3)
+           inds=>iatoms_o%v(i)%i
+           wgts=>wgts_o%v(i)%r
+           do j=1, iatoms_o%v(i)%last
+            ind=inds(j)
+            wgt=wgts(j)
+            __INCR(fx(ind),wgt*dx)
+            __INCR(fy(ind),wgt*dy)
+            __INCR(fz(ind),wgt*dz)
+           enddo ! j
+         enddo ! i
+        else ! ftsm_com_on
+         do i=1, norient
+           ind=iatom_o(i)
+           fx(ind) = fx(ind) + pre1 * fopar(i,1)
+           fy(ind) = fy(ind) + pre1 * fopar(i,2)
+           fz(ind) = fz(ind) + pre1 * fopar(i,3)
+         enddo
+        endif ! ftsm_com_on
+       endif ! qorient
+      endif ! pre2>0
 !
       end subroutine ftsm_addforce
-!===========================================================================
+!============================================================================
+      subroutine ftsm_compute_fe_fd()
+      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
+      __DEP_MPI
+      __DEP_NUMBER
+!
+#include "mpitype.def"
+!
+      float :: avforces(3,nstring), qcurv
+      int :: ierror, i
+      __IAM(FTSM_COMPUTE_FE_FD)
+!
+      if (proj_on) then
+       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.                         &
+     &                         SIZE_STRNG.gt.1) then
+
+        call MPI_GATHER(avforce, 3, mpifloat,               &
+     &                 avforces, 3, mpifloat,               &
+     &                 0, MPI_COMM_STRNG, ierror)
+        fe(1)=0d0
+!
+        if (fe_curvature) then ; qcurv=one ; else ; qcurv=zero ; endif
+!
+        if (ftsm_scaledist) then
+         do i=2, nstring
+          fe(i)  =fe(i-1) - half * ( avforces(1,i-1) + avforces(1,i) + qcurv*( avforces(2,i-1) + avforces(2,i) ) )
+!          fe(i-1)=fe(i-1) - ( avforces(2,i-1) - avforces(2,1) )
+         enddo
+!        fe(nstring)=fe(nstring) - ( avforces(2,nstring) - avforces(2,1))
+        else ! integrate along curve using arclength in ds
+         do i=2, nstring
+          fe(i)  =fe(i-1) - ds(i-1) * sqrt3 * half * ( avforces(1,i-1) + avforces(1,i) + qcurv*( avforces(2,i-1) + avforces(2,i) ) )
+         enddo
+        endif
+!
+       endif ! qroot
+      else ! explicitly set to zero for rmsd dynamics
+       fe=zero
+      endif ! proj_on
+!
+!      send free energy to slaves -- no need at present time
+!       if (MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.
+!     &                         SIZE_LOCAL.gt.1) then
+!        call __BROADCAST_LOCAL_8B(fe,nstring)
+!       endif
+!
+      end subroutine ftsm_compute_fe_fd
 !===========================================================================
       subroutine ftsm_calc_M(x,y,z,mass,t)
 ! 5.2013 : TODO : debug the case qdiffrot=1 
@@ -809,7 +922,7 @@ __CHARMM_ONLY##IF STRINGM
       bool :: qgrp, qcombine
       int :: i, a, b, c, d, e, j, k, n ! indices used in the derivation
       float :: rj(3), rk(3)         ! used in the analytical derivation
-      int4mpi, allocatable :: send_count(:), send_displ(:) ! if declared as int*8 parallelization will break
+      int4mpi, pointer :: send_count(:), send_displ(:) ! if declared as int*8 parallelization will break
       int :: obeg, oend, fbeg, fend, indo, indf
       float, pointer :: Mt(:,:,:,:)
       float :: Mtemp(3,3,nforced,nforced) ! scratch matrix
@@ -836,10 +949,9 @@ __CHARMM_ONLY##IF STRINGM
 !
       Mt=>Mtensor(:,:,:,:,1);
 !--------------------------------------------------------------------------------------
-!      load coordinates
-! write(0,*) 'loading coordinates ...' ! aa
+!      load coordinates -- simple form (currently no support for FTSM COM)
 !
-      if (.not. restrained_on) then ! if restraints are on coordinates already loaded
+      if (.not. restraint_force_on) then ! if restraints are on coordinates already loaded
        do k=1,nforced
         indf=iatom_f(k);  rfi(k,1)=x(indf);  rfi(k,2)=y(indf);  rfi(k,3)=z(indf)
        enddo
@@ -864,7 +976,7 @@ __CHARMM_ONLY##IF STRINGM
         endif ! qdiffrot
 !
        endif ! qorient
-      endif ! (.not. restrained_on)
+      endif ! (.not. restraint_force_on)
 !
 !    load masses
       do i=1,nforced
@@ -1211,7 +1323,7 @@ __CHARMM_ONLY##IF STRINGM
       float, pointer :: r_com(:)
       bool :: qgrp, qcombine
       int :: i, a, b, c ! indices used in the derivation
-      int4mpi, allocatable :: orient_count(:), orient_displ(:) ! for int*8 parallelization break with some compilers
+      int4mpi, pointer :: orient_count(:), orient_displ(:) ! for int*8 parallelization break with some compilers
       int :: j, k, indo, indf, obeg, oend
       float :: jo(3,norient), jf(3,nforced)   ! (Jacobian) derivative vectors (orientation and forced contributions)
       float :: d, d1, rho ! aux. vars
@@ -1234,9 +1346,9 @@ __CHARMM_ONLY##IF STRINGM
       rfl_rot=>r_f(:,:,left_rot);  rfr_rot=>r_f(:,:,right_rot)
 !
 !---- load coordinates ---------------------------------------------------------------------------
-! write(ME_STRNG + 100 , *) ME_STRNG, ME_LOCAL, qcombine, restrained_on ! aa
+! write(ME_STRNG + 100 , *) ME_STRNG, ME_LOCAL, qcombine, restraint_force_on ! aa
 !
-      if (.not. restrained_on) then ! if restraints are on, coordinates already loaded (called after calc in ftsm)
+      if (.not. restraint_force_on) then ! if restraints are on, coordinates already loaded (called after calc in ftsm)
        do k=1,nforced
         indf=iatom_f(k);  rfi(k,1)=x(indf);  rfi(k,2)=y(indf);  rfi(k,3)=z(indf)
        enddo
@@ -1261,7 +1373,7 @@ __CHARMM_ONLY##IF STRINGM
         endif ! qdiffrot
 !
        endif ! qorient
-      endif ! (.not. restrained_on)
+      endif ! (.not. restraint_force_on)
 !
 !---------------------------------------------------------------------------------------------
       if (qcombine) then ! use a combination of old and new reference structures
@@ -1352,7 +1464,7 @@ __CHARMM_ONLY##IF STRINGM
       else ! not qorient
         rfl_rot=>rfl; rfr_rot=>rfr ! no rotation
 !    define trivial identity rotation
-        u(:,:,3) = RESHAPE( (/one,zero,zero,zero,one,zero,zero,zero,one/), (/3,3/) ) ! rotation matrix
+        u(:,:,3) = Id3
       endif ! qorient
 !
 ! compute gradient vector

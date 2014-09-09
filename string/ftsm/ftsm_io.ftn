@@ -1,0 +1,633 @@
+! I/O module for finite-temperature string module
+      module ftsm_io
+!
+#if (defined(__CHARMM) || defined(__PARALLEL) )
+__CHARMM_ONLY##IF STRINGM
+!
+      __CHARMM_ONLY __DEP_KINDS
+      use ftsm_var
+      __IMPNONE
+!
+!=====================================================================
+!     SUBROUTINES
+      public ftsm_write_dcd
+      public ftsm_read_dcd
+      public ftsm_write_cor
+      public ftsm_read_cor
+!
+      contains
+!======================================================================
+      subroutine ftsm_write_dcd(ifile, col, ibeg, iend)
+!
+#ifdef __CHARMM
+      __DEP_PSF 
+      use cveloci_mod      !##CVELOCI
+      use version
+#endif
+!
+      __DEP_SIZE
+      __DEP_COORDINATES
+      __DEP_MULTICOM       __CHARMM_ONLY !##MULTICOM
+      __DEP_PARSER 
+      __DEP_COORIO
+! ugly fix for CHARMM compilation (mnodule dependency tree generation part)
+#ifdef __CHARMM
+##USE coorio_mod
+##USE ctitla
+#endif
+      __DEP_MPI
+      __DEP_NUMBER
+      use ftsm_util
+!
+!    will use fixed atom arrays to print only the path atoms
+!
+#ifdef __CHARMM
+      character(len=80) :: title(maxtit)
+      int :: ntitle, ncv
+#endif
+#ifndef __CHARMM
+      int :: natom
+#endif
+      float, pointer :: r3(:,:)  ! coordinates
+      int, pointer :: stringatoms(:), string_inds(:)
+#ifdef __CHARMM
+      int :: header(20)=zero
+#endif
+      int :: i, j, k
+      int :: ifile
+      int, optional :: col, ibeg, iend
+      int :: c, ierror, stat(MPI_STATUS_SIZE), ibg, ie, ind
+      int :: rtype=MPI_DOUBLE_PRECISION
+      float :: r_com(3)
+      bool :: qroot
+!
+      __IAM(FTSM_WRITE_DCD)
+!
+      qroot=MPI_COMM_STRNG.ne.MPI_COMM_NULL
+!
+#ifdef __CHARMM
+      title(1) = '* FINITE TEMPERATURE STRING IMAGE FILE'
+      ntitle=1
+#endif
+!
+      if (.not. ftsm_check(qorient)) return
+      if (present(col)) then ; c=col; else; c=center; endif
+      if (c.lt.1.or.c.gt.num_sets) then
+       __WRN( whoami, 'INVALID COLUMN. ABORT.')
+       return
+      endif
+!
+      if (present(ibeg)) then ; ibg=ibeg; else; ibg=1; endif
+      if (present(iend)) then ; ie=iend; else; ie=nstring; endif
+!
+      if (ibg.lt.1.or.ibg.gt.ie) then
+       __WRN( whoami, 'INVALID FRAMES REQUESTED. ABORT.')
+       return
+      endif
+!
+      nullify(stringatoms, string_inds, r3)
+!
+      if (qroot) then
+!
+      call ftsm_update_overlap_coor(ione)
+!
+      if (ME_STRNG.eq.0) then
+!
+#ifndef __CHARMM
+ natom=__NATOM
+#endif
+!
+       allocate(stringatoms(natom), string_inds(natom))
+       stringatoms=0
+!
+       if (ftsm_com_on) then
+        do i=1, nforced ; stringatoms(iatoms_f%v(i)%i(1)) = 1 ; enddo ! put in index of first atom in each COM group
+        if (qorient.and.qdiffrot) then
+         do i=1, norient ; stringatoms(iatoms_o%v(i)%i(1)) = 1 ; enddo
+        endif
+       else
+        stringatoms(iatom_f)=1
+        if (qorient.and.qdiffrot) stringatoms(iatom_o)=1
+       endif
+!
+       k=0
+       do i = 1, natom
+        if (stringatoms(i).gt.0) then; k=k+1; string_inds(k)=i; endif ! need this array for dcd writer below
+       enddo
+#ifdef __CHARMM
+       ncv=ncvel ; ncvel=0  !__CHARMM_ONLY##CVELOCI ! exclude constant velocity atoms also
+#endif
+!      for first frame, output all coordinates: take from instantaneous set
+       allocate(r3(natom,3)) ; r3=0d0
+       if (qorient) then ; r_com=rcom(:,instant) ; else ; r_com=zero ; endif
+#ifdef __CHARMM
+       r3(:,1)=x(1:natom)-r_com(1) ! bring all coordinates to zero COM for convenience (assume rcom(:,instant) is reasonably accurate)
+       r3(:,2)=y(1:natom)-r_com(2)
+       r3(:,3)=z(1:natom)-r_com(3)
+#elif defined (__DMOL)
+       r3(:,1)=r(:,1)-r_com(1)
+       r3(:,2)=r(:,2)-r_com(2)
+       r3(:,3)=r(:,3)-r_com(3)
+#endif
+!
+       do j=1,nforced
+        if (ftsm_com_on) then ; ind=iatoms_f%v(j)%i(1) ; else ; ind=iatom_f(j) ; endif
+        r3(ind,:)=r_f(j,:,c)
+       enddo
+       if (qorient.and.qdiffrot) then
+        do j=1,norient
+         if (ftsm_com_on) then ; ind=iatoms_o%v(j)%i(1) ; else ; ind=iatom_o(j) ; endif
+         r3(ind,:)=r_o(j,:,c)
+        enddo
+       endif
+! call trajectory writer
+#ifdef __CHARMM
+! (first, generate custom icontrol array)
+       header(1)=nstring ! number of sets
+       header(2)=1 ! step
+       header(3)=1 ! interval
+       header(4)=nstring ! total number of trajectory "frames"
+       header(9)=natom-k ! number of free (non-fixed) atoms
+       header(8)=header(9)*3 ! number of dof
+       header(20)=vernum ! version
+!
+       call writcv(r3(:,1), r3(:,2), r3(:,3),                           &
+     &  r3(:,1), .false.,                                               & !__CHARMM_ONLY##CHEQ
+     &  natom,                                                          &
+     &  string_inds, k, ibg, ibg, 3*k, 0d0, 1, ie, title,ntitle,ifile,  &
+     &  .false., .true., header, .false., r3(:,1))       ! whew...
+#elif defined(__DMOL)
+       ierror=dcd_write_frame(ifile,r3,(ibg.eq.1),FREEATOMS=string_inds(1:k))
+#endif
+!from dynio.src
+!      SUBROUTINE WRITCV(X,Y,Z,
+!     $                  CG,QCG,                             !__CHARMM_ONLY##CHEQ
+!     $                  NATOM,FREEAT,NFREAT,NPRIV,ISTEP,NDEGF,
+!     $                  DELTA,NSAVC,NSTEP,TITLE,NTITLE,IUNCRD,QVEL,
+!     $                  QINCT,JCNTRL,DIM4,FDIM)
+!C
+!C     WRITES A SET OF COORDINATES FOR A SINGLE DYNAMICS STEP. THE FORMAT
+!C     FOR THE TRAJECTORY FILE VARIES WITH WHETHER ANY ATOMS ARE FIXED.
+!C     ICNTRL(9) STORES THE NUMBER OF FIXED ATOMS WHICH WILL BE ZERO FOR
+!C     ALL PREVIOUS TRAJECTORY FILES SO COMPATIBILITY IS ASSURED.
+!C
+!C     Authors: S. Swaminathan
+!C              Robert Bruccoleri
+!
+!    repeat a few times to write out entire string
+       do i=2, nstring
+!
+        call MPI_RECV(r_f(:,:,dummy),3*nforced,rtype,i-1,i-1,MPI_COMM_STRNG,stat,ierror)
+!    extract coordinates
+        do j=1,nforced
+         if (ftsm_com_on) then ; ind=iatoms_f%v(j)%i(1) ; else ; ind=iatom_f(j) ; endif
+         r3(ind,:)=r_f(j,:,dummy)
+        enddo
+!
+        if (qdiffrot.and.qorient) then
+         call MPI_RECV(r_o(:,:,dummy),3*norient,rtype,i-1,i-1,MPI_COMM_STRNG,stat,ierror)
+         do j=1,norient
+          if (ftsm_com_on) then ; ind=iatoms_o%v(j)%i(1) ; else ; ind=iatom_o(j) ; endif
+          r3(ind,:)=r_o(j,:,dummy)
+         enddo
+        endif
+!
+!    write next frame
+#ifdef __CHARMM
+        call writcv(r3(:,1), r3(:,2), r3(:,3),                          &
+     &   r3(:,1), .false.,                                              & !__CHARMM_ONLY##CHEQ
+     &   natom,                                                         &
+     &   string_inds, k, ibg, ibg+i-1, 3*k, 0d0, 1, ie, title, 1, ifile,&
+     &   .false., .true., header, .false., r3(:,1))
+#elif defined(__DMOL)
+       ierror=dcd_write_frame(ifile,r3,.false.,FREEATOMS=string_inds(1:k))
+#endif
+       enddo
+!
+#ifdef __CHARMM
+       ncvel=ncv !##CVELOCI
+#endif
+      else
+       call MPI_SEND(r_f(:,:,c),3*nforced,rtype,0,ME_STRNG,             &
+     &                      MPI_COMM_STRNG, ierror)
+       if (qdiffrot.and.qorient)                                        &
+     &  call MPI_SEND(r_o(:,:,c),3*norient,rtype,0,ME_STRNG,            &
+     &                      MPI_COMM_STRNG, ierror)
+      endif ! string root
+!
+      endif ! qroot
+!
+      if (associated(stringatoms)) deallocate(stringatoms)
+      if (associated(string_inds)) deallocate(string_inds)
+      if (associated(r3)) deallocate(r3)
+!
+      end subroutine ftsm_write_dcd
+!===============================================================
+      subroutine ftsm_read_dcd(ifile, col)
+#ifdef __CHARMM
+      __DEP_PSF
+#endif
+      __DEP_SIZE
+      __DEP_COORDINATES
+      __DEP_MULTICOM       __CHARMM_ONLY !##MULTICOM
+      __DEP_PARSER 
+      __DEP_MPI
+      __DEP_COORIO
+      use ftsm_util
+! ugly fix for CHARMM compilation (module dependency tree generation part)
+#ifdef __CHARMM
+##USE coorio_mod
+##USE ctitla
+#endif
+!
+      __IAM(FTSM_READ_DCD)
+      float, pointer :: r3(:,:)
+      int, pointer :: stringatoms(:), string_inds(:)
+      int :: i, j, k, ind, ifile
+      int, optional :: col
+      int :: c, ierror, stat(MPI_STATUS_SIZE)
+      int :: rtype=MPI_DOUBLE_PRECISION
+!
+#ifdef __CHARMM
+      character(len=80) :: title(maxtit)
+      real*4 :: trash4(natom) ! scratch array for ugly routine
+      float :: trash8(natom) ! scratch array for ugly routine
+!     some dummy vars for coordinate read
+      int :: nfile, istep, istats, ndof, begin_, stop_,             &
+     &           skip_, nsavv_, satoms, ntitle
+      float :: delta
+      bool :: qdim4, qcg
+#else
+      int :: natom
+#ifdef __DMOL
+      real*8, pointer :: unitcell(:)=>NULL()
+#endif
+#endif
+!
+      if (.not. ftsm_check(qorient)) return
+      if (present(col)) then ; c=col; else; c=center; endif
+      if (c.lt.1.or.c.gt.num_sets) then
+       __WRN( whoami, 'INVALID COLUMN. ABORT.')
+       return
+      endif
+!
+#ifndef __CHARMM
+ natom=__NATOM
+#endif
+!
+      allocate(r3(natom,3))
+      allocate(stringatoms(natom), string_inds(natom))
+!
+      r3=0d0; stringatoms=0
+!
+      if (ftsm_com_on) then
+       do i=1, nforced ; stringatoms(iatoms_f%v(i)%i(1)) = 1 ; enddo ! put in index of first atom in each COM group
+       if (qorient.and.qdiffrot) then
+        do i=1, norient ; stringatoms(iatoms_o%v(i)%i(1)) = 1 ; enddo
+       endif
+      else
+       stringatoms(iatom_f)=1
+       if (qorient.and.qdiffrot) stringatoms(iatom_o)=1
+      endif
+!
+      k=0
+      do i = 1, natom
+       if (stringatoms(i).gt.0) then ; k=k+1 ; string_inds(k)=i ; endif ! need this array for dcd reader below
+      enddo
+!
+      if (ME_STRNG.eq.0) then
+!
+!    call trajectory reader
+!
+#ifdef __CHARMM
+       istats=1
+       qcg=.false.
+       qdim4=.false.
+       begin_=0 ! note begin <=0 forces a strange "reset" with begin=istep (which is zero below); this is to support trajectories
+                ! made with VMD
+       skip_=1
+       stop_=nstring
+       ntitle=0
+       istep=0
+!
+       call readcv(r3(:,1), r3(:,2), r3(:,3),                              &
+     &  trash8, qcg,                                                    & !__CHARMM_ONLY##CHEQ
+     &  trash4, natom,                                                  &
+     &  stringatoms, satoms, ifile, 1, ifile, nfile,                    &
+     &  istep, istats, ndof, delta, begin_, stop_, skip_,               &
+     &  nsavv_, 'CORD', 'CORD', title, ntitle, qdim4, trash8, .false.)
+#elif defined(__DMOL)
+       __FREE(stringatoms)
+       i=dcd_read_frame(ifile, r3, .true., stringatoms, unitcell)
+#endif
+!
+       if ( &
+#ifdef __CHARMM
+&       satoms &
+#else
+&      size(stringatoms) &
+#endif
+&       .eq.k) then
+        if ( any(stringatoms(1:k).ne.string_inds(1:k)) )                &
+     &   __WRN(whoami,'INVALID STRING ATOM INDICES. BEWARE.')
+       else
+        __WRN(whoami,'INCORRECT NUMBER OF STRING ATOMS. BEWARE.')
+       endif
+!
+!
+!      SUBROUTINE READCV(X,Y,Z,
+!     $                  CG,QCG,                         !__CHARMM_ONLY##CHEQ
+!     $                  TEMP,NATOM,FREEAT,NFREAT,
+!     $                  FIRSTU,NUNIT,IUNIT,NFILE,
+!     $                  ISTEP,ISTATS,NDEGF,DELTA,
+!     $                  BEGIN,STOP,SKIP,NSAVV,HDR1,HDR2,
+!     $                  TITLE,NTITLE,DIM4,FDIM,Q_PLL)
+! FREEAT WILL BE READ IF NFREAT IS NOT EQUAL TO NATOM.
+! ISTATS IS A FLAG WITH THE FOLLOWING FUNCTIONS:
+!CC             ON CALL
+!C             1 - OPEN A NEW UNIT FOR READING THE INFORMATION
+!C             2 - USE THE UNIT THAT IS ALREADY OPEN ON IUNIT
+!C             ON RETURN
+!C            -1 - THE REQUESTED INFORMATION HAS BEEN READ
+!C             1 - NOT DONE READING, BUT THIS FILE IS FINISHED
+!C             2 - NOT DONE READING, AND THIS FILE IS IS NOT DONE.
+!C     HDR1 AND HDR2 ARE OPTIONS FOR THE FILE HEADER THAT IS READ.
+!C     RECORDS WILL BE USED IF MOD(ISTEP,SKIP)=0 AND BEGIN<=ISTEP<=STOP.
+!C     DJS 1/25/81
+!C
+!C     Authors: S. Swaminathan
+!C              David Perahia
+!C              Dave States
+!C              Robert Bruccoleri
+!C
+!C    Q_PLL    mfc added bool variable to signal whether
+!C             the calling routine is being done in parallel or not.
+!C             When calling routine is not parallel, master hangs
+!C             trying to send data to slaves that are not receiving.
+!C
+!
+!
+       do j=1, nforced
+        if (ftsm_com_on) then ; ind=iatoms_f%v(j)%i(1) ; else ; ind=iatom_f(j) ; endif
+        r_f(j,:,c)=r3(ind,:)
+       enddo
+!
+       if (qorient.and.qdiffrot) then
+        do j=1, norient
+         if (ftsm_com_on) then ; ind=iatoms_o%v(j)%i(1) ; else ; ind=iatom_o(j) ; endif
+         r_o(j,:,c)=r3(ind,:)
+        enddo
+       endif
+!
+!    repeat a few times to read entire string
+       do i=2, nstring
+#ifdef __CHARMM
+        call readcv(r3(:,1), r3(:,2), r3(:,3),                          &
+     &   trash8, qcg,                                                   & !__CHARMM_ONLY##CHEQ
+     &   trash4, natom,                                                 &
+     &   stringatoms, satoms, ifile, 1, ifile, nfile,                   &
+     &   istep, istats, ndof, delta, begin_, stop_, skip_,              &
+     &   nsavv_, 'CORD', 'CORD', title, ntitle, qdim4, trash8, .false.)
+#elif defined (__DMOL)
+        j=dcd_read_frame(ifile, r3, .false., stringatoms, unitcell)
+#endif
+!
+        call MPI_SEND(r3,3*natom,rtype,i-1,i-1,                          &
+     &                      MPI_COMM_STRNG, ierror)
+       enddo ! i
+!
+      else ! me_string == 0
+!
+       call MPI_RECV(r3,3*natom,rtype,0,ME_STRNG,                        &
+     &                MPI_COMM_STRNG,stat,ierror)
+!
+       do j=1, nforced
+        if (ftsm_com_on) then ; ind=iatoms_f%v(j)%i(1) ; else ; ind=iatom_f(j) ; endif
+        r_f(j,:,c)=r3(ind,:)
+       enddo
+!
+       if (qorient.and.qdiffrot) then
+        do j=1, norient
+         if (ftsm_com_on) then ; ind=iatoms_o%v(j)%i(1) ; else ; ind=iatom_o(j) ; endif
+         r_o(j,:,c)=r3(ind,:)
+        enddo
+       endif
+      endif
+!
+      call ftsm_save_com(c) ! compute and remove center of mass
+!
+      __FREE(stringatoms)
+      __FREE(string_inds)
+      __FREE(r3)
+#ifdef __DMOL
+      __FREE(unitcell)
+#endif
+!
+      end subroutine ftsm_read_dcd
+!=====================================================
+      subroutine ftsm_write_cor(ifile, col)
+#ifdef __CHARMM
+      __DEP_PSF 
+#endif
+      __DEP_COORDINATES
+      __DEP_SIZE
+      __DEP_PARSER
+      __DEP_COORIO
+! ugly fix for CHARMM compilation (mnodule dependency tree generation part)
+#ifdef __CHARMM
+##USE coorio_mod
+##USE ctitla
+#endif
+      __DEP_NUMBER
+      use ftsm_util
+!
+#ifdef __CHARMM
+      character(len=80) :: title(maxtit)
+      int :: ntitle
+!     compatibility variables for coordinate reading/writing
+      float :: wdum(natom+1)
+      int :: icntrl(20)=0, modew
+#else
+      int :: natom
+#ifdef __DMOL
+      bool :: ok
+#endif
+#endif
+      float, pointer :: r3(:,:)
+      int, pointer :: stringatoms(:) 
+      int :: j, ind
+      int, optional :: col
+      int :: c, ifile
+!
+      __IAM(FTSM_WRITE_COR)
+!
+#ifdef __CHARMM
+      ntitle = 1
+      title(1) = '* FINITE TEMPERATURE STRING IMAGE FILE'
+#endif
+!
+      if (.not. ftsm_check(qorient)) return
+      if (present(col)) then ; c=col; else; c=center; endif
+      if (c.lt.1.or.c.gt.num_sets) then
+       __WRN( whoami, 'INVALID COLUMN. ABORT.')
+       return
+      endif
+!
+#ifndef __CHARMM
+ natom=__NATOM
+#endif
+!
+      allocate(r3(natom,3),stringatoms(natom))
+      r3=0d0; stringatoms=0
+!
+      if (ftsm_com_on) then
+       do j=1, nforced ; stringatoms(iatoms_f%v(j)%i(1)) = 1 ; enddo ! put in index of first atom in each COM group
+       if (qorient.and.qdiffrot) then
+        do j=1, norient ; stringatoms(iatoms_o%v(j)%i(1)) = 1 ; enddo
+       endif
+      else
+       stringatoms(iatom_f)=1
+       if (qorient.and.qdiffrot) stringatoms(iatom_o)=1
+      endif
+!
+      call ftsm_update_overlap_coor(ione)
+      do j=1, nforced
+       if (ftsm_com_on) then ; ind=iatoms_f%v(j)%i(1) ; else ; ind=iatom_f(j) ; endif
+       r3(ind,:)=r_f(j,:,c)
+      enddo
+!
+      if (qorient.and.qdiffrot) then
+       do j=1, norient
+        if (ftsm_com_on) then ; ind=iatoms_o%v(j)%i(1) ; else ; ind=iatom_o(j) ; endif
+        r3(ind,:)=r_o(j,:,c)
+       enddo
+      endif
+!
+#ifdef __CHARMM
+!    call writer
+!    formatted coor card files
+      modew=2
+      wdum=0d0
+!
+      call cwrite(ifile,title,ntitle,icntrl,                            &
+     &              r3(:,1),r3(:,2),r3(:,3),wdum,                       &
+     &              res,atype,ibase,                                    &
+     &              nres,natom,stringatoms,modew,0,0,.false.)
+#elif defined (__DMOL)
+      ok=ch_coor_write(ifile, r3, MASK=stringatoms)
+#endif
+!
+      __FREE(stringatoms)
+      __FREE(r3)
+!
+      end subroutine ftsm_write_cor
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      subroutine ftsm_read_cor(ifile, col)
+!
+      __DEP_SIZE 
+      __DEP_COORDINATES
+      __DEP_PARSER
+!
+#ifdef __CHARMM
+      __DEP_PSF
+      use ctitla
+#endif
+      __DEP_NUMBER
+      __DEP_COORIO
+! ugly fix for CHARMM compilation (mnodule dependency tree generation part)
+#ifdef __CHARMM
+##USE coorio_mod
+##USE ctitla
+#endif
+      use ftsm_util
+!
+      float, pointer :: r3(:,:)
+      int, pointer :: stringatoms(:) 
+      int :: j, ind
+      int, optional :: col
+      int :: c, ifile
+!
+#ifdef __CHARMM
+      character(len=80) :: title(maxtit), cdummy=''
+!     compatibility variables for coordinate reading/writing
+      float :: xdum(natom+1), ydum(natom+1), zdum(natom+1),            &
+     &          wdum(natom+1)
+!
+      int :: icntrl(20), moder, ntitle=0
+      int :: ifree(natom)
+#else
+      int :: natom
+#endif
+!
+      __IAM(FTSM_READ_COR)
+!
+      if (.not. ftsm_check(qorient)) return
+      if (present(col)) then ; c=col; else; c=center; endif
+      if (c.lt.1.or.c.gt.num_sets) then
+       __WRN( whoami, 'INVALID COLUMN. ABORT.')
+       return
+      endif
+!
+#ifndef __CHARMM
+ natom=__NATOM
+#endif
+!
+      allocate(r3(natom,3),stringatoms(natom))
+      r3=0d0; stringatoms=0
+!
+      if (ftsm_com_on) then
+       do j=1, nforced ; stringatoms(iatoms_f%v(j)%i(1)) = 1 ; enddo ! put in index of first atom in each COM group
+       if (qorient.and.qdiffrot) then
+        do j=1, norient ; stringatoms(iatoms_o%v(j)%i(1)) = 1 ; enddo
+       endif
+      else
+       stringatoms(iatom_f)=1
+       if (qorient.and.qdiffrot) stringatoms(iatom_o)=1
+      endif
+!    call reader
+!    formatted coor card files
+#ifdef __CHARMM
+      moder=1
+      xdum=__NAN; ydum=__NAN; zdum=__NAN; wdum=__NAN
+!
+      call cread(ifile, title, ntitle, icntrl,                          &
+     &        r3(:,1), r3(:,2), r3(:,3),                                & ! pass by reference ?
+     &        wdum, natom, moder, stringatoms,                          &
+     &        0, res, nres, atype, ibase, 1, ifree,                     &
+     &        segid, resid, nictot, nseg, .false., .false.,             &
+     &        cdummy, 80, 0, .false.)
+!
+!
+! from coor.io
+!      SUBROUTINE CREAD(IUNIT,TITLE,NTITL,ICNTRL,X,Y,Z,WMAIN,NATOM,
+!     &  NINPUT,ISLCT,IOFFS,RES,NRES,TYPE,IBASE,
+!     &  IFILE,FREEAT,SEGID,RESID,NICTOT,NSEG,LRSID,LFREE,LYN,MXLEN,
+!     &  MODEL,OFFICIAL)
+!
+#elif defined(__DMOL)
+      call ch_coor_read(ifile, r3, MASK=stringatoms)
+#endif
+!
+      do j=1, nforced
+       if (ftsm_com_on) then ; ind=iatoms_f%v(j)%i(1) ; else ; ind=iatom_f(j) ; endif
+       r_f(j,:,c)=r3(ind,:)
+      enddo
+!
+      if (qorient.and.qdiffrot) then
+       do j=1, norient
+        if (ftsm_com_on) then ; ind=iatoms_o%v(j)%i(1) ; else ; ind=iatom_o(j) ; endif
+        r_o(j,:,c)=r3(ind,:)
+       enddo
+      endif
+!
+      call ftsm_save_com(c) ! compute remove center of mass
+!
+      if (associated(stringatoms)) deallocate(stringatoms)
+      if (associated(r3)) deallocate(r3)
+!
+      end subroutine ftsm_read_cor
+!=================================================================================
+__CHARMM_ONLY##ENDIF
+#endif
+      end module ftsm_io
+!

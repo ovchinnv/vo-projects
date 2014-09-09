@@ -1,0 +1,130 @@
+#!/bin/bash 
+:<<COMMENT
+VO 5.2014 use a source code tree and a patch tree to create a new source
+directory containing only new files that is acceptable for CHARMM
+submission. The existing source directory is "$1" the new source
+directory is "$2" and the patch directory is "$3".  If the arguments are
+missing then default arguments will be used
+\
+COMMENT
+# begin code
+OUT="===>";
+ERR="WARNING:"
+BREAK="===================================================================================";
+PREFLX2CPP=0 ; # indicate whether to replace charmm preflx macros with CPP macros prior to applying patch : 1 - yes; 0 - no
+#PREFLX2CPP=1 ; # 
+rdir=`pwd`;
+
+dnew_default="c39a2devp"
+dold_default="c39a2dev"
+patchdir_default="chmdiff39a2dev"
+#
+# files excluded from prefx2cpp (relevant only with preflx2cpp=1)
+exclude_prefx2cpp="domdec_bonded_block.src"
+#==================== source
+if [ -z $1 ] ; then
+ echo " Source (existing) directory name unspecified. Trying \"$dold_default\""
+ dold=$dold_default
+else
+ dold=$1
+ echo " Source (existing) directory name is \"$dold\""
+fi
+#
+if [ ! -d "$dold" ]; then
+ echo " Directory "$dold" does not exist. Abort."
+ exit 1
+fi
+#==================== destination
+if [ -z $2 ] ; then
+ echo " Target (modified) directory name unspecified. Trying \"$dnew_default\""
+ dnew=$dnew_default
+else
+ dnew=$2
+ echo " Target (modified) directory name is \"$dnew\""
+fi
+#
+if [ -d "$dnew" ]; then
+ if [ `ls $dnew | wc -l` -ne "0" ]; then
+  echo " Directory "$dnew" exists and is not empty. Abort."
+#  exit 1
+  rm -rf $dnew ;## aa remove without prompting
+ fi
+fi
+#
+logfile=$dnew.log
+#compute absolute location of log file
+logfilename=${logfile##*/}
+logpath=${logfile%$logfilename}
+echo -n > $logfile
+pushd "$logpath" >&/dev/null
+logpath=`pwd`;
+popd >&/dev/null
+logfileabs="$logpath/$logfilename"
+#==================== patch tree
+if [ -z $3 ] ; then
+ echo " Patch tree directory name unspecified. Trying \"$patchdir_default\""
+ patchdir=$patchdir_default
+else
+ patchdir=$3
+ echo " Patch tree directory name is \"$patchdir\""
+fi
+#
+if [ ! -d "$patchdir" ]; then
+ echo " Directory "$patchdir" does not exist. Abort."
+ exit 1
+fi
+#
+echo $BREAK
+echo "$OUT Creating patched directory tree"
+echo "$OUT Target (modified) directory name is \"$dnew\"" >> $logfile
+echo "$OUT Source (modified) directory name is \"$dold\"" >> $logfile
+echo "$OUT Creating patched directory tree" >> $logfile
+#
+dirs=`ls -R $patchdir | grep ":" | sed "s/\(.*\):/\1/;s/$patchdir/\.\//;s/\///"`
+# file list for CHARMM submission
+echo -n  >$logpath/$dnew_default.files
+#
+for d in $dirs ; do
+ mkdir -p $dnew/$d
+ pushd $patchdir/$d >& /dev/null
+ patches=`ls | grep ".patch" `
+ popd >& /dev/null
+ for p in $patches ;do
+  fname=${p%.patch}
+  fold=$dold/$d/$fname
+  if [ ! -f $fold ] ; then
+   echo "$ERR Patch \"$patchdir/$d/$p\" requires nonexistent file \"$fold\" (skipping). New source tree will be incomplete."
+   echo "$ERR Patch \"$patchdir/$d/$p\" requires nonexistent file \"$fold\" (skipping). New source tree will be incomplete.">>$logfile
+   continue
+  fi
+  cp -f $fold $dnew/$d/$fname
+  cp -f $patchdir/$d/$p $dnew/$d
+  echo -n "$OUT Will patch file \"$fold\" ... " >> $logfile
+# echo name of file to patch (modified files for CHARMM submission)
+  fmod=$d/$fname
+  echo ${fmod#.*/*} >> $logpath/$dnew_default.files
+#
+  pushd $dnew/$d >&/dev/null
+  if [ $PREFLX2CPP -eq 1 ]; then
+   fext=${fname##*.}
+   if [ `echo $exclude_prefx2cpp | grep $fname  | wc -l` -eq "0" ] && [ "$fext"!="src" ] ; then #  run prefx2cpp on this file
+    $rdir/prefx2cpp $fname 0 > _tmp ;# 0 - flag means no parentheses
+    mv _tmp $fname
+   fi
+  fi
+  patch -E -F 2 -f -l < $p >> $logfileabs
+  rm -f $p
+  popd >&/dev/null
+ done
+done
+# make sure that necessary files are executable
+exec_files="$dnew/install.com $dnew/tool/makemod.pl"
+for f in $exec_files; do
+ if [ -f $f ] ; then
+  chmod ugo+x $f
+ fi
+done
+#
+cat $logfile
+echo "$OUT DONE!"
+echo $BREAK

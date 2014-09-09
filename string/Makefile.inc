@@ -10,5 +10,5 @@ $(COMMON)/%.mod : $(COMMON)/%.o
 	ln -s $$FILE $(COMMON)/$$file ; fi ; fi
 # touch used to change modification to update dependency status; 
 # note: pathscale converts module names to uppercase
-charmm: $(CHARMM_SOURCES)
+charmm:: $(CHARMM_SOURCES)
 

@@ -18,6 +18,9 @@ __CHARMM_ONLY##IF STRINGM
       use ivector_list
       use cv_types ! unfortunately, need to include this module because angle calculations require special treatment
 !
+      __IMPNONE
+!
+      private
 !     declare pointer type (for arrays of pointer)
       type priv_ptr
        int, pointer :: p(:), amap_ptr(:) ! amap_ptr contains a unique list of indices in the amap that the cv depends on
@@ -42,7 +45,7 @@ __CHARMM_ONLY##IF STRINGM
       float, dimension(:), pointer   :: k ! force constant
       float :: kpara ! force constant for forces parallel to string ; same for all CV (required for off-path sim.)
       float :: kperp ! force constant for forces perpendicular to string ; same for all CV
-      float, dimension(:), pointer   :: gamma ! coupling constant for on-the-fly string (currently not used)
+      float, dimension(:), pointer   :: gamma
       float, dimension(:), pointer   :: weight
       float :: wrss ! one over root-sum-square of the weight array
       int :: num_cv=0 ! number of active collective vars
@@ -79,7 +82,8 @@ __CHARMM_ONLY##IF STRINGM
       int, dimension(:), pointer :: rex_map ! holds the map between replica number and the process rank
       float :: rex_beta ! ensemble temperature in replica exchange (usually will be the same as the simulation temperature)
       end type cv_base
-
+!
+      public priv_ptr
       ! subroutines
       public cv_common_init   ! initialize cv array
       public cv_common_done   ! destroy cv array
@@ -91,7 +95,8 @@ __CHARMM_ONLY##IF STRINGM
       public cv_common_print_local  ! print out cv values (i.e. z) to separate files
       public cv_common_print_global  ! print out cv values (i.e. z) to a combined file
       public cv_common_add_hist ! save an instance of theta(x)
-      public cv_common_print_hist ! write history of computed cv values (i.e. theta(x)) to file
+      public cv_common_print_hist_local ! write history of computed cv values (i.e. theta(x)) to file
+      public cv_common_print_hist_global ! write history of computed cv values (i.e. theta(x)) to file
       public cv_common_clear_hist ! clear history
       public cv_common_smooth_hist ! filter history & place in comp-set r(:,:,2)
       public cv_common_evolve_expo ! evolution using exponential averaging of history
@@ -122,14 +127,16 @@ __CHARMM_ONLY##IF STRINGM
       public cv_common_update_fe_ave ! update average work curve
       public cv_common_set_ave_samples ! change the number of samples associated with the average CV
       public cv_common_voronoi_compute ! determine which voronoi cell we are in
-      public cv_common_voronoi_print_hist ! print voronoi histograms
+      public cv_common_voronoi_print_log ! print voronoi log
       public cv_common_voronoi_init ! initialize voronoi histogram matrix
       public cv_common_voronoi_update ! update voronoi cell centers
       public cv_common_voronoi_smart_update ! update vorohnoi cell centers sudh that the MD replicas remain inside their cells
       public cv_common_voronoi_done ! deallocate voronoi histogram matrix
       public cv_common_voronoi_set_cutoff ! set voronoi cell cutoff
-      public cv_common_read_voro_map   ! read replica map from file
-      public cv_common_print_voro_map   ! read replica map from file
+      public cv_common_read_voro_map   ! read voronoi map from file
+      public cv_common_print_voro_map   ! print voronoi map to file
+      public cv_common_read_voro_data   ! read voronoi crossing data from file
+      public cv_common_print_voro_data   ! print voronoi crossing to file
       public cv_common_neq_work_init ! initialize variables for computing work
       public cv_common_neq_get_work ! return work
       public cv_common_interpolate ! interpolate CV onto a different grid
@@ -140,15 +147,19 @@ __CHARMM_ONLY##IF STRINGM
       public cv_common_print_dr ! print tangent to the path
       public cv_common_read_dr ! read tangent to the path
       public cv_common_compute_k ! calculate force constants using k_i=kpara*w_i^2
-      public cv_common_print_M_global   ! print mass Matrix
+      public cv_common_print_M_global   ! print metric tensor
+      public cv_common_read_M_global   ! read metric tensor
+      public cv_common_compute_Minv    ! compute inverse of metric tensor
       public cv_common_rex_init       ! initialize replica exchange variables
       public cv_common_rex_done
+      public cv_common_rex_set_temp
       public cv_common_rex_compute_dE ! compute energy difference
-      public cv_common_read_rex_map   ! read replica map from file
-      public cv_common_print_rex_map  ! print replica map
-      public cv_common_print_rex_log  ! print replica exchange log
+      public cv_common_rex_read_map   ! read replica map from file
+      public cv_common_rex_print_map  ! print replica map
+      public cv_common_rex_print_log  ! print replica map
 
 !    variables
+ __DECL_MSGBUF
       type (cv_base), public, save :: cv
 !
       int, public :: max_cv_common=200
@@ -196,14 +207,12 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_NUMBER 
       __DEP_MULTICOM
 !
-      __IMPNONE
-!
        int, optional :: max_cv
        int :: nrep ! number of total replicas
        int :: i
 !
        interface
-        subroutine smcv_init(maxcv);__IMPNONE; int, optional :: maxcv ; end subroutine smcv_init
+        subroutine smcv_init(maxcv); int, optional :: maxcv ; end subroutine smcv_init
        end interface
 !
        if (.not.smcv_initialized) call smcv_init() ! defines nstring
@@ -253,7 +262,7 @@ __CHARMM_ONLY##IF STRINGM
         cv%r(:,runave)=0d0    ! not necessary, but cleaner when CVs include angles which need to be averaged
         cv%r(:,previnst)=0d0  ! not necessary, but cleaner when CVs include angles
         cv%M=0d0
-        cv%type=-1d0
+        cv%type=-1
         cv%active=.true. ! all cv active by default (and for compatibility with previous code)
         cv%k=0d0
         cv%kpara=0d0
@@ -272,7 +281,7 @@ __CHARMM_ONLY##IF STRINGM
        end subroutine cv_common_init
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_done()
-       __IMPNONE
+       
        int :: i
        cv%num_cv=0
        call cv_common_clear_hist()
@@ -331,14 +340,14 @@ __CHARMM_ONLY##IF STRINGM
        function cv_common_add(k,gamma,weight,type)
       __DEP_OUTPUT
       __DEP_NUMBER 
-      __IMPNONE
+      
 !
        int :: type
        float, optional :: k, gamma, weight
 !      locals
        int j
        int cv_common_add ! returns index into cv array
-       __IAM(CV_BASE_ADD)
+       __IAM(CV_COMMON_ADD)
 !      do work
        if (.not.cv_common_initialized) call cv_common_init()
        j=cv%num_cv + 1
@@ -390,13 +399,12 @@ __CHARMM_ONLY##IF STRINGM
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_fill(i,val,c)
       __DEP_OUTPUT
-      __IMPNONE
+!
        int :: i
        float :: val
        int, optional :: c
        int :: c1
-       character(len=14) :: whoami
-       data whoami /' CV_BASE_FILL>'/
+       __IAM(CV_COMMON_FILL)
 !      do work:
        if (present(c)) then
         if (c.lt.1.or.c.gt.main_offset+max_hist_base) then
@@ -413,7 +421,7 @@ __CHARMM_ONLY##IF STRINGM
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_grad_init()
 !      initialize cv%grad arrays
-       __IMPNONE
+       
        if (associated(cv%grad)) deallocate(cv%grad)
 !       if (associated(cv%gradx)) deallocate(cv%gradx) !    delete old data if present
 !       if (associated(cv%grady)) deallocate(cv%grady) !    delete old data if present
@@ -433,7 +441,7 @@ __CHARMM_ONLY##IF STRINGM
        subroutine cv_common_compute_Minv(inverse_LU, ind)
        use lu, only: inv_lu  ! matrix inverse by LU decomposition
        use multidiag, only: inv_mdiag
-       __IMPNONE
+       
        bool, optional, intent(in) :: inverse_LU
        int, optional, intent(in) :: ind
        bool :: qLU=.true.
@@ -460,9 +468,9 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_OUTPUT
       __DEP_MULTICOM
       __DEP_MPI 
-      __IMPNONE
+      
 !
-#include "../../mpitype.def"
+#include "mpitype.def"
 !
        float :: s, sum
        int :: i, j, ierror
@@ -471,7 +479,7 @@ __CHARMM_ONLY##IF STRINGM
        bool :: qroot
 !
        float :: Mave(max_cv_common, cv%num_cv)
-       __IAM(CV_BASE_COMPUTE_WGT)
+       __IAM(CV_COMMON_COMPUTE_WGT)
 !
        qroot=(MPI_COMM_STRNG.ne.MPI_COMM_NULL)
        if (qroot) then
@@ -505,14 +513,12 @@ __CHARMM_ONLY##IF STRINGM
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_print_wgt(iunit,fmt)
        __DEP_OUTPUT
-       __IMPNONE
 !      only root process must call
        int iunit
        character(len=*), optional :: fmt
 !      local
        character(len=80) :: frm
-       character(len=19) :: whoami
-       data whoami /' CV_BASE_PRINT_WGT>'/
+       __IAM(CV_COMMON_PRINT_WGT)
 !      begin
        if (.not.cv_common_weights_initialized)                            &
      & __WRN(whoami,'CV WEIGHTS NOT INITIALIZED.')
@@ -528,12 +534,12 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_OUTPUT
       __DEP_MULTICOM
       __DEP_MPI 
-      __IMPNONE
+      
 !
-#include "../../mpitype.def" 
+#include "mpitype.def" 
 !
        int iunit, ierror
-       __IAM(CV_BASE_READ_WGT)
+       __IAM(CV_COMMON_READ_WGT)
 !
        if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then
         if (ME_STRNG.eq.0) then
@@ -561,9 +567,9 @@ __CHARMM_ONLY##IF STRINGM
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_compute_k()
        __DEP_OUTPUT
-       __IMPNONE
+       
        int :: i
-       __IAM(CV_BASE_COMPUTE_K)
+       __IAM(CV_COMMON_COMPUTE_K)
 !
        if (cv_common_weights_initialized) then
         if (cv_common_kpara_initialized) then
@@ -586,10 +592,10 @@ __CHARMM_ONLY##IF STRINGM
        use sm_var, only: nstring
        __DEP_MULTICOM
        __DEP_MPI 
-       __IMPNONE
+       
        int :: ierror
 !
-#include "../../mpitype.def"
+#include "mpitype.def"
 !      interface to 'compute_dr' utility routine
        interface
         subroutine compute_dr(rin,drout,wgt,n,                          &
@@ -659,13 +665,13 @@ __CHARMM_ONLY##ENDIF
        end subroutine cv_common_compute_dr
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_print_dr(iunit) ! global print
-       __IMPNONE
+       
        int :: iunit
        call cv_common_print_global(iunit,dz,.false.) ! do not print BC
        end subroutine cv_common_print_dr
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_read_dr(iunit) ! global print
-       __IMPNONE
+       
        int :: iunit
 !      local
        int :: bc0, bc1
@@ -688,14 +694,14 @@ __CHARMM_ONLY##ENDIF
        __DEP_OUTPUT
        __DEP_MULTICOM
        __DEP_MPI 
-       __IMPNONE
+       
 !
-#include "../../mpitype.def"
+#include "mpitype.def"
 !
        int :: interp_method, iterations, ierror
        float, optional :: dst_c
        float :: def
-       __IAM(CV_BASE_REPA)
+       __IAM(CV_COMMON_REPA)
 !
 !      interfaces to reparameterization routine
 !      needed because of the keyword calls
@@ -846,7 +852,7 @@ __CHARMM_ONLY##ENDIF
 !      in the future, may compute on roots, then broadcast
       __DEP_OUTPUT
       __DEP_CONST 
-      __IMPNONE
+!
 !      the timestep can be specified optionally
 !      nskip ( the number of history elements to skip when computing the average) is also optional
        float, optional :: dt
@@ -854,7 +860,7 @@ __CHARMM_ONLY##ENDIF
        float :: dummy
        int :: i
        float :: delt
-       __IAM(CV_BASE_EVOLVE_SMCV)
+       __IAM(CV_COMMON_EVOLVE_SMCV)
 !      do work
        cv%r(:,comp)=cv%r(:,main) ! save current as "old" coordinates in column 2
        if (present(dt)) then; delt=dt; else ; delt=cv%dt; endif
@@ -907,15 +913,14 @@ __CHARMM_ONLY##ENDIF
 !                                         temperature not added yet
       __DEP_OUTPUT
       __DEP_CONST 
-      __IMPNONE
+      
 !      the timestep can be specified optionally
 !      nskip ( the number of history elements to skip when computing the average) is also optional
        float, optional :: dt
        float :: dummy
        int :: i
        float :: delt
-       character(len=19) :: whoami
-       data whoami /' CV_BASE_EVOLVE_BD>'/
+       __IAM(CV_COMMON_EVOLVE_BD)
 !      do work
        cv%r(:,comp)=cv%r(:,main) ! save current as "old" coordinates in column 2
        if (present(dt)) then; delt=dt; else ; delt=cv%dt; endif
@@ -962,13 +967,13 @@ __CHARMM_ONLY##ENDIF
       __DEP_OUTPUT
       __DEP_CONST 
 !
-      __IMPNONE
+      
        float :: a, a1
        int, optional :: nskip
 !      locals
        float :: dummy, u, v
        int :: numskip, i, j, k, n, k1, k2, k3, k4
-       __IAM(CV_BASE_EVOLVE_EXPO)
+       __IAM(CV_COMMON_EVOLVE_EXPO)
        float :: temp(max_hist_base)=0.0d0
 !
 !      do work
@@ -1068,7 +1073,7 @@ __CHARMM_ONLY##ENDIF
 !      tells the module whether collective string operations include
 !      virtual fixed CV sets; virtual because the CV are not updated;
 !      can be viewed as boundary conditions on the string
-       __IMPNONE
+       
        bool first, last
 !      clean up first
        call cv_common_done()
@@ -1088,10 +1093,9 @@ __CHARMM_ONLY##ENDIF
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        function cv_common_add_hist()
        __DEP_OUTPUT
-       __IMPNONE
+       
        int :: cv_common_add_hist
-       float :: t
-       __IAM(CV_BASE_ADD_HIST)
+       __IAM(CV_COMMON_ADD_HIST)
 !      returns index into cv%r array; the addition is done elsewhere
        if (cv%num_cv.eq.0) then
          __WRN( whoami,'NO CV DEFINED. NOTHING DONE');
@@ -1117,7 +1121,6 @@ __CHARMM_ONLY##ENDIF
 !
        __DEP_OUTPUT
        __DEP_CONST 
-       __IMPNONE
 !
        int, optional :: d
        int, optional :: nskip
@@ -1126,7 +1129,7 @@ __CHARMM_ONLY##ENDIF
        int :: numskip, i, j, k, n, k1, k2, k3, k4
        float :: t(max_hist_base)=(/(1.0d0*i,i=1,max_hist_base)/)
        float :: temp(max_hist_base)=0.0d0, u ! for smoothing
-       __IAM(CV_BASE_SMOOTH_HIST)
+       __IAM(CV_COMMON_SMOOTH_HIST)
 !      interface to smooth2
 !
        interface
@@ -1144,7 +1147,7 @@ __CHARMM_ONLY##ENDIF
        if (present(d)) then; delta=d; else ; delta=10; endif
        if (present(nskip)) then ; numskip=nskip; else; numskip=0; endif
        if (numskip.ge.cv%num_hist) then
-        __WRN('CV_BASE_SMOOTH_HIST','SKIPPED ALL SLICES. NOTHING DONE')
+        __WRN(whoami,'SKIPPED ALL SLICES. NOTHING DONE')
         return
        endif
 !       cv%r(:,comp)=cv%r(:,main) ! save current as "old" coordinates in column 2
@@ -1190,13 +1193,13 @@ __CHARMM_ONLY##ENDIF
        subroutine cv_common_print_hist_local(iunit, nskip) ! not used in regular SMCV
 !      assume that unit is prepared
        __DEP_OUTPUT
-       __IMPNONE
+       
        int :: iunit
        int, optional :: nskip
 !      locals
        int :: i, j, k, kbeg, kend, numskip
        character(len=80) :: fmt
-       __IAM(CV_BASE_PRINT_HIST)
+       __IAM(CV_COMMON_PRINT_HIST)
 
 !      do work
        if (present(nskip)) then ; numskip=nskip; else; numskip=0; endif
@@ -1220,9 +1223,8 @@ __CHARMM_ONLY##ENDIF
        __DEP_OUTPUT
        __DEP_MPI 
        __DEP_MULTICOM
-       __IMPNONE
 !
-#include "../../mpitype.def"
+#include "mpitype.def"
 !
        int :: iunit
        int, optional :: nskip
@@ -1230,11 +1232,10 @@ __CHARMM_ONLY##ENDIF
        int :: i, j, k, kbeg, kend, numskip, kout
        int :: ierror
        character(len=80) :: fmt
-       character(len=20) :: whoami
-       float, allocatable :: rtemp(:,:)
-       float, allocatable :: rall(:,:,:)
+       float, pointer :: rtemp(:,:)
+       float, pointer :: rall(:,:,:)
        bool :: qroot
-       data whoami /' CV_BASE_PRINT_HIST>'/
+       __IAM(CV_COMMON_PRINT_HIST)
 !
 !      do work
        qroot=(MPI_COMM_STRNG.ne.MPI_COMM_NULL)
@@ -1278,12 +1279,13 @@ __CHARMM_ONLY##ENDIF
          enddo
         endif ! ME
 !
-        deallocate(rtemp, rall)
+        __FREE(rtemp)
+        __FREE(rall)
        endif ! qroot
        end subroutine cv_common_print_hist_global
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_clear_hist()
-       __IMPNONE
+       
        cv%num_hist=0; cv%beg_hist=1; cv%end_hist=0
        end subroutine cv_common_clear_hist
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -1292,13 +1294,11 @@ __CHARMM_ONLY##ENDIF
 !      NOTE that this is a local print!
 !      does not print fixed BC
        __DEP_OUTPUT
-       __IMPNONE
        int iunit
        int, optional :: col
 !      locals
        int :: i, c
-       character(len=21) :: whoami
-       data whoami /' CV_BASE_PRINT_LOCAL>'/
+       __IAM(CV_COMMON_PRINT_LOCAL)
 !      do work
        if (.not.present(col)) then ; c=main ; else ; c=col ; endif
        if (c.lt.1.or.c.gt.(max_hist_base+main_offset)) then
@@ -1317,22 +1317,19 @@ __CHARMM_ONLY##ENDIF
        __DEP_MULTICOM
        __DEP_MPI
 !
-       __IMPNONE
-!
-#include "../../mpitype.def"
+#include "mpitype.def"
 !
        int iunit
        int, optional :: col
        bool, optional :: print_bc
 !      locals
-       int :: i, k, c, nrep
+       int :: i, k, c
        bool :: bc
        character(len=80) :: fmt
-       float, allocatable :: rtemp(:,:) ! temporary array for holding coords
+       float, pointer :: rtemp(:,:) ! temporary array for holding coords
        int :: ierror
        bool :: qroot
-       character(len=22) :: whoami
-       data whoami /' CV_BASE_PRINT_GLOBAL>'/
+       __IAM(CV_COMMON_PRINT_GLOBAL)
 !      do work
        qroot=(MPI_COMM_STRNG.ne.MPI_COMM_NULL)
        if (qroot) then
@@ -1403,22 +1400,16 @@ __CHARMM_ONLY##ENDIF
        __DEP_CONST
        __DEP_MPI
 !
-       __IMPNONE
+#include "mpitype.def"
 !
-#include "../../mpitype.def"
-!
-       int iunit
        int, optional :: col, ind
 !      locals
        int :: ibeg, iend
        int :: i, j, c, nrep
-       character(len=80) :: fmt
        float :: dangle
-       float, allocatable :: rtemp(:,:) ! temporary array for holding coords
+       float, pointer :: rtemp(:,:) ! temporary array for holding coords
        int :: ierror
-       character(len=23) :: whoami
-       bool :: qroot
-       data whoami /' CV_BASE_UNWRAP_ANGLES>'/
+       __IAM(CV_COMMON_UNWRAP_ANGLES)
 !      do work
        if (.not.present(col)) then ; c=main ; else ; c=col ; endif
        if (c.lt.1.or.c.gt.(cv%num_hist+main_offset)) then
@@ -1474,10 +1465,9 @@ __CHARMM_ONLY##ENDIF
        __DEP_OUTPUT
        __DEP_MULTICOM
        __DEP_MPI 
-       __IMPNONE
+!
        int :: ierror
-       character(len=23) :: whoami
-       data whoami /' CV_BASE_COMPUTE_FE_FD>'/
+       __IAM(CV_COMMON_COMPUTE_FE_FD)
 !       define interface for work routine (calling by keyword)
        interface
         subroutine compute_work_fd(r,rbc0,rbc1,f,n,fe)
@@ -1537,7 +1527,7 @@ __CHARMM_ONLY##ENDIF
        end subroutine cv_common_compute_fe_fd
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_print_forces(iunit) ! global
-       __IMPNONE
+       
        int :: iunit
        call cv_common_print_global(iunit,forces,.false.) ! do not print BC if they are present
        end subroutine cv_common_print_forces
@@ -1546,12 +1536,11 @@ __CHARMM_ONLY##ENDIF
 !      assume that unit is prepared
 !      for parallel, broadcast to slaves done by calling routine
        __DEP_OUTPUT
-       __IMPNONE
+       
        int :: iunit
        int, optional :: col
        int :: i, c
-       character(len=20) :: whoami
-       data whoami /' CV_BASE_READ_LOCAL>'/
+       __IAM(CV_COMMON_READ_LOCAL)
 !      do work
 !       character(len=80) :: fmt
 !       write(fmt,int_format) max_cv_common
@@ -1576,10 +1565,7 @@ __CHARMM_ONLY##ENDIF
        __DEP_NUMBER 
        __DEP_MPI
 !
-      __IMPNONE
-      __DECLARE_MSGBUF
-!
-#include "../../mpitype.def"
+#include "mpitype.def"
 !
        int :: iunit
        int, optional :: col
@@ -1589,9 +1575,8 @@ __CHARMM_ONLY##ENDIF
        int :: ierror
        character(len=8) :: me ! for output
        bool :: bc
-       character(len=21) :: whoami
        bool :: qread
-       data whoami /' CV_BASE_READ_GLOBAL>'/
+       __IAM(CV_COMMON_READ_GLOBAL)
 !
        qread=(MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.ME_STRNG.eq.0)
 !      do work
@@ -1699,11 +1684,7 @@ __CHARMM_ONLY##ENDIF
       __DEP_NUMBER 
       __DEP_MPI
 !
-       __IMPNONE
-!
-__DECLARE_MSGBUF
-!
-#include "../../mpitype.def"
+#include "mpitype.def"
 !
        int :: iunit
        int :: numrep  ! number of replicas in the CV data file
@@ -1713,9 +1694,8 @@ __DECLARE_MSGBUF
        float :: rtemp(max_cv_common, numrep) ! temporary array for holding coords
        int :: ierror
        character(len=8) :: me, which ! for output
-       character(len=32) :: whoami
        bool :: qroot
-       data whoami /' CV_BASE_READ_LOCAL_FROM_GLOBAL>'/
+       __IAM(CV_COMMON_READ_LOCAL_FROM_GLOBAL)
 !
        qroot=(MPI_COMM_STRNG.ne.MPI_COMM_NULL)
 !
@@ -1763,7 +1743,7 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_print_ds(iunit,fmt)
        use sm_var, only: nstring
-       __IMPNONE
+       
        int iunit
        character(len=*), optional :: fmt
 !      local
@@ -1781,13 +1761,13 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_print_curvature(iunit,fmt)
        use sm_var, only: smcv_initialized, nstring
-       __IMPNONE
+       
        int iunit
        character(len=*), optional :: fmt
 !      local
        character(len=80) :: frm
        interface
-        subroutine smcv_init(maxcv);__IMPNONE; int, optional :: maxcv ; end subroutine smcv_init
+        subroutine smcv_init(maxcv);; int, optional :: maxcv ; end subroutine smcv_init
        end interface
 !      begin
        if (.not.smcv_initialized) call smcv_init()
@@ -1803,14 +1783,13 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_print_fe(iunit,fmt)
        use sm_var, only: smcv_initialized, nstring
-       __IMPNONE
 !
        int iunit
        character(len=*), optional :: fmt
 !      local
        character(len=80) :: frm
        interface
-        subroutine smcv_init(maxcv);__IMPNONE; int, optional :: maxcv ; end subroutine smcv_init
+        subroutine smcv_init(maxcv);; int, optional :: maxcv ; end subroutine smcv_init
        end interface
 !      begin
        if (.not.smcv_initialized) call smcv_init()
@@ -1826,14 +1805,14 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_print_feav(iunit,fmt)
        use sm_var, only: smcv_initialized, nstring
-       __IMPNONE
+!
        int iunit
        character(len=*), optional :: fmt
 !      local
        character(len=80) :: frm
 !      begin
        interface
-        subroutine smcv_init(maxcv);__IMPNONE; int, optional :: maxcv ; end subroutine smcv_init
+        subroutine smcv_init(maxcv);; int, optional :: maxcv ; end subroutine smcv_init
        end interface
        if (.not.smcv_initialized) call smcv_init()
        if (.not.present(fmt)) then
@@ -1848,7 +1827,7 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
        end subroutine cv_common_print_feav
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_set_k(i,k)
-       __IMPNONE
+       
        int :: i
        float :: k
 ! no error checking: can set to anything you want!
@@ -1856,7 +1835,7 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
        end subroutine cv_common_set_k
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_set_active(i,flag)
-       __IMPNONE
+       
        int :: i
        bool :: flag
        if (i.ge.0.and.i.le.cv%num_cv) cv%active(i)=flag
@@ -1864,32 +1843,30 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_set_kpara(k)
        __DEP_OUTPUT
-       __IMPNONE
+       
        float :: k
 !
-       character(len=19) :: whoami
-       data whoami /' CV_BASE_SET_KPARA>'/
+       __IAM(CV_COMMON_SET_KPARA)
        if (k.lt.0d0) &
-     &__WRN(whoami,' NEGTIVE FORCE CONSTANT SPECIFIED. NOTHING DONE.')
+     &__WRN(whoami,' NEGATIVE FORCE CONSTANT SPECIFIED. NOTHING DONE.')
        cv%kpara=k
        cv_common_kpara_initialized=.true.
        end subroutine cv_common_set_kpara
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_set_kperp(k)
        __DEP_OUTPUT
-       __IMPNONE
+       
        float :: k
 !
-       character(len=19) :: whoami
-       data whoami /' CV_BASE_SET_KPERP>'/
+       __IAM(CV_COMMON_SET_KPERP)
        if (k.lt.0d0) &
-     & __WRN(whoami,' NEGTIVE FORCE CONSTANT SPECIFIED. NOTHING DONE.')
+     & __WRN(whoami,' NEGATIVE FORCE CONSTANT SPECIFIED. NOTHING DONE.')
        cv%kperp=k
        cv_common_kperp_initialized=.true.
        end subroutine cv_common_set_kperp
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_set_g(i,gamma)
-       __IMPNONE
+       
        int :: i
        float :: gamma
 !
@@ -1898,7 +1875,7 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
        end subroutine cv_common_set_g
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_set_w(i,weight)
-       __IMPNONE
+       
        int :: i
        float :: weight
 !
@@ -1912,15 +1889,14 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_set_r(i,z,col1)
        __DEP_OUTPUT
-       __IMPNONE
+       
 !
        int :: i
        int, optional :: col1
        float :: z
 !
        int :: col
-       character(len=15) :: whoami
-       data whoami /' CV_BASE_SET_R>'/
+       __IAM(CV_COMMON_SET_R)
 !
        if (present(col1)) then ; col=col1; else ; col=main; endif
        if (col.gt.0.and.col.le.main_offset+max_hist_base) then
@@ -1935,7 +1911,7 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
        end subroutine cv_common_set_r
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_set_dt(dt)
-       __IMPNONE
+       
        float :: dt
 ! no error checking: can set to anything you want!
 !      locals
@@ -1943,26 +1919,28 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
        end subroutine cv_common_set_dt
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_copy(c1, c2)
-       __IMPNONE
 !      be careful -- you can do damage here!
        int :: c1, c2
 !      local
+       __IAM(CV_COMMON_COPY)
 !      start
        if (c1.gt.0.and.c1.le.main_offset+max_hist_base                  &
      &     .and.                                                        &
      &     c2.gt.0.and.c2.le.main_offset+max_hist_base                  &
      &  .and.c1.ne.c2) then
         cv%r(:,c2)=cv%r(:,c1)
+       else
+        __WRN(whoami, 'INVALID COLUMN SPECIFIED')
        endif
        end subroutine cv_common_copy
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_swap(col1, col2)
-       __IMPNONE
 !      be careful -- you can do damage here!
        int, optional :: col1, col2
+       __IAM(CV_COMMON_SWAP)
        int :: c1, c2
 !      local
-       float, allocatable, dimension(:) :: temp
+       float :: temp(max_cv_common)
 !      start
        if (present(col1)) then ; c1=col1; else ; c1=main; endif
        if (present(col2)) then ; c2=col2; else ; c2=comp; endif
@@ -1970,25 +1948,25 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
      &     .and.                                                        &
      &     c2.gt.0.and.c2.le.main_offset+max_hist_base                  &
      &  .and.c1.ne.c2) then
-        allocate(temp(max_cv_common))
         temp=cv%r(:,c1);
         cv%r(:,c1)=cv%r(:,c2)
         cv%r(:,c2)=temp
+       else
+        __WRN(whoami, 'INVALID COLUMN SPECIFIED')
        endif
        end subroutine cv_common_swap
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        function cv_common_rmsd(col1, col2)
        __DEP_OUTPUT
        __DEP_CONST 
-       __IMPNONE
+       
        int, optional :: col1, col2
        int :: c1, c2
 !      local
        float :: cv_common_rmsd, dummy, dangle
 !       float, parameter :: pi=3.14159265358979 ! hardwired for angles
        int :: i
-       character(len=14) :: whoami
-       data whoami /' CV_BASE_RMSD>'/
+       __IAM(CV_COMMON_RMSD)
 !      start
        if (cv%num_cv.eq.0) then
         __WRN( whoami, 'NO CV DEFINED. EXITING.')
@@ -2038,7 +2016,7 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
        end function cv_common_rmsd
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_update_ave()
-       __IMPNONE
+       
 !      local
        float :: t
 !      begin
@@ -2048,7 +2026,7 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
        end subroutine cv_common_update_ave
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_update_fe_ave()
-       __IMPNONE
+       
 !      local
        float :: t
 !      begin
@@ -2058,7 +2036,7 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
        end subroutine cv_common_update_fe_ave
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_set_ave_samples(n)
-       __IMPNONE
+       
        int :: n
        if (n.ge.0) cv%num_average_samples=n
        end subroutine cv_common_set_ave_samples
@@ -2066,7 +2044,7 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
        subroutine cv_common_rex_init(temp)
        use sm_var, only: nstring, smcv_initialized
        __DEP_CONST 
-       __IMPNONE
+!
        float, optional :: temp
        float :: t
        int :: i
@@ -2078,14 +2056,14 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
 !
         allocate(cv%rex_map(nstring))
         cv%rex_map=(/ (i, i=0,nstring-1) /)
-        call int_vector_init(cv%rex_log)
+        call int_vector_reinit(cv%rex_log)
         cv_common_rex_initialized=.true.
        endif
 !
        end subroutine cv_common_rex_init
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_rex_done()
-       __IMPNONE
+       
        if (cv_common_rex_initialized) then
         deallocate(cv%rex_map)
         call int_vector_done(cv%rex_log) ! destroy rex log
@@ -2095,7 +2073,7 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_rex_set_temp(temp)
        __DEP_CONST 
-       __IMPNONE
+       
        float, optional :: temp
        float :: t
 !
@@ -2108,15 +2086,14 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
        subroutine cv_common_rex_print_map(iunit,fmt)
        use sm_var, only: nstring
        __DEP_OUTPUT
-       __IMPNONE
+       
 !      only root process should call
        int :: iunit
        character(len=*), optional :: fmt
 !      local
        int :: i
        character(len=80) :: frm
-       character(len=23) :: whoami
-       data whoami /' CV_BASE_PRINT_REX_MAP>'/
+       __IAM(CV_COMMON_PRINT_REX_MAP)
 !      begin
        if (.not.cv_common_rex_initialized) then
         __WRN(whoami,'REX NOT INITIALIZED. NOTHING DONE.')
@@ -2137,12 +2114,11 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
        __DEP_OUTPUT
        __DEP_MULTICOM
        __DEP_MPI 
-       __IMPNONE
-       int :: iunit, ierror
-#include "../../mpitype.def"
 !
-       character(len=22) :: whoami
-       data whoami /' CV_BASE_READ_REX_MAP>'/
+       int :: iunit, ierror
+#include "mpitype.def"
+!
+       __IAM(CV_COMMON_READ_REX_MAP)
 !      begin
        if (.not.cv_common_rex_initialized) then
         call cv_common_rex_init()
@@ -2177,7 +2153,7 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
       __DEP_MULTICOM
       __DEP_MPI
 !
-       __IMPNONE
+       
        int iunit
        character(len=*), optional :: fmt
 !      local
@@ -2187,10 +2163,10 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
        int   :: rex_log_size8(SIZE_STRNG)
        int4mpi :: rex_log_disp4(SIZE_STRNG)
        int :: total_size
-       int, allocatable, dimension(:) :: rex_log_all
+       int, pointer, dimension(:) :: rex_log_all
        int :: ierror
 !
-#include "../../mpitype.def"
+#include "mpitype.def"
 !      do work
 !      gather all data on root
        if (.not.cv_common_rex_initialized) call cv_common_rex_init()
@@ -2224,14 +2200,14 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
 !
       if(ME_STRNG.eq.0.and.total_size.gt.0) write(iunit,frm) rex_log_all
 !
-        call int_vector_init(cv%rex_log) ! erase log
+        call int_vector_reinit(cv%rex_log) ! erase log
         deallocate(rex_log_all)
        endif ! STRNG
        end subroutine cv_common_rex_print_log
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_rex_compute_dE(rnew, dE)
        __DEP_CONST 
-       __IMPNONE
+       
        float :: rnew(:)
        float :: dummy1, dummy2, dE
        int :: i
@@ -2262,9 +2238,8 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
         dE=0.5d0*dE
 !
        end subroutine cv_common_rex_compute_dE
-!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!===================================================================================================
        subroutine cv_common_voronoi_init()
-       __IMPNONE
        call cv_common_voronoi_update()
        cv%voronoi_data=0
 !       cv%cross_acceptO=1 ! need a nonzero initial condition
@@ -2272,10 +2247,8 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
        cv%voronoi_whereami=-1
        cv%voronoi_map=-1
        end subroutine cv_common_voronoi_init
-!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!===================================================================================================
        subroutine cv_common_voronoi_set_cutoff(cut)
-       __IMPNONE
-!
        float :: cut
 !
        if (cut.gt.0d0) then ! reject invalid values without warning
@@ -2284,21 +2257,21 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
         cv%voronoi_cut=cut
        endif
        end subroutine cv_common_voronoi_set_cutoff
-!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!===================================================================================================
        subroutine cv_common_print_voro_map(iunit,fmt)
        use sm_var, only: nstring
        __DEP_OUTPUT
        __DEP_MULTICOM
        __DEP_MPI 
-       __IMPNONE
-       int :: iunit, ierr
+!
+       int :: iunit !, ierr
        character(len=*), optional :: fmt
 !      local
-!#include "../../mpitype.def"
+!#include "mpitype.def"
 !
        int :: i
        character(len=80) :: frm
-       __IAM(CV_BASE_PRINT_VORO_MAP)
+       __IAM(CV_COMMON_PRINT_VORO_MAP)
 !      begin
        if (.not.cv_common_voronoi_initialized) call cv_common_voronoi_init()
 !
@@ -2324,11 +2297,11 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
        __DEP_OUTPUT
        __DEP_MULTICOM
        __DEP_MPI 
-       __IMPNONE
-#include "../../mpitype.def"
+       
+#include "mpitype.def"
 !
        int :: iunit, ierror
-       __IAM(CV_BASE_READ_VORO_MAP)
+       __IAM(CV_COMMON_READ_VORO_MAP)
 !      begin
        if (.not.cv_common_voronoi_initialized) then
         call cv_common_voronoi_init()
@@ -2361,8 +2334,8 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
        use sm_var, only: nstring, mestring, smcv_initialized
        __DEP_MULTICOM
        __DEP_MPI 
-       __IMPNONE
-#include "../../mpitype.def"
+       
+#include "mpitype.def"
 !
 !      locals
        __IAM(CV_COMMON_VORONOI_UPDATE)
@@ -2370,7 +2343,7 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
        float, pointer :: M(:,:)
        bool :: qroot
        interface
-        subroutine smcv_init(maxcv);__IMPNONE; int, optional :: maxcv ; end subroutine smcv_init
+        subroutine smcv_init(maxcv);; int, optional :: maxcv ; end subroutine smcv_init
        end interface
 !      begin
        if (.not. smcv_initialized) call smcv_init()
@@ -2399,7 +2372,7 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
         allocate(cv%voronoi_map(nstring))
         cv%voronoi_map=-1
 !
-        call int_vector_init(cv%voro_log)
+        call int_vector_reinit(cv%voro_log)
         cv_common_voronoi_initialized=.true.
        endif
 !      gather all main coordinate sets (same code as in print_global)
@@ -2451,9 +2424,8 @@ __CHARMM_ONLY##ENDIF
        __DEP_MULTICOM
        __DEP_CONST 
        __DEP_MPI 
-       __IMPNONE
 !      vars
-#include "../../mpitype.def"
+#include "mpitype.def"
 !
        float :: rnew(cv%num_cv) ! current CV values (theta(x))
        float :: rold(cv%num_cv) ! new (possibly reflected) CV values (theta(xcomp))
@@ -2464,15 +2436,13 @@ __CHARMM_ONLY##ENDIF
        float :: rall_temp(cv%num_cv, nstring)
        float :: Mall_new(cv%num_cv, cv%num_cv, nstring)
        float :: Mall_temp(cv%num_cv, cv%num_cv, nstring)
-       float :: z(cv%num_cv)
        int :: correct_cell_me, correct_cell
        int :: iter, max_iter
        int, parameter :: default_iter=15
-       float :: dummy
-       int :: i, j, which(1), ierror, me
+       int :: ierror, me
        bool :: qroot
 !
-       __IAM(CV_BASE_VORONOI_SMART_UPDATE)
+       __IAM(CV_COMMON_VORONOI_SMART_UPDATE)
 !
 !      begin
 !
@@ -2525,7 +2495,7 @@ __CHARMM_ONLY##ENDIF
         allocate(cv%voronoi_map(nstring))
         cv%voronoi_map=-1
 !
-        call int_vector_init(cv%voro_log)
+        call int_vector_reinit(cv%voro_log)
 !
         cv_common_voronoi_initialized=.true.
        else
@@ -2641,7 +2611,7 @@ __CHARMM_ONLY##ENDIF
 !    this is a straightforward implementation of eqs 29/30 (perhaps a bit inefficient but at the benefit of clarity)
 !
        __DEP_CONST 
-       __IMPNONE
+       
        int :: ncv, nstring, me
        float :: r(ncv), rall(ncv, nstring), Mall(ncv, ncv, nstring)
 ! locals
@@ -2722,7 +2692,7 @@ __CHARMM_ONLY##ENDIF
 !
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_voronoi_done()
-       __IMPNONE
+!
        if (cv_common_voronoi_initialized) then
         deallocate(cv%rall)
         deallocate(cv%Mall)
@@ -2757,23 +2727,19 @@ __CHARMM_ONLY##ENDIF
       __DEP_CONST
       __DEP_MPI
 !
-      __IMPNONE
-#include "../../mpitype.def"
+#include "mpitype.def"
 !     variables
        int :: cv_common_voronoi_compute ! index of Voronoi cell that the system is in
        float :: rtemp(cv%num_cv) ! current CV values (theta(x))
 !     locals
        float :: msd(nstring,nstring), msdall(nstring,nstring) ! mean square distance
        float :: dummy, z(cv%num_cv)
-       int :: i, j, k, n, m, iatom, which(1), q(nstring), me
+       int :: i, j, k, n, m, which(1), q(nstring), me
 !    parallelization
        bool :: qpara
        int4mpi :: send_displ(SIZE_LOCAL), send_count(SIZE_LOCAL)
        int :: mbeg, mend, ierror
-!
-       character(len=25) :: whoami
-!
-       data whoami /' CV_BASE_VORONOI_COMPUTE>'/
+       __IAM(CV_COMMON_VORONOI_COMPUTE)
 !
        if (cv%num_cv.eq.0) then
          __WRN(whoami,'NO CV DEFINED. NOTHING DONE.')
@@ -2907,12 +2873,10 @@ __CHARMM_ONLY##ENDIF
        __DEP_MULTICOM
        __DEP_MPI
 !
-       __IMPNONE
-!
-       int iunit
+       int :: iunit
 !      locals
        character(len=80) :: fmt
-       int :: i, j
+       int :: j
        int :: voro_data_all(nstring,2*nstring+1)
        int :: ierror, type
 !      do work
@@ -2955,15 +2919,12 @@ __CHARMM_ONLY##ENDIF
        __DEP_MULTICOM
        __DEP_MPI
 !
-       __IMPNONE
-!
-       int iunit
+       int :: iunit
 !      locals
-       character(len=80) :: fmt
-       int :: i, j
+       int :: j
        int :: voro_data_all(SIZE_STRNG,2*SIZE_STRNG+1)
        int :: ierror
-#include "../../mpitype.def"
+#include "mpitype.def"
 !      do work
 !      gather all data on root
 !
@@ -3002,22 +2963,19 @@ __CHARMM_ONLY##ENDIF
        subroutine cv_common_voronoi_print_log(iunit)
 !      assume that unit is prepared
 !      NOTE that this is a global print!
-!      this routine is redundant with cv_common_voronoi_print_hist
        __DEP_MULTICOM
        __DEP_MPI
 !
-       __IMPNONE
-!
-       int iunit
+       int :: iunit
 !      locals
        int :: i
        int4mpi :: voro_log_size4(SIZE_STRNG)
        int   :: voro_log_size8(SIZE_STRNG)
        int4mpi :: voro_log_disp4(SIZE_STRNG)
        int :: total_size
-       int, allocatable, dimension(:) :: voro_log_all
+       int, pointer, dimension(:) :: voro_log_all
        int :: ierror
-#include "../../mpitype.def"
+#include "mpitype.def"
 !      do work
 !      gather all data on root
 !
@@ -3052,7 +3010,7 @@ __CHARMM_ONLY##ENDIF
 !
         if (ME_STRNG.eq.0) write(iunit) voro_log_all
 !
-        call int_vector_init(cv%voro_log) ! erase log
+        call int_vector_reinit(cv%voro_log) ! erase log
         deallocate(voro_log_all)
        endif ! STRNG
        end subroutine cv_common_voronoi_print_log
@@ -3063,13 +3021,11 @@ __CHARMM_ONLY##ENDIF
       __DEP_MULTICOM
       __DEP_MPI
 !
-       __IMPNONE
-!
-#include "../../mpitype.def"
+#include "mpitype.def"
        int :: ifile
        int, optional :: ind  ! M index
 !     locals
-       int :: isizeM, ierror, j, Mind
+       int :: ierror, j, Mind
        float :: M_all(cv%num_cv, cv%num_cv, nstring)
        float :: M_me(cv%num_cv, cv%num_cv)
 !
@@ -3115,9 +3071,7 @@ __CHARMM_ONLY##ENDIF
       __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
       __DEP_MPI  ! deal with other platforms later
 !
-       __IMPNONE
-!
-#include "../../mpitype.def"
+#include "mpitype.def"
        int :: ifile
        int, optional :: ind  ! M index to print
 !     locals
@@ -3155,7 +3109,7 @@ __CHARMM_ONLY##ENDIF
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_neq_work_init()
 !      initialize variables for nonequilibrium work
-       __IMPNONE
+       
        cv%work=0.
        cv%r(:,forces2)=0.
        cv%r(:,zcur)=cv%r(:,comp)
@@ -3164,7 +3118,7 @@ __CHARMM_ONLY##ENDIF
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        function cv_common_neq_get_work()
 !      returns the value of work
-       __IMPNONE
+       
        float :: cv_common_neq_get_work
        cv_common_neq_get_work=cv%work
        end function cv_common_neq_get_work
@@ -3177,7 +3131,6 @@ __CHARMM_ONLY##ENDIF
       __DEP_NUMBER 
       __DEP_MPI 
 !
-       __IMPNONE
        int :: ifile, ofile, num_rep_in, num_rep_out, interp_method
 !     local declarations
        float :: rin(max_cv_common,num_rep_in),                           &
@@ -3189,8 +3142,7 @@ __CHARMM_ONLY##ENDIF
        int :: i,k
        character(len=80) :: fmt
        bool :: qroot
-       character(len=20) :: whoami
-       data whoami /' CV_BASE_INTERPOLATE'/
+       __IAM(CV_COMMON_INTERPOLATE)
 !
        int, parameter :: linear=1, spline=2, bspline=3
 !

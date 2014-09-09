@@ -186,14 +186,14 @@ int main()
 //
 // deallocate memory
  free(r);
- free(r_rot);
+// free(r_rot); // g95 bombs here -- not clear why : matmul fortran function (see above) returns an allocated array !
  free(rtemp);
  free(u);
  free(w);
  free(ugrad);
  free(ugrad_fd);
  free(rmsd_);
- free(eigval);
+// free(eigval); // see g95 comment above
 } //main
 
 

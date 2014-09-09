@@ -11,6 +11,9 @@ __CHARMM_ONLY##IF STRINGM
       use cv_common, only: cv, priv_ptr
       use cv_frames
 !
+      __IMPNONE
+      private
+!
       type cv_quat
       float, dimension(:,:), pointer :: q ! quaternion components
       float, dimension(:,:,:,:), pointer :: gradq ! combined gradient array with some `extra` space; parallelization efficiency
@@ -27,8 +30,8 @@ __CHARMM_ONLY##IF STRINGM
       public quat_init   ! initialize quaternion arrays
       public quat_done   ! destroy all quaternions
       public quat_add    ! add a quaternnion
-      public quat_normalize ! normalize quaternion to unity
       public quat_calc   ! calculate quaternions & their gradients w.r.t. atom positions
+      public quat_list   ! list quaternions
       public quat_grad_init ! initialize quat%grad arrays
       public quat_print_local  ! print out quaternion values to separate files
       public quat_print_global  ! print out quaternions values to a combined file
@@ -45,8 +48,6 @@ __CHARMM_ONLY##IF STRINGM
       contains
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine quat_init()
-!
-       __IMPNONE
 !
        int :: i
 !
@@ -71,7 +72,6 @@ __CHARMM_ONLY##IF STRINGM
        end subroutine quat_init
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine quat_done()
-       __IMPNONE
        int :: i
        quat%num_quat=0
        if (quat_initialized) then
@@ -105,20 +105,18 @@ __CHARMM_ONLY##IF STRINGM
        function quat_add(fr1, fr2)
        __DEP_OUTPUT
        __DEP_NUMBER
-       __IMPNONE
 !
        int :: fr1, fr2
 !      locals
        int :: j, l, num_int
        int :: i, ii, jj, ncomf
-       int, allocatable :: indf(:)
+       int, pointer :: indf(:)
        int :: f1, f2
        bool :: found
        int :: quat_add
-       character(len=12) :: whoami
        type (int_vector) :: unique_amap_ptr ! contains a unique list of atom map pointers (to speed up gradient computation)
 !
-       data whoami/' QUAT_ADD>'/
+       __IAM(QUAT_ADD)
 !
 !    check that input options are valid
 !cccccccccccccccc  check frame indices ccccccccccccccccccccccccccccccccc
@@ -207,15 +205,12 @@ __CHARMM_ONLY##IF STRINGM
        __DEP_MULTICOM
        __DEP_MPI 
 !
-       __IMPNONE
  __DECLARE_MSGBUF
 !
        int :: i
-       character(len=14) :: whoami
 !
        int :: f1, f2
-!
-       data whoami /' CV_QUAT_LIST>'/
+       __IAM(CV_QUAT_LIST)
 !
 !
        if (MPI_COMM_STRNG.eq.MPI_COMM_NULL) return ! only replica heads stay
@@ -233,20 +228,20 @@ __CHARMM_ONLY##IF STRINGM
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine quat_calc(i,x,y,z,mass,deriv)
        __DEP_OUTPUT
-       __IMPNONE
+       __DEP_CONST
+       use sm_var
 !
        int :: i ! which quaternion to calculate
        float :: x(:), y(:), z(:), mass(:)
        bool :: deriv
-       character(len=13) :: whoami
 !
        float :: A(3,3), B(3,3), R(3,3)    ! transformation matrices (frame vectors)
        float :: dA(3,3)                   ! matrix derivatives
        float :: qq(4)                     ! temporary quaternioin
 
        int :: f1, f2, ii, j, jj, ncomf, ind
-       int, allocatable, dimension(:) :: indf
-       float :: a1, a2, trace, tr, dtr, s, s2, qdp
+       int, pointer, dimension(:) :: indf
+       float :: a1, a2, trace, tr, dtr, s, s2
        bool :: qframe1, qframe2
        float :: RRm32, RRm13, RRm21, RRp12, RRp13, RRp23
        int, pointer :: priv(:)
@@ -255,9 +250,9 @@ __CHARMM_ONLY##IF STRINGM
 !       float, parameter :: tol=0d0
 !
 ! aardvark : FD
-       float :: h, aa(3,3)
+!       float :: h, aa(3,3)
+       __IAM(QUAT_CALC)
 !
-       data whoami /' QUAT_CALC>'/
 !      check for initialization
        if (.not.quat_initialized) then
         __WRN( whoami, 'NO QUATERNIONS DEFINED. NOTHING DONE.')
@@ -284,14 +279,14 @@ __CHARMM_ONLY##IF STRINGM
         call frames_calc(f1,x,y,z,mass,deriv)
         A=transpose(frames%r(:,:,f1))
        else
-        A=RESHAPE( (/1d0,0d0,0d0,0d0,1d0,0d0,0d0,0d0,1d0/),(/3,3/) )
+        A=Id3
        endif
 !
        if (qframe2) then
         call frames_calc(f2,x,y,z,mass,deriv)
         B=frames%r(:,:,f2)
        else
-        B=RESHAPE( (/1d0,0d0,0d0,0d0,1d0,0d0,0d0,0d0,1d0/),(/3,3/) )
+        B=Id3
        endif
        R=matmul(A,B);
        RRm32=R(3,2)-R(2,3)
@@ -907,8 +902,7 @@ __CHARMM_ONLY##IF STRINGM
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine quat_grad_init()
 !      initialize quat%grad arrays
-       __IMPNONE
-       if (associated(quat%gradq)) deallocate(quat%gradq)
+       __FREE(quat%gradq)
 !       if (associated(quat%gradqx)) deallocate(quat%gradqx)
 !       if (associated(quat%gradqy)) deallocate(quat%gradqy)
 !       if (associated(quat%gradqz)) deallocate(quat%gradqz)
@@ -934,13 +928,11 @@ __CHARMM_ONLY##IF STRINGM
 !      __DEP_OUTPUT
        __DEP_MULTICOM
        __DEP_MPI
-       __IMPNONE
 !
-       int iunit
+       int :: iunit
 !      locals
-       int :: i, j, k
-       character(len=18) :: whoami
-       data whoami /' QUAT_PRINT_LOCAL>'/
+       int :: i, j
+       __IAM(QUAT_PRINT_LOCAL)
 !
        if (MPI_COMM_STRNG.eq.MPI_COMM_NULL) return
 !      do work
@@ -958,17 +950,14 @@ __CHARMM_ONLY##IF STRINGM
        __DEP_MULTICOM
        __DEP_MPI
 !
-       __IMPNONE
-!
-#include "../../mpitype.def"
+#include "mpitype.def"
        int iunit
 !      locals
        int :: i, k, m, n
        character(len=80) :: fmt
        float :: rtemp(4,quat%num_quat,SIZE_STRNG) ! temporary array
        int :: ierror
-       character(len=21) :: whoami
-       data whoami /' QUAT_PRINT_GLOBAL>'/
+       __IAM(QUAT_PRINT_GLOBAL)
 !
        if (MPI_COMM_STRNG.eq.MPI_COMM_NULL) return
 !
@@ -997,12 +986,9 @@ __CHARMM_ONLY##IF STRINGM
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine quat_reset_calculate(grad,i)
        __DEP_OUTPUT
-       __IMPNONE
        int, optional :: i
        bool :: grad
-!
-       character(len=22) :: whoami
-       data whoami /' QUAT_RESET_CALCULATE>'/
+       __IAM(QUAT_RESET_CALCULATE)
 !
 !      check for initialization
        if (.not.quat_initialized) then

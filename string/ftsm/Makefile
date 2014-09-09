@@ -1,18 +1,24 @@
 ROOT=../..
-OBJS=ftsm_var.o ftsm_rex.o ftsm.o ftsm_voronoi.o ftsm_compute.o ftsmv2_compute.o
+OBJS=ftsm_var.o ftsm_rex.o ftsm.o ftsm_voronoi.o ftsm_compute.o ftsmv2_compute.o ftsm_stats.o ftsm_io.o ftsm_util.o\
+     ftsm_connect.o ftsm_min.o ftsm_rep.o ftsm_addatoms.o
 NAME=string/ftsm
 COMMON=..
 DEPS=constants bestfit output vectors dynamol multicom parser lu
 INCLUDES= -I $(COMMON)
 
-LOCALMACROS=-include source.defs -include ../source.defs -include $(ROOT)/dmol.defs
-LOCALDEPS=source.defs ../source.defs $(ROOT)/dmol.defs
-
+LOCALMACROS=-include source.defs -include $(COMMON)/source.defs 
+LOCALMACROS+=-include $(ROOT)/dmol.defs
+LOCALDEPS=source.defs $(ROOT)/mpitype.def $(COMMON)/source.defs ftsm_load_fcor.def ftsm_load_ocor.def
+LOCALDEPS+= $(ROOT)/dmol.defs 
 include $(ROOT)/Makefile.inc
 include $(COMMON)/Makefile.inc
 
 ftsm_var.o: $(COMMON)/sm_config.mod $(COMMON)/sm_var.mod
-ftsm.o: ftsm_var.o ftsm_rex.o ftsm_voronoi.o ftsm_compute.o ftsmv2_compute.o
-ftsm_rex.o: ftsm_var.o
-ftsm_voronoi.o: ftsm_var.o
-ftsm_compute.o ftsmv2_compute.o : ftsm_var.o
+ftsm.o: ftsm_var.o ftsm_rex.o ftsm_voronoi.o ftsm_compute.o ftsmv2_compute.o ftsm_io.o ftsm_stats.o ftsm_util.o ftsm_min.o ftsm_rep.o\
+ ftsm_connect.o ftsm_addatoms.o
+ftsm_connect.o: $(COMMON)/tsp.mod
+ftsm_compute.o ftsmv2_compute.o ftsm_util.o ftsm_min.o ftsm_rex.o ftsm_voronoi.o ftsm_rep.o ftsm_connect.o ftsm_addatoms.o ftsm_io.o ftsm_stats.o : \
+ ftsm_var.o
+ftsm_stats.o: ftsm_rex.o ftsm_voronoi.o ftsm_io.o ftsm_connect.o ftsm_util.o ftsm_compute.o
+ftsm_addatoms.o ftsm_io.o ftsm_min.o ftsm_stats.o ftsm_rep.o : ftsm_util.o
+ftsm_util.o: ftsm_compute.o ftsmv2_compute.o

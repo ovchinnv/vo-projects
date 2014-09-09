@@ -13,8 +13,8 @@
 __CHARMM_ONLY##IF STRINGM
 !
       use cv_common
-      use cv_frames, only: frames_reset_calculate
-      use cv_quaternion, only: quat_reset_calculate
+      use cv_frames, only: frames_reset_calculate, frames, frames_initialized
+      use cv_quaternion, only: quat_reset_calculate, quat, quat_initialized
       use cv_types
       use sm_config
 !     when adding new cv types, include the corresponding modules below
@@ -28,7 +28,9 @@ __CHARMM_ONLY##IF STRINGM
       use cv_rmsd ! RMSD of selected atom coordinates from target values
       use cv_drmsd ! RMSD difference of selected atom coordinates from two target structures
       use cv_proj ! projection onto vector between two reference strutures
+      use ivector
 !
+      __IMPNONE
 !     listing of subroutines:
 !
       public smcv_main     ! driver subroutine
@@ -36,7 +38,7 @@ __CHARMM_ONLY##IF STRINGM
       public smcv_fill
       public smcv_add_hist ! computes and stores theta_i(x), and M_ij for each i and j
       public smcv_voronoi_compute
-      public smcv_voronoi_smart_update ! experimental !
+      public smcv_voronoi_smart_update ! version that ensures that MD replicas stay within the corresponding cells
       public smcv_compute_wgt ! compute CV weights for interpolation and RMSD
       public smcv_compute_M ! compute M matrix
       public smcv_list ! list CV weights
@@ -53,9 +55,8 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_OUTPUT
       __DEP_MULTICOM
       __DEP_MPI 
-      __IMPNONE
  __DECLARE_MSGBUF
-#include "../../mpitype.def"
+#include "mpitype.def"
 !
       float :: x(:), y(:), z(:),                                        &
      &          xcomp(:), ycomp(:), zcomp(:),                           &
@@ -65,7 +66,7 @@ __CHARMM_ONLY##IF STRINGM
 !     locals
       float :: s
       bool :: qgrp
-      int :: i, ierror, qfac
+      int :: ierror
       __IAM(SMCV_MAIN)
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       qgrp=(MPI_COMM_LOCAL.ne.MPI_COMM_NULL)                            &
@@ -102,16 +103,11 @@ __CHARMM_ONLY##IF STRINGM
       if (restrained_on) then ! impose restraints
        if (.not.unrestrained_on .or.                                    & ! if unrestrained dynamics is off
      &    (unrestrained_on.and.                                         & ! or: unrestrained dyn. is on, BUT we are equilibrating w/ res.
-     &    ((iteration-unrestrained_eq0).lt.unrestrained_eq_steps))) then  ! looks like we first equilibrate with restraints on, then release restraints
+     &    ((iteration-unrestrained_eq0).lt.unrestrained_eq_steps))) then  ! first equilibrate with restraints on, then release restraints
 !
         restraint_force_on=.true.
 !
-        if (restrained_eq_steps.gt.0) then
-         s=min(1.0d0*(iteration-restrained_eq0)/restrained_eq_steps,1d0)
-        else
-         s=1d0
-        endif ! restrained equilibration is on
-!
+        if (restrained_eq_steps.gt.0) then ; s=min(1.0d0*(iteration-restrained_eq0)/restrained_eq_steps,1d0) ; else ; s=1d0 ; endif !restrained equilibration
         call smcv_addforce(x,y,z,mass,fx,fy,fz,s)
 !
        endif ! not untrestrained_on
@@ -164,9 +160,7 @@ __CHARMM_ONLY##IF STRINGM
          else
           call cv_common_evolve_smcv(evolve_step) ! Euler string evolution
          endif
-         if (unrestrained_on) then ! unrestrained dynamics
-           unrestrained_eq0=iteration
-         endif
+         if (unrestrained_on) unrestrained_eq0=iteration  ! unrestrained dynamics
          restrained_eq0=iteration
 !       call cv_common_compute_wgt() ! compute weight from M
 !      update Voronoi cell centers
@@ -227,7 +221,6 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_MULTICOM
       __DEP_CONST 
       __DEP_MPI 
-      __IMPNONE
 !
       float :: x(:), y(:), z(:), mass(:),                              & ! mass(size(x,1)) ,
      &          fx(:), fy(:), fz(:)
@@ -239,10 +232,9 @@ __CHARMM_ONLY##IF STRINGM
       int :: k
 !
       int :: i, j, qbeg, qend, ibeg, iend, ierror
-      float :: s, one_m_s, r, r1, fpre, f, fpara, fperp, qnorm, qdp
+      float :: s, one_m_s, r, fpre, f, fpara, fperp, qnorm, qdp
       bool :: deriv, addforce, addforce2, calctheta, qgrp
-      character(len=15) :: whoami
-      data whoami /' SMCV_ADDFORCE>'/
+      __IAM(SMCV_ADDFORCE)
 !
       qgrp=(MPI_COMM_LOCAL.ne.MPI_COMM_NULL)                            &
      & .and.(SIZE_LOCAL.gt.1)
@@ -539,13 +531,12 @@ __CHARMM_ONLY##IF STRINGM
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine smcv_add_hist(x,y,z,mass,update_average)
 !     this is a driver to routines
-!     that calculate the M matrix and cv time series
+!     that calculates the M matrix and cv time series
       __DEP_OUTPUT
       __DEP_MULTICOM
       __DEP_CONST
       __DEP_NUMBER
       __DEP_MPI
-      __IMPNONE
 !
       float :: x(:), y(:), z(:), mass(:) ! mass(size(x,1))
       bool :: update_average ! whether the current dataset should be included with the cv running average
@@ -553,11 +544,10 @@ __CHARMM_ONLY##IF STRINGM
       int :: i, j, k, imap, ibeg, iend, kbeg, kend, ierror
       float :: u, v, t, t1, dot_pr
       bool :: deriv, calctheta, qgrp, qgrp1
-      float, allocatable :: gradi(:), gradj(:)
-      float cvlist(cv%num_cv) ! for fast M tensor computation
+      int :: cvlist(cv%num_cv) ! for fast M tensor computation
       int :: cvlistsize, ii, jj
       __IAM(SMCV_ADD_HIST)
-      float, allocatable :: M(:,:)
+      float, pointer :: M(:,:)
 !
       qgrp=(MPI_COMM_LOCAL.ne.MPI_COMM_NULL)                            &
      &  .and.(SIZE_LOCAL.gt.1)
@@ -755,7 +745,7 @@ __CHARMM_ONLY##IF STRINGM
 !      do k=1, imap
        do k=kbeg, kend
         cvlistsize=cv%amap%v(k)%last
-        cvlist=cv%amap%v(k)%i(1:cvlistsize) ! note that the cvs in the cvlist should be in increasing order because the map is updated as CV are added
+        cvlist(1:cvlistsize)=cv%amap%v(k)%i(1:cvlistsize) ! note that the cvs in the cvlist should be in increasing order because the map is updated as CV are added
         do j=1,cvlistsize
          jj=cvlist(j)
          do i=1, j
@@ -799,8 +789,7 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_RANDOM
       __DEP_MDOUT
 !
-      __IMPNONE
-#include "../../mpitype.def"
+#include "mpitype.def"
 !
       float :: x(:), y(:), z(:), mass(:) ! mass(size(x,1))
       int :: itime
@@ -811,15 +800,14 @@ __CHARMM_ONLY##IF STRINGM
       int :: which   ! replica with which the exchange was attempted
       bool :: success ! whether the exchange attempt was successful
       int :: nodelist(nstring) ! holds new string replica order after excahnge attempt
-      int :: itype ! MPI_INTEGER type
 !
       float :: r_send(1:cv%num_cv, 1:5) ! cv values to send to partner
       float :: r_recv(1:cv%num_cv, 1:5) ! cv values to receive from partner
-      float :: dummy1, dummy2, dE_me, dE
+      float :: dE_me, dE
 !
       character(len=150) :: fnames(5)              ! for storing output file names
       character(len=150) :: new_fnames(5)          ! for storing swapped file names
-      bool :: openun(5), qform, qwrite
+      bool :: openun(5) ! , qform, qwrite
 #ifdef __CHARMM
       int :: oldiol
 #endif
@@ -827,8 +815,7 @@ __CHARMM_ONLY##IF STRINGM
 !
 !      float :: dEG(nstring) !aa
 !
-      character(len=20) :: whoami
-      data whoami /' SMCV_REPL_EXCHANGE>'/
+      __IAM(SMCV_REPL_EXCHANGE)
 !
       if (.not.cv_common_rex_initialized) call cv_common_rex_init()
 !
@@ -1123,7 +1110,6 @@ __CHARMM_ONLY##IF STRINGM
       subroutine smcv_gradcv_dot_dr(rx,ry,rz,c)
 ! for now, this routine is not parallel, since it should execute pretty fast
       __DEP_OUTPUT
-      __IMPNONE
       float :: rx(:), ry(:), rz(:)
       int, optional :: c
 !
@@ -1131,8 +1117,7 @@ __CHARMM_ONLY##IF STRINGM
 !
       int :: i
       float :: dcv
-      character(len=20) :: whoami
-      data whoami /' SMCV_GRADCV_DOT_DR>'/
+      __IAM(SMCV_GRADCV_DOT_DR)
 !
       if (.not.cv_common_grad_initialized) call cv_common_grad_init() ! allocate cv%grad array (for derivatives)
 !
@@ -1168,7 +1153,6 @@ __CHARMM_ONLY##IF STRINGM
       subroutine smcv_dcv_dot_gradcv(rx,ry,rz,c)
 ! for now, this routine is not parallel, since it should execute pretty fast
       __DEP_OUTPUT
-      __IMPNONE
       float :: rx(:), ry(:), rz(:)
       int, optional :: c
 !
@@ -1176,8 +1160,7 @@ __CHARMM_ONLY##IF STRINGM
       float :: dummy
 !
       int :: i
-      character(len=21) :: whoami
-      data whoami /' SMCV_DCV_DOT_GRADCV>'/
+      __IAM(SMCV_DCV_DOT_GRADCV)
 !
       if (.not.cv_common_grad_initialized) call cv_common_grad_init() ! allocate cv%grad array (for derivatives)
 !
@@ -1213,14 +1196,12 @@ __CHARMM_ONLY##IF STRINGM
       subroutine smcv_fill(x,y,z,mass,c)
 ! for now, this routine is not parallel, since it should not be called often
       __DEP_OUTPUT
-      __IMPNONE
       float :: x(:), y(:), z(:), mass(:) ! mass(size(x,1))
       int, optional :: c
 !
       int :: i
       bool :: calcz, deriv
-      character(len=11) :: whoami
-      data whoami /' SMCV_FILL>'/
+      __IAM(SMCV_FILL)
 !
       if (.not.cv_common_grad_initialized) call cv_common_grad_init() ! allocate cv%grad array (for derivatives)
 !
@@ -1266,7 +1247,6 @@ __CHARMM_ONLY##IF STRINGM
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       function smcv_test_grad_fd(x,y,z,mass,h)
       __DEP_OUTPUT
-      __IMPNONE
       float :: x(:), y(:), z(:), mass(:) ! mass(size(x,1))
       float :: h
       float, pointer :: error(:,:), smcv_test_grad_fd(:,:)
@@ -1274,8 +1254,7 @@ __CHARMM_ONLY##IF STRINGM
       int :: i, j, jj
       float :: dummy
 !
-      character(len=19) :: whoami
-      data whoami /' SMCV_TEST_GRAD_FD>'/
+      __IAM(SMCV_TEST_GRAD_FD)
 !
       allocate(error(cv%num_cv,3)); smcv_test_grad_fd=>error
       error=0d0
@@ -1370,7 +1349,6 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_MULTICOM
       __DEP_MPI 
       __DEP_OUTPUT
-      __IMPNONE
 !
       float :: x(:), y(:), z(:), mass(:) ! mass(size(x,1))
       float, pointer :: error(:,:), smcv_test_parallel(:,:)
@@ -1381,8 +1359,7 @@ __CHARMM_ONLY##IF STRINGM
       bool :: qgrp
       float :: dummy(size(x,1))
 !
-      character(len=20) :: whoami
-      data whoami /' SMCV_TEST_PARALLEL>'/
+      __IAM(SMCV_TEST_PARALLEL)
 !
       allocate(error(cv%num_cv,4)) ! first column contains the CV values; then maximum derivative error (x,y,z)
       smcv_test_parallel=>error
@@ -1444,16 +1421,14 @@ __CHARMM_ONLY##IF STRINGM
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine smcv_voronoi_whereami(x,y,z,mass)
       __DEP_OUTPUT
-      __IMPNONE
 !
        float :: x(:), y(:), z(:), mass(:) ! mass(size(x,1))
 !     locals
       bool :: calcz, deriv, addforce
       int :: i
       float :: rtemp(cv%num_cv) ! for storing current CV values (theta(x))
-!!
-      character(len=23) :: whoami
-      data whoami /' SMCV_VORONOI_WHEREAMI>'/
+!
+      __IAM(SMCV_VORONOI_WHEREAMI)
 !    do some work
 !
       calcz=.true.; deriv=.false. ; addforce=.false.
@@ -1502,9 +1477,8 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_MULTICOM
       __DEP_MPI 
       __DEP_RANDOM
-      __IMPNONE
 !
-#include "../../mpitype.def"
+#include "mpitype.def"
 !
       float :: x(:), y(:), z(:)
       float :: mass(:) ! assumed shape
@@ -1519,7 +1493,7 @@ __CHARMM_ONLY##IF STRINGM
       bool :: calcz, deriv, addforce
       float :: rtemp(cv%num_cv) ! for storing current CV values (theta(x))
 !
-      int, allocatable :: vtemp(:), vtemp2(:)        ! for gathering Voronoi stats; this is an upper bound
+      int, pointer :: vtemp(:), vtemp2(:)        ! for gathering Voronoi stats; this is an upper bound
       int4mpi :: stat(MPI_STATUS_SIZE)
       bool :: voronoi_update
       bool :: success, qgrp, qstring, ready(nstring-1), ok
@@ -1530,8 +1504,7 @@ __CHARMM_ONLY##IF STRINGM
 !     &          netflux(nstring)        ! net probability flux into a Voronoi cell
 !      int :: permut(nstring), d, code ! for LU decomposition routine
 !
-      character(len=22) :: whoami
-      data whoami /' SMCV_VORONOI_COMPUTE>'/
+      __IAM(SMCV_VORONOI_COMPUTE)
 !     loop over all cv and make calls by type
       if (cv%num_cv.eq.0) then
        __WRN( whoami, 'NO CV DEFINED.')
@@ -1590,7 +1563,8 @@ __CHARMM_ONLY##IF STRINGM
            l=k+sum(length)
            allocate(vtemp2(l))
            do m=1,nstring-1
-            call MPI_IRECV(vtemp2(k+sum(length(1:m-1))+1), length(m),   &
+            l=k+sum(length(1:m-1))+1
+            call MPI_IRECV(vtemp2(l), length(m),   &
      &      mpiint, m, m, MPI_COMM_STRNG, request(m), ierror)
            enddo ! m
 !    copy vtemp into vtemp2
@@ -1788,8 +1762,7 @@ __CHARMM_ONLY##IF STRINGM
 !     currently not parallelized; I assume that it will be called infrequently (e.g. 1 in 20 or more iter.)
       __DEP_OUTPUT
       __DEP_MULTICOM
-      __DEP_MPI 
-      __IMPNONE
+      __DEP_MPI
 !      float :: dx(:), dy(:), dz(:), xcomp(:), ycomp(:), zcomp(:)
       float :: x(:), y(:), z(:), xcomp(:), ycomp(:), zcomp(:)
       float :: mass(:) ! mass(size(x,1))
@@ -1800,8 +1773,7 @@ __CHARMM_ONLY##IF STRINGM
       float :: rold(cv%num_cv) ! for storing additional (old) CV values (theta(xcomp))
       float :: A(3,3,frames%num_frames), o(3,frames%num_frames),       &
      &          q(4,quat%num_quat)
-      character(len=27) :: whoami
-      data whoami /' SMCV_VORONOI_SMART_UPDATE>'/
+      __IAM(SMCV_VORONOI_SMART_UPDATE)
 !     loop over all cv and make calls by type
       if (cv%num_cv.eq.0) then
        __WRN( whoami, 'NO CV DEFINED.')
@@ -1917,14 +1889,12 @@ __CHARMM_ONLY##IF STRINGM
       subroutine smcv_list()
       __DEP_OUTPUT
       __DEP_MULTICOM
-      __DEP_MPI 
-      __IMPNONE
+      __DEP_MPI
  __DECLARE_MSGBUF
 !    local
       int :: i
-      character(len=11) :: whoami
       bool :: qprint
-      data whoami /' SMCV_LIST>'/
+      __IAM(SMCV_LIST)
 !
       qprint=MPI_COMM_STRNG.ne.MPI_COMM_NULL                            &
      & .and.ME_STRNG.eq.0
@@ -1953,7 +1923,7 @@ __CHARMM_ONLY##IF STRINGM
       end subroutine smcv_list
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine smcv_compute_wgt(x,y,z,mass) ! compute CV weights from current coordinates
-      __IMPNONE                               ! note that this routine clears all history
+                                              ! note that this routine clears all history
 !
       float :: x(:), y(:), z(:), mass(:) ! mass(size(x,1))
 !
@@ -1967,8 +1937,7 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_OUTPUT
       __DEP_MPI 
       __DEP_MULTICOM
-      __IMPNONE             ! note that this routine clears all history
-#include "../../mpitype.def"
+#include "mpitype.def"
 !
       float :: x(:), y(:), z(:), mass(:) ! mass(size(x,1))
       bool :: inverse ! should inverse be computed?
@@ -2001,7 +1970,6 @@ __CHARMM_ONLY##IF STRINGM
       end subroutine smcv_compute_M
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       function smcv_test_Minv(x,y,z,mass) result(diff)
-      __IMPNONE
 !
       float, intent (in)  :: x(:), y(:), z(:), mass(:) ! mass(size(x,1))
       float :: diff
@@ -2023,8 +1991,7 @@ __CHARMM_ONLY##IF STRINGM
       use cv_quaternion
       __DEP_MPI 
       __DEP_MULTICOM
-      __IMPNONE
-#include "../../mpitype.def"
+#include "mpitype.def"
 !
       float :: x(:), y(:), z(:), mass(:) ! mass(size(x,1))
 !    local vars
@@ -2032,7 +1999,7 @@ __CHARMM_ONLY##IF STRINGM
       int4mpi :: qfac, ffac
 !
 ! aardvark
-!      float, allocatable :: trash(:,:,:,:,:)
+!      float, pointer :: trash(:,:,:,:,:)
 !
       if (MPI_COMM_LOCAL.eq.MPI_COMM_NULL) return
 !
