@@ -27,7 +27,7 @@ charmm: $(CHARMM_SOURCES)
 %_.F90:%.ftn $(LOCALDEPS) $(GLOBALDEPS) $(ROOT)/source.msg
 	$(FPP) $(FPPFLAGS) $(DEFS) -D__BINDC $(GLOBALMACROS) $(LOCALMACROS) -P $< > $@
 
-libraries : cbind tcl python
+libraries : cbind #tcl python
 cbind : bestfit.h static shared
 shared : dynamic
 dynamic : libbestfit.so
@@ -54,7 +54,7 @@ bestfit.h : bestfit.H $(LOCALDEPS) $(GLOBALDEPS)
 	$(FPP) $(FPPFLAGS) -D__BINDC -U__CHARMM $(GLOBALMACROS) $(LOCALMACROS) -P $< > $@
 
 ctest :: ctest.o shared static force_look
-	$(CC) -Bdynamic -pie ctest.o $(LIBS) $(MPI_LIBS) $(CLIB) $(FLIBS) -o  ctest
+	$(CC) -Bdynamic ctest.o $(LIBS) $(MPI_LIBS) $(CLIB) $(FLIBS) -o  ctest
 	echo "==================================================="
 	echo "Running C test :"
 	echo "==================================================="

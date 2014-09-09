@@ -1,7 +1,8 @@
 SHELL=/bin/sh
 #
 CC=gcc
-CFLAGS =-O3 -fno-math-errno -g -c -fPIC -fPIE
+CC=cc
+CFLAGS =-O3 -fno-math-errno -g -c -fPIC
 #---INTEL
 #FC=ifort
 #FFLAGS=-O2 -c
@@ -13,6 +14,7 @@ CFLAGS =-O3 -fno-math-errno -g -c -fPIC -fPIE
 #MPI_HOME=/usr/local/mpich2-intel
 #---GNU
 FC=gfortran
+FC=ftn
 #FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  -Wall  #-fopenmp 
 #FFLAGS=-O1 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  -Wall  #-fopenmp 
 FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno #-fbounds-check -frange-check
@@ -43,7 +45,7 @@ DEFS+=-Dint=integer -Dfloat=real*8 -Dbool=logical -Dmpiint=MPI_INTEGER -Dmpifloa
 # -C flag preserves comments
 
 AR=xiar
-#AR=ar
+AR=ar
 AFLAGS=rvcs
 
 LD=$(FC)
@@ -57,6 +59,7 @@ LDFLAGS=-dynamic -Bdynamic # -no-ipo
 #EXTRA_LIBS+=-lirc -limf -lifcore -ldl
 
 EXTRA_LIBS=-llapack
+EXTRA_LIBS=
 
 PIC=-fPIC
 GLOBALMACROS=-include $(ROOT)/source.defs -include $(ROOT)/contexts.def

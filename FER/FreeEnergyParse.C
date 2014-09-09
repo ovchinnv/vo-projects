@@ -29,12 +29,9 @@
 #include "PDB.h" // VO 2013 : add option to read atoms inds/coord from PDB
 #include "PDBData.h" // VO 2013
 
-#define DEBUGM
-
-#ifdef DEBUGM
+//#define DEBUGM
 #include "Debug.h"
 //#include <string>
-#endif
 
 void ProblemParsing(const char* Message, const char* Str, Bool_t Terminate) {
 //----------------------------------------------------------------------------
@@ -1083,35 +1080,24 @@ DebugM(1, "AddAtomsFromPDB : file name :"<<fname<<"\n");
  col_t col;
  if (strncmp(str,"beta",4)==0) { col=beta;}
  else if (strncmp(str,"occu",4)==0) { col=occu;}
+ else { ProblemParsing("PDB column not specified",str);}
+//
  str+=ReadAlpha(str);// skip "beta" or "occupancy"
-
- double val;
- str+=ReadWhite(str);
- str+=ReadChar(str,'=');
- str+=ReadWhite(str);
- str+=ReadAValue(str,val,kTrue);
 //
  PDBAtom* atom;
 //
- if (col==beta) {
-  for (int i=0; i < numatoms; i++) {
+ for (int i=0; i < numatoms; i++) {
    atom=fepdb.atom(i); // fetch pointer to ith atom
-   if (atom->temperaturefactor() == val ) { 
+   double val;
+   switch (col) {
+    case beta : val = atom->temperaturefactor();
+    case occu : val = atom->occupancy();
+   }
+   if ( val > 0) {
     CFE.requestAtom(i); // register atom
-    Group.Add(i, CFE.getMass(i), atom->xcoor(), atom->ycoor(), atom->zcoor() ); //add atom to group
+    Group.Add(i, val, atom->xcoor(), atom->ycoor(), atom->zcoor() ); //add atom to group
    }//if
   }//for
- } else if (col==occu) {
-  for (int i=0; i < numatoms; i++) {
-   atom=fepdb.atom(i);
-   if (atom->occupancy() == val ) {
-    CFE.requestAtom(i); // register atom
-    Group.Add(i, CFE.getMass(i), atom->xcoor(), atom->ycoor(), atom->zcoor() ); //add atom to group
-   }//if
-  }//for
- } else {
-  ProblemParsing("PDB column not specified",str);
- }//if
 }
 
 
@@ -1155,7 +1141,6 @@ void AddAtomsInResidues(AGroup& Group, char* AtomNames, char* ResRange,
     }
   }
 }
-
 
 void AddResidues(AGroup& Group, char* ResRange, GlobalMasterFreeEnergy& CFE) {
 //-------------------------------------------------------------------
@@ -1548,19 +1533,11 @@ DebugM(1,"IsPDBFile : PDB File Name : "<<std::string(Str, count)<<"\n" );
     Str+=count;
     Str+=ReadWhite(Str);
     count=ReadAlpha(Str);
-    if ( ( strncmp(Str, "beta", 4) == 0 ) || ( strncmp(Str, "occu", 4) == 0 ) ) {
+    if (count) {
+     if ( ( strncmp(Str, "beta", 4) == 0 ) || ( strncmp(Str, "occu", 4) == 0 ) ) {
 DebugM(1,"IsPDBFile : Column "<<std::string(Str, count)<<"\n" );
-     Str+=count;
-     Str+=ReadWhite(Str);
-     if (Str[0]=='=') {
-      Str+=1;
-      Str+=ReadWhite(Str);
-      count=ReadAValue(Str,val,kFalse);
-DebugM(1,"IsPDBFile : Value "<<val<<"\n" );
-      if (count) {
-       Str+=count;
-       return (Str-IniStr);
-      }
+      Str+=count;
+      return (Str-IniStr);
      }
     }
    }
