@@ -37,6 +37,7 @@
 !
 ! call setdebug(.false.)
 !
+!
  maxerr=0d0
  numtest=0
 !
@@ -50,7 +51,12 @@
 !
  ERRTOL_=ERRTOL()
  ERRTOL4=ERRTOL_
-goto 776
+!
+! 9/2014 : check for any failures in fort.666 files
+ call check_666()
+ stop
+!
+!goto 776
 ! ok
  M=reshape ( (/ 4.1d0, ERRTOL_, 0d0, 0d0, 1d0, 0d0, 0d0, 0d0, 3d0/),(/3,3/) )
  err=check_diag(M) ; if (err.ge.0) numtest=numtest+1 ; maxerr=max(maxerr,err)
@@ -72,14 +78,14 @@ goto 776
 ! goto 777
 ! previously failed cases : 
 !
-! this failed: 9/14
+! this failed on edison: 9/14 cannot reproduce error here : perhaps due to precision
  776 continue
  M=reshape( (/ &
   0.1111390146284271795984E-01,  0.6646080588816050994938E-02, -0.1772941663859427946504E-01,&
   0.6646080588816050994938E-02,  0.3974930565945564500674E-02, -0.1059930749808372062171E-01,&
  -0.1772941663859427946504E-01, -0.1059930749808372062171E-01,  0.2834150414212475987963E-01 /), (/3,3/))
   err=check_diag(M) ; if (err.ge.0) numtest=numtest+1 ; maxerr=max(maxerr,err)
-  goto 777
+!  goto 777
 
 ! in this case the eigenvalues were very close to zero (but computed as 1e-8), which lead to two 'duplicate' evectors; fixed
  M=reshape( (/ &
@@ -195,7 +201,7 @@ M=reshape( (/ & ! make sure eigenvalue refine is off
  write(0,*) ' MAXIMUM DIAGONALIZATION ERROR: ',maxerr
  write(0,*) ' NUMBER OF TESTS: ',numtest
 !####################################################################################################
-stop
+!stop
 !####################################################################################################
 ! TEST BEST FIT ALIGNMENT
 !
@@ -340,7 +346,7 @@ stop
  deallocate(r,r_rot,rave,rave_new,u,w)
 !####################### UTILITY FUNCTIONS ##########################################################
  contains
-  function check_diag(B)
+  function check_diag(B,verbose_)
   implicit none
   float, intent(in) :: B(3,3)
   float :: maxerr, A(3,3)
@@ -348,9 +354,10 @@ stop
   real*8 :: b0(3,3) ! this is a check -- do in double prec
   float :: check_diag, norm
   character(len=10) :: whoami='CHECK_DIAG'
-  bool :: verbose=.true.
-!
-!  verbose=.false.
+  bool, optional, intent(in) :: verbose_
+  bool :: verbose=.false.
+
+  if (present(verbose_)) then ; verbose=verbose_ ; else ; verbose=.true. ; endif
 ! First, make sure that the matrix is symmetric
   maxerr=(maxval(abs(B-transpose(B))))
   if (maxerr.ge.TOL) then
@@ -419,5 +426,64 @@ stop
   endif
 !
   end function check_diag
- end 
+!====================================
+  subroutine check_666()
+  __DEP_OUTPUT
+  __IMPNONE
+  __STRING_PARAM(fname,testdata/fort.666);
+  __STRING_PARAM(tag,RMSBestFit>> RR matrix:)
+!
+  bool :: exists
+  float :: derr
+  int :: ioerr
+  int :: funit = 10
+  float :: rr(3,3)
+  int :: i
+  
+  __DECL_MSGBUF
+  inquire(file=fname, exist=exists);
+!
+  if (.not.exists) then
+   __MESG('test',fname,' file does not exist');
+   return
+  endif
+!
+  __MESG('test','==================================');
+  __MESG('test','testing matrices in ',fname,'...');
+  open(file=fname, unit=funit, status='old', form='formatted');
+!
+  ioerr=0
+  do while (ioerr==0)
+   read(funit,'(A)', iostat=ioerr) line
+   if (ioerr.ne.0) exit
+   line=adjustl(line)
+!   __MESG('test','*',trim(line),trim(tag),trim(line)==trim(tag),len_trim(line), len_trim(tag))
+   if (trim(line).eq.tag) then ! next tree lines are a matrix
+    do i=1,3
+     read(funit,*,iostat=ioerr) rr(1,i), rr(2,i), rr(3,i)
+     if (ioerr.ne.0) then
+      __WARN('test','error reading matrix in file',fname)
+      return
+     endif
+    enddo
+    __MESG('test','testing diagonalization for:');
+    __MESG('test','----------------------')
+    do i=1,3
+     __MESG('test',rr(:,i))
+    enddo
+    derr=check_diag(rr)
+    __MESG('test','diagonalization error : ',derr)
+    __MESG('test','----------------------')
+   endif
+  enddo
+
+  __MESG('test','==================================');
+
+
+
+
+  end subroutine check_666
+!====================================
+
+ end ! program
  
