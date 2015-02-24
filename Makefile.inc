@@ -43,7 +43,6 @@ DEFS+=-Dint=integer -Dfloat=real*8 -Dbool=logical -Dmpiint=MPI_INTEGER -Dmpifloa
 # preprocess with C++ style preprocessor
 # -C flag preserves comments
 
-#AR=xiar
 AR=ar
 AFLAGS=rvcs
 
@@ -60,7 +59,7 @@ LDFLAGS=-dynamic -Bdynamic # -no-ipo
 # G95
 #EXTRA_LIBS+=-lf95 -lgcc
 
-EXTRA_LIBS+=-llapack
+#EXTRA_LIBS+=-llapack
 
 PIC=-fPIC
 GLOBALMACROS=-include $(ROOT)/source.defs

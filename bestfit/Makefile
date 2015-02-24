@@ -27,7 +27,7 @@ charmm:: $(CHARMM_SOURCES)
 %_.F90:%.ftn $(LOCALDEPS) $(GLOBALDEPS) $(ROOT)/source.msg
 	$(FPP) $(FPPFLAGS) $(DEFS) -D__BINDC $(GLOBALMACROS) $(LOCALMACROS) -P $< > $@
 
-libraries : cbind tcl python
+libraries : cbind #tcl python
 cbind : bestfit.h static shared
 shared : dynamic
 dynamic : libbestfit.so
