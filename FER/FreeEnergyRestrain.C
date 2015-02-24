@@ -37,7 +37,7 @@ extern "C" {
 #include "GlobalMasterFreeEnergy.h"
 #include "Molecule.h"
 //
-//#define DEBUGM
+#define DEBUGM
 #define MIN_DEBUG_LEVEL 1
 #define MAX_DEBUG_LEVEL 10
 #include "Debug.h"
@@ -949,6 +949,7 @@ void AnRMSDRestraint::PrintInfo() {
 //
 void AnRMSDRestraint::qDiffRotCheck() {
 //
+ qorient = 1;
  qdiffrot = 1;
 //
  if (NumGroups==2) {
@@ -959,7 +960,13 @@ void AnRMSDRestraint::qDiffRotCheck() {
   const double* orientWeights = Groups[0].GetWeights() ;
   const double* forcedWeights = Groups[1].GetWeights() ;
 //
-  if (norient==nforced) {
+  if (nforced==0) {
+   EarlyExit("AnRMSDRestraint::qDiffRotCheck() : No forcing atoms found (nothing to to). Aborting.");
+  } else if (norient<2) {
+   iout << " Warning (AnRMSDRestraint::qDiffRotCheck) : Fewer than two (2) orientation atoms found. Orientation is off." << std::endl<<endi;
+   qorient=0 ;
+   Groups[0].Clear() ; // orientation group
+  } else if (norient==nforced) {
    qdiffrot=0 ; // assume that the indices are the same, check below
    std::map<int, double > imap; // maps aid to o/f atom weights
 // first store forced atom indices
@@ -1049,7 +1056,7 @@ void AnRMSDRestraint::ApplyForce(GlobalMasterFreeEnergy &CFE, bool fdtest, doubl
 DebugM(9, "RMSD Force calculation : qdiffrot, qorient: "<<qdiffrot<<" "<<qorient<<"\n");
 DebugM(9, "RMSD Force calculation : nforced, norient: "<<nforced<<" "<<norient<<"\n");
 //
- if (qdiffrot) {
+ if (qdiffrot && qorient) {
   iatom_o = Groups[0].GetInds() ; //orientation index array
   rcurrent_o = (double*) malloc(3*norient*sizeof(double)) ;__MEMOK(rcurrent_o) ;
   forces_o = (double*) malloc(3*norient*sizeof(double)) ; __MEMOK(forces_o)  ;
@@ -1177,11 +1184,12 @@ DebugM(9, "RMSD Force calculation : COM: "<<COM[0]<<" "<<COM[1]<<" "<<COM[2]<<"\
       } // for
   } //qdiffrot
  } else { // not qorient
+     rtarget_rot_f=(double*)rtarget_f ; // point to static target structure w/o rotation ; need dirty cast b/c rtarget_f const
      for (j=0, k=0; j<nforced; j++) {//   add forces on the forcing atoms:
       double w = forcedWeights[j];
-      forces_f[k] = w * ( rcurrent_f[k] - rtarget_f[k] ) ; k++ ;
-      forces_f[k] = w * ( rcurrent_f[k] - rtarget_f[k] ) ; k++ ;
-      forces_f[k] = w * ( rcurrent_f[k] - rtarget_f[k] ) ; k++ ;
+      forces_f[k] = w * ( rcurrent_f[k] - rtarget_rot_f[k] ) ; k++ ;
+      forces_f[k] = w * ( rcurrent_f[k] - rtarget_rot_f[k] ) ; k++ ;
+      forces_f[k] = w * ( rcurrent_f[k] - rtarget_rot_f[k] ) ; k++ ;
      } // for
  } // qorient
 //
@@ -1230,7 +1238,9 @@ DebugM(9, "RMSD Force calculation : COM: "<<COM[0]<<" "<<COM[1]<<" "<<COM[2]<<"\
 // 
   double err, maxerr=0;
 // remove COM from orientation atoms (otherwise, COM would be subtracted twice from r_f)
-  for (i=0;i<3*norient;){rcurrent_o[i++]-=COM[0];rcurrent_o[i++]-=COM[1];rcurrent_o[i++]-=COM[2]; }
+  if (qorient) {
+   for (i=0;i<3*norient;){rcurrent_o[i++]-=COM[0];rcurrent_o[i++]-=COM[1];rcurrent_o[i++]-=COM[2]; }
+  }
 //
   std::map<int, Vector>::iterator fc=fmap.begin(); // does not want to go inside loop
   for (std::map<int, std::vector<int> >::iterator i=imap.begin(); fc!=fmap.end(); ++fc, ++i ) {
@@ -1247,7 +1257,7 @@ DebugM(9, "RMSD Force calculation : COM: "<<COM[0]<<" "<<COM[1]<<" "<<COM[2]<<"\
      if (rf) rf[k] += dh*l;
      if (ro) ro[k] += dh*l;
  // recompute rmsd:
-     if (qdiffrot || qorient ) {
+     if (qorient) {
       RMSBestFit(rtarget_o,rcurrent_o,orientWeights,norient,u,qswapdim);
       free(rtarget_rot_f); rtarget_rot_f=(double*) matmul(u, rtarget_f, 3, 3, nforced); // rotated target structure
       free(COM); COM = (double*) com(rcurrent_o,orientWeights,norient,qswapdim); // note : make sure COM has been subtracted above 
@@ -1310,13 +1320,13 @@ DebugM(9, "AtomID : "<< (i->second[0])<<" analytical : " << pref * fc-> second[k
 //
 // ----------------------v clean up memory
 //
- if ( qdiffrot || qorient ) {
+ if (qorient) {
   free(rtarget_rot_f);
   free(COM);
  }
  free(forces_f);
  free(rcurrent_f);
- if(qdiffrot) {
+ if(qdiffrot && qorient) {
   free(forces_o);
   free(rcurrent_o);
  }

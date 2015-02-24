@@ -173,9 +173,10 @@ void GlobalMasterFreeEnergy::initialize() {
   config[0] = '\0';
  //
  // functionality to remove comments: (VO 2013)
-  int comlen = 2;
+  int comlen = 1;
   const char* (comment[comlen]);
-  comment[0]="#"; comment[1]="//";
+  comment[0]="#";
+//  comment[1]="//"; // keep this because may refer to file paths with extra slashes
 //
   for ( ; script; script = script->next) {
     char* filescript=NULL;

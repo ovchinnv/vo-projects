@@ -29,7 +29,7 @@
 #include "PDB.h" // VO 2013 : add option to read atoms inds/coord from PDB
 #include "PDBData.h" // VO 2013
 
-//#define DEBUGM
+#define DEBUGM // to produce debug output
 #include "Debug.h"
 //#include <string>
 
@@ -477,12 +477,13 @@ DebugM(1,"GetRestraint : Positional restraint\n");
 // read group definitions
   groups = new AGroup[ngroup];
   for (int i = 0; i< ngroup; i++) { Str += AddAtoms(groups[i], Str, CFE); }
-#ifdef FE_RESTRAINT_RMSD_FORTRAN
-  if (ngroup>=2) {
-   if (groups[0].GetSize() < 2) ProblemParsing("Orientation set cannot have fewer than two atoms. Abort.", Str);
-   if (groups[1].GetSize() < 1) ProblemParsing("Forcing set cannot have fewer than one atom. Abort.", Str);
-  }
-#endif
+//#ifdef FE_RESTRAINT_RMSD_FORTRAN
+// VO 2015 : Make this check elsewhere
+//  if (ngroup>=2) {
+//   if (groups[0].GetSize() < 2) ProblemParsing("Orientation set cannot have fewer than two atoms. Abort.", Str);
+//   if (groups[1].GetSize() < 1) ProblemParsing("Forcing set cannot have fewer than one atom. Abort.", Str);
+//  }
+//#endif
   //
 DebugM(1,"GetRestraint : Reading restraint parameters\n");
   // for dihedrals, allow keywords of "barr=", "gap=", OR "kf="
@@ -1078,8 +1079,8 @@ DebugM(1, "AddAtomsFromPDB : file name :"<<fname<<"\n");
  str+=ReadWhite(str); // skip to column spec
 //
  col_t col;
- if (strncmp(str,"beta",4)==0) { col=beta;}
- else if (strncmp(str,"occu",4)==0) { col=occu;}
+ if (strncmp(str,"beta",4)==0) { col=beta; DebugM(1, "Atom weights will be read from beta column\n"); }
+ else if (strncmp(str,"occu",4)==0) { col=occu; DebugM(1, "Atom weights will be read from occupancy column\n"); }
  else { ProblemParsing("PDB column not specified",str);}
 //
  str+=ReadAlpha(str);// skip "beta" or "occupancy"
@@ -1090,10 +1091,14 @@ DebugM(1, "AddAtomsFromPDB : file name :"<<fname<<"\n");
    atom=fepdb.atom(i); // fetch pointer to ith atom
    double val;
    switch (col) {
-    case beta : val = atom->temperaturefactor();
-    case occu : val = atom->occupancy();
+    case beta : val = atom->temperaturefactor(); break ;
+    case occu : val = atom->occupancy(); break ;
    }
+   DebugM(1, "COL="<<col<<" BETA="<<beta<<" OCCU="<<occu<<"\n") ;// column definitions
+   DebugM(1,"Atom #"<<atom->serialnumber()<<" has weight "<<val<<"\n");
+   DebugM(1,"Atom #"<<atom->serialnumber()<<" "<<atom->xcoor()<<" "<<atom->ycoor()<<" "<<atom->zcoor()<<" "<<atom->occupancy()<<" "<<atom->temperaturefactor()<<"\n");
    if ( val > 0) {
+    DebugM(1,"Adding atom #"<<atom->serialnumber()<<" with weight "<<val<<" to this group\n");
     CFE.requestAtom(i); // register atom
     Group.Add(i, val, atom->xcoor(), atom->ycoor(), atom->zcoor() ); //add atom to group
    }//if
@@ -1534,12 +1539,17 @@ DebugM(1,"IsPDBFile : PDB File Name : "<<std::string(Str, count)<<"\n" );
     Str+=ReadWhite(Str);
     count=ReadAlpha(Str);
     if (count) {
-     if ( ( strncmp(Str, "beta", 4) == 0 ) || ( strncmp(Str, "occu", 4) == 0 ) ) {
 DebugM(1,"IsPDBFile : Column "<<std::string(Str, count)<<"\n" );
+     if ( ( strncmp(Str, "beta", 4) == 0 ) || ( strncmp(Str, "occu", 4) == 0 )
+       || ( strncmp(Str, "x", 1) == 0 )  || ( strncmp(Str, "y", 1) == 0 ) || ( strncmp(Str, "z", 1) == 0 )) {
       Str+=count;
       return (Str-IniStr);
+     } else {
+ProblemParsing("IsPDBFile : invalid column specified",Str);
      }
-    }
+    } else {
+ProblemParsing(" (IsPDBFile) : column not specified",Str);
+    } //count
    }
   }
  }
