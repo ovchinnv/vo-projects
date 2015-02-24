@@ -12,8 +12,8 @@ FFLAGS=-O3 -fast -finline -fp-model fast=2 -xhost -ipo -fno-math-errno -no-inlin
 #FFLAGS= -O2 -c -fast -fno-math-errno -finline -fp-model fast=2 -xhost -no-ipo # -no-inline-factor -no-inline-min-size #-ipo 
 MPI_HOME=/usr/local/mpich2-intel
 #---GNU
-#FC=gfortran
-#FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  -Wall  #-fopenmp 
+FC=gfortran
+FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  -Wall  #-fopenmp 
 #FFLAGS=-O1 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  -Wall  #-fopenmp 
 #FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fcheck=all
 #MPI_HOME=/usr/local/mpich2-gnu
@@ -32,7 +32,7 @@ MPI_HOME=/usr/local/mpich2-intel
 FORTRAN_COMPILER=$(notdir $(FC))
 DEFS+=-Dint=integer -Dfloat=real*8 -Dbool=logical -Dmpiint=MPI_INTEGER -Dmpifloat=MPI_REAL8 -Dmpichar=MPI_CHARACTER -Dmpiint4=MPI_INTEGER4\
      -Dmpibool=MPI_LOGICAL -Dint1="integer(kind=KIND('a'))" -D__DMOL -D__RCOMP -D__DMOL -D__CHES -D__EDDIE -D__$(FORTRAN_COMPILER) \
-     -Dint4mpi=integer -D__DEBUG -D__TIMER -D__PARALLEL #-D__PATHSCALE #-Dint4mpi="integer(KIND=MPI_INTEGER_KIND)" 
+     -Dint4mpi=integer -D__DEBUG -D__TIMER #-D__PARALLEL #-D__PATHSCALE #-Dint4mpi="integer(KIND=MPI_INTEGER_KIND)" 
 
 # ! note: the VEC routines are probably slower
 
@@ -73,11 +73,11 @@ GLOBALDEPS=$(ROOT)/source.defs $(ROOT)/source.msg
 GLOBALDEPS+=$(ROOT)/contexts.def $(ROOT)/setcomm.def  $(ROOT)/exec.def
 
 MPI_INCLUDE=-I $(MPI_HOME)/include -I $(MPI_HOME) -I $(MPI_HOME)/lib
-MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -pthread -lmpich -lmpichf90 -lmpl # -lmpi -lmpi_f90 -lmpi_f77 # mpich
+MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lpthread -lmpich -lmpichf90 -lmpl # -lmpi -lmpi_f90 -lmpi_f77 # mpich
 #MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lpthread -lmpi -lmpi_f90 -lmpi_f77 # older openmpi
 #MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lmpi -lmpi_mpifh -lmpi_usempif08  # newer openmpi w/ F08
-#MPI_INCLUDE=
-#MPI_LIBS=
+MPI_INCLUDE=
+MPI_LIBS=
 
 INCLUDES+=-I $(ROOT)/include
 LIBS+=-L $(ROOT)/lib
