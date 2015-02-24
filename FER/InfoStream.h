@@ -8,6 +8,7 @@
     Defines a new stream: iout, for "i"nforming consoles.
 */
 
+
 #ifndef INFOSTREAM_H
 #define INFOSTREAM_H
 

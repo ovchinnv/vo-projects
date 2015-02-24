@@ -29,7 +29,7 @@
 #include "PDB.h" // VO 2013 : add option to read atoms inds/coord from PDB
 #include "PDBData.h" // VO 2013
 
-#define DEBUGM // to produce debug output
+//#define DEBUGM // to produce debug output
 #include "Debug.h"
 //#include <string>
 

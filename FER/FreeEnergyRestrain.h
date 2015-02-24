@@ -8,6 +8,10 @@
 //
 // modifications by Victor Ovchinnikov 2013
 //
+//#define  DEBUGM // debugging output
+#define MIN_DEBUG_LEVEL 1
+#define MAX_DEBUG_LEVEL 10
+
 #if !defined(RESTRAINT_HPP)
   #define RESTRAINT_HPP
 
