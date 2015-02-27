@@ -431,11 +431,14 @@ protected:
   bool qorient  ;   // whether RMSD is to be computed after best-fit orientation
   bool qdiffrot ;   // whether orientation atoms are the same as Moving (RMSD) atoms
                     // if yes, gradient computation does not require rotation matrix derivatives (simpler)
+  bool qtrans ;     // if not qorient, translate to COM before applying forces (thus computing orientational best-fit only)
 public:
   AnRMSDRestraint();
   ~AnRMSDRestraint(); // modified constructor to free ugrad
   void    PrintInfo();
   void    SetRefRMSD(double v)  {refRMSD=v;}
+  void    SetQorient(bool q)  {qorient=q;}
+  void    SetQtrans(bool q)  {qtrans=q;}
   virtual void    ComputeRefRMSD() {
    if ( refRMSD < 0.0 ) { // this may be useful if one does not care to specify the initial RMSD
 //   DebugM(1,"Setting Reference RMSD to : "<<instRMSD<<"\n");

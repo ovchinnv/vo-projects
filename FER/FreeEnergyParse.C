@@ -438,6 +438,10 @@ ARestraint* GetRestraint(char* Str, int& NumChars, GlobalMasterFreeEnergy& CFE) 
   char*       TempStr;
 
   const Bool_t  kPrintErrMsg=kTrue; // kNoErrMsg=kFalse;
+#ifdef FE_RESTRAINT_RMSD_FORTRAN
+  bool qorient_rmsd=1;
+  bool qtrans_rmsd=1;
+#endif
 
   // save pointer to full string
   FullStr = Str;
@@ -631,7 +635,40 @@ DebugM(1,"GetRestraint : RMSD high value is "<<D1<<"\n");
       break;
 #endif
     default: ;
-  }
+  } // switch restraint
+// another switch to deal with additional RMSD_FORTRAN params
+#ifdef FE_RESTRAINT_RMSD_FORTRAN
+  switch (Restraint) {
+    case kRMSDPMF: case kRMSDBound: case kRMSD:
+// check whether we have a no-orientation option
+      NumChars = ReadWord(Str, "norota", kFalse);
+      Str+=NumChars ;
+      qorient_rmsd=(NumChars==0) ;
+
+      NumChars = ReadWord(Str, "notrans", kFalse);
+      Str+=NumChars ;
+      qtrans_rmsd=(NumChars==0) ;
+//  try noorie again in case they are entered out of order (ugly hack)
+      if (!qtrans_rmsd && qorient_rmsd) {
+       NumChars = ReadWord(Str, "norota", kFalse);
+       Str+=NumChars ;
+       qorient_rmsd=(NumChars==0) ;
+      }
+//
+      if (!qorient_rmsd) {
+       if (qtrans_rmsd) {
+DebugM(1,"GetRestraint : turning off rotation in RMSD restraint (COM translation active)");
+       } else {
+DebugM(1,"GetRestraint : turning off rotation/translation in RMSD restraint");
+       }
+      } else { // qorient_rmsd active
+       if (!qtrans_rmsd) {
+        ProblemParsing("RMSD orientation currently requires translation to COM",Str);
+       }
+      } // qorient_rmsd
+      break;
+  } // end switch 
+#endif
 
   // convert degrees to radians
   A  *= (kPi/180);
@@ -766,6 +803,15 @@ DebugM(1,"GetRestraint : RMSD high value is "<<D1<<"\n");
 #endif
     default: ;
   }
+#ifdef FE_RESTRAINT_RMSD_FORTRAN
+  switch (Restraint) {
+    case kRMSD: case kRMSDPMF: case kRMSDBound:
+     ((AnRMSDRestraint*) ptrRestraint)->SetQorient(qorient_rmsd); //cast to derived pointer type, then access derived-class method
+     ((AnRMSDRestraint*) ptrRestraint)->SetQtrans(qtrans_rmsd); // not sure this is kosher, but I am no C++ expert
+  } // switch
+// additional options to RMSD_FORTRAN
+#endif
+//
   ptrRestraint->SetGroups(groups, ngroup);
 DebugM(1,"GetRestraint : Setting restraint force constant to "<<Kf<<"\n");
   ptrRestraint->SetKf(Kf);
