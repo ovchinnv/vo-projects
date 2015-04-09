@@ -1,0 +1,472 @@
+! interpolation module for finite-temperature string module
+      module ftsm_interpolate
+!
+#if (defined(__CHARMM) || defined(__PARALLEL) )
+__CHARMM_ONLY##IF STRINGM
+!
+      __CHARMM_ONLY __DEP_KINDS
+      use ftsm_var
+      use ftsm_io
+      use ftsm_util
+      __IMPNONE
+!
+      private
+!
+  __DECLARE_MSGBUF
+!=====================================================================
+!     SUBROUTINES
+      public ftsm_interp
+!
+      contains
+!=====================================================================
+      subroutine ftsm_interp(comlyn, comlen)
+!     given a collection of n string replicas, interpolate onto a finer/coarser path
+!
+      __DEP_BESTFIT
+      __DEP_OUTPUT
+      __DEP_PARSER
+      __DEP_MULTICOM       __CHARMM_ONLY !##MULTICOM
+      __DEP_COORDINATES
+      __DEP_COORIO
+      __DEP_PSF
+      __DEP_NUMBER
+! ugly fix for CHARMM compilation (module dependency tree generation part)
+#ifdef __CHARMM
+##USE coorio_mod
+##USE ctitla
+#endif
+!
+      character(len=*) :: comlyn
+      int :: comlen
+      __IAM(FTSM_INTERP)
+#ifndef __DMOL
+      bool :: qprint ! not sure how to deal with dmol ; qprint visible from output_mod
+#endif
+      bool :: qroot
+      int :: interp_method, length, num_rep_in, num_rep_out, len_cor_in, len_cor_out
+      int :: i, j, k, ifile, ofile, offset, ind
+      bool :: qicor, qidcd, qocor, qodcd, qibase, qilist, qobase, qolist
+      character(len=len(name_interp_methods(1))) :: method
+      character(len=8) :: keyword, iext, oext
+      character(len=80) :: name_cor_in, name_cor_out, fname
+      character(len=80), pointer :: fname_cor_in(:), fname_cor_out(:)
+#ifndef __CHARMM
+      int :: natom
+#endif
+#ifdef __DMOL
+      real*8, pointer :: unitcell(:)=>NULL()
+#endif
+!
+      float, save, pointer, dimension (:,:,:) :: rall_f, rall_new_f,       & ! forcing (rall`s will not always be associated so beware)
+     &                                           rall_o, rall_new_o          ! orientation
+      float, pointer, dimension(:,:) :: r3                      ! temporary array for all coordinates
+      int, pointer :: stringatoms(:), string_inds(:)
+!
+!
+      interface
+        subroutine interp_driver_sci(rin,rout,wgt,n,                    &
+     &   interp_method,tol,max_iterations,d_arclength, curvature,       &
+     &   dst_cutoff, dr,r_bc_0, r_bc_1)
+      __CHARMM_ONLY __DEP_KINDS
+      __DEP_OUTPUT
+        int n
+        float rin(n), rout(n), wgt(n)
+        int, intent(in) ::  interp_method
+        int max_iterations
+        float :: tol, d_arclength(:), curvature(:)
+        float, optional :: dst_cutoff
+        float, optional :: dr(n) ,r_bc_0(n), r_bc_1(n)
+        end subroutine interp_driver_sci
+!
+        subroutine interp_linear_exact(rin,rout,wgt,n,                  &
+     &   d_arclength, curvature,                                        &
+     &   drout,                                                         &
+     &   r_bc_0, r_bc_1)
+      __CHARMM_ONLY __DEP_KINDS
+        int :: n
+        float :: rin(n), rout(n), wgt(n)
+        float :: d_arclength(:), curvature(:)
+        float, optional :: drout(n) ! optional computation of tangent
+        float , optional :: r_bc_0(n), r_bc_1(n)   ! optional fixed bc data
+       end subroutine interp_linear_exact
+!
+      end interface
+!
+      nullify(rall_f, rall_o)
+!
+#ifndef __CHARMM
+ natom=__NATOM
+#endif
+!
+      qroot=MPI_COMM_STRNG.ne.MPI_COMM_NULL
+      qprint=qroot.and.ME_STRNG.eq.0
+!
+! note: interpolation is done serially
+! get interpolation parameters
+#ifdef __CHARMM
+        if (qprint) then ; oldiol=iolev ; iolev=1 ; endif
+#endif
+!
+      interp_method=0
+      method=__GET_RM_AFUN(comlyn, comlen, 'METH')
+      length=len(method)
+      __TRIMA(method, length)
+      if (length.ge.4) then
+       if (__STRNCMP(method,'LINE',4)) then
+        interp_method=linear
+       elseif (__STRNCMP(method,'BSPL',4)) then
+        interp_method=bspline
+       elseif (__STRNCMP(method,'SPLI',4)) then
+        interp_method=spline
+       endif
+      endif
+!     print summary
+      if (qprint) then
+       if (interp_method.gt.0) then
+        write(_MSGBUF,6770) whoami, trim(name_interp_methods(interp_method)) ; __PRINT(_MSGBUF)
+ 6770 format(/A,' WILL INTERPOLATE USING ',A,' INTERPOLATION')
+       else
+        if (length.gt.0) then
+         write(_MSGBUF,6771) whoami, method(1:length), whoami        ; __PRINT(_MSGBUF)
+ 6771 format(/A,' UNRECOGNIZED INTERPOLATION METHOD: ',A,'.',/,         &
+     &       A, ' WILL INTERPOLATE USING LINEAR INTERPOLATION')
+        else
+         write(_MSGBUF,6772) whoami, whoami                          ; __PRINT(_MSGBUF)
+ 6772 format(/A,' UNSPECIFIED INTERPOLATION METHOD.',/,                 &
+     &       A, ' WILL INTERPOLATE USING LINEAR INTERPOLATION')
+         interp_method=linear ! choose linear interpolation as default
+        endif ! length
+       endif ! interp_method
+      endif ! qprint
+! process other options ccccccccccccccccccccccccccccccccccccccccccccccc
+! number of input replicas
+      if (__INDX(comlyn,comlen,'NIN',3).gt.0) then
+       num_rep_in=__GET_RM_I(comlyn, comlen, 'NIN', 0)
+       if (num_rep_in.le.0) then
+        if (qprint) then ; write(_MSGBUF, 6781) whoami ; __PRINT(_MSGBUF) ; endif
+ 6781 format(A,' NUMBER OF INPUT REPLICAS MUST BE > 0. NOTHING DONE.')
+        return
+       else
+        if (qprint) then 
+          write(_MSGBUF,6783) whoami, num_rep_in ; __PRINT(_MSGBUF) 
+        endif
+ 6783 format(A,' INITIAL STRING RESOLUTION: ', I5, ' REPLICAS.')
+       endif ! num_rep_in<=0
+      else
+        if (qprint) then ; write(_MSGBUF, 6784) whoami ; __PRINT(_MSGBUF) ; endif
+ 6784 format(A,' NUMBER OF INPUT REPLICAS UNSPECIFIED NOTHING DONE.')
+         return
+      endif !  indx('NIN')
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+! number of output replicas
+      if (__INDX(comlyn,comlen,'NOUT',4).gt.0) then
+       num_rep_out=__GET_RM_I(comlyn, comlen, 'NOUT', 0)
+       if (num_rep_out.le.0) then
+        if (qprint) then ; write(_MSGBUF, 6782) whoami ; __PRINT(_MSGBUF) ; endif
+ 6782 format(A,' NUMBER OF OUTPUT REPLICAS MUST BE > 0. NOTHING DONE.')
+        return
+       else
+        if (qprint) then 
+          write(_MSGBUF,6785) whoami, num_rep_out ; __PRINT(_MSGBUF) 
+        endif
+ 6785 format(A,' INTERPOLATED STRING RESOLUTION: ', I5, ' REPLICAS.')
+       endif ! num_rep_in<=0
+      else
+        if (qprint) then ; write(_MSGBUF, 6786) whoami ; __PRINT(_MSGBUF) ; endif
+ 6786 format(A,' NUMBER OF OUTPUT REPLICAS UNSPECIFIED NOTHING DONE.')
+         return
+      endif ! indx('NIN')
+!=======================================================================
+! get input coordinate file info
+      qilist=.false.
+      qibase=.false.
+      qicor=__INDX(comlyn, comlen, 'CRIN', 4).gt.0
+      qidcd=__INDX(comlyn, comlen, 'DCDIN', 5).gt.0
+!
+      if (qicor) then
+       if (qidcd) then ; __WRN(whoami, "CANNOT SPECIFY BOTH 'CRIN' and 'DCDIN'. NOTHING DONE"); 
+        i=__INDX_RM(comlyn, comlen, 'CRIN');i=__INDX_RM(comlyn, comlen, 'DCDIN'); return;
+       endif
+!    check how the user is specifying coordinate names
+       qilist=__INDX_RM(comlyn, comlen, 'INLIST').gt.0 ! formatted file with explicit filenames
+       qibase=__INDX_RM(comlyn, comlen, 'INBASE').gt.0 ! base name with index appended
+       if (qilist) then
+        if (qibase) then ; __WRN(whoami, "CANNOT SPECIFY BOTH 'INLIST' and 'INBASE'. NOTHING DONE"); 
+         i=__INDX_RM(comlyn, comlen, 'INLIST');i=__INDX_RM(comlyn, comlen, 'INBASE'); return;
+        endif
+        keyword='INLIST' ; i=6;
+       elseif (qibase) then
+        keyword='INBASE' ; i=6;
+       endif
+      elseif (qidcd) then 
+       keyword='DCDIN' ; i=5;
+      endif
+!
+      len_cor_in=-1
+      if (qilist.or.qibase.or.qidcd) then ;  __GET_RM_A(comlyn, comlen, keyword, i, name_cor_in, 80, len_cor_in) ; endif
+      if (len_cor_in.le.0) then
+      if (qprint) then ; write(_MSGBUF, 6787) whoami ; __PRINT(_MSGBUF) ; endif
+ 6787 format(A,' INPUT COORDINATE FILE NAME UNSPECIFIED. NOTHING DONE.')
+      return
+      endif
+!=======================================================================
+! get output coordinate file info
+      qolist=.false.
+      qobase=.false.
+      qocor=__INDX(comlyn, comlen, 'CROUT', 4).gt.0
+      qodcd=__INDX(comlyn, comlen, 'DCDOUT', 5).gt.0
+!
+      if (qocor) then
+       if (qodcd) then ; __WRN(whoami, "CANNOT SPECIFY BOTH 'CROUT' and 'DCDOUT'. NOTHING DONE"); 
+        i=__INDX_RM(comlyn, comlen, 'CROUT');i=__INDX_RM(comlyn, comlen, 'DCDOUT'); return;
+       endif
+!    check how the user is specifying coordinate names
+       qolist=__INDX_RM(comlyn, comlen, 'OUTLIST').gt.0 ! formatted file with explicit filenames
+       qobase=__INDX_RM(comlyn, comlen, 'OUTBASE').gt.0 ! base name with index appended
+       if (qolist) then
+        if (qobase) then ; __WRN(whoami, "CANNOT SPECIFY BOTH 'INLIST' and 'INBASE'. NOTHING DONE"); 
+         i=__INDX_RM(comlyn, comlen, 'OUTLIST');i=__INDX_RM(comlyn, comlen, 'OUTBASE'); return;
+        endif
+        keyword='OUTLIST' ; i=7;
+       elseif (qobase) then
+        keyword='OUTBASE' ; i=7;
+       endif
+      elseif (qodcd) then 
+       keyword='DCDOUT' ; i=6;
+      endif
+!
+      len_cor_out=-1
+      if (qolist.or.qobase.or.qodcd) then ;  __GET_RM_A(comlyn, comlen, keyword, i, name_cor_out, 80, len_cor_out) ; endif
+      if (len_cor_out.le.0) then
+      if (qprint) then ; write(_MSGBUF, 6788) whoami ; __PRINT(_MSGBUF) ; endif
+ 6788 format(A,' OUTPUT COORDINATE FILE NAME UNSPECIFIED. NOTHING DONE.')
+      return
+      endif
+!
+!============================================================
+!      read coordinate file names ( adapted from SMCV interpolation )
+      if (qprint) then ! root only
+!===   get input coordinate file names
+       ifile=-1 ! a valid unit number will be assigned by __OPEN_FILE
+!==========================
+       if (qidcd) then 
+! == dcd input
+        __OPEN_FILE(ifile,name_cor_in(1:len_cor_in),'UNFORMATTED','READ')
+         write(_MSGBUF,6791) whoami, name_cor_in(1:len_cor_in) ; __PRINT(_MSGBUF)
+ 6791 format(A,' INPUT STRING WILL BE READ FROM THE FILE ',A )
+       else
+! == cor input
+        allocate(fname_cor_in(num_rep_in))
+!============================================================
+        if (qilist) then 
+         __OPEN_FILE(ifile,name_cor_in(1:len_cor_in),'FORMATTED','READ')
+         do j=1, num_rep_in
+          read(ifile,'(A80)') fname_cor_in(j)
+         enddo
+         __CLOSE_FILE(ifile,'KEEP',ierror)
+!============================================================
+        elseif (qibase) then
+         offset=__GET_RM_I(comlyn, comlen, 'INI',0); ! input coordinate name offset
+         iext='.cor'
+         if (__INDX(comlyn,comlen,'IEXT',4).gt.0) then ; iext=__GET_RM_AFUN(comlyn, comlen, 'IEXT') ; endif
+         do j=1, num_rep_in
+          k=min(len_cor_in, len(fname_cor_in(j)) - (len(itoa(num_rep_in-1))+len_trim(iext)) ) ! determine maximum length to avoid buffer overrun
+          fname_cor_in(j)=name_cor_in(1:k)//itoa(j-1+offset)//trim(iext)
+         enddo
+        endif ! qolist
+!
+         write(_MSGBUF,6792) whoami ; __PRINT(_MSGBUF)
+ 6792 format(A,' INPUT STRING WILL BE READ FROM THE FOLLOWING FILES:' )
+        do j=1, num_rep_in
+         write(_MSGBUF,'(A1,I5," ",A80)') tab, j, fname_cor_in(j) ; __PRINT(_MSGBUF)
+        enddo
+       endif ! qidcd
+!
+!===   get output coordinate file names
+       ofile=-1
+!==========================
+       if (qodcd) then 
+! == dcd input
+        __OPEN_FILE(ofile,name_cor_out(1:len_cor_in),'UNFORMATTED','WRITE')
+         write(_MSGBUF,6793) whoami, name_cor_out(1:len_cor_out) ; __PRINT(_MSGBUF)
+ 6793 format(A,' OUTPUT STRING WILL BE WRITTEN TO THE FILE ',A )
+       else
+! == cor input
+        allocate(fname_cor_out(num_rep_out))
+!============================================================
+        if (qolist) then 
+         __OPEN_FILE(ifile,name_cor_out(1:len_cor_out),'FORMATTED','READ')
+         do j=1, num_rep_out
+          read(ifile,'(A80)') fname_cor_out(j)
+         enddo
+         __CLOSE_FILE(ofile,'KEEP',ierror)
+!============================================================
+        elseif (qobase) then
+         offset=__GET_RM_I(comlyn, comlen, 'OUTI',0); ! input coordinate name offset
+         oext='.cor'
+         if (__INDX(comlyn,comlen,'OEXT',4).gt.0) then ; oext=__GET_RM_AFUN(comlyn, comlen, 'OEXT') ; endif
+         do j=1, num_rep_out
+          k=min(len_cor_out, len(fname_cor_out(j)) - (len(itoa(num_rep_out-1))+len_trim(oext)) ) ! determine maximum length to avoid buffer overrun
+          fname_cor_out(j)=name_cor_out(1:k)//itoa(j-1+offset)//trim(oext)
+         enddo
+        endif ! qolist
+!
+         write(_MSGBUF,6794) whoami ; __PRINT(_MSGBUF)
+ 6794 format(A,' INPUT STRING WILL BE WRITTEN TO THE FOLLOWING FILES:' )
+        do j=1, num_rep_out
+         write(_MSGBUF,'(A1,I5," ",A80)') tab, j, fname_cor_out(j) ; __PRINT(_MSGBUF)
+        enddo
+       endif ! qodcd
+!
+! check for string definitions
+!
+       __FTSM_ALLOC
+       if __FTSM_UNALLOC then
+        __FTSM_UNALLOC_WARN
+       endif
+       if (.not. ftsm_check(qorient)) return ! another check
+!
+!    allocate input/output coordinate data for all replicas
+!
+       __FREE(rall_f); allocate(rall_f(nforced,3,num_rep_in)) ; rall_f=__NAN
+       __FREE(rall_new_f); allocate(rall_new_f(nforced,3,num_rep_out)) ; rall_new_f=__NAN
+       if (qorient) then 
+         if (qdiffrot) then
+          __FREE(rall_o); allocate(rall_o(norient,3,num_rep_in)) ; rall_o=__NAN
+          __FREE(rall_new_o); allocate(rall_new_o(norient,3,num_rep_out)) ; rall_new_o=__NAN
+         else
+          rall_o =>rall_f
+          rall_new_o =>rall_new_f
+         endif !qdiffrot
+       endif ! qorient
+!
+!========================= read coordinates =================
+       allocate(stringatoms(natom), string_inds(natom))
+       allocate(r3(natom,3)) ! temporary array
+       r3=__NAN
+       stringatoms=0
+!
+       if (ftsm_com_on) then
+        do i=1, nforced ; stringatoms(iatoms_f%v(i)%i(1)) = 1 ; enddo ! put in index of first atom in each COM group
+        if (qorient.and.qdiffrot) then
+         do i=1, norient ; stringatoms(iatoms_o%v(i)%i(1)) = 1 ; enddo
+        endif
+       else
+        stringatoms(iatom_f)=1
+        if (qorient.and.qdiffrot) stringatoms(iatom_o)=1
+       endif
+!
+       k=0
+       do i = 1, natom
+        if (stringatoms(i).gt.0) then ; k=k+1 ; string_inds(k)=i ; endif ! need this array for dcd reader below
+       enddo
+!
+!    call trajectory reader
+#ifdef __CHARMM
+       istats=1
+       qcg=.false.
+       qdim4=.false.
+       begin_=0 ! note begin <=0 forces a strange "reset" with begin=istep (which is zero below); this is to support trajectories
+                ! made with VMD
+       skip_=1
+       stop_=num_rep_in
+       ntitle=0
+       istep=0
+#endif
+!
+       do j=1, num_rep_in ! input coordinate sets
+!
+        if (qidcd) then
+#ifdef __CHARMM
+         call readcv(r3(:,1), r3(:,2), r3(:,3),                              &
+     &  trash8, qcg,                                                    & !__CHARMM_ONLY##CHEQ
+     &  trash4, natom,                                                  &
+     &  stringatoms, satoms, ifile, 1, ifile, nfile,                    &
+     &  istep, istats, ndof, delta, begin_, stop_, skip_,               &
+     &  nsavv_, 'CORD', 'CORD', title, ntitle, qdim4, trash8, .false.)
+#elif defined(__DMOL)
+       __FREE(stringatoms)
+       i=dcd_read_frame(ifile, r3, .true., stringatoms, unitcell)
+#endif
+!
+         if ( &
+#ifdef __CHARMM
+&         satoms &
+#else
+&         size(stringatoms) &
+#endif
+&          .eq.k) then
+           if ( any(stringatoms(1:k).ne.string_inds(1:k)) )                &
+     &    __WRN(whoami,'INVALID STRING ATOM INDICES. BEWARE.')
+         else
+          __WRN(whoami,'INCORRECT NUMBER OF STRING ATOMS. BEWARE.')
+         endif
+!
+!     compute string coordinates from atomic coordinates
+!
+         do i=1, nforced
+          if (ftsm_com_on) then ; ind=iatoms_f%v(i)%i(1) ; else ; ind=iatom_f(i) ; endif
+          rall_f(i,:,j)=r3(ind,:)
+         enddo
+!
+         if (qorient.and.qdiffrot) then
+          do i=1, norient
+           if (ftsm_com_on) then ; ind=iatoms_o%v(i)%i(1) ; else ; ind=iatom_o(i) ; endif
+           rall_o(i,:,j)=r3(ind,:)
+          enddo
+         endif
+!
+        elseif (qicor) then ! coordinate files
+!
+         length=len_trim(fname_cor_in(j))
+         fname=fname_cor_in(j)(1:length)
+         ifile=-1 ; __OPEN_FILE(ifile,fname,'FORMATED','READ') 
+!        read coordinates into dummy column
+         call ftsm_read_cor(ifile,dummy)
+         rall_f(:,:,j)=r_f(:,:,dummy)
+         if (qorient.and.qdiffrot) rall_o(:,:,j)=r_o(:,:,dummy)
+         __CLOSE_FILE(ifile,'KEEP',ierror)
+        endif ! qidcd
+       enddo ! j over num_rep_in
+!
+       if (qidcd) then ; __CLOSE_FILE(ifile,'KEEP',ierror) ; endif ! close dcd file
+!
+!     check for undefined coordinates
+!
+       if (any(rall_f.eq.__NAN)) then 
+        __WRN(whoami,'WARNING: SOME FORCING COORDINATES ARE UNDEFINED AFTER READING.')
+       endif
+       if (qorient.and.qdiffrot.and.any(rall_o.eq.__NAN)) then
+        __WRN(whoami,'WARNING: SOME ORIENTATION COORDINATES ARE UNDEFINED AFTER READING.')
+       endif
+!
+! ============ input string read ==============
+!
+
+
+
+!
+      endif ! qprint
+
+
+!    free memory
+      __FREE(r3)
+      __FREE(stringatoms)
+      __FREE(string_inds)
+      __FREE(rall_f)
+      __FREE(rall_new_f)
+      if (qorient .and. qdiffrot) then
+       __FREE(rall_o)
+       __FREE(rall_new_o)
+      endif
+#ifdef __DMOL
+      __FREE(unitcell)
+#endif
+
+      end subroutine ftsm_interp
+!
+__CHARMM_ONLY##ENDIF
+#endif
+!=================================================================================
+      end module ftsm_interpolate
+
