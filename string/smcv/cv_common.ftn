@@ -357,6 +357,8 @@ __CHARMM_ONLY##IF STRINGM
 !       assign cv values
         cv%num_cv=j
         cv%r(j,:)=__NAN ! undefined value
+        cv%r(j,runave)=0d0    ! not strictly necessary, but cleaner when CVs include angles which need to be averaged
+        cv%r(j,previnst)=0d0  !
 !
         cv%k(j)=0d0
         if (present(k)) then
@@ -877,13 +879,15 @@ __CHARMM_ONLY##ENDIF
 !
         select case(cv%type(i))
         case(dihe_com);
-          dummy=(cv%r(i,main) - cv%r(i,runave))
+          dummy=cv%r(i,main) - cv%r(i,runave)
           dummy=modulo(dummy,TWOPI)
           if (dummy.gt.PI) dummy=dummy-TWOPI;
-        case(angle_com); ! cannot tell between theta/-theta
-          dummy=(abs(cv%r(i,main)) - cv%r(i,runave))
+        case(angle_com, anglvec); ! cannot tell between theta/-theta
+          dummy=abs(cv%r(i,main)) - cv%r(i,runave)
+          dummy=modulo(dummy,TWOPI)
+          if (dummy.gt.PI) dummy=dummy-TWOPI;
         case default
-          dummy=(cv%r(i,main) - cv%r(i,runave))
+          dummy=cv%r(i,main) - cv%r(i,runave)
         end select
 !
         cv%r(i,forces)=cv%k(i)*dummy
@@ -905,6 +909,7 @@ __CHARMM_ONLY##ENDIF
 !       write(600+whoiam,*)
 !     &   dot_product(cv%M(i,:,1),cv%r(:,forces)),
 !     &  cv%r(i,forces)/cv%weight(i)
+        if (cv%type(i).eq.angle_com.or.cv%type(i).eq.anglvec) cv%r(i,main)=abs(cv%r(i,main))
        enddo
 !    now reset history (number of slices in the running average)
        cv%num_run_ave=0
@@ -915,7 +920,7 @@ __CHARMM_ONLY##ENDIF
 !                                         temperature not added yet
       __DEP_OUTPUT
       __DEP_CONST 
-      
+!
 !      the timestep can be specified optionally
 !      nskip ( the number of history elements to skip when computing the average) is also optional
        float, optional :: dt
@@ -940,8 +945,10 @@ __CHARMM_ONLY##ENDIF
           dummy=(cv%r(i,main) - cv%r(i,runave))
           dummy=modulo(dummy,TWOPI)
           if (dummy.gt.PI) dummy=dummy-TWOPI;
-        case(angle_com); ! cannot tell between theta/-theta
+        case(angle_com, anglvec); ! cannot tell between theta/-theta
           dummy=(abs(cv%r(i,main)) - cv%r(i,runave))
+          dummy=modulo(dummy,TWOPI)
+          if (dummy.gt.PI) dummy=dummy-TWOPI;
         case default
           dummy=(cv%r(i,main) - cv%r(i,runave))
         end select
@@ -958,6 +965,7 @@ __CHARMM_ONLY##ENDIF
         cv%r(i,main)=cv%r(i,main)-delt*cv%gamma(i)*                     &
 !     &               dot_product(cv%M(i,:,2),cv%r(:,forces))
      &                                        cv%r(i,forces) ! + temp (coming soon)
+        if (cv%type(i).eq.angle_com) cv%r(i,main)=abs(cv%r(i,main))
        enddo
 !    now reset history (number of slices in the running average)
        cv%num_run_ave=0
@@ -1001,11 +1009,13 @@ __CHARMM_ONLY##ENDIF
 !
         select case(cv%type(i))
         case(dihe_com);
-          dummy=(cv%r(i,main) - cv%r(i,runave))
+          dummy=cv%r(i,main) - cv%r(i,runave)
           dummy=modulo(dummy,TWOPI)
           if (dummy.gt.PI) dummy=dummy-TWOPI;
-        case(angle_com); ! cannot tell between theta/-theta
-          dummy=(abs(cv%r(i,main)) - cv%r(i,runave))
+        case(angle_com, anglvec); ! cannot tell between theta/-theta
+          dummy=abs(cv%r(i,main)) - cv%r(i,runave)
+          dummy=modulo(dummy,TWOPI)
+          if (dummy.gt.PI) dummy=dummy-TWOPI;
         case default
           dummy=(cv%r(i,main) - cv%r(i,runave))
         end select
@@ -1037,18 +1047,20 @@ __CHARMM_ONLY##ENDIF
 !c        cv%r(i,main)=       a  * cv%r(i,main) +
 !c     &                      a1 * sum(temp(numskip+1:cv%num_hist))/n
 
-! VO 3.24.09: angle correction
         u=cv%r(i,main)
         v=u-cv%r(i,runave)
-!
+! VO 3.24.09: angle correction
+! NOTE: angle_com main could in principle be negative (e.g. if read in from file)
         select case(cv%type(i));
-         case(dihe_com, angle_com, anglvec);
+         case(angle_com, dihe_com, anglvec);
           v=modulo(v,TWOPI)
           if (v.gt.PI) v=v-TWOPI
         end select
 !
         cv%r(i,main)=       u -                                         &
      &                      a1 * v
+!
+        if (cv%type(i).eq.angle_com.or.cv%type(i).eq.anglvec) cv%r(i,main)=abs(cv%r(i,main))
 !cccccc from Euler evolve cccccccccccc
 !    compute average F.E. gradient and dump into force set
 !    assuming that the runnung average has been computed
@@ -1164,6 +1176,8 @@ __CHARMM_ONLY##ENDIF
 !    'unwrap' history
         temp=(/ (cv%r(i,k),k=k1,k2),(cv%r(i,k),k=k3,k4) /)
 !
+        if (cv%type(i).eq.angle_com.or.cv%type(i).eq.anglvec) temp=abs(temp) ! +/- angles indistinguishable
+!
 !    VO 3.24.09: angle correction
         select case(cv%type(i));
          case(dihe_com, angle_com, anglvec);
@@ -1178,9 +1192,14 @@ __CHARMM_ONLY##ENDIF
         temp(1:n)=smooth2(                                              &
      &                     t(numskip+1:cv%num_hist),                    &
      &                  temp(numskip+1:cv%num_hist),                    &
-     &           delta)
+     &                  delta)
         cv%r(i,main)=temp(n) ! set the restraint value (z) to the
         cv%r(i,comp)=temp(n) ! the theta(x) are roughly consistent with these CV
+!
+        if (cv%type(i).eq.angle_com.or.cv%type(i).eq.anglvec) then
+         cv%r(i,comp)=abs(cv%r(i,comp))
+         cv%r(i,main)=abs(cv%r(i,main))
+        endif
 !      M: what to do about M in this case is unclear
 !         for now, setting the long-term average to the short-term evarage
         do j=1,i
@@ -1257,7 +1276,7 @@ __CHARMM_ONLY##ENDIF
          allocate(rall(cv%num_cv,kout,SIZE_STRNG))
          allocate(rtemp(cv%num_cv,kout))
         else
-         __WRN( whoami,'SKIPPED ALL ELEMENTS. NOTHING PRINTED')
+         __WRN( whoami,'SKIPPED ALL ELEMENTS. NOTHING PRINTED.')
          return
         endif ! kout
 !
@@ -1271,7 +1290,7 @@ __CHARMM_ONLY##ENDIF
      &    ierror)
 !
         if (ME_STRNG.eq.0) then ! root writes
-         write(fmt,int_format) cv%num_cv
+         write(fmt,int_format) SIZE_STRNG
          do k=1,kout
           write(iunit,'("% ",'//int_format//')') k
           do i=1,cv%num_cv
@@ -1448,6 +1467,8 @@ __CHARMM_ONLY##ENDIF
         select case(cv%type(i))
          case(dihe_com, angle_com, anglvec);
 !
+          if (cv%type(i).eq.angle_com.or.cv%type(i).eq.anglvec) rtemp(i,:)=abs(rtemp(i,:)) ! make sure only positive values for angles are taken
+!
           do j=2,nrep
            dangle=modulo(rtemp(i,j)-rtemp(i,j-1), TWOPI)
            if (dangle .gt. PI ) dangle = dangle - TWOPI
@@ -1529,7 +1550,6 @@ __CHARMM_ONLY##ENDIF
        end subroutine cv_common_compute_fe_fd
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_print_forces(iunit) ! global
-       
        int :: iunit
        call cv_common_print_global(iunit,forces,.false.) ! do not print BC if they are present
        end subroutine cv_common_print_forces
@@ -1538,7 +1558,7 @@ __CHARMM_ONLY##ENDIF
 !      assume that unit is prepared
 !      for parallel, broadcast to slaves done by calling routine
        __DEP_OUTPUT
-       
+!
        int :: iunit
        int, optional :: col
        int :: i, c
@@ -1997,9 +2017,10 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
             dangle=modulo(cv%r(i,c1)-cv%r(i,c2), TWOPI)
             if (dangle .gt. PI ) dangle = dangle - TWOPI
             dummy=dummy+(dangle*cv%weight(i))**2
-         case(angle_com); ! cannot tell between theta/-theta
-            dummy=dummy+((abs(cv%r(i,c1))-abs(cv%r(i,c2)))*             &
-     &                  cv%weight(i))**2
+         case(angle_com, anglvec); ! cannot tell between theta/-theta
+            dangle=modulo(abs(cv%r(i,c1))-abs(cv%r(i,c2)), TWOPI)
+            if (dangle .gt. PI ) dangle = dangle - TWOPI
+            dummy=dummy+(dangle*cv%weight(i))**2
          case default
             dummy=dummy+((cv%r(i,c1)-cv%r(i,c2))*cv%weight(i))**2
          end select
@@ -2018,7 +2039,6 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
        end function cv_common_rmsd
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_update_ave()
-       
 !      local
        float :: t
 !      begin
@@ -2209,7 +2229,7 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_rex_compute_dE(rnew, dE)
        __DEP_CONST 
-       
+!
        float :: rnew(:)
        float :: dummy1, dummy2, dE
        int :: i
@@ -2226,10 +2246,14 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
           dummy2=(cv%r(i,main) - cv%r(i,instant)) ! old
           dummy2=modulo(dummy2,TWOPI)
           if (dummy2.gt.PI) dummy2=dummy2-TWOPI
-         case(angle_com); ! cannot tell between theta/-theta
+         case(angle_com, anglvec); ! cannot tell between theta/-theta
           dummy1=(abs(rnew(i)) - cv%r(i,instant))
+          dummy1=modulo(dummy1,TWOPI)
+          if (dummy1.gt.PI) dummy1=dummy1-TWOPI
 !
           dummy2=(abs(cv%r(i,main)) - cv%r(i,instant))
+          dummy2=modulo(dummy2,TWOPI)
+          if (dummy2.gt.PI) dummy2=dummy2-TWOPI
          case default
           dummy1=(rnew(i) - cv%r(i,instant))
           dummy2=(cv%r(i,main) - cv%r(i,instant))
@@ -2629,8 +2653,9 @@ __CHARMM_ONLY##ENDIF
          case(dihe_com);
             dummy=modulo(r(j)-rall(j,i), TWOPI)
             if (dummy .gt. PI ) dummy = dummy - TWOPI
-         case(angle_com); ! cannot tell between theta/-theta
-            dummy=abs(r(j))-abs(rall(j,i))
+         case(angle_com, anglvec); ! cannot tell between theta/-theta
+            dummy=modulo(abs(r(j))-abs(rall(j,i)), TWOPI)
+            if (dummy .gt. PI ) dummy = dummy - TWOPI
          case default
             dummy=r(j)-rall(j,i)
          end select
@@ -2788,8 +2813,9 @@ __CHARMM_ONLY##ENDIF
          case(dihe_com);
             dummy=modulo(rtemp(j)-cv%rall(j,n), TWOPI)
             if (dummy .gt. PI ) dummy = dummy - TWOPI
-         case(angle_com); ! cannot tell between theta/-theta
-            dummy=abs(rtemp(j))-abs(cv%rall(j,n))
+         case(angle_com, anglvec); ! cannot tell between +/- theta
+            dummy=modulo(abs(rtemp(j))-abs(cv%rall(j,n)), TWOPI)
+            if (dummy .gt. PI ) dummy = dummy - TWOPI
          case default
             dummy=rtemp(j)-cv%rall(j,n)
          end select
@@ -3111,7 +3137,6 @@ __CHARMM_ONLY##ENDIF
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_neq_work_init()
 !      initialize variables for nonequilibrium work
-       
        cv%work=0.
        cv%r(:,forces2)=0.
        cv%r(:,zcur)=cv%r(:,comp)
@@ -3120,7 +3145,6 @@ __CHARMM_ONLY##ENDIF
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        function cv_common_neq_get_work()
 !      returns the value of work
-       
        float :: cv_common_neq_get_work
        cv_common_neq_get_work=cv%work
        end function cv_common_neq_get_work
