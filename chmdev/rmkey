@@ -1,0 +1,81 @@
+#!/bin/bash
+:<<COMMENT
+VO 7.2015
+script to remove CHARMM code protected by C-style preprocessor
+#if directives. This is a very crude tool.
+\
+COMMENT
+#begin
+if [ -z $1 ] || [ -z $2 ]; then
+ echo "USAGE: ./rmkey [key] [input.src]"
+ exit 1
+fi
+
+key=`echo $1 | tr '[:lower:]' '[:upper:]'`
+gawk -v key=$key '
+BEGIN { 
+ qactive=1 ;
+ chmkey="KEY_"key ;
+ cif=0;
+ endif[0]=1 ;
+}
+
+{
+ newline=$0;
+#if : ============================================
+ if ( substr($1,1,3)== "#if" ) {
+   cif++;
+   endif[cif]=1; #keep endif by default
+   qelse=0;
+# determine whether instance of key occurs in the conditional
+   if ( match($0, chmkey) ) { # found key
+#
+# determine if other conditions are present
+#
+    if ( match($0,"\\&\\&") || match($0,"\\|\\|")) {
+     itrue=match($0, chmkey"[ ]*==[ ]*1") # if key is true)
+     if (itrue) {
+      gsub(substr($0,RSTART,RLENGTH),0,$0);# replace with 0
+     }
+     ifalse=match($0, chmkey"[ ]*==[ ]*0") # if key is false)
+     if (ifalse) {
+      gsub(substr($0,RSTART,RLENGTH),1,$0);# replace with 1
+     }
+     newline=$0
+     endif[cif]=1; # keep the endif
+    } else { # no other conditionals present
+     newline=""; # erase line
+     endif[cif]=0 ; # remove else/endif
+     itrue=match($0, chmkey"[ ]*==[ ]*1") # if key is true)
+     if (itrue) { qactive=0 }
+    }
+   } else { # not found key
+    newline=$0
+    endif[cif]=1; # keep the endif
+   } ;# found key
+
+ } else if ($1 == "#elif" ) {
+  if (endif[cif]==0) {
+   if (!qelse) qactive=!qactive ;
+   if (qactive) {
+    endif[cif]=1 # restore endif
+    sub("elif","if",$0) ;
+    newline=$0 ;
+   }
+  }
+  qelse=1; # need to know that we had an else previously
+ } else if ($1 == "#else" ) {
+#print qactive" "qelse" "endif[cif]" "cif
+  if (endif[cif]==0) {
+   if (!qelse) qactive=!qactive ;
+   newline=""; # do not print else
+  }
+ } else if ($1 == "#endif" ) {
+  if (endif[cif]==0) {
+   qactive=1 ;
+   newline=""; # do not print else
+  }
+  cif--;
+ }
+ if (qactive) { print newline }
+} ' < $2
