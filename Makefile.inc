@@ -59,7 +59,7 @@ LDFLAGS=-dynamic -Bdynamic # -no-ipo
 # G95
 #EXTRA_LIBS+=-lf95 -lgcc
 
-#EXTRA_LIBS+=-llapack
+EXTRA_LIBS+=-llapack
 
 PIC=-fPIC
 GLOBALMACROS=-include $(ROOT)/source.defs
@@ -73,7 +73,7 @@ GLOBALDEPS+=$(ROOT)/contexts.def $(ROOT)/setcomm.def  $(ROOT)/exec.def
 
 MPI_INCLUDE=-I $(MPI_HOME)/include -I $(MPI_HOME) -I $(MPI_HOME)/lib
 MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lpthread -lmpich -lmpichf90 -lmpl # -lmpi -lmpi_f90 -lmpi_f77 # mpich
-#MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lpthread -lmpi -lmpi_f90 -lmpi_f77 # older openmpi
+MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lpthread -lmpi -lmpi_f90 -lmpi_f77 # older openmpi
 #MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lmpi -lmpi_mpifh -lmpi_usempif08  # newer openmpi w/ F08
 #MPI_INCLUDE=
 #MPI_LIBS=
@@ -180,7 +180,7 @@ libs : libraries
 libraries: $(ROOT)/$(NAME).stamp
 	for d in $(DIRS); do (cd $$d; $(MAKE) libraries); done
 
-.SILENT : %.stamp clean $(DISTRIB) test force_look
+.SILENT : %.stamp clean $(DISTRIB) force_look
 clean::
 	rm -f *.mod *.a *.so $(ROOT)/$(NAME).stamp $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(EXE) test.F90 test.dat test.out test.o 
 	if [ -f test ] ; then rm -f test ; fi

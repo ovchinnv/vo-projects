@@ -10,7 +10,7 @@ DBINDOBJS  =$(OBJS:%.o=%__.o)  $(CBINDOBJS:%.o=%__.o)
 CLIB=-L. -lbestfit
 #
 LOCALMACROS=-include source.defs
-LOCALDEPS=source.defs
+LOCALDEPS=source.defs eig3s_lapack.def
 # additional objects for linking test.o executable
 
 LINKOBJS=constants.o output.o parser.o cmd.o prm.o multicom_aux.o multicom.o ivector.o parselist.o isort.o

@@ -2,6 +2,7 @@
 
  use bestfit
  use constants
+ use parser
 
  implicit none
 
@@ -188,8 +189,8 @@ M=reshape( (/ & ! make sure eigenvalue refine is off
 !*******random matrix tests*******
 ! these are an approximation to what actually goes on in a code
 !
- do n=1,1000
-! do n=1,10000000  ! ten million
+ do n=1,10000
+! do n=1,100000000  ! millions
 ! do n=1,1000000000 ! one billion
 !do n=1,0
   call random_number(M)
@@ -198,7 +199,11 @@ M=reshape( (/ & ! make sure eigenvalue refine is off
  enddo
 !
  777  continue
+#ifndef __USELAPACK
  write(0,*) ' MAXIMUM DIAGONALIZATION ERROR: ',maxerr
+#else
+ write(0,*) ' MAXIMUM DIAGONALIZATION ERROR(LPK): ',maxerr
+#endif
  write(0,*) ' NUMBER OF TESTS: ',numtest
 !####################################################################################################
 !stop
@@ -355,9 +360,17 @@ M=reshape( (/ & ! make sure eigenvalue refine is off
   float :: check_diag, norm
   character(len=10) :: whoami='CHECK_DIAG'
   bool, optional, intent(in) :: verbose_
-  bool :: verbose=.false.
-
-  if (present(verbose_)) then ; verbose=verbose_ ; else ; verbose=.true. ; endif
+  bool :: verbose
+!
+#ifdef __USELAPACK
+  float :: evallpk(3), eveclpk(3,3), wlpk(20), maxerrlpk
+  real*8 :: b0lpk(3,3)
+  int :: errlpk=0
+  bool, parameter :: qdouble=(kind(evallpk).eq.kind(1d0));
+  bool, parameter :: qsingle=(kind(evallpk).eq.kind(1.0));
+#endif
+!
+  if (present(verbose_)) then ; verbose=verbose_ ; else ; verbose=.false. ; endif
 ! First, make sure that the matrix is symmetric
   maxerr=(maxval(abs(B-transpose(B))))
   if (maxerr.ge.TOL) then
@@ -382,21 +395,70 @@ M=reshape( (/ & ! make sure eigenvalue refine is off
   A=B/norm
 ! 
   call eig3s(A, eval, evec)
+#ifdef __USELAPACK
+  eveclpk=A
+  if (qdouble) then
+   call dsyev('V','L',3,eveclpk,3,evallpk,wlpk,size(wlpk),errlpk)
+  elseif (qsingle) then
+   call ssyev('V','L',3,eveclpk,3,evallpk,wlpk,size(wlpk),errlpk)
+  else
+   write(0,*) whoami, 'Cannot find compatible LAPACK diagonalization routine for kind "'//itoa(kind(evallpk))//'". Abort'
+  endif
+
+! make sure eigenvalues are sorted by decreasing magnitude
+  if (abs(evallpk(1)).lt.abs(evallpk(2))) then;
+    wlpk(1)=evallpk(1); evallpk(1)=evallpk(2); evallpk(2)=wlpk(1); 
+    wlpk(1:3)=eveclpk(:,1); eveclpk(:,1)=eveclpk(:,2); eveclpk(:,2)=wlpk(1:3); 
+  endif
+  if (abs(evallpk(1)).lt.abs(evallpk(3))) then;
+    wlpk(1)=evallpk(1); evallpk(1)=evallpk(3); evallpk(3)=wlpk(1); 
+    wlpk(1:3)=eveclpk(:,1); eveclpk(:,1)=eveclpk(:,3); eveclpk(:,3)=wlpk(1:3); 
+  endif
+  if (abs(evallpk(2)).lt.abs(evallpk(3))) then;
+    wlpk(1)=evallpk(2); evallpk(2)=evallpk(3); evallpk(3)=wlpk(1); 
+    wlpk(1:3)=eveclpk(:,2); eveclpk(:,2)=eveclpk(:,3); eveclpk(:,3)=wlpk(1:3); 
+  endif
+!
+#endif // lapack
+!
 ! check diagonalization directly
 ! rescale the eigenvalues back
   eval=eval*norm
   b0(:,1)=eval(1)*evec(:,1);b0(:,2)=eval(2)*evec(:,2);b0(:,3)=eval(3)*evec(:,3)! aa
-
+!
+#ifdef __USELAPACK
+  evallpk=evallpk*norm
+  b0lpk(:,1)=evallpk(1)*eveclpk(:,1);b0lpk(:,2)=evallpk(2)*eveclpk(:,2);b0lpk(:,3)=evallpk(3)*eveclpk(:,3)! aa
+#endif
+!
   if (verbose) then
-   write(0,*) '* EIGENVALUES: ' , eval
+   write(0,*) '* EIGENVALUES  : ' , eval
+#ifdef __USELAPACK
+   write(0,*) '* EIGENVAL(LPK): ' , evallpk
+#endif
    write(0,*) '* EIGENVECTOR 1 ', evec(:,1), norm3(evec(:,1))
+#ifdef __USELAPACK
+   write(0,*) '* EVECT (LPK) 1 ', eveclpk(:,1), norm3(eveclpk(:,1))
+#endif
    write(0,*) '* EIGENVECTOR 2 ', evec(:,2), norm3(evec(:,2))
+#ifdef __USELAPACK
+   write(0,*) '* EVECT (LPK) 2 ', eveclpk(:,2), norm3(eveclpk(:,2))
+#endif
    write(0,*) '* EIGENVECTOR 3 ', evec(:,3), norm3(evec(:,3))
-   write(0,*) '* ERRTOL : ', __ERRTOL 
-   write(0,*) '* ',matmul(b0, transpose(evec))
+#ifdef __USELAPACK
+   write(0,*) '* EVECT (LPK) 3 ', eveclpk(:,3), norm3(eveclpk(:,3))
+#endif
+   write(0,*) '* ERRTOL : ', __ERRTOL
+   write(0,*) '*     ',matmul(b0, transpose(evec))
+#ifdef __USELAPACK
+   write(0,*) '*(LPK)',matmul(b0lpk, transpose(eveclpk))
+#endif
   endif
 
   maxerr=(maxval(abs(matmul(b0,transpose(evec))-B)))
+#ifdef __USELAPACK
+  maxerrlpk=(maxval(abs(matmul(b0lpk,transpose(eveclpk))-B)))
+#endif
   if (maxerr.ge.TOL) then
    write(666,*) whoami,': Test failed, maximum error:',maxerr,TOL
    write(666,*) whoami,': Details:'
@@ -420,6 +482,9 @@ M=reshape( (/ & ! make sure eigenvalue refine is off
   endif
 !
   check_diag=maxerr
+#ifdef __USELAPACK
+  check_diag=maxerrlpk
+#endif
 !
   if (maxerr.ge.TOL) then
    write(0,*) '--**ERROR**--', check_diag ! , norm
