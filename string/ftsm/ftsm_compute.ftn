@@ -676,19 +676,25 @@ __CHARMM_ONLY##IF STRINGM
       end subroutine ftsmv1_calc
 !
 !===========================================================================
-      subroutine ftsm_addforce(fx,fy,fz,addforce)
+      subroutine ftsm_addforce(fx,fy,fz,addforce,itime)
       __DEP_NUMBER
+      __DEP_MULTICOM ! for ME_STRNG
 !    note: boundary points require special treatment: x0.25 force constant and x2 dperp0
 !    this is because distance between replicas is halved for the endpoints, but still corresponds to 1 (as for the inner pts)
       float :: fx(:), fy(:), fz(:)
+      bool :: addforce  ! whether to add forces to running force average
+      int :: itime
+! locals
       float, pointer, dimension(:,:) :: ffpar, ffprp, fopar, foprp
       float :: pre1, pre2, dw, ddm, ddp
       float :: fac, fac2, t, omt, wgt, dx, dy, dz, kbt=0.6d0 ! for now, hardwired at room temperature
+      float :: tw, omtw ! window average
+      int, parameter :: right=1, left=-1, home=0
+      int :: qwhere
 !
       int, pointer :: inds(:)
       float, pointer :: wgts(:)
       int :: i, j, ind
-      bool :: addforce  ! whether to add forces to running force average
       bool :: qendpoint
 !
       qendpoint=(mestring.eq.0.or.mestring.eq.nstring-1)
@@ -727,8 +733,28 @@ __CHARMM_ONLY##IF STRINGM
         dw=fac2 * dwin ; ! converted to local metric (2d for inner pts.)
         ddp=dpar - dpar0 + 0.5*dw ; ! add half-window size
         ddm=ddp - dw ;
-        pre1 = kpara * fac * fac * (max(ddm,zero) + min(ddp,zero)) ! one-line window restraint
-       else ! harmonic window
+        if (ddm.gt.zero) then ! system to the `right` of window
+         pre1 = kpara * fac * fac * ddm
+         qwhere = right
+        elseif (ddp.lt.zero) then ! system to the `left` of window
+         pre1 = kpara * fac * fac * ddp
+         qwhere = left
+        else ! update average position inside window (conditional on being inside the window)
+         __INC(window_num_ave) ! increment (local) sample counter
+         omtw=one/window_num_ave ; tw=one-omtw;
+         window_ave_pos = tw * window_ave_pos + omtw * dpar ! note: logging dpar and not normalized quantities (e.g. (dpar-dpar0)/dw) )
+         qwhere = home
+        endif ! ddm, ddp, etc
+! update crossing log if needed ; note that if you call this routine twice at the same step, the code below is only executed once b/c qwhere=whereami
+        if (qwhere.ne.ftsm_window_whereami) then
+         j=ME_STRNG+1
+         i=int_vector_add(ftsm_window_log, j)                        ! replica ID
+         i=int_vector_add(ftsm_window_log, qwhere)                   ! crossed boundary in this direction
+         i=int_vector_add(ftsm_window_log, itime + window_offset)    ! at this time
+         ftsm_window_whereami=qwhere
+        endif
+!
+       else ! regular harmonic window
         pre1 = kpara * fac * fac * ( dpar-dpar0 )                ! scale down the force constant of endpoints (one for d, one for gradients)
        endif ! window_on
        pre2 = kperp * fac * max   ( fac * dperp - dperp0, zero ) ! ignore negative values; dperp0 criterion in inner-replica d-metric
