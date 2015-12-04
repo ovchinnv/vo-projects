@@ -425,7 +425,7 @@ __CHARMM_ONLY int :: oldiol, error
         else
           __WRN(whoami,'NO FILE NAME GIVEN. WILL NOT WRITE WINDOW CROSSING LOG.')
         endif ! window_flen.gt.0
- 6731 format(A,' WILL WRITE WINDOW CROSSING LOG TO FILE ',A,'.DAT')
+ 6731 format(A,' WILL WRITE WINDOW CROSSING LOG TO FILE ',A,'.LOG')
 !
       endif ! window crossing log
 !cccccccccccc process Voronoi histogram output options ccccccccccc
@@ -588,7 +588,7 @@ __CHARMM_ONLY int :: oldiol, error
       character(len=80) :: fmt_real, fmt_int, fmt
       float :: projdist(3) ! dpar, dperp, drms
       float :: u (3,3)= Id3
-      float :: rmsd0, rmsd0_all(nstring), fc_all(3,nstring)
+      float :: rmsd0, rmsd0_all(nstring), fc_all(3,nstring), winave_all(2,nstring)
       float, pointer :: M_all(:,:,:,:,:) ! Mtensor combined from all images
       float, pointer :: J_all(:) ! combined jacobian
 !
@@ -848,22 +848,23 @@ __CHARMM_ONLY int :: oldiol, error
          projdist(1)=window_ave_pos; projdist(2)=one*window_num_ave
 !    reuse fc_all
          call mpi_gather(projdist,2,mpifloat,                & ! heads communicate
-     &                  fc_all,2,mpifloat,0,                 &
+     &                  winave_all,2,mpifloat,0,             &
      &                  MPI_COMM_STRNG, ierror)
 !
          fmt='('//fmt_real(1:fmt_len)//real_format//')'
          if (qprint) then
           window_funit=-1
           window_fname(window_flen+1:window_flen+4)='.dat' ! append to name
-          __OPEN_FILE(window_funit,window_fname(1:window_flen+4), 'FORMATTED','WRITE')
+          __OPEN_FILE(window_funit,window_fname(1:window_flen+4), 'FORMATTED',windowform)
           window_fname(window_flen+1:)='' ! erase extension
           write(window_funit,'("% ",I8)') stat_iteration_counter ! % is a MATLAB comment
 !    print data
-          write(window_funit, fmt) fc_all(1,:) ! average position
-          write(window_funit, fmt) fc_all(2,:) ! number of samples cast to real
+          write(window_funit, fmt) winave_all(1,:) ! average position
+          write(window_funit, fmt) winave_all(2,:) ! number of samples cast to real
           __CLOSE_FILE(window_funit, 'KEEP', ierror)
          endif ! qprint
         endif ! qroot
+        if (.not.output_window_xs_log) windowform='APPEND' ! otherwise, needed for writing log below
        endif ! window_flen
       endif ! output_window_ave
 !===========================================================================
@@ -874,7 +875,7 @@ __CHARMM_ONLY int :: oldiol, error
         if (qprint) then
          window_funit=-1
          window_fname(window_flen+1:window_flen+4)='.log' ! append to name
-         __OPEN_FILE(window_funit,window_fname(1:window_flen+4),'FORMATTED', windowform)
+         __OPEN_FILE(window_funit,window_fname(1:window_flen+4),'UNFORMATTED', windowform)
          window_fname(window_flen+1:)='' ! erase extension
         endif
         call ftsm_window_print_xs_log(window_funit) ! all processes can call (and clear their logs)
@@ -900,8 +901,9 @@ __CHARMM_ONLY int :: oldiol, error
      &       IBEG=i,                                                    &
 !     &       IBEG=(stat_iteration_counter-1) * nstring + 1,             &
 !     &       IEND=2**31-1) ! largest 4-byte int     
-     &       IEND= ione*(-1 + 2**30 + 2**30)) ! possible i4 => i8 cast
-!    NOTE: should write the correct number of records to header at the end of calculation
+     &       IEND= ione*(-1 + 2**30 + 2**30),                           & ! possible i4 => i8 cast
+     &       NFRAMES= ione*(-1 + 2**30 + 2**30))
+!    NOTE: perhaps should write the correct number of records to header at the end of calculation
 !--------------------------------------------------------------------
 !    flush unit:
         if (qprint) __CLOSE_FILE(centers_funit, 'KEEP', ierror)
@@ -1077,6 +1079,7 @@ __CHARMM_ONLY int :: oldiol, error
       num_force_samples=0
 ! also reset window position averages
       window_num_ave=0
+      window_ave_pos=__NAN
 !
       end subroutine ftsm_stat
 !
