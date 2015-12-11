@@ -10,7 +10,7 @@ FFLAGS=-O3 -fast -finline -fp-model fast=2 -xhost -ipo -fno-math-errno -no-inlin
 #FFLAGS= -O0 -c -g -check all -debug extended -debug-parameters all -traceback -no-ipo #-fast -fno-math-errno -finline -fp-model fast=2 -xhost -no-ipo #-ipo 
 #FFLAGS= -O3 -c -fast -fno-math-errno -finline -fp-model fast=2 -xSSE3 -ipo # -no-inline-factor -no-inline-min-size #-ipo #xSSE3 for pentium
 #FFLAGS= -O2 -c -fast -fno-math-errno -finline -fp-model fast=2 -xhost -no-ipo # -no-inline-factor -no-inline-min-size #-ipo 
-MPI_HOME=/usr/local/mpich2-intel
+#MPI_HOME=/usr/local/mpich2-intel
 #---GNU
 FC=gfortran
 FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -Wall  #-fopenmp 
@@ -74,7 +74,7 @@ GLOBALDEPS+=$(ROOT)/contexts.def $(ROOT)/setcomm.def  $(ROOT)/exec.def
 MPI_INCLUDE=-I $(MPI_HOME)/include -I $(MPI_HOME) -I $(MPI_HOME)/lib
 MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lpthread -lmpich -lmpichf90 -lmpl # -lmpi -lmpi_f90 -lmpi_f77 # mpich
 MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lpthread -lmpi -lmpi_f90 -lmpi_f77 # older openmpi
-#MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lmpi -lmpi_mpifh -lmpi_usempif08  # newer openmpi w/ F08
+MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lmpi -lmpi_mpifh -lmpi_usempif08  # newer openmpi w/ F08
 #MPI_INCLUDE=
 #MPI_LIBS=
 
@@ -119,17 +119,21 @@ all : default
 # DISTRIBUTION DIRS
 DISTRIB=$(addprefix $(ROOT)/, include obj lib)
 $(DISTRIB):
-	if [ ! -d $@ ] ; then mkdir $@ ; fi
+	echo $@
+	if [ ! -d "$@" ] ; then mkdir -p $@ ; fi
 
 ###################### STAMPS KEEP TRACK OF DEPENDENCIES ON DIRECTORIES (OR OTHER COMPOUND OBJECTS): #####
 # try searching for module file in uppercase for pathscale
-$(ROOT)/$(NAME).stamp:: $(OBJS) $(DISTRIB)
+$(ROOT)/$(NAME).stamp:: $(OBJS) $(HEADS) $(DISTRIB)
 	for file in $(OBJS); do \
 	ln -fs `pwd`/$$file ${ROOT}/obj/$$file; \
 	file=$${file%.*}.mod ; if [ -f $$file  ] ; then ln -fs `pwd`/$$file ${ROOT}/include/$$file; fi ;\
 	file=`echo $${file%.*} | tr '[:lower:]' '[:upper:]'`.mod ;\
 	if [ -f $$file  ] ; then ln -fs `pwd`/$$file ${ROOT}/include/$$file; fi ;\
 	done; 
+	for file in $(HEADS); do \
+	ln -fs `pwd`/$$file ${ROOT}/include/$$file; \
+        done;
 	echo -n > $@
 ####################### GENERIC STAMP RESULTS IN DIFFERENT BEHAVIOR : ####################################
 %.stamp::
