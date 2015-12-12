@@ -1,0 +1,299 @@
+! use macros to compare dihedral cross terms: note that they potentially be given in two different orders
+! in which case we should consider both permutations
+! in addition, each dihedral can be given in two orders: ABCD, or DCBA
+#define __TRIM( _S ) _S
+#define _C(_x,_y) __TRIM(__CONCAT(_x,_y))
+#define __COMP1(_x,_y) (_C(_x,1).eq._C(_y,1).and._C(_x,2).eq._C(_y,2).and._C(_x,3).eq._C(_y,3).and._C(_x,4).eq._C(_y,4))
+#define __COMP2(_x,_y) (_C(_x,1).eq._C(_y,4).and._C(_x,2).eq._C(_y,3).and._C(_x,3).eq._C(_y,2).and._C(_x,4).eq._C(_y,1))
+!
+      module cmappar
+      __DEP_CONSTANTS
+      __IMPNONE
+!    define a derived type to store cmaps
+!    note that this is a different structure from bonds/angles/dihedrals because the underlying type of cmaps (cmap) is also derived
+      type cmap
+       character(len=8) :: a1, a2, a3, a4, b1, b2, b3, b4 ! atom names for two dihedrals
+       float, dimension(:,:), pointer :: xmap ! cross-term map from parameter file
+       float, dimension(:,:,:,:), pointer :: spline_coeff ! spline coefficients (there are 4x4=16 per map entry)
+       int :: mapsize(2) ! in principle, maps could have different sizes ; 1: phi-size, 2: psi-size
+       float :: dphi, dpsi, iphi, ipsi, ephi, epsi ! assume uniform 2D grid, i.e. phi:=[iphi:dphi:ephi]
+       bool :: initialized=.false., spline_initialized=.false.
+#ifdef __F2003
+       contains
+        procedure :: init  => cmap_init ! ok
+        procedure :: check => cmap_check ! ok
+        procedure :: set => cmap_set !ok
+        procedure :: done => cmap_done !ok
+        procedure :: compute_spline_coeff => cmap_compute_spline_coeff ! to do
+#endif
+      end type cmap
+
+      type cmaps
+       int :: length ! length of the cmap vector
+       int :: last   ! index of last element
+       type (cmap), dimension(:), pointer :: map ! map object
+       bool :: initialized=.false. ! has the vector been initialized
+       bool :: spline_initialized = .false. ! true if the spline coefficients have been computed
+#ifdef __F2003
+#define __TYPE class
+       contains
+        procedure :: init => cmaps_init !ok
+        procedure :: check => cmaps_check !todo
+        procedure :: done => cmaps_done ! ok
+        procedure :: add => cmaps_uadd ! ok
+        procedure :: getind => cmaps_getind !ok
+        procedure :: getcoeff => cmaps_getcoeff ! todo
+#endif
+      end type cmaps
+!
+#ifdef __F2003
+#define __TYPE class
+#else
+#define __TYPE type
+#endif
+!
+      interface operator(.eq.)
+       module procedure compare_maps
+      end interface operator(.eq.)
+!
+      int, parameter, private :: expand_incr=10 ! keep this modest because of the large memory requirement
+!
+      contains
+       function compare_maps(m1,m2) result(q)
+       type(cmap), intent(in) :: m1, m2
+       bool :: q
+      q=((__COMP1(m1%a, m2%a))&
+     &.or.&
+     &   (__COMP2(m1%a, m2%a)))&
+     &.and.&
+     &  ((__COMP1( m1%b, m2%b))&
+     &.or.&
+     &   (__COMP2( m1%b, m2%b)))
+       if (.not.q) &
+     &q=((__COMP1(m1%a, m2%b))&
+     &.or.&
+     &   (__COMP2(m1%a, m2%b)))&
+     &.and.&
+     &  ((__COMP1( m1%b, m2%a))&
+     &.or.&
+     &   (__COMP2( m1%b, m2%a)))
+       end function compare_maps
+!=================================================
+       subroutine cmaps_init( maps, length )
+       int, optional :: length
+       int :: i, mlength
+       __TYPE (cmaps) :: maps
+       if (maps%initialized) return ! do not reinitialize
+       if (present(length)) then ; mlength=length;
+       else ; mlength=expand_incr ; endif
+       allocate(maps%map(mlength)) ! map
+       maps%length=mlength
+       maps%last=0
+! allocate new map objects and point to them
+       do i=1,maps%length ; call cmap_init(maps%map(i)) ; enddo
+       maps%initialized=.true.
+       end subroutine cmaps_init
+!=================================================
+       subroutine cmaps_done( maps )
+       int :: i
+       __TYPE (cmaps) :: maps
+       if (.not.maps%initialized) return ! do nothing if not initialized
+       if (associated(maps%map)) then
+        do i=1,maps%length ; call cmap_done(maps%map(i)) ; enddo
+        deallocate(maps%map)
+        maps%length=0
+        maps%last=0
+       endif
+       maps%initialized=.false.
+       end subroutine cmaps_done
+!=================================================
+       subroutine cmaps_expand( maps )
+       __TYPE (cmaps) :: maps
+       int :: newlength, i
+!
+       type (cmaps) :: tmaps ! temporary map array
+!
+       if (.not.maps%initialized) then
+        call cmaps_init(maps)
+       else
+        newlength=maps%length+expand_incr
+!
+        call cmaps_init(tmaps,newlength) ! initialize a new array
+!
+        tmaps%map(1:maps%length)=maps%map ! copy old pointers
+        deallocate(maps%map) ! delete old pointers (since data is safe and sound)
+!
+        do i=maps%length+1,newlength;call cmap_init(tmaps%map(i));enddo ! allocate space for additional maps
+        tmaps%last=maps%length
+        maps%map=>tmaps%map
+        maps%last=tmaps%last
+        maps%length=tmaps%length
+        maps%initialized=tmaps%initialized
+        maps%spline_initialized=.false. ! assume that need to recompute spline coeffs after new maps added; good enough for now
+       endif
+       end subroutine cmaps_expand
+!=================================================
+       function cmaps_add( maps, newmap ) ! add a new map object to the end of cmaps array and return its index
+       __TYPE (cmaps) :: maps
+       type (cmap), intent(in) :: newmap
+       int :: j, cmaps_add
+       bool :: ok=.false.
+!
+       if (.not.maps%initialized) call cmaps_init(maps)
+! add map element
+       if (maps%last.eq.maps%length) call cmaps_expand(maps)
+       j=maps%last+1
+       ok=cmap_set(maps%map(j), newmap) 
+       if (ok) then
+        maps%last=j ! set new size
+        cmaps_add=j
+       else
+        cmaps_add=iminusone
+       endif
+       end function cmaps_add
+!=================================================
+       function cmaps_uadd( maps, newmap ) ! add a _unique_ element to the list and return the index of the list
+       __TYPE (cmaps) :: maps
+       type (cmap), intent(in) :: newmap
+       int :: k, cmaps_uadd
+!
+       if (.not. maps%initialized) call cmaps_init(maps)
+       do k=1,maps%last
+        if (maps%map(k).eq.newmap) then
+         cmaps_uadd=-k ! map corresponding to those angles already exists; not adding
+         return
+        endif
+       enddo
+! if we are here, that means a matching entry was not found; we can safely call regular add (not unique)
+       cmaps_uadd=cmaps_add( maps, newmap )
+       end function cmaps_uadd
+!=================================================
+       function cmaps_getind( maps, a1, a2, a3, a4, b1, b2, b3, b4 ) ! get index into the cmaps array for a particular crossterm
+       __TYPE(cmaps) :: maps
+       int :: j, cmaps_getind
+       bool :: q
+       __TYPE(cmap), pointer :: m1
+       character(len=*) :: a1, a2, a3, a4, b1, b2, b3, b4
+!
+       cmaps_getind=-999
+       if (.not.maps%initialized) then 
+! nothing
+       else
+        do j=1,maps%last
+!    compare :
+         m1=>maps%map(j)
+      q=((__COMP1(m1%a, a))&
+     &.or.&
+     &   (__COMP2(m1%a, a)))&
+     &.and.&
+     &  ((__COMP1( m1%b, b))&
+     &.or.&
+     &   (__COMP2( m1%b, b)))
+       if (.not.q) &
+     &q=((__COMP1( m1%a, b))&
+     &.or.&
+     &   (__COMP2( m1%a, b)))&
+     &.and.&
+     &  ((__COMP1( m1%b, a))&
+     &.or.&
+     &   (__COMP2( m1%b, a)))
+         if (q) then 
+          cmaps_getind=j ! found element
+          exit
+         endif
+        enddo
+       endif ! initialized
+!
+       end function cmaps_getind
+!===========================================
+       subroutine cmap_init(map)
+       __TYPE(cmap) :: map
+       if (.not.map%initialized) then
+        nullify(map%xmap)
+        nullify(map%spline_coeff)
+        map%mapsize=izero
+        map%dphi=izero; map%iphi=izero; map%ephi=izero; map%dpsi=izero; map%ipsi=izero; map%epsi=izero
+        map%initialized=.true.
+        map%spline_initialized=.false.
+       endif
+       end subroutine cmap_init
+!===========================================
+       subroutine cmap_done(map)
+       __TYPE(cmap) :: map
+       if (map%initialized) then
+        __FREE(map%xmap)
+        __FREE(map%spline_coeff)
+        call cmap_init(map)
+       endif
+       end subroutine cmap_done
+!===========================================
+       function cmap_check(map) result(ok)
+       __TYPE(cmap) :: map
+       __IAM(CMAP_CHECK)
+! check whether map has valid parameters
+       bool :: ok
+       ok=.true.
+       if (.not. map%initialized) then 
+        __WRN(whoami, 'CMAP INITIALIZATION FLAG IS FALSE. NOTHING DONE.'); ok=.false. ; return ;
+       endif
+       if ( associated(map%xmap) ) then
+        if ( size(map%xmap).le.izero ) then
+         __WRN(whoami, 'CMAP HAS INVALID NONPOSITIVE SIZE'); ok=.false. ; return
+        elseif ( size(map%xmap,1).ne.map%mapsize(1).or.size(map%xmap,2).ne.map%mapsize(2)  ) then
+          __WRN(whoami, 'SPECIFIED CMAP SIZE IS DIFFERENT FROM ACTUAL SIZE'); ok=.false. ; return
+        endif
+       endif
+! check sline coeffs
+       if ( associated(map%spline_coeff) ) then
+        if (.not. map%spline_initialized) then
+         __WRN(whoami, 'SPLINE ARRAY IS ALLOCATED BUT INITIALIZATION FLAG IS FALSE'); ok=.false. ; return
+        elseif ( size(map%spline_coeff).le.izero ) then
+         __WRN(whoami, 'SPLINE ARRAY HAS INVALID NONPOSITIVE SIZE'); ok=.false. ; return
+        elseif ( size(map%spline_coeff,3).ne.map%mapsize(1).or.size(map%spline_coeff,4).ne.map%mapsize(2)  ) then
+          __WRN(whoami, 'SPECIFIED CMAP SIZE IS DIFFERENT FROM SIZE OF SPLINE ARRAY'); ok=.false. ; return
+        elseif ( size(map%spline_coeff,1).ne.4.or.size(map%spline_coeff,2).ne.4 ) then
+          __WRN(whoami, 'SPLINE GRID ARRAY IS NOT 4 X 4'); ok=.false. ; return
+        endif
+       else
+        if (map%spline_initialized) then
+         __WRN(whoami, 'SPLINE ARRAY IS UNALLOCATED BUT INITIALIZATION FLAG IS TRUE'); ok=.false. ; return
+        endif
+       endif
+!
+       if ( any(map%mapsize.ne.izero).and.( associated(map%xmap) .or. associated(map%spline_coeff)) ) then
+        __WRN(whoami, 'SPECIFIED CMAP SIZE IS NONZERO BUT MAP OR SPLINE DATA ARE NOT PRESENT'); ok=.false. ; return
+       endif
+!
+       if    ( abs( map%iphi + map%dphi * map%mapsize(1) - map%ephi ) .gt. errtol() ) then
+          __WRN(whoami, 'SPECIFIED CMAP PHI-GRID INCONSISTENT'); ok=.false. ; return
+       elseif( abs( map%ipsi + map%dpsi * map%mapsize(2) - map%epsi ) .gt. errtol() ) then
+          __WRN(whoami, 'SPECIFIED CMAP PSI-GRID INCONSISTENT'); ok=.false. ; return
+       endif
+!
+       end function cmap_check
+!===========================================
+       function cmap_set(map, newmap) result(ok)
+       __TYPE(cmap) :: map, newmap
+       bool :: ok
+       __IAM(CMAP_SET)
+       if (.not.map%initialized) call cmap_initialize(map)
+       if (.not.cmap_check(newmap)) then
+        __WRN(whoami, 'SOURCE CMAP IS INVALID. NOTHING DONE.')
+        ok=.false.
+       else
+        __FREE(map%xmap)
+        __FREE(map%spline_coeff)
+        map=newmap ;       ! copy all data (including pointer to te same data)
+        nullify(map%xmap, map%spline_coeff); ! nullify pointers
+        allocate(map%xmap(map%mapsize(1), map%mapsize(2))) ! allocate data for cmap
+        map%xmap=newmap%xmap ; ! copy cmap data
+        ok=.true.
+       endif
+       end function cmap_set
+!===========================================
+!
+      end module cmappar
+#undef __TRIM
+#undef _C
+#undef __COMP1
+#undef __COMP2
