@@ -32,7 +32,7 @@ MPI_HOME=/usr/lib/openmpi
 FORTRAN_COMPILER=$(notdir $(FC))
 DEFS+=-Dint=integer -Dfloat=real*8 -Dbool=logical -Dmpiint=MPI_INTEGER -Dmpifloat=MPI_REAL8 -Dmpichar=MPI_CHARACTER -Dmpiint4=MPI_INTEGER4\
      -Dmpibool=MPI_LOGICAL -Dint1="integer(kind=KIND('a'))" -D__DMOL -D__RCOMP -D__DMOL -D__CHES -D__EDDIE -D__$(FORTRAN_COMPILER) \
-     -Dint4mpi=integer -D__DEBUG -D__TIMER -D__PARALLEL #-D__PATHSCALE #-Dint4mpi="integer(KIND=MPI_INTEGER_KIND)" 
+     -Dint4mpi=integer -D__DEBUG -D__TIMER -D__PARALLEL -D__STRING_SERIAL #-D__PATHSCALE #-Dint4mpi="integer(KIND=MPI_INTEGER_KIND)" 
 
 # ! note: the VEC routines are probably slower
 
@@ -186,6 +186,6 @@ libraries: $(ROOT)/$(NAME).stamp
 
 .SILENT : %.stamp clean $(DISTRIB) force_look
 clean::
-	rm -f *.mod *.a *.so $(ROOT)/$(NAME).stamp $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(EXE) test.F90 test.dat test.out test.o 
+	rm -f *.mod *.a *.so $(ROOT)/$(NAME).stamp $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(EXE) $(HEADS) test.F90 test.dat test.out test.o 
 	if [ -f test ] ; then rm -f test ; fi
 charmm::$(addsuffix .stamp, $(CHMDEPS))

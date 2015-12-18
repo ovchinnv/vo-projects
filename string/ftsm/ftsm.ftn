@@ -430,7 +430,7 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
 !
 ! scale force constants and restraint reference values (if necessary)
         if (.not.ftsm_scaledist.or.  &
-&                                  qkpara_angstrom.or.qkperp_angstrom.or.qdperp_angstrom.or.qdperpf_angstrom) then
+&                                  qkpara_angstrom.or.qkperp_angstrom.or.qdperp_angstrom.or.qdperpf_angstrom.or.qdwin_angstrom) then
          call ftsm_compute_arcl_curv(linear)
 !writE(0,*) 'DARCL : ', ds ! aa
          zval = sum(ds) / ( max( nstring-1 , 1 ) ) * sqrt3 ; ! sqrt(3) makes the arclength correspond to the RMSD in 3D
@@ -440,7 +440,7 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
          endif
 !
          if (.not.ftsm_scaledist) then ! need to compute reference distance from string length
-          if (mestring.eq.0) then ; dpar0=zero ; else ; dpar0 = zval ; endif ; dpar0i=dpar0 ! left endpoint uses one sided tangent (see ftsm14 paper)
+          if (mestring.eq.0) then ; dpar0=zero ; else ; dpar0 = zval ; endif ; dpar0i=dpar0 ! left endpoint uses one-sided tangent (see ftsm14 paper)
           if (qprint) then ; write(_MSGBUF,6713) whoami, ftoa(zval)
           __PRINT(_MSGBUF) ;
           endif
@@ -456,6 +456,8 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
            __PRINT(_MSGBUF) ;
            endif
            qkpara_angstrom=.false. ! make sure no additional scaling will occur if there are multiple runs per initialization
+          else ! scale length to 2DS from (1DS at input)
+           __SCALE(kpara,four)
           endif
           if (qkperp_angstrom) then
            fname='PERPENDICULAR FORCE CONSTANT (KPRP)' ; kperp = kperp * zval**2 ;
@@ -463,6 +465,8 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
            __PRINT(_MSGBUF)
            endif
            qkperp_angstrom=.false.
+          else
+           __SCALE(kperp,four)
           endif
           if (qdperp_angstrom) then
            fname='REFERENCE TUBE WIDTH (DPRP)' ; dperp0 = dperp0 / zval ; dperp0i = dperp0i / zval ;
@@ -470,6 +474,8 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
            __PRINT(_MSGBUF)
            endif
            qdperp_angstrom=.false.
+          else
+           __SCALE(dperp0,half); __SCALE(dperp0i,half)
           endif
           if (qdperpf_angstrom) then
            fname='FINAL REFERENCE TUBE WIDTH (DPRPF)' ; dperp0f = dperp0f / zval ;
@@ -477,10 +483,23 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
            __PRINT(_MSGBUF)
            endif
            qdperpf_angstrom=.false.
+          else
+           __SCALE(dperp0f,half)
+          endif
+          if (qdwin_angstrom) then
+           fname='WIDTH OF HALF-HARMONIC WINDOW POTENTIAL (DWIN)' ; dwin = dwin / zval ;
+           if (qprint) then ; write(_MSGBUF,6712) whoami, trim(fname), ftoa(zval), ftoa(dwin)
+           __PRINT(_MSGBUF)
+           endif
+           qdwin_angstrom=.false.
+          else
+           __SCALE(dwin,half)
           endif
          endif ! .not. ftsm_scaledist
 !
- 6712 format(A,' SCALING ',A,' BY 2 x INTER-REPLICA DS (',A,' ANG). NEW VALUE IS ',A)
+! NOTE that the scaling is actually by 2 x ds ; however, for the sake of simplicity of input
+! I omit this detail here
+ 6712 format(A,' SCALING ',A,' BY INTER-REPLICA DS (',A,' ANG). NEW VALUE IS ',A)
         endif ! ftsm_scaledist .or. ...
 !
        endif ! if restrained_on
@@ -1249,7 +1268,14 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
 ! scaling output macro
 #define __IS_DISTANCE_SCALED then;write(_MSGBUF,6758)whoami;else;write(_MSGBUF,6759)whoami;endif;__PRINT(_MSGBUF);
  6758 format(A,'( LENGTH SCALE ASSUMED TO BE IN ANGSTROMS AND WILL BE SCALED INTERNALLY.)')
- 6759 format(A,'( LENGTH SCALE ASSUMED TO BE SCALED BY TWICE THE INTER-REPLICA DISTANCE.)')
+ 6759 format(A,'( LENGTH SCALE ASSUMED TO BE SCALED BY THE INTER-REPLICA DISTANCE.)')
+! note: for historical reasons (because the paper was written that way, all lengths except dwin
+! are represented per 2D in the code, so I will accept them as per D, then divide by 2 to
+! change to per 2D (force constants get multiplied by four)
+! NOTE that the dpar input is in per 2D because (1) is is not meant to be changed by reg. users
+! (2) it is more natural to understand wht this means : e.g. dpar=0 means plane at left neighbor
+! dpar=1 means plane at right neighbor -- which is why 0.5 corresponds to middle
+! ALSO, the metric is 1D at endpoints, so that dpar has a different meaning there (scaled by 2)
 !
 !==============================================================
 !      set k parallel to path (for off-path dynamics)
@@ -1381,21 +1407,28 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
 !==============================================================
         elseif (__INDX(comlyn,comlen,'DPAR',4).gt.0) then ! normalized distance parallel to vector between neighboring replicas at which this system is restrained
           zval=__GET_RM_F(comlyn, comlen, 'DPAR', -1.0d0)
+! this parameter curently can only be set 
+          if (.not.ftsm_scaledist) then
+           __WRN(whoami, 'FTSM IN UNSCALED COORDINATES DOES NOT SUPPORT SETTING DPAR');
+          else 
+           __WRN(whoami, 'SETTING DPAR SHOULD NOT NORMALLY BE NEEDED. YOU HAVE BEEN WARNED');
+           __WRN(whoami, 'DPAR IS EXPRESSED IN UNITS OF 2 x INTER-REPLICA DISTANCE');
 !    check replica spec
-          irep=__GET_RM_I(comlyn, comlen, 'REP', -1)
-          if (irep.lt.0.or.irep.ge.nstring) then
-           if (qprint) then ; write(_MSGBUF, 6773) whoami, whoami, zval ; __PRINT(_MSGBUF) ; endif
-           dpar0=zval
-          else
-           if (qprint) then ; write(_MSGBUF,6774) whoami, irep, zval ; __PRINT(_MSGBUF) ; endif
-           if (mestring.eq.irep) dpar0=zval ! note: permitting any value
-          endif ! irep
+           irep=__GET_RM_I(comlyn, comlen, 'REP', -1)
+           if (irep.lt.0.or.irep.ge.nstring) then
+            if (qprint) then ; write(_MSGBUF, 6773) whoami, whoami, zval ; __PRINT(_MSGBUF) ; endif
+            dpar0=zval
+           else
+            if (qprint) then ; write(_MSGBUF,6774) whoami, irep, zval ; __PRINT(_MSGBUF) ; endif
+            if (mestring.eq.irep) dpar0=zval ! note: permitting any value
+           endif ! irep
  6773 format(A,' REPLICA NUMBER INVALID OR UNSPECIFIED.',               &
      &      /A,' WILL SET RERERENCE VALUE FOR PARALLEL RESTRAINT ',     &
      &         '  TO ',F7.3,' ON ALL REPLICAS.')
  6774 format(A,' WILL SET RERERENCE VALUE FOR PARALLEL RESTRAINT ',     &
      &   'ON REPLICA ',I5,' TO ',F7.3,'.')
-        ! DPAR
+          endif
+! DPAR
 !==============================================================
         elseif (__INDX(comlyn,comlen,'DPRPF',5).gt.0) then ! final perpendicular distance at which the replicas are restrained
           qangstrom=.false.
@@ -1533,6 +1566,8 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
          endif ! voro_cut > 0
 !==============================================================
         elseif (__INDX(comlyn,comlen,'DWIN',4).gt.0) then
+         qangstrom=.false.
+         if (ftsm_scaledist) qangstrom = __INDX_RM(comlyn, comlen, 'ANG').gt.0 ! scaled/unscaled units
          zval=__GET_RM_F(comlyn, comlen, 'DWIN', zero)
 ! replica spec
          irep=__GET_RM_I(comlyn, comlen, 'REP', -1)
@@ -1540,11 +1575,18 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
           __WRN(whoami,'DWIN MUST BE NONNEGATIVE. NOT SET.')
          else
           if (irep.lt.0.or.irep.ge.nstring) then
+           qdwin_angstrom=qangstrom
            if (qprint) then ; write(_MSGBUF, 6782) whoami, whoami, zval ; __PRINT(_MSGBUF) ; endif
+           if (ftsm_scaledist) then 
+            if (qdwin_angstrom) __IS_DISTANCE_SCALED
+           endif
            dwin=zval;
           else
            if (qprint) then ; write(_MSGBUF, 6783) whoami, irep, zval ; __PRINT(_MSGBUF) ; endif
-           if (mestring.eq.irep) dwin=zval
+           if (ftsm_scaledist) then
+            if(qangstrom) __IS_DISTANCE_SCALED
+           endif
+           if (mestring.eq.irep) then ; dwin=zval ; qdwin_angstrom=qangstrom ; endif
           endif ! irep
  6782 format(A,' REPLICA NUMBER INVALID OR UNSPECIFIED.',/A,' WILL SET WINDOW WIDTH FOR PROJECTION DYNAMICS ', &
      & '  TO ',F7.3,' ON ALL REPLICAS.')
