@@ -35,7 +35,7 @@
        call toplist_init(alist, ifour) ! angle list
        call toplist_init(dlist, ifive) ! dihedral list
        call toplist_init(ilist, ifive) ! improper list
-!       call toplist_init(clist, 9) ! CMAP list
+       call toplist_init(clist, inine) ! CMAP list
        psf_initialized=.true.
        end subroutine psf_init
 !===============================================================================
@@ -121,7 +121,7 @@
           if (keyword.eq.'PSF') then 
            if (.not.(any(qread))) then ! can only be the first section
             qread(qhead)=.true.
-            which=qhead+1
+            which=qhead+1 ! we are not actually reading anything from header; skip to next
             cycle
            else
             call error(whoami,'MISPLACED "PSF" TAG IN STRUCTURE FILE. ABORTING.',0)
@@ -133,13 +133,13 @@
 !    see if command string has a comment that identifies the next section:
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
          i=scan(cmdline(1:l), '!')
-         if (i.gt.0.and.i+1.le.l) then
+         if (i.gt.0.and.i+1.le.l) then ! cannot be the last character
            keyword=cmdline(i+1:l)
            call adjustleft(keyword)
            if (keyword(1:6).eq.'NTITLE') then
             if (.not.qread(qtitl)) then
              qread(qtitl)=.true.
-             which=qtitl+1
+             which=qtitl+1 ! we are not actually reading anything from the title section; skip to next
              cycle
             else
              call error(whoami,'DUPLICATE ENTRY IN STRUCTURE FILE. ABORTING.',0)
@@ -295,7 +295,7 @@
          endif ! i.gt.0
 !
          if (which.lt.0) then
-          which=max(which,-which)+1
+          which=max(which,-which)+1 ! prepare for next section
           if (which.eq.qatom) then
             read(cmdline,*) natom
             cycle
@@ -377,7 +377,7 @@
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
           case(qdihe, qimpr);
            i=numword(cmdline) ! get the number of blank-separated words
-           if (mod(i,ifour).ne.0) then ! not divisible by 3 ==> some angle specification invalid
+           if (mod(i,ifour).ne.0) then ! not divisible by 4 ==> some angle specification invalid
             call error(whoami, 'IMCOMPLETE DIHEDRAL ANGLE SPECIFICATION. ABORTING.',0)
             call error(whoami, cmdline(1:l),-1)
            else
@@ -399,7 +399,21 @@
           case(qgrp);  cycle
           case(qmolnt); cycle
           case(qlp); cycle
-          case(qcmap); cycle
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+          case(qcmap);
+           i=numword(cmdline) ! get the number of blank-separated words
+           if (i.ne.ieight) then ! CMAP specification invalid
+            call error(whoami, 'INVALID DIHEDRAL CROSS TERM SPECIFICATION. ABORTING.',0)
+            call error(whoami, cmdline(1:l),-1)
+           else
+            if (allocated(idummy)) deallocate(idummy)
+            allocate(idummy(i))
+            read(cmdline,*) (idummy(j), j=1,i)
+            do j=1,i,8
+             k=toplist_uadd(clist,inine,(/ idummy(j:j+8-1), iminusone /)) ! add CMAP entry
+            enddo
+           endif ! mod
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
           case default
            call error(whoami, 'UNRECOGNIZED LINE IN STRUCTURE FILE. ABORTING.',0)
            call error(whoami, cmdline(1:l),-1)
@@ -417,6 +431,7 @@
        if (nangl.ne.alist%last) write(fout,'(2(A,I5))') 'WARNING('//whoami//') : EXPECTED ',nangl,' ATOMS, BUT FOUND ',alist%last
        if (ndihe.ne.dlist%last) write(fout,'(2(A,I5))') 'WARNING('//whoami//') : EXPECTED ',ndihe,' ATOMS, BUT FOUND ',dlist%last
        if (nimpr.ne.ilist%last) write(fout,'(2(A,I5))') 'WARNING('//whoami//') : EXPECTED ',nimpr,' ATOMS, BUT FOUND ',ilist%last
+       if (ncmap.ne.clist%last) write(fout,'(2(A,I5))') 'WARNING('//whoami//') : EXPECTED ',ncmap,' ATOMS, BUT FOUND ',clist%last
 ! other PSF entries are omitted at present
        call message(whoami, 'Structure file read.')
 !
@@ -491,6 +506,14 @@
          if (mod(i,ithree).eq.0) write(fout,*)
         enddo
         write(fout,*)
+        call message(whoami,'==================================================')
+        call message(whoami,'THE FOLLOWING DIHEDRAL CROSS TERM MAPS ARE PRESENT')
+!
+        do i=1,clist%last
+         write(fout, '(7(I6," -- "),I6,"; ")', advance='no') ilist%ind(1,i),ilist%ind(2,i),ilist%ind(3,i),ilist%ind(4,i)
+         if (mod(i,itwo).eq.0) write(fout,*)
+        enddo
+        write(fout,*)
 ! there are other parts of a psf that are omitted at present
 #ifdef __PARALLEL
        endif
@@ -532,6 +555,7 @@
         write(fout,'(A,I6,A)' ) tab,alist%last,' ANGLES'
         write(fout,'(A,I6,A)' ) tab,dlist%last,' DIHEDRALS'
         write(fout,'(A,I6,A)' ) tab,ilist%last,' IMPROPERS'
+        write(fout,'(A,I6,A)' ) tab,clist%last,' DIHEDRAL CROSS TERM MAPS'
         write(fout,'(A)') tab//'================='
         write(fout,'(A,G14.6)' ) tab//'Total charge: ',sum(atoms%charge(1:atoms%last))
         write(fout,'(A,G16.8)' ) tab//'Total mass  : ',sum(atoms%mass(1:atoms%last))
