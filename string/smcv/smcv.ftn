@@ -260,8 +260,8 @@ __CHARMM_ONLY##IF STRINGM
 !    compare me and whereami:
            if (qroot) then
             if(SIZE_STRNG.gt.1) then
-             call MPI_ALLREDUCE(me.eq.cv%voronoi_whereami, ok,          &
-     &         1, MPI_LOGICAL, MPI_LAND, MPI_COMM_STRNG, ierror)
+__MPI_ONLY             call MPI_ALLREDUCE(me.eq.cv%voronoi_whereami, ok,          &
+__MPI_ONLY     &         1, MPI_LOGICAL, MPI_LAND, MPI_COMM_STRNG, ierror)
             else
              ok=me.eq.cv%voronoi_whereami
             endif
@@ -589,16 +589,14 @@ __CHARMM_ONLY##IF STRINGM
 ! this type will change when the auxiliary atom array is resized
 ! I could define the type in grad_init (only once would be required)
 ! but I don`t want to contaminate cv_common module (it would need to know sm_config)
-       if (MPI_GRAD_TYPE.ne.MPI_DATATYPE_NULL)                          &
-     &  call mpi_type_free(MPI_GRAD_TYPE, ierror)
-       if (MPI_GRAD_TYPE_.ne.MPI_DATATYPE_NULL)                         &
-     &  call mpi_type_free(MPI_GRAD_TYPE_, ierror)
+__MPI_ONLY       if (MPI_GRAD_TYPE.ne.MPI_DATATYPE_NULL) call mpi_type_free(MPI_GRAD_TYPE, ierror)
+__MPI_ONLY       if (MPI_GRAD_TYPE_.ne.MPI_DATATYPE_NULL) call mpi_type_free(MPI_GRAD_TYPE_, ierror)
 !
        impi=6*cv%amap%last
        jmpi=1
        kmpi=6*cv%num_cv
-       call mpi_type_vector(impi,jmpi,kmpi, & ! impi=6 because we are taking 3 gradients and both grad arrays (see cv_common)
-     &  mpifloat,MPI_GRAD_TYPE_,ierror)
+__MPI_ONLY       call mpi_type_vector(impi,jmpi,kmpi, & ! impi=6 because we are taking 3 gradients and both grad arrays (see cv_common)
+__MPI_ONLY     &  mpifloat,MPI_GRAD_TYPE_,ierror)
 !
 !      indexed version
 !       i=6*cv%amap%last
@@ -611,9 +609,8 @@ __CHARMM_ONLY##IF STRINGM
 !
        lb=0
        extent=sizeofreal
-       call mpi_type_create_resized(MPI_GRAD_TYPE_,lb,extent,           &
-     &  MPI_GRAD_TYPE, ierror)
-       call mpi_type_commit(MPI_GRAD_TYPE, ierror)
+__MPI_ONLY       call mpi_type_create_resized(MPI_GRAD_TYPE_,lb,extent,MPI_GRAD_TYPE,ierror)
+__MPI_ONLY       call mpi_type_commit(MPI_GRAD_TYPE, ierror)
 !
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       elseif (__STRNCMP(keyword,'CLEA',4)) then ! initialize
@@ -665,12 +662,14 @@ __CHARMM_ONLY##IF STRINGM
  6010 format(A,' WILL CALCULATE VORONOI MAP FROM MAIN COORDINATES.')
           call smcv_voronoi_whereami(__X,__Y,__Z,__MASS)
 !    put 'whereami' into the map
-          if (qroot.and.SIZE_STRNG.gt.1) then
-           call MPI_ALLGATHER(cv%voronoi_whereami, 1, mpiint,       &
-     &      cv%voronoi_map, 1, mpiint, MPI_COMM_STRNG, ierror)
-          else
-           cv%voronoi_map(mestring+1)=cv%voronoi_whereami
-          endif
+          if (qroot) then 
+           if (SIZE_STRNG.gt.1) then
+__MPI_ONLY            call MPI_ALLGATHER(cv%voronoi_whereami, 1, mpiint,       &
+__MPI_ONLY     &       cv%voronoi_map, 1, mpiint, MPI_COMM_STRNG, ierror)
+           else
+            cv%voronoi_map(mestring+1)=cv%voronoi_whereami
+           endif ! size
+          endif ! root
           if (qslave) then
 #ifdef __CHARMM
           __BROADCAST_LOCAL_4B(cv%voronoi_map,nstring)  !__CHARMM_ONLY##.not.INTEGER8
@@ -938,10 +937,9 @@ __CHARMM_ONLY##IF STRINGM
          endif
         endif ! qroot
 ! send to slaves
-        if (MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.                        &
-     &                          SIZE_LOCAL.gt.1)                        &
-     &   call MPI_BCAST(frames%r(:,:,:), frames%num_frames*9,           &
-     &   mpifloat, 0, MPI_COMM_LOCAL, ierror)
+        if (MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.SIZE_LOCAL.gt.1)                        &
+     &    __BROADCAST_LOCAL(frames%r(:,:,:), frames%num_frames*9,mpifloat)
+!     &   call MPI_BCAST(frames%r(:,:,:), frames%num_frames*9,mpifloat, 0, MPI_COMM_LOCAL, ierror)
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        elseif (__STRNCMP(keyword,'ADD',3)) then
         call smcv_frame_add(comlyn, comlen)
@@ -1372,7 +1370,8 @@ __CHARMM_ONLY##IF STRINGM
        if (MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.SIZE_LOCAL.gt.1) then
 !        call MPI_BCAST(cv%r(1,c1), cv%num_cv, mpifloat,
 !     &   0, MPI_COMM_LOCAL, ierror)
-        __BROADCAST_LOCAL_8B(cv%r(1,c1), cv%num_cv)
+!        __BROADCAST_LOCAL_8B(cv%r(1,c1), cv%num_cv)
+        __BROADCAST_LOCAL(cv%r(1,c1), cv%num_cv, mpifloat) ! what if have single precision ?
 !    broadcast BC
         if (cv_common_fixed_0_bc.eq.1) then 
 #ifdef __CHARMM
@@ -1610,13 +1609,14 @@ __CHARMM_ONLY##IF STRINGM
           call smcv_compute_M(__X,__Y,__Z,__MASS,.true.) ! compute M and M inverse
 !    print
         elseif ((__INDX_RM(comlyn, comlen, 'PRIN').gt.0) .or. (__INDX_RM(comlyn, comlen, 'WRIT').gt.0)) then
+! NOTE : not sure how to best implement this: finally, decided to keep a correct version of M outside of PRINT
 !    if running in parallel, combine partial M entries
-          if (qslave) then
+!          if (qslave) then
 !       call MPI_ALLREDUCE(cv%M(1,1,1),cv%M(1,1,2),max_cv_common*cv%num_cv, ! will broadcast all rows, but only num_cv columns
 !     &          mpifloat, MPI_SUM, MPI_COMM_LOCAL, ierror)
-          else ! qslave
+!          else ! qslave
 !         cv%M(1:cv%num_cv,1:cv%num_cv,2)=cv%M(1:cv%num_cv,1:cv%num_cv,1)
-          endif ! qslave
+!          endif ! qslave
 !    check for inverse spec (inverse stored in 3)
           if (__INDX_RM(comlyn, comlen, 'INV').gt.0) then
             ind=3
@@ -2402,17 +2402,14 @@ __CHARMM_ONLY##IF STRINGM
 !     &  mpifloat, MPI_CV_TYPE2_, ierror)
 
       temp1=(/ione,ione,izero/)
-      temp2=(/max_cv_common*(main-1),                                     &
-     &    max_cv_common*(comp-1),izero/)
-      call mpi_type_indexed(2, temp1, temp2,                            &
-     &  mpifloat, MPI_CV_TYPE2_, ierror)
+      temp2=(/max_cv_common*(main-1),max_cv_common*(comp-1),izero/)
+__MPI_ONLY      call mpi_type_indexed(2, temp1, temp2, mpifloat, MPI_CV_TYPE2_, ierror)
 
 ! corresponding resized type (modified extent)
       lb=0
       extent=sizeofreal
-      call mpi_type_create_resized(MPI_CV_TYPE2_,lb,extent,             &
-     &  MPI_CV_TYPE2, ierror)
-      call mpi_type_commit(MPI_CV_TYPE2, ierror)
+__MPI_ONLY      call mpi_type_create_resized(MPI_CV_TYPE2_,lb,extent,MPI_CV_TYPE2, ierror)
+__MPI_ONLY      call mpi_type_commit(MPI_CV_TYPE2, ierror)
 !ccccccccccccccccccccccccccccccccccccccccccccccccccc
 !ccccccccccccccccccc three cv values cccccccccccccc
 !       call mpi_type_indexed(3,(/1,1,1/),
@@ -2425,18 +2422,13 @@ __CHARMM_ONLY##IF STRINGM
       temp2=(/max_cv_common*(zcur-1),                                     &
      &        max_cv_common*(instant-1),                                  &
      &        max_cv_common*(forces2-1)/)
-      call mpi_type_indexed(3, temp1, temp2,                            &
-     &  mpifloat, MPI_CV_TYPE3_, ierror)
-
-!        write(0,*) temp2 !aa
-!          stop
+__MPI_ONLY    call mpi_type_indexed(3, temp1, temp2, mpifloat, MPI_CV_TYPE3_, ierror)
 
 ! corresponding resized type
       lb=0
       extent=sizeofreal
-      call mpi_type_create_resized(MPI_CV_TYPE3_,lb,extent,             &
-     &  MPI_CV_TYPE3, ierror)
-      call mpi_type_commit(MPI_CV_TYPE3, ierror)
+__MPI_ONLY    call mpi_type_create_resized(MPI_CV_TYPE3_,lb,extent,MPI_CV_TYPE3,ierror)
+__MPI_ONLY    call mpi_type_commit(MPI_CV_TYPE3, ierror)
 !ccccccccccccccccccccccccccccccccccccccccccccccccccc
 !ccccccccccccccccccc three cv values (different from above) cccccccccccccc
 !       call mpi_type_indexed(3,(/1,1,1/),
@@ -2449,15 +2441,13 @@ __CHARMM_ONLY##IF STRINGM
       temp2=(/max_cv_common*(runave-1),                                   &
      &        max_cv_common*(instant-1),                                  &
      &        max_cv_common*(forces2-1)/)
-      call mpi_type_indexed(3, temp1, temp2,                            &
-     &  mpifloat, MPI_CV_TYPE3I_, ierror)
+__MPI_ONLY    call mpi_type_indexed(3, temp1, temp2, mpifloat, MPI_CV_TYPE3I_, ierror)
 
 ! corresponding resized type (note change of extent)
       lb=0
       extent=sizeofreal
-      call mpi_type_create_resized(MPI_CV_TYPE3I_,lb,extent,            &
-     &  MPI_CV_TYPE3I, ierror)
-      call mpi_type_commit(MPI_CV_TYPE3I, ierror)
+__MPI_ONLY    call mpi_type_create_resized(MPI_CV_TYPE3I_,lb,extent,MPI_CV_TYPE3I,ierror)
+__MPI_ONLY    call mpi_type_commit(MPI_CV_TYPE3I, ierror)
 !
       MPI_GRAD_TYPE =MPI_DATATYPE_NULL
       MPI_GRAD_TYPE_=MPI_DATATYPE_NULL
@@ -2511,25 +2501,17 @@ __CHARMM_ONLY##IF STRINGM
      &           imap_displ,imap_count,                                 &
      &           qt_send_displ,qt_send_count)
 !    free MPI_TYPES
-       if (MPI_CV_TYPE2.ne.MPI_DATATYPE_NULL)                           &
-     &  call mpi_type_free(MPI_CV_TYPE2,ierror);
-       if (MPI_CV_TYPE2_.ne.MPI_DATATYPE_NULL)                          &
-     &  call mpi_type_free(MPI_CV_TYPE2_,ierror);
+__MPI_ONLY       if (MPI_CV_TYPE2.ne.MPI_DATATYPE_NULL)  call mpi_type_free(MPI_CV_TYPE2,ierror);
+__MPI_ONLY       if (MPI_CV_TYPE2_.ne.MPI_DATATYPE_NULL) call mpi_type_free(MPI_CV_TYPE2_,ierror);
 !
-       if (MPI_CV_TYPE3.ne.MPI_DATATYPE_NULL)                           &
-     &  call mpi_type_free(MPI_CV_TYPE3,ierror);
-       if (MPI_CV_TYPE3_.ne.MPI_DATATYPE_NULL)                          &
-     &  call mpi_type_free(MPI_CV_TYPE3_,ierror);
+__MPI_ONLY       if (MPI_CV_TYPE3.ne.MPI_DATATYPE_NULL)  call mpi_type_free(MPI_CV_TYPE3,ierror);
+__MPI_ONLY       if (MPI_CV_TYPE3_.ne.MPI_DATATYPE_NULL) call mpi_type_free(MPI_CV_TYPE3_,ierror);
 !
-       if (MPI_CV_TYPE3I.ne.MPI_DATATYPE_NULL)                          &
-     &  call mpi_type_free(MPI_CV_TYPE3I,ierror);
-       if (MPI_CV_TYPE3I_.ne.MPI_DATATYPE_NULL)                         &
-     &  call mpi_type_free(MPI_CV_TYPE3I_,ierror);
+__MPI_ONLY       if (MPI_CV_TYPE3I.ne.MPI_DATATYPE_NULL) call mpi_type_free(MPI_CV_TYPE3I,ierror);
+__MPI_ONLY       if (MPI_CV_TYPE3I_.ne.MPI_DATATYPE_NULL)call mpi_type_free(MPI_CV_TYPE3I_,ierror);
 !
-       if (MPI_GRAD_TYPE.ne.MPI_DATATYPE_NULL)                          &
-     &  call mpi_type_free(MPI_GRAD_TYPE,ierror);
-       if (MPI_GRAD_TYPE_.ne.MPI_DATATYPE_NULL)                         &
-     &  call mpi_type_free(MPI_GRAD_TYPE_,ierror);
+__MPI_ONLY       if (MPI_GRAD_TYPE.ne.MPI_DATATYPE_NULL) call mpi_type_free(MPI_GRAD_TYPE,ierror);
+__MPI_ONLY       if (MPI_GRAD_TYPE_.ne.MPI_DATATYPE_NULL)call mpi_type_free(MPI_GRAD_TYPE_,ierror);
       endif
 !
 !  what else ?
@@ -3233,9 +3215,13 @@ __CHARMM_ONLY##IF STRINGM
       if (output_rmsd0) then
 !      weighting is taken care of in cv_common class
           rmsd0=cv_common_rmsd(ione,ithree) ! we will keep the initial reference coords in col. 3
-          if (qroot) call mpi_gather(rmsd0,1,mpifloat       & ! heads communicate
-     &                ,rmsd0_all,1,mpifloat,0,              &
-     &                 MPI_COMM_STRNG, ierror)
+          if (qroot) then
+           if (SIZE_STRNG.gt.1) then 
+__MPI_ONLY  call mpi_gather(rmsd0,1,mpifloat,rmsd0_all,1,mpifloat,0,MPI_COMM_STRNG, ierror)
+           else
+            rmsd0_all=rmsd0
+           endif !size
+          endif ! root 
           if (qprint) then ! root writes
            if (rmsd0_funit.eq.__OSTREAM) then
             fmt='("RMSD0> ",I5," ",'//fmt_real(1:fmt_r_len)//'F15.5)'
@@ -3257,9 +3243,13 @@ __CHARMM_ONLY##IF STRINGM
       if (output_dsdt) then
 !      weighting is taken care of in cv_common class
           dsdt=cv_common_rmsd(ione,itwo) ! we will keep the previous coords in col. 2
-          if (qroot) call mpi_gather(dsdt,1,mpifloat        &
-     &                ,dsdt_all,1,mpifloat,0,               &
-     &                 MPI_COMM_STRNG, ierror)
+          if (qroot) then 
+           if (SIZE_STRNG.gt.1) then
+__MPI_ONLY  call mpi_gather(dsdt,1,mpifloat,dsdt_all,1,mpifloat,0,MPI_COMM_STRNG, ierror)
+           else
+            dsdt_all=dsdt
+           endif ! size
+          endif ! root
           if (qprint) then ! root writes
            if (dsdt_funit.eq.__OSTREAM) then
             fmt='("DLEN> ",I5," ",'//fmt_real(1:fmt_r_len)//'F15.5)'
@@ -3283,9 +3273,13 @@ __CHARMM_ONLY##IF STRINGM
 !      call to update running average
           call cv_common_update_ave()
           rmsd0=cv_common_rmsd(ione,ifour) ! we will keep the average coords in col. 4
-          if (qroot) call mpi_gather(rmsd0,1,mpifloat       &
-     &                ,rmsd0_all,1,mpifloat,0,              &
-     &                 MPI_COMM_STRNG, ierror)
+          if (qroot) then 
+           if (SIZE_STRNG.gt.1) then
+__MPI_ONLY  call mpi_gather(rmsd0,1,mpifloat,rmsd0_all,1,mpifloat,0,MPI_COMM_STRNG, ierror)
+           else
+            rmsd0_all=rmsd0
+           endif
+          endif
           if (qprint) then ! root writes
            if (rmsd_ave_funit.eq.__OSTREAM) then
             fmt='("RMSD_AVE> ",I5," ",'//fmt_real(1:fmt_r_len)//'F15.5)'
@@ -3373,18 +3367,18 @@ __CHARMM_ONLY##IF STRINGM
 !     if running in parallel, need to reduce work from slave nodes
        if (MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.SIZE_LOCAL.gt.1          &
      & .and.calc_cv_para) then
-        call MPI_REDUCE(mywork, allwork(1), 1, mpifloat,    &
-     &   MPI_SUM, 0, MPI_COMM_LOCAL, ierror) ! reduce on all group roots
+__MPI_ONLY        call MPI_REDUCE(mywork, allwork(1), 1, mpifloat,    &
+__MPI_ONLY     &   MPI_SUM, 0, MPI_COMM_LOCAL, ierror) ! reduce on all group roots
         mywork=allwork(1)
        endif
 !    gather work from all nodes into one output buffer
        if (qroot) then
-        call mpi_gather(mywork, 1, mpifloat,                &
-     &                 allwork, 1, mpifloat,                &
-     &                 0, MPI_COMM_STRNG, ierror)
-        call mpi_gather(work_tag, 8, MPI_BYTE,                          &
-     &                work_tags, 8, MPI_BYTE, 0, MPI_COMM_STRNG,        &
-     &                ierror)
+        if (SIZE_STRNG.gt.1) then
+__MPI_ONLY  call mpi_gather(mywork, 1, mpifloat, allwork, 1, mpifloat, 0, MPI_COMM_STRNG, ierror)
+__MPI_ONLY  call mpi_gather(work_tag, 8, MPI_BYTE, work_tags, 8, MPI_BYTE, 0, MPI_COMM_STRNG, ierror)
+        else
+         allwork=mywork ; work_tags=work_tag
+        endif
        endif
 ! write
        if (qprint) then
@@ -3445,12 +3439,15 @@ __CHARMM_ONLY##IF STRINGM
          __WRN(whoami,'NO FILE NAME SPECIFIED. WILL NOT WRITE VORONOI MAP.')
         else
 !    put 'whereami' into the map
-          if (qroot.and.SIZE_STRNG.gt.1) then
-           call MPI_ALLGATHER(cv%voronoi_whereami, 1, mpiint,       &
-     &      cv%voronoi_map, 1, mpiint, MPI_COMM_STRNG, ierror)
-          else
-           cv%voronoi_map(mestring+1)=cv%voronoi_whereami
+          if (qroot) then 
+           if (SIZE_STRNG.gt.1) then
+__MPI_ONLY       call MPI_ALLGATHER(cv%voronoi_whereami,1,mpiint, &
+__MPI_ONLY     &      cv%voronoi_map,1,mpiint,MPI_COMM_STRNG,ierror)
+           else
+            cv%voronoi_map(mestring+1)=cv%voronoi_whereami
+           endif
           endif
+!
           if (qgrp) then
 #ifdef __CHARMM
            __BROADCAST_LOCAL_4B(cv%voronoi_map,nstring)  !__CHARMM_ONLY##.not.INTEGER8
@@ -3550,8 +3547,8 @@ __CHARMM_ONLY##IF STRINGM
 !
 ! print the short-term average (gather on root)
 ! broadcast all rows, but only num_cv columns
-        call MPI_REDUCE(cv%M(1,1,1),cv%M(1,1,2),max_cv_common*cv%num_cv, &
-     &                  mpifloat, MPI_SUM, 0, MPI_COMM_LOCAL, ierror)
+__MPI_ONLY        call MPI_REDUCE(cv%M(1,1,1),cv%M(1,1,2),max_cv_common*cv%num_cv, &
+__MPI_ONLY     &                  mpifloat, MPI_SUM, 0, MPI_COMM_LOCAL, ierror)
        else ! qgrp
         cv%M(1:cv%num_cv,1:cv%num_cv,2)=cv%M(1:cv%num_cv,1:cv%num_cv,1)
        endif ! qgrp

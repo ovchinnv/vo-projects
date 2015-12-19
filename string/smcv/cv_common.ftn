@@ -487,8 +487,12 @@ __CHARMM_ONLY##IF STRINGM
 !
        qroot=(MPI_COMM_STRNG.ne.MPI_COMM_NULL)
        if (qroot) then
-       call MPI_ALLREDUCE(cv%M(1,1,3),Mave,max_cv_common*cv%num_cv,       &
-     &        mpifloat, MPI_SUM, MPI_COMM_STRNG, ierror) ! use M inverse averaged along string
+        if (SIZE_STRNG.gt.1) then
+__MPI_ONLY         call mpi_ALLREDUCE(cv%M(1,1,3),Mave,max_cv_common*cv%num_cv,       &
+__MPI_ONLY     &        mpifloat, MPI_SUM, MPI_COMM_STRNG, ierror) ! use M inverse averaged along string
+        else
+         Mave=cv%M(1,1,3)
+        endif
 !     11/30/08: note: it is not completely clear to me how the weights should computed
         do j=1,cv%num_cv
          s=0d0; do i=1, cv%num_cv ; s=s+Mave(i,j)**2 ; enddo
@@ -551,11 +555,11 @@ __CHARMM_ONLY##IF STRINGM
          if (any(cv%weight(1:cv%num_cv).le.0)) &
      &   __WRN( whoami,'READ ZERO OR NEGATIVE CV WEIGHT')
         endif ! ME_
-        if (SIZE_STRNG.gt.1)                                            &
-     &  __BROADCAST_STRING(cv%weight, cv%num_cv, mpifloat)
+        if (SIZE_STRNG.gt.1) &
+     &    __BROADCAST_STRING(cv%weight, cv%num_cv, mpifloat)
        endif ! MPI_COMM
 !    broadcast to slave nodes
-       if (ME_LOCAL.ne.MPI_UNDEFINED.and.SIZE_LOCAL.gt.1)               &
+       if (ME_LOCAL.ne.MPI_UNDEFINED.and.SIZE_LOCAL.gt.1) &
 !     &  call MPI_BCAST(cv%weight, cv%num_cv, mpifloat,
 !     &                     0,MPI_COMM_LOCAL,ierr)
 #ifdef __CHARMM
@@ -1285,9 +1289,13 @@ __CHARMM_ONLY##ENDIF
          rtemp(:,k)=cv%r(1:cv%num_cv,j) ! each line corresponds to a time slice
         enddo
 !    gather all data on root (0)
-        call MPI_GATHER(rtemp,cv%num_cv*kout,mpifloat,      &
-     &    rall,cv%num_cv*kout,mpifloat,0,MPI_COMM_STRNG,    &
-     &    ierror)
+        if (SIZE_STRNG.gt.1) then
+ __MPI_ONLY call mpi_GATHER(rtemp,cv%num_cv*kout,mpifloat,      &
+ __MPI_ONLY     &    rall,cv%num_cv*kout,mpifloat,0,MPI_COMM_STRNG,    &
+ __MPI_ONLY     &    ierror)
+        else
+         rall(:,:,1)=rtemp
+        endif
 !
         if (ME_STRNG.eq.0) then ! root writes
          write(fmt,int_format) SIZE_STRNG
@@ -1367,9 +1375,13 @@ __CHARMM_ONLY##ENDIF
 !      gather all data on root
         allocate(rtemp(cv%num_cv, SIZE_STRNG))
 !
-        call MPI_GATHER(cv%r(1,c),cv%num_cv,mpifloat,       &
-     &   rtemp,cv%num_cv,mpifloat,0,MPI_COMM_STRNG,         &
-     &   ierror)
+        if (SIZE_STRNG.gt.1) then
+ __MPI_ONLY call mpi_GATHER(cv%r(1,c),cv%num_cv,mpifloat,       &
+ __MPI_ONLY     &   rtemp,cv%num_cv,mpifloat,0,MPI_COMM_STRNG,         &
+ __MPI_ONLY     &   ierror)
+        else
+         rtemp(:,1)=cv%r(1:cv%num_cv,c)
+        endif
 !
         if (ME_STRNG.eq.0) then ! root writes
 !
@@ -1453,11 +1465,16 @@ __CHARMM_ONLY##ENDIF
        nrep=nstring+cv_common_fixed_0_bc+cv_common_fixed_1_bc
        allocate(rtemp(cv%num_cv, nrep))
 !      gather all data on each root processor
-       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.SIZE_STRNG.gt.1)         &
-     &  call MPI_ALLGATHER(cv%r(1,c),cv%num_cv,mpifloat,    &
-     &   rtemp(1,1+cv_common_fixed_0_bc),                                 &
-     &   cv%num_cv,mpifloat,MPI_COMM_STRNG,                 &
-     &   ierror)
+       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then
+        if (SIZE_STRNG.gt.1) then
+ __MPI_ONLY         call MPI_ALLGATHER(cv%r(1,c),cv%num_cv,mpifloat,    &
+ __MPI_ONLY     &    rtemp(1,1+cv_common_fixed_0_bc),                   &
+ __MPI_ONLY     &    cv%num_cv,mpifloat,MPI_COMM_STRNG,                 &
+ __MPI_ONLY     &    ierror)
+        else
+         rtemp(:,1+cv_common_fixed_0_bc)=cv%r(1:cv%num_cv,c)
+        endif
+       endif ! COMM_STRNG .ne. null
 !    broadcast rtemp to slaves:
        if (MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.SIZE_LOCAL.gt.1)         &
      &  __BROADCAST_LOCAL(rtemp,cv%num_cv*nrep,mpifloat)
@@ -1673,9 +1690,13 @@ __CHARMM_ONLY##ENDIF
        endif ! root
 !      scatter all data on root
        if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then
-        call MPI_SCATTER(rtemp, max_cv_common, mpifloat,      &
-     &   cv%r(1,c),max_cv_common,mpifloat,0,MPI_COMM_STRNG,   &
-     &   ierror)
+        if (SIZE_STRNG.gt.1) then
+ __MPI_ONLY         call MPI_SCATTER(rtemp, max_cv_common, mpifloat,      &
+ __MPI_ONLY     &    cv%r(1,c),max_cv_common,mpifloat,0,MPI_COMM_STRNG,   &
+ __MPI_ONLY     &    ierror)
+        else
+         rtemp(:,1)=cv%r(:,c)
+        endif ! SIZE_STRNG
 !      broadcast BC
         if (bc) then
          if (cv_common_fixed_0_bc.eq.1)                                   &
@@ -2193,38 +2214,42 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
 !      gather all data on root
        if (.not.cv_common_rex_initialized) call cv_common_rex_init()
 !
-       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.SIZE_STRNG.gt.1) then
+       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then
+        if (SIZE_STRNG.gt.1) then
 !     calculate size of logs
-        rex_log_size8=0
-        call MPI_ALLGATHER(cv%rex_log%last,1,mpiint,                    &
-     &                 rex_log_size8,1,mpiint,                          &
-     &                 MPI_COMM_STRNG,ierror)
+         rex_log_size8=0
+ __MPI_ONLY     call MPI_ALLGATHER(cv%rex_log%last,1,mpiint,                    &
+ __MPI_ONLY     &                 rex_log_size8,1,mpiint,                          &
+ __MPI_ONLY     &                 MPI_COMM_STRNG,ierror)
 
-        total_size=sum(rex_log_size8)
-        rex_log_size4=rex_log_size8 ! type cast to 4 byte int
+         total_size=sum(rex_log_size8)
+         rex_log_size4=rex_log_size8 ! type cast to 4 byte int
 !     allocate space to hold entire log
-        allocate(rex_log_all(total_size))
+         allocate(rex_log_all(total_size))
 !     calculate send displacements
-        rex_log_disp4(1)=0;
-        do i=1,SIZE_STRNG-1
-         rex_log_disp4(i+1)=rex_log_disp4(i)+rex_log_size4(i)
-        enddo
+         rex_log_disp4(1)=0;
+         do i=1,SIZE_STRNG-1
+          rex_log_disp4(i+1)=rex_log_disp4(i)+rex_log_size4(i)
+         enddo
 !      now gather the logs
-        call MPI_ALLGATHERV(cv%rex_log%i,cv%rex_log%last,mpiint,          &
-     &                  rex_log_all,rex_log_size4,rex_log_disp4,mpiint,   &
-     &                  MPI_COMM_STRNG,ierror)
+__MPI_ONLY        call MPI_ALLGATHERV(cv%rex_log%i,cv%rex_log%last,mpiint,          &
+__MPI_ONLY     &                  rex_log_all,rex_log_size4,rex_log_disp4,mpiint,   &
+__MPI_ONLY     &                  MPI_COMM_STRNG,ierror)
 !
         if (.not.present(fmt)) then
          frm='(2I5,I8)'
         else
          frm=fmt
         endif
+       else ! string_size=1 (NOTE: this is purely for compatibility b/c relica exchange makes no sense with just one replica ! )
+         allocate(rex_log_all(cv%rex_log%last)) ; rex_log_all=cv%rex_log%i(1:cv%rex_log%last)
+       endif
 !
       if(ME_STRNG.eq.0.and.total_size.gt.0) write(iunit,frm) rex_log_all
 !
         call int_vector_reinit(cv%rex_log) ! erase log
         deallocate(rex_log_all)
-       endif ! STRNG
+       endif ! COMM_STRNG
        end subroutine cv_common_rex_print_log
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_rex_compute_dE(rnew, dE)
@@ -2323,7 +2348,7 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
        __DEP_OUTPUT
        __DEP_MULTICOM
        __DEP_MPI 
-       
+!
 #include "mpitype.def"
 !
        int :: iunit, ierror
@@ -2404,10 +2429,14 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
 !      gather all main coordinate sets (same code as in print_global)
        qroot=(MPI_COMM_STRNG.ne.MPI_COMM_NULL)
 !
-       if (qroot.and.SIZE_STRNG.gt.1) then
-        call MPI_ALLGATHER(cv%r,cv%num_cv,mpifloat,         &
-     &   cv%rall,cv%num_cv,mpifloat,MPI_COMM_STRNG,         &
-     &   ierror)
+       if (qroot) then
+        if (SIZE_STRNG.gt.1) then
+ __MPI_ONLY     call MPI_ALLGATHER(cv%r,cv%num_cv,mpifloat,         &
+ __MPI_ONLY     &    cv%rall,cv%num_cv,mpifloat,MPI_COMM_STRNG,         &
+ __MPI_ONLY     &    ierror)
+        else
+         cv%rall(:,1)=cv%r(1:cv%num_cv,1)
+        endif ! string size
 !      gather all M^-1 matrices
 !
         if (.not.cv_common_Minv_initialized) then
@@ -2415,10 +2444,14 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
         endif
         M => cv%M(1:cv%num_cv,1:cv%num_cv,3) ! for use in MPI call
 !
-        call MPI_ALLGATHER(M,                                            &! cv%M(1:cv%num_cv,1:cv%num_cv,3),
-     &   cv%num_cv**2,mpifloat,                             &
-     &   cv%Mall,cv%num_cv**2,mpifloat,MPI_COMM_STRNG,      &
-     &   ierror)
+        if (SIZE_STRNG.gt.1) then
+ __MPI_ONLY        call MPI_ALLGATHER(M,                                            &! cv%M(1:cv%num_cv,1:cv%num_cv,3),
+ __MPI_ONLY     &   cv%num_cv**2,mpifloat,                             &
+ __MPI_ONLY     &   cv%Mall,cv%num_cv**2,mpifloat,MPI_COMM_STRNG,      &
+ __MPI_ONLY     &   ierror)
+        else
+         cv%Mall(:,:,1)=M
+        endif ! string size
        endif
 !
 ! broadcast to slaves
@@ -2479,19 +2512,25 @@ __CHARMM_ONLY##ENDIF
 !
        qroot=(MPI_COMM_STRNG.ne.MPI_COMM_NULL)
 !
-       if (qroot.and.SIZE_STRNG.gt.1) then
+       if (qroot) then
+        if (SIZE_STRNG.gt.1) then
 !      gather all main cv coordinate sets
-         call MPI_ALLGATHER(cv%r,cv%num_cv,mpifloat,        &
-     &    rall_new,cv%num_cv,mpifloat,MPI_COMM_STRNG,       &
-     &    ierror)
+__MPI_ONLY         call MPI_ALLGATHER(cv%r,cv%num_cv,mpifloat,        &
+__MPI_ONLY     &    rall_new,cv%num_cv,mpifloat,MPI_COMM_STRNG,       &
+__MPI_ONLY     &    ierror)
 !      gather all M^-1 matrices
          M => cv%M(1:cv%num_cv,1:cv%num_cv,3)
 !
-         call MPI_ALLGATHER(M,                              &
-     &    cv%num_cv**2,mpifloat,                            &
-     &    Mall_new,cv%num_cv**2,mpifloat,MPI_COMM_STRNG,    &
-     &    ierror)
-       endif
+__MPI_ONLY         call MPI_ALLGATHER(M,                              &
+__MPI_ONLY     &    cv%num_cv**2,mpifloat,                            &
+__MPI_ONLY     &    Mall_new,cv%num_cv**2,mpifloat,MPI_COMM_STRNG,    &
+__MPI_ONLY     &    ierror)
+!
+        else
+         rall_new(:,1)=cv%r(1:cv%num_cv,1)
+         Mall_new(:,:,1)=cv%M(1:cv%num_cv,1:cv%num_cv,3)
+        endif ! size
+       endif !qroot
 !
        if (.not.cv_common_voronoi_initialized) then
         allocate(cv%rall(cv%num_cv, nstring))
@@ -2551,8 +2590,12 @@ __CHARMM_ONLY##ENDIF
          endif ! .not. correct_cell_me
 
 !     pool all results
-         call MPI_ALLREDUCE(correct_cell_me, correct_cell, 1,           &
-     &                  mpiint, MPI_MIN, MPI_COMM_STRNG, ierror)
+         if (SIZE_STRNG.gt.1) then
+__MPI_ONLY         call MPI_ALLREDUCE(correct_cell_me, correct_cell, 1,           &
+__MPI_ONLY     &                  mpiint, MPI_MIN, MPI_COMM_STRNG, ierror)
+         else
+          correct_cell=correct_cell_me
+         endif ! string_size
          if (correct_cell.eq.0) then
           __WRN(whoami,' CURRENT VORONOI CELL CENTERS INCONSISTENT WITH COORDINATES.')
 !    roll back CVs
@@ -2574,8 +2617,13 @@ __CHARMM_ONLY##ENDIF
            correct_cell_me=cv_common_voronoi_check_aux                    &
      &           (rold, rall_temp, cv%num_cv, nstring, Mall_temp, me)
 !     pool all results
-           call MPI_ALLREDUCE(correct_cell_me, correct_cell, 1,         &
-     &                  mpiint, MPI_MIN, MPI_COMM_STRNG, ierror)
+           if (SIZE_STRNG.gt.1) then
+__MPI_ONLY            call MPI_ALLREDUCE(correct_cell_me, correct_cell, 1,         &
+__MPI_ONLY     &                  mpiint, MPI_MIN, MPI_COMM_STRNG, ierror)
+           else
+            correct_cell=correct_cell_me
+           endif ! string_size
+!
            if (correct_cell.eq.1) then
             cv%rall=rall_temp
             cv%Mall=Mall_temp
@@ -2848,17 +2896,19 @@ __CHARMM_ONLY##ENDIF
 ! VO 9.2013: note that the method below is a nonstandard MPI_IN_PLACE (sometimes will give errors)
 ! changing to proper MPI_IN_PLACE
        if (qpara) then
-        if (ME_LOCAL.eq.0) then
-         call MPI_GATHERV(MPI_IN_PLACE, send_count(me),                 &
-     &   mpifloat,                                                      &
-     &   msd, send_count, send_displ,                                   &
-     &   mpifloat, 0, MPI_COMM_LOCAL, ierror)
-        else ! slaves
-         call MPI_GATHERV(msd(1,mbeg),send_count(me),                   &
-     &   mpifloat,                                                      &
-     &   msd, send_count, send_displ,                                   &
-     &   mpifloat, 0, MPI_COMM_LOCAL, ierror)
-        endif ! ME_LOCAL
+        if (SIZE_LOCAL.gt.1) then
+         if (ME_LOCAL.eq.0) then
+__MPI_ONLY          call MPI_GATHERV(MPI_IN_PLACE, send_count(me),                 &
+__MPI_ONLY     &    mpifloat,                                                      &
+__MPI_ONLY     &    msd, send_count, send_displ,                                   &
+__MPI_ONLY     &    mpifloat, 0, MPI_COMM_LOCAL, ierror)
+         else ! slaves
+__MPI_ONLY          call MPI_GATHERV(msd(1,mbeg),send_count(me),                   &
+__MPI_ONLY     &    mpifloat,                                                      &
+__MPI_ONLY     &    msd, send_count, send_displ,                                   &
+__MPI_ONLY     &    mpifloat, 0, MPI_COMM_LOCAL, ierror)
+         endif ! ME_LOCAL
+        endif ! local_size
        endif ! qpara
 
 !    root determines where theta(x) is
@@ -2909,15 +2959,15 @@ __CHARMM_ONLY##ENDIF
        int :: ierror, type
 !      do work
 !      gather all data on root
-       type=MPI_INTEGER                       !__CHARMM_ONLY##.not.INTEGER8
-       type=MPI_INTEGER8                      !__CHARMM_ONLY##INTEGER8
-
+__MPI_ONLY       type=MPI_INTEGER                       !__CHARMM_ONLY##.not.INTEGER8
+__MPI_ONLY       type=MPI_INTEGER8                      !__CHARMM_ONLY##INTEGER8
+!
        if (.not.cv_common_voronoi_initialized) call cv_common_voronoi_init()
 !
        if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then
         if (SIZE_STRNG.gt.1) then
-         call MPI_ALLREDUCE(cv%voronoi_data(:,:,1),voro_data_all,       &
-     & nstring*(2*nstring+1),type,MPI_SUM,MPI_COMM_STRNG,ierror)
+__MPI_ONLY         call MPI_ALLREDUCE(cv%voronoi_data(:,:,1),voro_data_all,       &
+__MPI_ONLY     & nstring*(2*nstring+1),type,MPI_SUM,MPI_COMM_STRNG,ierror)
         else
          voro_data_all=cv%voronoi_data(:,:,1)
         endif ! SIZE
@@ -3009,32 +3059,36 @@ __CHARMM_ONLY##ENDIF
 !
        if (.not.cv_common_voronoi_initialized) call cv_common_voronoi_init()
 !
-       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.SIZE_STRNG.gt.1) then
+       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then 
+        if (SIZE_STRNG.gt.1) then
 !     calculate size of logs
-        voro_log_size8=0
+         voro_log_size8=0
 !       call MPI_GATHER(cv%voro_log%last,1,type,
 !     &                 voro_log_size8,1,type,
 !     &                 0,MPI_COMM_WORLD,ierror)
-        call MPI_ALLGATHER(cv%voro_log%last,1,mpiint,                     &
-     &                 voro_log_size8,1,mpiint,                           &
-     &                 MPI_COMM_STRNG,ierror)
+__MPI_ONLY         call MPI_ALLGATHER(cv%voro_log%last,1,mpiint,                     &
+__MPI_ONLY     &                 voro_log_size8,1,mpiint,                           &
+__MPI_ONLY     &                 MPI_COMM_STRNG,ierror)
 
-        total_size=sum(voro_log_size8)
-        voro_log_size4=voro_log_size8 ! type cast to 4 byte int
+         total_size=sum(voro_log_size8)
+         voro_log_size4=voro_log_size8 ! type cast to 4 byte int
 !     allocate space to hold entire log
-        allocate(voro_log_all(total_size))
+         allocate(voro_log_all(total_size))
 !     calculate send displacements
-        voro_log_disp4(1)=0;
-        do i=1,SIZE_STRNG-1
-         voro_log_disp4(i+1)=voro_log_disp4(i)+voro_log_size4(i)
-        enddo
+         voro_log_disp4(1)=0;
+         do i=1,SIZE_STRNG-1
+          voro_log_disp4(i+1)=voro_log_disp4(i)+voro_log_size4(i)
+         enddo
 !      now gather the logs
-!       call MPI_GATHERV(cv%voro_log%i,cv%voro_log%last,type,
-!     &                  voro_log_all,voro_log_size4,voro_log_disp4,type,
-!     &                  0,MPI_COMM_WORLD,ierror)
-        call MPI_ALLGATHERV(cv%voro_log%i,cv%voro_log%last,mpiint,        &
-     &                  voro_log_all,voro_log_size4,voro_log_disp4,mpiint,&
-     &                  MPI_COMM_STRNG,ierror)
+!__MPI_ONLY       call MPI_GATHERV(cv%voro_log%i,cv%voro_log%last,type,
+!__MPI_ONLY     &                  voro_log_all,voro_log_size4,voro_log_disp4,type,
+!__MPI_ONLY     &                  0,MPI_COMM_WORLD,ierror)
+__MPI_ONLY        call MPI_ALLGATHERV(cv%voro_log%i,cv%voro_log%last,mpiint,        &
+__MPI_ONLY     &                  voro_log_all,voro_log_size4,voro_log_disp4,mpiint,&
+__MPI_ONLY     &                  MPI_COMM_STRNG,ierror)
+        else
+         allocate(voro_log_all(cv%voro_log%last)); voro_log_all=cv%voro_log%i(1:cv%voro_log%last)
+        endif !size
 !
         if (ME_STRNG.eq.0) write(iunit) voro_log_all
 !
@@ -3067,9 +3121,13 @@ __CHARMM_ONLY##ENDIF
           read(ifile,*) M_all(:,:,j)
          enddo
         endif ! ME
-        call MPI_SCATTER(M_all,cv%num_cv**2,mpifloat,       &
-     &                 M_me,cv%num_cv**2,mpifloat,0,        &
-     &                 MPI_COMM_STRNG,ierror)
+        if (SIZE_STRNG.gt.1) then
+__MPI_ONLY        call MPI_SCATTER(M_all,cv%num_cv**2,mpifloat,       &
+__MPI_ONLY     &                 M_me,cv%num_cv**2,mpifloat,0,        &
+__MPI_ONLY     &                 MPI_COMM_STRNG,ierror)
+        else
+         M_me=M_all(:,:,1)
+        endif
        endif ! COMM_STRNG
 !    broadcast to slaves
        if (ME_LOCAL.ne.MPI_UNDEFINED.and.SIZE_LOCAL.gt.1)               &
@@ -3116,9 +3174,13 @@ __CHARMM_ONLY##ENDIF
         M_me=cv%M(1:isizeM, 1:isizeM, Mind)
         isizeM=isizeM*isizeM
 !
-        call MPI_GATHER(M_me,isizeM,mpifloat,               &
-     &                 M_all,isizeM,mpifloat,0,             &
-     &                 MPI_COMM_STRNG,ierror)
+        if (SIZE_STRNG.gt.1) then
+__MPI_ONLY        call MPI_GATHER(M_me,isizeM,mpifloat,               &
+__MPI_ONLY     &                 M_all,isizeM,mpifloat,0,             &
+__MPI_ONLY     &                 MPI_COMM_STRNG,ierror)
+        else
+         M_all(:,:,1)=M_me
+        endif
 !        call MPI_ALLGATHER(M_me,isizeM,mpifloat,
 !     &                 M_all,isizeM,mpifloat,
 !     &                 MPI_COMM_STRNG,ierror)

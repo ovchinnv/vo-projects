@@ -20,6 +20,7 @@ LOCALDEPS=source.defs multicom_def.src
 
 include $(ROOT)/Makefile.inc
 
+dmol.o: system.o
 sysinfo.o sysmanip.o pca.o : system.o
 system.o: stats.o multicom_def.src
 verlet.o: system.o

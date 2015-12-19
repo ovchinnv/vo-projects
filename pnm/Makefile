@@ -12,7 +12,9 @@ LOCALDEPS+= $(ROOT)/dmol.defs
 
 include $(ROOT)/Makefile.inc
 
-charmm:: vectors $(CHARMM_SOURCES) 
+charmm:: 
+	$(MAKE) vectors 
+	$(MAKE) $(CHARMM_SOURCES) 
 vectors : $(ROOT)/getcode force_look
 	/bin/sh -c 'source $(ROOT)/getcode;\
 	get_typedef_from_file int_vector $(ROOT)/vectors/ivector.src > vectors_var ;\
