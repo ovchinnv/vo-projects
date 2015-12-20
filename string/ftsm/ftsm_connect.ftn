@@ -267,16 +267,16 @@ __CHARMM_ONLY##IF STRINGM
          endif
 !
          if (qorient) then  ! send orientation atoms first
-          call MPI_ISEND(ro,              3*norient, mpifloat, i, ME_STRNG, MPI_COMM_STRNG, srequest(i), ierror)
-          call MPI_IRECV(rall_o(:,:,i+1), 3*norient, mpifloat, i, i,        MPI_COMM_STRNG, rrequest(i), ierror)
+          __MPI_ONLY call MPI_ISEND(ro,              3*norient, mpifloat, i, ME_STRNG, MPI_COMM_STRNG, srequest(i), ierror)
+          __MPI_ONLY call MPI_IRECV(rall_o(:,:,i+1), 3*norient, mpifloat, i, i,        MPI_COMM_STRNG, rrequest(i), ierror)
 !
           if (qdiffrot) then ! send forcing atoms next (with incremented request counters)
-           call MPI_ISEND(rf,              3*nforced, mpifloat, i, ME_STRNG+nstring, MPI_COMM_STRNG, srequest(i+nstring), ierror)
-           call MPI_IRECV(rall_f(:,:,i+1), 3*nforced, mpifloat, i, i+nstring,        MPI_COMM_STRNG, rrequest(i+nstring), ierror)
+           __MPI_ONLY call MPI_ISEND(rf,              3*nforced, mpifloat, i, ME_STRNG+nstring, MPI_COMM_STRNG, srequest(i+nstring), ierror)
+           __MPI_ONLY call MPI_IRECV(rall_f(:,:,i+1), 3*nforced, mpifloat, i, i+nstring,        MPI_COMM_STRNG, rrequest(i+nstring), ierror)
           endif ! do nothing if .not.qdiffrot
          else ! not qorient : send forcing atoms only
-          call MPI_ISEND(rf,              3*nforced, mpifloat, i, ME_STRNG+nstring, MPI_COMM_STRNG, srequest(i), ierror)
-          call MPI_IRECV(rall_f(:,:,i+1), 3*nforced, mpifloat, i, i+nstring,        MPI_COMM_STRNG, rrequest(i), ierror)
+          __MPI_ONLY call MPI_ISEND(rf,              3*nforced, mpifloat, i, ME_STRNG+nstring, MPI_COMM_STRNG, srequest(i), ierror)
+          __MPI_ONLY call MPI_IRECV(rall_f(:,:,i+1), 3*nforced, mpifloat, i, i+nstring,        MPI_COMM_STRNG, rrequest(i), ierror)
          endif
 !
         enddo
@@ -291,7 +291,7 @@ __CHARMM_ONLY##IF STRINGM
         endif
 !
         do while (any(.not.ready(1:k)))
-         call MPI_WAITANY(k, rrequest, ind, stat, ierror) ! note that mpi does not know that rrequest is indexed from 0 not 1 (see above)
+         __MPI_ONLY call MPI_WAITANY(k, rrequest, ind, stat, ierror) ! note that mpi does not know that rrequest is indexed from 0 not 1 (see above)
          ready(ind)=.true.
          if (qorient) then
           if (ind.le.nstring) then ! orientation atoms received
@@ -313,8 +313,7 @@ __CHARMM_ONLY##IF STRINGM
 ! in principle, we could use the same asynchronous strategy as above, but the benefits will be much less, 
 ! at the expense of longer code.  Instead, will use a simple allgather
         dmat(ME_STRNG+1, ME_STRNG+1)=0 ! self distances
-        call mpi_allgather(MPI_IN_PLACE,           0, MPI_DATATYPE_NULL, &
-&                          dmat, nstring, mpifloat, MPI_COMM_STRNG, ierror)
+        __MPI_ONLY call MPI_allgather(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, dmat, nstring, mpifloat, MPI_COMM_STRNG, ierror)
        endif ! qstring
 ! send distance matrix to slaves
        if (qgrp) then
@@ -354,24 +353,26 @@ __CHARMM_ONLY##IF STRINGM
        path_len(1)=ftsm_connect_dist ; path_len(2) = dble(ME_LOCAL)
        if (qgrp) then
 ! determine local node with lowest dstance path
-        call mpi_allreduce(MPI_IN_PLACE, path_len, 1, MPI_2DOUBLE_PRECISION, MPI_MINLOC, MPI_COMM_LOCAL, ierror)
+        __MPI_ONLY call MPI_allreduce(MPI_IN_PLACE, path_len, 1, MPI_2DOUBLE_PRECISION, MPI_MINLOC, MPI_COMM_LOCAL, ierror)
 ! send optimal route to root
         if (INT(path_len(2)).gt.0) then ! otherwise broadcasting from 0 to 0
-         if (ME_LOCAL .eq. INT(path_len(2))) then ; call mpi_send(newroute, nstring, mpiint, 0, 1, MPI_COMM_LOCAL, ierror)
-         elseif (ME_LOCAL.eq.0)              then ; call mpi_recv(newroute, nstring, mpiint, INT(path_len(2)), 1, MPI_COMM_LOCAL, stat, ierror)
+         if (ME_LOCAL .eq. INT(path_len(2))) then 
+          __MPI_ONLY call MPI_send(newroute, nstring, mpiint, 0, 1, MPI_COMM_LOCAL, ierror)
+         elseif (ME_LOCAL.eq.0) then 
+          __MPI_ONLY call MPI_recv(newroute, nstring, mpiint, INT(path_len(2)), 1, MPI_COMM_LOCAL, stat, ierror)
          endif
         endif
        endif
 ! gather within string communicator
        if (qstring.and.SIZE_STRNG.gt.1) then
         path_len(2)=ME_STRNG
-        call mpi_allreduce(MPI_IN_PLACE, path_len, 1, MPI_2DOUBLE_PRECISION, MPI_MINLOC, MPI_COMM_STRNG, ierror)
+        __MPI_ONLY call MPI_allreduce(MPI_IN_PLACE, path_len, 1, MPI_2DOUBLE_PRECISION, MPI_MINLOC, MPI_COMM_STRNG, ierror)
 ! broadcast optimal route within local group
-        call mpi_bcast(newroute, nstring, mpiint, INT(path_len(2)), MPI_COMM_STRNG, ierror)
+        __MPI_ONLY call MPI_bcast(newroute, nstring, mpiint, INT(path_len(2)), MPI_COMM_STRNG, ierror)
        endif
 ! broadcast to local cpus
        if (qgrp) then
-        call mpi_bcast(newroute, nstring, mpiint, 0, MPI_COMM_LOCAL, ierror)
+        __MPI_ONLY call MPI_bcast(newroute, nstring, mpiint, 0, MPI_COMM_LOCAL, ierror)
        endif
 !
 !    update distance and route map
@@ -406,7 +407,7 @@ __CHARMM_ONLY##IF STRINGM
        end subroutine ftsm_reconnect
 !=================================================================================
        subroutine ftsm_reconnect_print_log(iunit,fmt)
-      __DEP_OUTPUT
+       __DEP_OUTPUT
        int :: iunit
        character(len=*), optional :: fmt
 !      local

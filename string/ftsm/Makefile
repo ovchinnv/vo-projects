@@ -13,7 +13,7 @@ LOCALDEPS+= $(ROOT)/dmol.defs
 include $(ROOT)/Makefile.inc
 include $(COMMON)/Makefile.inc
 
-ftsm_var.o: $(COMMON)/sm_config.mod $(COMMON)/sm_var.mod
+ftsm_var.o: $(COMMON)/sm_config.mod $(COMMON)/sm_var.mod $(COMMON)/mpi_compat_stub.mod $(COMMON)/multicom_serial_string.mod
 ftsm.o: ftsm_var.o ftsm_rex.o ftsm_voronoi.o ftsm_compute.o ftsmv2_compute.o ftsm_io.o ftsm_stats.o ftsm_util.o ftsm_min.o ftsm_rep.o\
  ftsm_connect.o ftsm_addatoms.o ftsm_interpolate.o
 ftsm_connect.o: $(COMMON)/tsp.mod

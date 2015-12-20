@@ -12,5 +12,5 @@ LOCALDEPS+=$(ROOT)/dmol.defs
 include $(ROOT)/Makefile.inc
 include $(COMMON)/Makefile.inc
 
-sm0k.o: $(COMMON)/sm_config.mod $(ROOT)/dmol_select_macro.def $(COMMON)/multicom_serial_string.mod
+sm0k.o: $(COMMON)/sm_config.mod $(ROOT)/dmol_select_macro.def $(COMMON)/mpi_compat_stub.mod $(COMMON)/multicom_serial_string.mod
 

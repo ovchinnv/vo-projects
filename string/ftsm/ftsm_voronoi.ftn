@@ -145,11 +145,19 @@ __CHARMM_ONLY##IF STRINGM
        if (.not.ftsm_voronoi_initialized) then
         call ftsm_voronoi_init() ! init will call update, so we are done after this call returns
        else
-        if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.SIZE_STRNG.gt.1) then ! roots only
-         call MPI_ALLGATHER(r_f(:,:,center),3*nforced,mpifloat, &
-     &                      rall_f,3*nforced,mpifloat,MPI_COMM_STRNG, ierror)
-         if (bcast_orient) call MPI_ALLGATHER(r_o(:,:,center),3*norient,mpifloat, &
-     &                      rall_o,3*norient,mpifloat,MPI_COMM_STRNG, ierror)
+        if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then ! roots only
+         if (SIZE_STRNG.gt.1) then ! size
+__MPI_ONLY         call MPI_ALLGATHER(r_f(:,:,center),3*nforced,mpifloat, &
+__MPI_ONLY     &                      rall_f,3*nforced,mpifloat,MPI_COMM_STRNG, ierror)
+          if (bcast_orient) then 
+__MPI_ONLY          call MPI_ALLGATHER(r_o(:,:,center),3*norient,mpifloat, &
+__MPI_ONLY     &                      rall_o,3*norient,mpifloat,MPI_COMM_STRNG, ierror)
+          endif ! bcast_orient
+         else ! size
+          rall_f(1:nforced,:,1)=r_f(1:nforced,:,center)
+          if (bcast_orient) rall_o(1:norient,:,1)=r_o(1:norient,:,center)
+         endif !size
+!
         endif ! roots only
 ! broadcast to slaves
         if (MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.SIZE_LOCAL.gt.1) then
@@ -198,7 +206,7 @@ __CHARMM_ONLY##ENDIF
        int :: iter, max_iter
        int, parameter :: default_iter=15
        int :: i, j, k, ierror, me, ind
-       bool :: qroot, qgrp
+       bool :: qroot, qgrp, qrepgt1
 !
        __IAM(FTSM_VORONOI_SMART_UPDATE)
 !
@@ -218,15 +226,21 @@ __CHARMM_ONLY##ENDIF
          endif !qdiffrot
         endif ! qorient
 !
-        qroot=(MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.SIZE_STRNG.gt.1)
+        qroot=(MPI_COMM_STRNG.ne.MPI_COMM_NULL)
+        qrepgt1=SIZE_STRNG.gt.1
         qgrp=(MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.SIZE_LOCAL.gt.1)
 !      gather all main coordinate sets in rall_new
-        if (qroot) &
-     &    call MPI_ALLGATHER(r_f(:,:,center),3*nforced,mpifloat, &
-     &                      rall_new_f,3*nforced,mpifloat,MPI_COMM_STRNG,ierror)
+        if (qroot) then
+         if (qrepgt1) then
+__MPI_ONLY          call MPI_ALLGATHER(r_f(:,:,center),3*nforced,mpifloat, &
+__MPI_ONLY     &                      rall_new_f,3*nforced,mpifloat,MPI_COMM_STRNG,ierror)
+         else !size
+          rall_new_f(1:nforced,:,1)=r_f(1:nforced,:,center)
+         endif !size
+        endif ! root
 !
 ! broadcast to slaves
-        if (MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.SIZE_LOCAL.gt.1) then
+        if (qgrp) then
 #ifdef __CHARMM
 __CHARMM_ONLY##IF SINGLE
           __BROADCAST_LOCAL_4B(rall_new_f,3*nforced*nstring)
@@ -236,7 +250,7 @@ __CHARMM_ONLY##ENDIF
 #else
           __BROADCAST_LOCAL(rall_new_f,3*nforced*nstring,mpifloat)
 #endif
-        endif ! MPI_COMM_LOCAL
+        endif ! qgrp
 !    update orientation coords if needed (all CPUs do this)
         if (qorient.and.qdiffrot) then ! update orientation coords (which only evolve via r_f) :
          rall_new_o=rall_o ! copy from previous update step
@@ -291,8 +305,14 @@ __CHARMM_ONLY##ENDIF
         endif ! .not. correct_cell_me
 
 !     pool all results
-        if (qroot) call MPI_ALLREDUCE(correct_cell_me, correct_cell, 1,           &
-     &                  mpibool, MPI_LAND, MPI_COMM_STRNG, ierror)
+        if (qroot) then
+         if (qrepgt1) then 
+__MPI_ONLY          call MPI_ALLREDUCE(correct_cell_me, correct_cell, 1,           &
+__MPI_ONLY &                  mpibool, MPI_LAND, MPI_COMM_STRNG, ierror)
+         else
+          correct_cell=correct_cell_me
+         endif ! size
+        endif ! root
 !     broadcast to slaves
         if (qgrp) then ; __BROADCAST_LOCAL(correct_cell, 1, mpibool) ; endif
 !
@@ -315,8 +335,14 @@ __CHARMM_ONLY##ENDIF
 !     check if the new set is consistent
            correct_cell_me=(me.eq.ftsm_voronoi_compute(rfi_old, roi_old, rall_temp_f, rall_temp_o))
 !     pool all results
-           if (qroot) call MPI_ALLREDUCE(correct_cell_me, correct_cell, 1,         &
-     &                  mpibool, MPI_LAND, MPI_COMM_STRNG, ierror)
+           if (qroot) then 
+            if (qrepgt1) then 
+__MPI_ONLY             call MPI_ALLREDUCE(correct_cell_me, correct_cell, 1,         &
+__MPI_ONLY     &                  mpibool, MPI_LAND, MPI_COMM_STRNG, ierror)
+            else
+             correct_cell=correct_cell_me
+            endif !size
+           endif ! root
 !      broadcast to slaves
            if (qgrp) then
 !#ifdef __CHARMM
@@ -325,8 +351,8 @@ __CHARMM_ONLY##ENDIF
 !#else
 !            __BROADCAST_LOCAL(correct_cell,1,mpiint)
 !#endif
+            __BROADCAST_LOCAL(correct_cell, 1, mpibool)
            endif ! qgrp
-           __BROADCAST_LOCAL(correct_cell, 1, mpibool)
 !
            if (correct_cell) then
             rall_f=rall_temp_f ; if (qorient.and.qdiffrot) rall_o=rall_temp_o
@@ -433,28 +459,30 @@ __CHARMM_ONLY##ENDIF
 ! pool norms (and rotation matrices) on local root
        if (qpara) then
         if (ME_LOCAL.eq.0) then
-         call MPI_GATHERV(MPI_IN_PLACE, send_count(me), &
-     & mpifloat, &
-     & msd, send_count, send_displ, &
-     & mpifloat, 0, MPI_COMM_LOCAL, ierror)
+__MPI_ONLY       call MPI_GATHERV(MPI_IN_PLACE, send_count(me), &
+__MPI_ONLY     & mpifloat, &
+__MPI_ONLY     & msd, send_count, send_displ, &
+__MPI_ONLY     & mpifloat, 0, MPI_COMM_LOCAL, ierror)
 ! send orientation matrices if tube constraint used
-         if (qorient.and.ftsm_voronoi_cut.gt.zero) &
-     &  call MPI_GATHERV(MPI_IN_PLACE, 9*send_count(me), &
-     & mpifloat, &
-     & u, 9*send_count, 9*send_displ, &
-     & mpifloat, 0, MPI_COMM_LOCAL, ierror)
+         if (qorient.and.ftsm_voronoi_cut.gt.zero) then
+__MPI_ONLY       call MPI_GATHERV(MPI_IN_PLACE, 9*send_count(me), &
+__MPI_ONLY     & mpifloat, &
+__MPI_ONLY     & u, 9*send_count, 9*send_displ, &
+__MPI_ONLY     & mpifloat, 0, MPI_COMM_LOCAL, ierror)
+         endif ! qorient
 !====================================================
         else ! slaves
-         call MPI_GATHERV(msd(mbeg),send_count(me), &
-     & mpifloat, &
-     & msd, send_count, send_displ, &
-     & mpifloat, 0, MPI_COMM_LOCAL, ierror)
+__MPI_ONLY       call MPI_GATHERV(msd(mbeg),send_count(me), &
+__MPI_ONLY     & mpifloat, &
+__MPI_ONLY     & msd, send_count, send_displ, &
+__MPI_ONLY     & mpifloat, 0, MPI_COMM_LOCAL, ierror)
 ! send orientation matrices if tube constraint used
-         if (qorient.and.ftsm_voronoi_cut.gt.zero) &
-     &  call MPI_GATHERV(u(1,1,mbeg), 9*send_count(me), &
-     & mpifloat, &
-     & u, 9*send_count, 9*send_displ, &
-     & mpifloat, 0, MPI_COMM_LOCAL, ierror)
+          if (qorient.and.ftsm_voronoi_cut.gt.zero) then
+__MPI_ONLY       call MPI_GATHERV(u(1,1,mbeg), 9*send_count(me), &
+__MPI_ONLY     & mpifloat, &
+__MPI_ONLY     & u, 9*send_count, 9*send_displ, &
+__MPI_ONLY     & mpifloat, 0, MPI_COMM_LOCAL, ierror)
+         endif ! qorient
         endif ! me_local
        endif ! qpara
 !
@@ -594,8 +622,8 @@ __CHARMM_ONLY##ENDIF
 !
        if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then
         if (SIZE_STRNG.gt.1) then
-         call MPI_ALLREDUCE(ftsm_voronoi_data(:,:,1),voro_data_all,       &
-     & nstring*(2*nstring+1),type,MPI_SUM,MPI_COMM_STRNG,ierror)
+__MPI_ONLY         call MPI_ALLREDUCE(ftsm_voronoi_data(:,:,1),voro_data_all,       &
+__MPI_ONLY     & nstring*(2*nstring+1),type,MPI_SUM,MPI_COMM_STRNG,ierror)
         else
          voro_data_all=ftsm_voronoi_data(:,:,1)
         endif ! SIZE
@@ -687,33 +715,37 @@ __CHARMM_ONLY##ENDIF
 !
        if (.not.ftsm_voronoi_initialized) call ftsm_voronoi_init()
 !
-       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.SIZE_STRNG.gt.1) then
+       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then
+        if (SIZE_STRNG.gt.1) then
 !     calculate size of logs
-        voro_log_size8=0
+         voro_log_size8=0
 !       call MPI_GATHER(ftsm_voro_log%last,1,type,
 !     &                 voro_log_size8,1,type,
 !     &                 0,MPI_COMM_WORLD,ierror)
-        call MPI_ALLGATHER(ftsm_voro_log%last,1,mpiint,                     &
-     &                 voro_log_size8,1,mpiint,                           &
-     &                 MPI_COMM_STRNG,ierror)
+__MPI_ONLY         call MPI_ALLGATHER(ftsm_voro_log%last,1,mpiint,                     &
+__MPI_ONLY     &                 voro_log_size8,1,mpiint,                           &
+__MPI_ONLY     &                 MPI_COMM_STRNG,ierror)
 
-        total_size=sum(voro_log_size8)
-        voro_log_size4=voro_log_size8 ! type cast to 4 byte int
+         total_size=sum(voro_log_size8)
+         voro_log_size4=voro_log_size8 ! type cast to 4 byte int
 !     allocate space to hold entire log
-        allocate(voro_log_all(total_size))
+         allocate(voro_log_all(total_size))
 !     calculate send displacements
-        voro_log_disp4(1)=0;
-        do i=1,SIZE_STRNG-1
-         voro_log_disp4(i+1)=voro_log_disp4(i)+voro_log_size4(i)
-        enddo
+         voro_log_disp4(1)=0;
+         do i=1,SIZE_STRNG-1
+          voro_log_disp4(i+1)=voro_log_disp4(i)+voro_log_size4(i)
+         enddo
 !      now gather the logs
 !       call MPI_GATHERV(ftsm_voro_log%i,ftsm_voro_log%last,type,
 !     &                  voro_log_all,voro_log_size4,voro_log_disp4,type,
 !     &                  0,MPI_COMM_WORLD,ierror)
-        call MPI_ALLGATHERV(ftsm_voro_log%i,ftsm_voro_log%last,mpiint,        &
-     &                  voro_log_all,voro_log_size4,voro_log_disp4,mpiint,&
-     &                  MPI_COMM_STRNG,ierror)
+__MPI_ONLY         call MPI_ALLGATHERV(ftsm_voro_log%i,ftsm_voro_log%last,mpiint,        &
+__MPI_ONLY     &                  voro_log_all,voro_log_size4,voro_log_disp4,mpiint,&
+__MPI_ONLY     &                  MPI_COMM_STRNG,ierror)
 !
+        else ! size
+         allocate(voro_log_all(ftsm_voro_log%last)) ; voro_log_all=ftsm_voro_log%i(1:ftsm_voro_log%last)
+        endif ! size
         if (ME_STRNG.eq.0) write(iunit) voro_log_all
 !
         call int_vector_reinit(ftsm_voro_log) ! erase log
@@ -786,8 +818,8 @@ __CHARMM_ONLY##ENDIF
           enddo
 !
           if (ME_STRNG.ne.0) then
-           call MPI_ISEND(vtemp, k,       & ! send local attempts, accepts + occupancy to root packed in vtemp
-     &     mpiint, 0, ME_STRNG, MPI_COMM_STRNG, request(ME_STRNG), ierror)
+__MPI_ONLY           call MPI_ISEND(vtemp, k,       & ! send local attempts, accepts + occupancy to root packed in vtemp
+__MPI_ONLY     &     mpiint, 0, ME_STRNG, MPI_COMM_STRNG, request(ME_STRNG), ierror)
           else ! rank 0
 ! wait for all messages to begin sending
            ready=.false.
@@ -796,10 +828,10 @@ __CHARMM_ONLY##ENDIF
              if (.not.ready(m)) then
               ok=.false. ! this is necessary
               m_=m ! cast
-              call MPI_IPROBE(m_, m_, MPI_COMM_STRNG, ok, stat, ierror)
+__MPI_ONLY     call MPI_IPROBE(m_, m_, MPI_COMM_STRNG, ok, stat, ierror)
               if (ok) then
 !    get message length
-                call MPI_Get_count(stat,mpiint,length(m),ierror)
+__MPI_ONLY       call MPI_Get_count(stat,mpiint,length(m),ierror)
 !                write(600+ME_STRNG,*) ok, ready(m), m, length(m), stat
                 ready(m)=.true.
               endif ! ok
@@ -812,8 +844,8 @@ __CHARMM_ONLY##ENDIF
            allocate(vtemp2(l))
            do m=1,nstring-1
             ind=k+sum(length(1:m-1))+1
-            call MPI_IRECV(vtemp2(ind), length(m),   &
-     &      mpiint, m, m, MPI_COMM_STRNG, request(m), ierror)
+__MPI_ONLY  call MPI_IRECV(vtemp2(ind), length(m),   &
+__MPI_ONLY     &      mpiint, m, m, MPI_COMM_STRNG, request(m), ierror)
            enddo ! m
 !    copy vtemp into vtemp2
            vtemp2(1:k)=vtemp(1:k)
@@ -853,28 +885,28 @@ __CHARMM_ONLY##ENDIF
        if (qstring) then
         if (ME_STRNG.eq.0) then
 ! wait for all messages to arrive
-         call MPI_WAITALL(nstring-1, request, MPI_STATUSES_IGNORE, ierror)
+__MPI_ONLY    call MPI_WAITALL(nstring-1, request, MPI_STATUSES_IGNORE, ierror)
 ! now send received array to all cpus:
          do m=1, nstring-1
-           call MPI_ISEND(vtemp2, k+sum(length),                        & ! send local attempts, accepts + occupancy to root packed in temp
-     &     mpiint, m, m, MPI_COMM_STRNG, request(m), ierror)
+__MPI_ONLY      call MPI_ISEND(vtemp2, k+sum(length),                        & ! send local attempts, accepts + occupancy to root packed in temp
+__MPI_ONLY &     mpiint, m, m, MPI_COMM_STRNG, request(m), ierror)
          enddo
         else ! other roots
 !    first make sure previous send was successful
-         call MPI_WAIT(request(ME_STRNG), stat, ierror)
+__MPI_ONLY      call MPI_WAIT(request(ME_STRNG), stat, ierror)
 !    test for message from root:
          ok=.false.
          do while (.not.ok)
-          call MPI_IPROBE(0, ME_STRNG, MPI_COMM_STRNG, ok, stat, ierror)
+__MPI_ONLY      call MPI_IPROBE(0, ME_STRNG, MPI_COMM_STRNG, ok, stat, ierror)
          enddo
 !    a message is ready to be received : begin
 !    get message length
-         call MPI_Get_count(stat,mpiint,length(1),ierror)
+__MPI_ONLY      call MPI_Get_count(stat,mpiint,length(1),ierror)
          l=length(1)
 !    begin receiving
          allocate(vtemp2(l))
-         call MPI_IRECV(vtemp2, l, mpiint,                               &
-     &      0, ME_STRNG, MPI_COMM_STRNG, request(ME_STRNG), ierror)
+__MPI_ONLY    call MPI_IRECV(vtemp2, l, mpiint,                               &
+__MPI_ONLY  &      0, ME_STRNG, MPI_COMM_STRNG, request(ME_STRNG), ierror)
         endif ! ME
        endif ! string root
       endif ! voro_update
@@ -885,7 +917,9 @@ __CHARMM_ONLY##ENDIF
 ! receive the rest
       if (voronoi_update) then
         if (qstring) then
-         if (ME_STRNG.ne.0) call MPI_WAIT(request(ME_STRNG), stat, ierror) ! make sure message is received
+         if (ME_STRNG.ne.0) then 
+__MPI_ONLY   call MPI_WAIT(request(ME_STRNG), stat, ierror) ! make sure message is received
+         endif
 ! unpack message (all string roots do this)
          ftsm_voronoi_data(:,:,2)=ftsm_voronoi_data(:,:,3) ! statistics from previous runs (if any)
          k=0
@@ -893,13 +927,14 @@ __CHARMM_ONLY##ENDIF
            k=k+1; i=vtemp2(k); k=k+1; j=vtemp2(k); k=k+1;
            ftsm_voronoi_data(i,j,2)=ftsm_voronoi_data(i,j,2)+vtemp2(k)
          enddo
-         if (ME_STRNG.eq.0) call MPI_WAITALL(nstring-1, request,        &
-     &         MPI_STATUSES_IGNORE, ierror)
+         if (ME_STRNG.eq.0) then
+__MPI_ONLY          call MPI_WAITALL(nstring-1, request, MPI_STATUSES_IGNORE, ierror)
+         endif
          deallocate(vtemp, vtemp2)
         endif ! string roots
 !
         if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.SIZE_STRNG.eq.1)        &
-     &   ftsm_voronoi_data(:,:,2)=ftsm_voronoi_data(:,:,1)
+     &   ftsm_voronoi_data(:,:,2)=ftsm_voronoi_data(:,:,3) + ftsm_voronoi_data(:,:,1) ! simply copy local data (and keep prev. run)
 !
       endif ! voronoi_update
 !
@@ -967,7 +1002,7 @@ __CHARMM_ONLY##ENDIF
         endif ! string roots
 !        write(600+ME_STRNG,*) P_accept_cross, success, ' * ', prob
 !    broadcast to slaves
-        if (qgrp) __BROADCAST_LOCAL_4B(success,1)
+        if (qgrp) then ; __BROADCAST_LOCAL_4B(success,1) ; endif
 !    if successful, update
         if (success) then
          cross_accept(me,which)=cross_accept(me,which)+1
