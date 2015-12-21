@@ -32,7 +32,7 @@ MPI_HOME=/usr/lib/openmpi
 FORTRAN_COMPILER=$(notdir $(FC))
 DEFS+=-Dint=integer -Dfloat=real*8 -Dbool=logical -Dmpiint=MPI_INTEGER -Dmpifloat=MPI_REAL8 -Dmpichar=MPI_CHARACTER -Dmpiint4=MPI_INTEGER4\
      -Dmpibool=MPI_LOGICAL -Dint1="integer(kind=KIND('a'))" -D__DMOL -D__RCOMP -D__DMOL -D__CHES -D__EDDIE -D__$(FORTRAN_COMPILER) \
-     -Dint4mpi=integer -D__DEBUG -D__TIMER -D__PARALLEL #-D__STRING_SERIAL #-D__PATHSCALE #-Dint4mpi="integer(KIND=MPI_INTEGER_KIND)" 
+     -Dint4mpi=integer -D__DEBUG -D__TIMER -D__PARALLEL -D__STRING_SERIAL #-D__PATHSCALE #-Dint4mpi="integer(KIND=MPI_INTEGER_KIND)" 
 
 # ! note: the VEC routines are probably slower
 

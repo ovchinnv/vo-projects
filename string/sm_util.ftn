@@ -35,13 +35,13 @@ __CHARMM_ONLY##IF STRINGM
 !
       me=ME_STRNG
       nensem=SIZE_STRNG
-      nrep=nensem+fbc0+fbc1
+      nrep=nensem+fbc0+fbc1 ! number of replicas (including "fake" replicas : boundary conditions)
 !     allocate work array, now that we know nrep
       allocate(wme(nrep))
 !
 !     compute in parallel
 !     determine displacements and allocate arays
-      nall=ceiling(1.0d0*n/nrep)
+      nall=ceiling(1.0d0*n/nensem) ! number of variables per replica (excluding fake replicas, since they cannot do work)
       allocate(xall(nall,nrep), fall(nall,nrep),                        &
      & dxall(nall,nrep-1), fall_c(nall,nrep-1))
 !     initialize
@@ -51,18 +51,22 @@ __CHARMM_ONLY##IF STRINGM
       fall_c=0.0
 
       do i=1,nensem
-       s_disp(i)=min((i-1)*nall,n-1)
+       s_disp(i)=min((i-1)*nall,n-1) ! displacements are always relative to 0 because, e.g., xbc0 is not part of x
        r_disp(i)=(i-1+fbc0)*nall
        s_count(i)=max(0,min(nall,n-nall*(i-1)))
       enddo
       r_count=s_count(me+1)
 !
-      call mpi_alltoallv(x,s_count,s_disp,mpifloat,                        &
-     &                   xall,r_count,r_disp,mpifloat,                     &
-     &                   MPI_COMM_STRNG, ierror)
-      call mpi_alltoallv(f,s_count,s_disp,mpifloat,                        &
-     &                   fall,r_count,r_disp,mpifloat,                     &
-     &                   MPI_COMM_STRNG, ierror)
+      if (nensem.gt.1) then ! compatibility only (makes little sense for a single replica string)
+__MPI_ONLY      call mpi_alltoallv(x,s_count,s_disp,mpifloat,                        &
+__MPI_ONLY     &                   xall,r_count,r_disp,mpifloat,                     &
+__MPI_ONLY     &                   MPI_COMM_STRNG, ierror)
+__MPI_ONLY      call mpi_alltoallv(f,s_count,s_disp,mpifloat,                        &
+__MPI_ONLY     &                   fall,r_count,r_disp,mpifloat,                     &
+__MPI_ONLY     &                   MPI_COMM_STRNG, ierror)
+      else
+       xall(:,1+fbc0) = x ;  fall(:,1+fbc0) = f
+      endif
 !     take care of BC as well
       if (fbc0.eq.1)                                                    &
      &   xall(1:r_count(1),1)=                                          &
@@ -86,8 +90,11 @@ __CHARMM_ONLY##IF STRINGM
       enddo
 !
 !     reduce work
-      call mpi_allreduce(wme, work, nrep, mpifloat,                        &
-     & MPI_SUM, MPI_COMM_STRNG, ierror)
+      if (nensem.gt.1) then ! compatibility w/ 1-replica
+__MPI_ONLY   call mpi_allreduce(wme, work, nrep, mpifloat, MPI_SUM, MPI_COMM_STRNG, ierror)
+      else
+       work=wme
+      endif
 !   done!
 !
       deallocate(xall, dxall, fall, fall_c, wme)
@@ -157,12 +164,12 @@ __CHARMM_ONLY##IF STRINGM
 !     allocate work arrays, now that we know nrep
 
       allocate(rr(nrep), rrpp(nrep))
-      allocate(ds(nrep-1), dsn(nrep-1), ds2me(nrep-1), ds2all(nrep-1),  &
-     &     s(nrep),t(nrep),curv_me(nrep-2))
+      allocate(ds(nrep-1), dsn(nrep-1), ds2me(nrep-1), ds2all(nrep-1), &
+     & s(nrep),t(nrep),curv_me(max(0,nrep-2)))
 !
 !     compute arclength in parallel
 !     determine displacements and allocate arays
-      nall=ceiling(1.0d0*n/nrep)
+      nall=ceiling(1.0d0*n/nensem) ! vars per replica, excluding bc fake "replicas"
       allocate(rall(nall,nrep), drall(nall,nrep), dr2all(nall,nrep-2))
 !     initialize
       rall=0.0d0
@@ -180,9 +187,14 @@ __CHARMM_ONLY##IF STRINGM
       wrs=1./sum(wgt)
       swgt=sqrt(wgt*wrs)  ! no checking for nonnegative numbers
       rin_w=rin*swgt
-      call mpi_alltoallv(rin_w,s_count,s_disp,mpifloat,                    &
-     &                   rall,r_count,r_disp,mpifloat,                     &
-     &                   MPI_COMM_STRNG, ierror)
+!
+      if (nensem.gt.1) then
+__MPI_ONLY      call mpi_alltoallv(rin_w,s_count,s_disp,mpifloat,                    &
+__MPI_ONLY     &                   rall,r_count,r_disp,mpifloat,                     &
+__MPI_ONLY     &                   MPI_COMM_STRNG, ierror)
+      else
+       rall(:,1+fbc0)=rin_w ! single-replica case for compatibility
+      endif
 !     take care of BC as well
       if (fbc0.eq.1)                                                    &
      &   rall(1:r_count(1),1)=                                          &
@@ -197,11 +209,14 @@ __CHARMM_ONLY##IF STRINGM
 !     now have partial coordinates from ALL replicas
 !     compute local part of the tangent
 !
-      drall=rall(:,2:nrep)-rall(:,1:nrep-1)
+      drall(:,1:nrep-1)=rall(:,2:nrep)-rall(:,1:nrep-1)
       ds2me=sum(drall**2,1)
 !     reduce ds2
-      call mpi_allreduce(ds2me, ds2all, nrep-1, mpifloat,                  &
-     & MPI_SUM, MPI_COMM_STRNG, ierror)
+      if (nensem.gt.1) then
+__MPI_ONLY      call mpi_allreduce(ds2me, ds2all, nrep-1, mpifloat, MPI_SUM, MPI_COMM_STRNG, ierror)
+      else
+       ds2all=ds2me
+      endif
 !     now can compute arclength
       s(1)=0d0
       do i=1,nrep-1
@@ -224,8 +239,11 @@ __CHARMM_ONLY##IF STRINGM
 !     compute magnitude
       curv_me=sum(dr2all**2,1)
 !     reduce from all cpus
-      call mpi_allreduce(curv_me, curvature, nrep-2, mpifloat,             &
-     & MPI_SUM, MPI_COMM_STRNG, ierror)
+      if (nensem.gt.1) then
+__MPI_ONLY      call mpi_allreduce(curv_me, curvature, max(0,nrep-2), mpifloat, MPI_SUM, MPI_COMM_STRNG, ierror)
+      else
+       curvature=curv_me
+      endif
 !     take square root
       curvature=sqrt(curvature)
 
@@ -266,13 +284,16 @@ __CHARMM_ONLY##IF STRINGM
 
       endif
 !ccccc now scatter new coordinates into xout,yout,zout
-      call mpi_alltoallv(rall,r_count,r_disp,mpifloat,                     &
-     &                   rout,s_count,s_disp,mpifloat,                     &
-     &                   MPI_COMM_STRNG, ierror)
+      if (nensem.gt.1) then
+__MPI_ONLY      call mpi_alltoallv(rall,r_count,r_disp,mpifloat,                     &
+__MPI_ONLY     &                   rout,s_count,s_disp,mpifloat,                     &
+__MPI_ONLY     &                   MPI_COMM_STRNG, ierror)
+      else
+       rout=rall(:,1+fbc0) ! for compatibility
+      endif
 !     note: rout obtained in this way is scaled by wgt
 !     we need to unscale it:
       rout=rout/swgt
-
 !   done!
 !cccccccccccccccccccccccccccccccccccccccccccccccccc
       deallocate(rall, drall, dr2all)
@@ -388,7 +409,7 @@ __CHARMM_ONLY##IF STRINGM
 !
 !     compute arclength in parallel
 !     determine displacements and allocate arrays
-      nall=ceiling(1.0d0*n/nrep)
+      nall=ceiling(1.0d0*n/nensem)
       allocate(rall(nall,nrep), drall(nall,nrep), dr2all(nall,nrep-1))
       allocate(rfine(nall, nfine), drfine(nall,nfine-1)) ! sci
 !     initialize
@@ -407,10 +428,14 @@ __CHARMM_ONLY##IF STRINGM
       swgt=sqrt(wgt*wrs)
       rin_w=rin*swgt
 !
-      call mpi_alltoallv(rin_w,s_count,s_disp,mpifloat,                    &
-     &                   rall,r_count,r_disp,mpifloat,                     &
-     &                   MPI_COMM_STRNG, ierror)
-
+      if (nensem.gt.1) then
+__MPI_ONLY      call mpi_alltoallv(rin_w,s_count,s_disp,mpifloat,                    &
+__MPI_ONLY     &                   rall,r_count,r_disp,mpifloat,                     &
+__MPI_ONLY     &                   MPI_COMM_STRNG, ierror)
+      else
+       rall(:,1+fbc0)=rin_w
+      endif
+!
 !     take care of BC as well
       if (fbc0.eq.1)                                                    &
      &   rall(1:r_count(1),1)=                                          &
@@ -498,8 +523,12 @@ __CHARMM_ONLY##IF STRINGM
 !
       ds2me_fine=sum(drfine**2,1)
 !     reduce ds2
-      call mpi_allreduce(ds2me_fine, ds2all_fine, nfine-1, mpifloat,       &
-     & MPI_SUM, MPI_COMM_STRNG, ierror)
+      if (nensem.gt.1) then
+__MPI_ONLY      call mpi_allreduce(ds2me_fine, ds2all_fine, nfine-1, mpifloat,       &
+__MPI_ONLY     & MPI_SUM, MPI_COMM_STRNG, ierror)
+      else
+       ds2all_fine = ds2me_fine
+      endif
 !
 !     compute (fine) arclength s
       sfine(1)=zero
@@ -521,8 +550,12 @@ __CHARMM_ONLY##IF STRINGM
       dr2all(:,1:nrep-2)=dr2all(:,2:nrep-1)-dr2all(:,1:nrep-2)  ! second difference
       curv_me=sum(dr2all**2,1)
 !     reduce from all cpus
-      call mpi_allreduce(curv_me, curvature, nrep-2, mpifloat,             &
-     & MPI_SUM, MPI_COMM_STRNG, ierror)
+      if (nensem.gt.1) then
+__MPI_ONLY      call mpi_allreduce(curv_me, curvature, max(0,nrep-2), mpifloat,             &
+__MPI_ONLY     & MPI_SUM, MPI_COMM_STRNG, ierror)
+      else
+       curvature(1:nrep-2)=curv_me(1:nrep-2) ! NOTE : curv_me overdimensioned
+      endif
 !     take square root and divide by ds^2
       curvature=sqrt(curvature)/ds(1:nrep-2)/ds(2:nrep-1)
 !     to get the derivative with respect to a \in {0,1} parametrization, multiply by curve length
@@ -596,8 +629,12 @@ __CHARMM_ONLY##IF STRINGM
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccc
        drfine=rfine(:,2:nfine)-rfine(:,1:nfine-1)
        ds2me_fine=sum(drfine**2,1)
-       call mpi_allreduce(ds2me_fine, ds2all_fine, nfine-1, mpifloat,      &
-     &  MPI_SUM, MPI_COMM_STRNG, ierror)
+       if (nensem.gt.1) then
+__MPI_ONLY       call mpi_allreduce(ds2me_fine, ds2all_fine, nfine-1, mpifloat,      &
+__MPI_ONLY     &  MPI_SUM, MPI_COMM_STRNG, ierror)
+       else
+        ds2all_fine = ds2me_fine
+       endif
 !
        sfine(1)=zero
        do i=1,nfine-1
@@ -614,8 +651,12 @@ __CHARMM_ONLY##IF STRINGM
        dr2all(:,1:nrep-2)=dr2all(:,2:nrep-1)-dr2all(:,1:nrep-2)
        curv_me=sum(dr2all**2,1)
 !     reduce from all cpus
-       call mpi_allreduce(curv_me, curvature, nrep-2, mpifloat,            &
-     & MPI_SUM, MPI_COMM_STRNG, ierror)
+       if (nensem.gt.1) then
+__MPI_ONLY     call mpi_allreduce(curv_me, curvature, max(0,nrep-2), mpifloat,            &
+__MPI_ONLY     & MPI_SUM, MPI_COMM_STRNG, ierror)
+       else
+        curvature(1:nrep-2)=curv_me(1:nrep-2) ! curv_me overdimensioned
+       endif
 !     take square root and divide by ds^2
        curvature=sqrt(curvature)/ds(1:nrep-2)/ds(2:nrep-1)
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -627,24 +668,32 @@ __CHARMM_ONLY##IF STRINGM
 !     save arclength to pass back to calling routine
       d_arclength=ds
 !ccccc now scatter new coordinates into rout
-      call mpi_alltoallv(rall,r_count,r_disp,mpifloat,                     &
-     &                   rout,s_count,s_disp,mpifloat,                     &
-     &                   MPI_COMM_STRNG, ierror)
+       if (nensem.gt.1) then
+__MPI_ONLY     call mpi_alltoallv(rall,r_count,r_disp,mpifloat,                     &
+__MPI_ONLY     &                   rout,s_count,s_disp,mpifloat,                     &
+__MPI_ONLY     &                   MPI_COMM_STRNG, ierror)
+       else
+        rout=rall(:,1+fbc0)
+       endif
 !     note: rall is scaled by wgt, so we need to unscale rout:
       rout=rout/swgt
 !
 !     drall is computed inside the iteration loop; if there were no
 !     iterations, leave drout untouched; (also do nothing if drout not passed in)
       if (present(drout).and.(iteration.gt.0)) then
-       call mpi_alltoallv(drall,r_count,r_disp,mpifloat,                   &
-     &                    drout,s_count,s_disp,mpifloat,                   &
-     &                    MPI_COMM_STRNG, ierror)
+       if (nensem.gt.1) then
+__MPI_ONLY       call mpi_alltoallv(drall,r_count,r_disp,mpifloat,                   &
+__MPI_ONLY     &                    drout,s_count,s_disp,mpifloat,                   &
+__MPI_ONLY     &                    MPI_COMM_STRNG, ierror)
+       else
+        drout=drall(:,1+fbc0)
+       endif
 !     note: drout is scaled by wgt; to unscale, uncomment below
 !       drout=drout/swgt
 !     normalize drout to unity
        dum=dot_product(drout,drout)
        drout=drout/sqrt(dum)
-      endif
+      endif ! drout
 
 !   done!
 !cccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -770,6 +819,7 @@ __CHARMM_ONLY##IF STRINGM
       allocate(rfine(nall, nfine), drfine(nall,nfine-1)) ! sci
 !     initialize
       rall=zero
+      drall=zero
       rfine=zero
 !
 !     scale rin by wgt
@@ -778,8 +828,12 @@ __CHARMM_ONLY##IF STRINGM
       rin_w=rin*swgt
 !
 !     gather all data on root
-      call mpi_gather(rin_w,n,mpifloat,rall(1,fbc0+1),n,mpifloat,             &
-     &                                   0,MPI_COMM_STRNG, ierror)
+      if (nensem.gt.1) then
+__MPI_ONLY      call mpi_gather(rin_w,n,mpifloat,rall(1,fbc0+1),n,mpifloat,             &
+__MPI_ONLY      &                                   0,MPI_COMM_STRNG, ierror)
+      else
+       rall(:,1+fbc0)=rin_w
+      endif
 !
 !     the rest of reparametrization done by root
 !
@@ -975,9 +1029,16 @@ __CHARMM_ONLY##IF STRINGM
       endif ! qroot
 
 !ccccc now scatter new coordinates into rout
-      call mpi_scatter(rall(1,fbc0+1), n, mpifloat, rout, n ,mpifloat,        &
-     &                   0, MPI_COMM_STRNG, ierror)
-!     note: may want to broadcast curvature and arclength
+      if (nensem.gt.1) then
+__MPI_ONLY       call mpi_scatter(rall(1,fbc0+1), n, mpifloat, rout, n ,mpifloat,        &
+__MPI_ONLY       &                   0, MPI_COMM_STRNG, ierror)
+! broadcast arclength and curvature
+! note : only the root outputs curv/ds, so it is not actually needed on other processors
+       __BROADCAST_STRING(d_arclength, nrep-1, mpifloat)
+       __BROADCAST_STRING(curvature, nrep-2, mpifloat)
+      else
+       rout=rall(:,1+fbc0)
+      endif
 !
 !     note: rall is scaled by wgt, so we need to unscale rout:
       rout=rout/swgt
@@ -988,17 +1049,21 @@ __CHARMM_ONLY##IF STRINGM
 !      write(0,*) present(drout)
 !
       if (present(drout)) then
-       call mpi_bcast(iteration,1,mpiint,0,MPI_COMM_STRNG,ierror)
+__MPI_ONLY       call mpi_bcast(iteration,1,mpiint,0,MPI_COMM_STRNG,ierror)
        if (iteration.gt.0) then
 !           write(0,*) 'sending drout'
-        call mpi_scatter(drall(1,fbc0), n, mpifloat, drout, n ,mpifloat,      &
-     &                   0, MPI_COMM_STRNG, ierror)
+        if (nensem.gt.1) then
+__MPI_ONLY         call mpi_scatter(drall(1,fbc0+1), n, mpifloat, drout, n ,mpifloat,      &
+__MPI_ONLY     &                   0, MPI_COMM_STRNG, ierror)
+        else
+         drout=drall(:,1+fbc0) ! when fbc=0 will give all zeros (init condition)
+        endif
 !     note: drout is scaled by wgt; to unscale, uncomment below
 !       drout=drout/swgt
 !     normalize drout to unity
         dum=dot_product(drout,drout)
         drout=drout/sqrt(dum)
-       endif
+       endif ! iteration
       endif ! drout present
 
 !   done!
@@ -1024,13 +1089,13 @@ __CHARMM_ONLY##IF STRINGM
      & r_bc_0, r_bc_1) ! provide additional arrays for fixed bc
 !
       __DEP_MULTICOM
+      __DEP_CONST
       __DEP_MPI
       __DEP_MULTIDIAG ! tridiagonal inversion
       __CHARMM_ONLY __DEP_KINDS
 !
       __IMPNONE
 !
-      int, parameter :: ione=1
       int :: n
       float :: rin(n), rout(n), wgt(n)
       float :: d_arclength(:), curvature(:)
@@ -1052,7 +1117,6 @@ __CHARMM_ONLY##IF STRINGM
       float, pointer :: a(:,:), ao(:), am(:), ap(:)
 !
       float :: wrs, err, dum
-      float, parameter :: errtol = 1d-8
       int , parameter :: max_iterations = 200
 !
 #include "mpitype.def"
@@ -1072,9 +1136,9 @@ __CHARMM_ONLY##IF STRINGM
       nrep=nensem+fbc0+fbc1
 !
       nall=n ! all coordinates will be sent to root
-      allocate(rall(nall,nrep), drall(nall,nrep-1),                     &
+      allocate(rall(nall,nrep), drall(nall,nrep),                     &
      &                          rall_new(nall,nrep),                    &
-     &                          drall_new(nall,nrep-1),                 &
+     &                          drall_new(nall,nrep),                 &
      &                          ds2_new(nrep-1),                        &
      &                          a(-1:1,nrep-2),                         &
      &                          cons(nrep-2),                           &
@@ -1084,14 +1148,23 @@ __CHARMM_ONLY##IF STRINGM
 !
       am=>a(-1,:);      ao=>a(0,:);      ap=>a(1,:)
 !
+      rall=zero;
+      drall=zero;
+      rall_new=zero;
+      drall_new=zero;
+!
 !     scale rin by wgt
       wrs=1./sum(wgt)
       swgt=sqrt(wgt*wrs)
       rin_w=rin*swgt
 !
 !     gather all data on root
-      call mpi_gather(rin_w,n,mpifloat,rall(1,fbc0+1),n,mpifloat,             &
-     &                                   0,MPI_COMM_STRNG, ierror)
+      if (nensem.gt.1) then
+__MPI_ONLY      call mpi_gather(rin_w,n,mpifloat,rall(1,fbc0+1),n,mpifloat,             &
+__MPI_ONLY     &                                   0,MPI_COMM_STRNG, ierror)
+      else
+       rall(:,1+fbc0)=rin_w
+      endif
 !
 !     the rest of reparametrization done by root
 !
@@ -1154,7 +1227,7 @@ __CHARMM_ONLY##IF STRINGM
 !         write(500+ME_GLOBAL,*) iteration, rall_new(:,nrep) ! aa
 !         write(400+ME_GLOBAL,*) iteration, rall(:,nrep) ! aa
 !
-        if (err.lt.errtol) then
+        if (err.lt.__ERRTOL) then
          exit
         elseif (iteration.gt.max_iterations) then
  __WRN(whoami,'NO CONVERGENCE AFTER MAXIMUM NUMBER OF ITERATIONS.')
@@ -1191,18 +1264,29 @@ __CHARMM_ONLY##IF STRINGM
      &  (d_arclength(1:nrep-2)*d_arclength(2:nrep-1))
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       endif ! qroot
-
+!
+      if (nensem.gt.1) then
 !ccccc now scatter new coordinates into rout
-      call mpi_scatter(rall(1,fbc0+1), n, mpifloat, rout, n ,mpifloat,        &
-     &                   0, MPI_COMM_STRNG, ierror)
+__MPI_ONLY      call mpi_scatter(rall(1,fbc0+1), n, mpifloat, rout, n ,mpifloat,        &
+__MPI_ONLY     &                   0, MPI_COMM_STRNG, ierror)
+! broadcast arclength and curvature (should only be needed on string root)
+       __BROADCAST_STRING(d_arclength, nrep-1, mpifloat)
+       __BROADCAST_STRING(curvature, nrep-2, mpifloat)
+      else
+       rout=rall(:,1+fbc0)
+      endif
 !     note: may want to broadcast curvature and arclength
 !
 !     note: rall is scaled by wgt, so we need to unscale rout:
       rout=rout/swgt
 !
       if (present(drout)) then
-        call mpi_scatter(drall_new(1,fbc0), n, mpifloat, drout, n ,mpifloat,  &
-     &                   0, MPI_COMM_STRNG, ierror)
+       if (nensem.gt.1) then
+__MPI_ONLY        call mpi_scatter(drall_new(1,fbc0+1), n, mpifloat, drout, n ,mpifloat,  &
+__MPI_ONLY     &                   0, MPI_COMM_STRNG, ierror)
+       else
+        drout=drall_new(:,1+fbc0)
+       endif
 !     note: drout is scaled by wgt; to unscale, uncomment below
 !       drout=drout/swgt
 !     normalize drout to unity
@@ -1264,7 +1348,7 @@ __CHARMM_ONLY##IF STRINGM
      &     s(nrep),curv_me(nrep-2))
 !
 !     determine send/receive displacements and allocate arays
-      nall=ceiling(1.0d0*n/nrep)
+      nall=ceiling(1.0d0*n/nensem)
       allocate(rall(nall,nrep), drall(nall,nrep), dr2all(nall,nrep-2))
 !     initialize
       rall=0.0
@@ -1282,9 +1366,14 @@ __CHARMM_ONLY##IF STRINGM
       wrs=1./sum(wgt)
       swgt=sqrt(wgt*wrs)
       rin_w=rin*swgt
-      call mpi_alltoallv(rin_w,s_count,s_disp,mpifloat,                    &
-     &                   rall,r_count,r_disp,mpifloat,                     &
-     &                   MPI_COMM_STRNG, ierror)
+!
+      if (nensem.gt.1) then
+__MPI_ONLY      call mpi_alltoallv(rin_w,s_count,s_disp,mpifloat,                    &
+__MPI_ONLY     &                   rall,r_count,r_disp,mpifloat,                     &
+__MPI_ONLY     &                   MPI_COMM_STRNG, ierror)
+      else
+       rall(:,1+fbc0)=rin_w
+      endif
 !
 !     take care of BC as well
       if (fbc0.eq.1)                                                    &
@@ -1303,8 +1392,12 @@ __CHARMM_ONLY##IF STRINGM
       drall(:,1:nrep-1)=rall(:,2:nrep)-rall(:,1:nrep-1)
       ds2me=sum(drall**2,1)
 !     reduce ds2
-      call mpi_allreduce(ds2me, ds2all, nrep-1, mpifloat,                  &
-     & MPI_SUM, MPI_COMM_STRNG, ierror)
+      if (nensem.gt.1) then
+__MPI_ONLY       call mpi_allreduce(ds2me, ds2all, nrep-1, mpifloat,                  &
+__MPI_ONLY      & MPI_SUM, MPI_COMM_STRNG, ierror)
+      else
+       ds2all=ds2me
+      endif
 !     now can compute arclength
       s(1)=0
       do i=1,nrep-1
@@ -1327,8 +1420,12 @@ __CHARMM_ONLY##IF STRINGM
 !     compute magnitude
       curv_me=sum(dr2all**2,1)
 !     reduce from all cpus
-      call mpi_allreduce(curv_me, curvature, nrep-2, mpifloat,             &
-     & MPI_SUM, MPI_COMM_STRNG, ierror)
+      if (nensem.gt.1) then
+__MPI_ONLY      call mpi_allreduce(curv_me, curvature, nrep-2, mpifloat,             &
+__MPI_ONLY     & MPI_SUM, MPI_COMM_STRNG, ierror)
+      else
+       curvature=curv_me
+      endif
 !     take square root
       curvature=sqrt(curvature)
 !     massage tangent vector (compute at nodes, rather than centers)
@@ -1340,9 +1437,13 @@ __CHARMM_ONLY##IF STRINGM
       enddo
 !
 !ccccc now scatter tangent vector
-      call mpi_alltoallv(drall,r_count,r_disp,mpifloat,                    &
-     &                    drout,s_count,s_disp,mpifloat,                   &
-     &                    MPI_COMM_STRNG, ierror)
+      if (nensem.gt.1) then
+__MPI_ONLY      call mpi_alltoallv(drall,r_count,r_disp,mpifloat,                    &
+__MPI_ONLY     &                    drout,s_count,s_disp,mpifloat,                   &
+__MPI_ONLY     &                    MPI_COMM_STRNG, ierror)
+      else
+       drout=drall(:,1+fbc0)
+      endif
 !     drout is scaled by wgt, we can unscale it here if desired:
 !      drout=drout/swgt
 !     scale new drout to unit length
@@ -1480,7 +1581,7 @@ __CHARMM_ONLY##IF STRINGM
        int, pointer, dimension (:) :: ind0
        int :: i, j, ii, jj, ibeg, iend, ncom
        int :: stat(MPI_STATUS_SIZE)
-       int :: error
+       int :: ierror
 !
  __DECLARE_MSGBUF
 #include "mpitype.def"
@@ -1630,12 +1731,9 @@ __CHARMM_ONLY##IF STRINGM
 !ccc  (1) if we are replicas [1 .. nstring-1], first receive aligned coordinates from
 !ccc      replica on the left (0 .. nstring -2)
          if (mestring.gt.0) then
-          call MPI_RECV(x0, ncom, mpifloat, mestring-1,     &
-     &                   1, MPI_COMM_STRNG, stat, error)
-          call MPI_RECV(y0, ncom, mpifloat, mestring-1,     &
-     &                   2, MPI_COMM_STRNG, stat, error)
-          call MPI_RECV(z0, ncom, mpifloat, mestring-1,     &
-     &                   3, MPI_COMM_STRNG, stat, error)
+__MPI_ONLY       call MPI_RECV(x0, ncom, mpifloat, mestring-1, 1, MPI_COMM_STRNG, stat, ierror)
+__MPI_ONLY       call MPI_RECV(y0, ncom, mpifloat, mestring-1, 2, MPI_COMM_STRNG, stat, ierror)
+__MPI_ONLY       call MPI_RECV(z0, ncom, mpifloat, mestring-1, 3, MPI_COMM_STRNG, stat, ierror)
 !ccc now manipulate local axes to achieve best RMSD
           corr1=dot_product(x0,x1)+dot_product(y0,y1)+dot_product(z0,z1)
           corr2=dot_product(x0,x2)+dot_product(y0,y2)+dot_product(z0,z2)
@@ -1667,12 +1765,9 @@ __CHARMM_ONLY##IF STRINGM
 !ccc  (2) if we are replicas [0 .. nensem-2], send aligned local coordinates to
 !ccc      replica on the right (1 .. nensem -1)
          if (mestring.lt.nstring-1) then
-          call MPI_SEND(x1, ncom, mpifloat, mestring+1,     &
-     &                   1, MPI_COMM_STRNG, error)
-          call MPI_SEND(y1, ncom, mpifloat, mestring+1,     &
-     &                   2, MPI_COMM_STRNG, error)
-          call MPI_SEND(z1, ncom, mpifloat, mestring+1,     &
-     &                   3, MPI_COMM_STRNG, error)
+__MPI_ONLY       call MPI_SEND(x1, ncom, mpifloat, mestring+1, 1, MPI_COMM_STRNG, ierror)
+__MPI_ONLY       call MPI_SEND(y1, ncom, mpifloat, mestring+1, 2, MPI_COMM_STRNG, ierror)
+__MPI_ONLY       call MPI_SEND(z1, ncom, mpifloat, mestring+1, 3, MPI_COMM_STRNG, ierror)
          endif ! whoiam
 !    free memory
 !
@@ -1684,12 +1779,9 @@ __CHARMM_ONLY##IF STRINGM
 !
 !    now broadcast relevant frames + cv to slave nodes
        if (MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.SIZE_LOCAL.gt.1) then
-        call MPI_BCAST(frames%r(:,:,ibeg:iend), (iend-ibeg+1)*9,        &
-     &   mpifloat, 0, MPI_COMM_LOCAL, error)
-        call MPI_BCAST(cv%r(1,main), cv%num_cv, mpifloat,   &
-     &   0, MPI_COMM_LOCAL, error)
-        call MPI_BCAST(cv%r(1,comp), cv%num_cv, mpifloat,   &
-     &   0, MPI_COMM_LOCAL, error)
+        __BROADCAST_LOCAL(frames%r(:,:,ibeg:iend), (iend-ibeg+1)*9, mpifloat)
+        __BROADCAST_LOCAL(cv%r(1,main), cv%num_cv, mpifloat)
+        __BROADCAST_LOCAL(cv%r(1,comp), cv%num_cv, mpifloat)
        endif
 !
 !      frames may have changed as a result of our 'acrobatics', but not the
@@ -1718,7 +1810,7 @@ __CHARMM_ONLY##IF STRINGM
 !
        float :: A1(3,3), A2(3,3), A3(3,3), A4(3,3)
        float :: rmsd1, rmsd2, rmsd3, rmsd4, mrmsd ! for rmsd alignment
-       int :: i, ibeg, iend, error
+       int :: i, ibeg, iend, ierror
 !
 #include "mpitype.def"
 !
@@ -1804,12 +1896,9 @@ __CHARMM_ONLY##IF STRINGM
 !
 !    now broadcast relevant frames + cv to slave nodes
        if (MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.SIZE_LOCAL.gt.1) then
-        call MPI_BCAST(frames%r(:,:,ibeg:iend), (iend-ibeg+1)*9,        &
-     &   mpifloat, 0, MPI_COMM_LOCAL, error)
-        call MPI_BCAST(cv%r(1,main), cv%num_cv, mpifloat,   &
-     &   0, MPI_COMM_LOCAL, error)
-        call MPI_BCAST(cv%r(1,comp), cv%num_cv, mpifloat,   &
-     &   0, MPI_COMM_LOCAL, error)
+        __BROADCAST_LOCAL(frames%r(:,:,ibeg:iend), (iend-ibeg+1)*9, mpifloat)
+        __BROADCAST_LOCAL(cv%r(1,main), cv%num_cv, mpifloat)
+        __BROADCAST_LOCAL(cv%r(1,comp), cv%num_cv, mpifloat)
        endif
 !
 !      frames may have changed as a result of our 'acrobatics', but not the
@@ -1934,7 +2023,7 @@ __DECLARE_MSGBUF
 !
       end subroutine frame_align_voro
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-      subroutine hypercube_allgatherv(message,count,displ,type,         &
+      subroutine hypercube_allgatherv(message, count, displ, type,         &
      &                                comm, error, rank, size)
 !     custom in-place all-gatherv
 !
@@ -1969,9 +2058,9 @@ __DECLARE_MSGBUF
        rcount = sum ( count (  ind : ind + step - 1 ) )
 !          write(ME_GLOBAL+500,'(5I6)') ! aa
 !     &     step, rank, partner, ind, rdispl, rcount ! aa
-       call mpi_sendrecv(message(sdispl+1),scount,type,partner,rank,    &
-     &                   message(rdispl+1),rcount,type,partner,partner, &
-     &                   comm, stat, error)
+__MPI_ONLY       call mpi_sendrecv(message(sdispl+1),scount,type,partner,rank,    &
+__MPI_ONLY     &                   message(rdispl+1),rcount,type,partner,partner, &
+__MPI_ONLY     &                   comm, stat, error)
        step = step*2
       enddo
 !           close(ME_GLOBAL+500)
