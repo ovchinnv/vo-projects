@@ -26,6 +26,7 @@
       int :: i
       character, parameter :: lower2(26)=(/ (lower(i:i),i=1,26)/)
       character, parameter :: upper2(26)=(/ (upper(i:i),i=1,26)/)
+      character, parameter, public :: letters(52)=(/ (lower2(i), i=1,26), (upper2(i), i=1,26) /)
       character, parameter, public :: digits2(10)=(/ (digits(i:i),i=1,10)/)
       character, parameter :: tilde='~'
       character, parameter :: decimal='.'
@@ -40,10 +41,13 @@
       character, parameter :: vector_close(2)=(/')',']'/)
       character, parameter :: context_open(1)=(/'{'/)
       character, parameter :: context_close(1)=(/'}'/)
+      character, parameter :: string_open(1)=(/'"'/)
+      character, parameter :: string_close(1)=(/'"'/) ! do not have to be the same -- see code below
       character(len=200), parameter :: allowed=upper//lower//digits//decimal//underscore//hyphen//slash//tilde
       character(len=5), parameter :: exec_start='exec:'
       character(len=18), parameter :: exec_msg='Execution stack +='
       character(len=4), parameter, public :: maincontext_name='MAIN'
+      __STRING_PARAM(bigline,======================>)
       int, parameter :: maincontext_namelen=4
 !
       int, parameter, private :: context_incr=1  ! expand increment for contexts
@@ -53,6 +57,8 @@
       type (contexts), save :: context              ! contexts
       type (params), save, pointer :: parameters    ! pointer to a single parameter set (e.g. main parameter set)
       type (commands), save, pointer :: executables ! pointer to a single command set   (e.g. main command set)
+!
+      public bigline
 !
       public atoi     	! convert string to int 
       public atof	! convert string to double
@@ -88,12 +94,13 @@
       public ltoa
 !
       interface adjustleft
-       module procedure adjustleft_1, adjustleft_2
+       module procedure adjustleft_1, adjustleft_2, adjustleft_3
       end interface adjustleft
 !
       interface pop_string
        module procedure pop_string_default
        module procedure pop_string_custom
+       module procedure pop_string_custom2
       end interface pop_string
 !
       interface itoa
@@ -267,7 +274,7 @@
        end function params_getval_nocase
 !********************************************************************************************
        character(len=vartaglen) function getval(atag,ctx)
-       use output, only: warning
+       __DEP_OUTPUT
        character(len=vartaglen) :: value
        character(len=*), intent(in) :: atag
        character(len=*), intent(in), optional :: ctx
@@ -275,26 +282,26 @@
        __IAM(GETVAL)
        ictx=1 ; if (present(ctx)) ictx=max(1,parser_find_context(ctx))
        value=params_getval(context%context_params(ictx),atag)
-       if (len_trim(value).eq.0) call warning(whoami,'Parameter "'//trim(atag)//'" not found in context "'//trim(context%context_name(ictx))//'"',-1)
+       if (len_trim(value).eq.0) __WRN3(whoami,'Parameter "'//trim(atag)//'" not found in context "'//trim(context%context_name(ictx))//'"',-1)
        getval=value
 !
        end function getval
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        character(len=vartaglen) function getval_nocase(atag,ctx)
-       use output, only: warning
+       __DEP_OUTPUT
        character(len=vartaglen) :: value
        character(len=*), intent(in) :: atag
        character(len=*), intent(in), optional :: ctx ; int :: ictx
        __IAM(GETVAL_NOCASE)
        ictx=1 ; if (present(ctx)) ictx=max(1,parser_find_context(ctx))
        value=params_getval_nocase(context%context_params(ictx),atag)
-       if (len_trim(value).eq.0) call warning(whoami,'Parameter "'//trim(atag)//'" not found in context "'//trim(context%context_name(ictx))//'"',-1)
+       if (len_trim(value).eq.0) __WRN3(whoami,'Parameter "'//trim(atag)//'" not found in context "'//trim(context%context_name(ictx))//'"',-1)
        getval_nocase=value
 !
        end function getval_nocase
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        character(len=vartaglen) function getval_nocasev(atag,ctx)
-       use output, only: warning, message
+       __DEP_OUTPUT
        character(len=vartaglen) :: value
        character(len=*), intent(in) :: atag
        character(len=*), intent(in), optional :: ctx(:) 
@@ -311,38 +318,38 @@
           if (i.gt.1) call message(whoami, 'Checking for parameter "'//trim(atag)//'" in context "'//trim(context%context_name(ictx))//'"',0)
           value=params_getval_nocase(context%context_params(ictx),atag)
           if (len_trim(value).eq.0) then ! issue a warning; if i=j, wrnlev=-1 (should be fatal)
-           call warning(whoami,'Parameter "'//trim(atag)//'" not found in context "'//trim(context%context_name(ictx))//'"', min(1,j-i)-1)
+           __WRN3(whoami,'Parameter "'//trim(atag)//'" not found in context "'//trim(context%context_name(ictx))//'"', min(1,j-i)-1)
           else  ! value
            exit
           endif ! value
          else ! (ictx==0)
-          call warning(whoami,'Skipping nonexistent context "'//trim(ctx(i))//'"',min(1,j-i)-1)
+          __WRN3(whoami,'Skipping nonexistent context "'//trim(ctx(i))//'"',min(1,j-i)-1)
          endif ! ictx
         enddo ! loop over contexts
        else ! present(ctx) : default to main context
         value=params_getval_nocase(context%context_params(ictx),atag)
-        if (len_trim(value).eq.0) call warning(whoami,'Parameter "'//trim(atag)//'" not found in context "'//trim(context%context_name(ictx))//'"',-1)
+        if (len_trim(value).eq.0) __WRN3(whoami,'Parameter "'//trim(atag)//'" not found in context "'//trim(context%context_name(ictx))//'"',-1)
        endif ! present(ctx)
 !
        getval_nocasev=value
        end function getval_nocasev
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        character(len=vartaglen) function getval_nocase_upper(atag,ctx)
-       use output, only: warning
+       __DEP_OUTPUT
        character(len=vartaglen) :: value
        character(len=*), intent(in) :: atag
        character(len=*), intent(in), optional :: ctx ; int :: ictx
        __IAM(GETVAL_NOCASE_UPPER)
        ictx=1 ; if (present(ctx)) ictx=max(1,parser_find_context(ctx))
        value=params_getval_nocase(context%context_params(ictx),atag)
-       if (len_trim(value).eq.0) call warning(whoami,'Parameter "'//trim(atag)//'" not found in context "'//trim(context%context_name(ictx))//'"',-1)
+       if (len_trim(value).eq.0) __WRN3(whoami,'Parameter "'//trim(atag)//'" not found in context "'//trim(context%context_name(ictx))//'"',-1)
        call toupper(value)
        getval_nocase_upper=value
 !
        end function getval_nocase_upper
 !********************************************************************************************
        function get_next_command(ctx) ! returning command as an array of characters
-       use output, only: warning
+       __DEP_OUTPUT
        character(len=maxlinelen), pointer :: get_next_command
 ! some advanced Fortran 2003 commented out
 !       character(len=:), pointer :: get_next_command
@@ -373,7 +380,7 @@
          c%current=c%current+1
         endif ! c%initialized
        else
-        call warning(whoami,'Context "'//trim(ctx)//'" not found.',-1)
+        __WRN3(whoami,'Context "'//trim(ctx)//'" not found.',-1)
        endif ! ictx > 0
 !
        end function get_next_command
@@ -405,7 +412,7 @@
        end function noexec
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        function existtag(atag,ctx)
-       use output, only: error
+       __DEP_OUTPUT
        bool :: existtag
        character(len=vartaglen) :: value
        character(len=*), intent(in) :: atag
@@ -439,7 +446,7 @@
      &  ,communicator,me__       &
 #endif
      &                           )
-       use output
+       __DEP_OUTPUT
 !
 #ifdef __PARALLEL
        __DEP_MPI
@@ -450,6 +457,7 @@
        int4mpi :: communicator, me
        int4mpi, optional :: me__
        int :: msglev
+       int4mpi :: ierr
 #endif
 !
        int :: fid ! input file handle
@@ -460,10 +468,10 @@
        character :: allowed2(200),c
        bool :: qtag, qeq, qval, qexec, qerror ! active : tag, equals, value, executable line, error flag
        bool :: qvector ! flag that is active when we are reading a vector (certain default behavior is overridden)
+       bool :: qstring ! flag that is active when we are reading a character string (anything is allowed inside)
        bool :: qcontext ! flag that is active when any context other than the main context is active
 !
        integer :: ioerr
-       int4mpi :: ierr
        int :: l=0, ltag=0, lval=0, lexec=0
        character(len=2*maxlinelen) :: cmdline
        character(len=vartaglen) :: tag, val, exec
@@ -484,6 +492,7 @@
        qvector=.false.
        qerror=.false.
        qexec=.false.
+       qstring=.false.
        if (.not. parser_initialized) call parser_init()
        call message(whoami, 'Reading input file.')
        do while (.true.)
@@ -514,22 +523,26 @@
          qeq=.false.
          qvector=.false.      ! this implies that a vector entry currently cannot span multiple lines
          qexec=.false.        ! this implies that an executable command currently cannot span multiple lines
+         qstring=.false.      ! string cannot span multiple lines
 !
          do while (l.ge.1)
            i=i+1
            c=cmdline(i:i)
 !     write(0,*) tag(1:ltag), val(1:lval),i
-           if (any(comment.eq.c.or.i.eq.l)) then ! end of command line
+           if ( (any(comment.eq.c).and..not.qstring).or.(i.eq.l)) then ! end of command line
 !write(0,*) "EOL:", qtag, tag(1:ltag), '=', val(1:lval)
             if ((qtag.and.i.gt.1).or.qeq) then
-             call warning(whoami,'Unexpected end of line',0)
+             __WRN3(whoami,'Unexpected end of line',0)
              qerror=.true.; exit 
             elseif (qval) then
              if (lval.eq.0) then
-              call warning(whoami, 'Missing value for parameter "'//tag(1:ltag)//'". Skipping line',0)
+              __WRN3(whoami, 'Missing value for parameter "'//tag(1:ltag)//'". Skipping line',0)
               qerror=.true.; exit 
              elseif (qvector) then
-              call warning(whoami, 'Missing closing bracket for vector parameter "'//tag(1:ltag)//'". Skipping line',0)
+              __WRN3(whoami, 'Missing closing bracket for vector parameter "'//tag(1:ltag)//'". Skipping line',0)
+              qerror=.true.; exit 
+             elseif (qstring) then
+              __WRN3(whoami, 'Missing termination character for string parameter "'//tag(1:ltag)//'". Skipping line',0)
               qerror=.true.; exit 
              else ! store tag and val
               call message(whoami, tag(1:ltag)//' <= '//val(1:lval))
@@ -541,7 +554,7 @@
             elseif (qexec) then
              if (lexec.eq.0) then
               contextname=>context%context_name(context%current)
-              call warning(whoami, 'Empty command line in context "'//contextname(1:len_trim(contextname))//'". Skipping line',0)
+              __WRN3(whoami, 'Empty command line in context "'//contextname(1:len_trim(contextname))//'". Skipping line',0)
               qerror=.true.; exit 
              else ! store command
 ! remove trailing space
@@ -557,6 +570,76 @@
              exit
             endif ! qtag
 !
+           elseif ( any(comment.eq.c).and.qstring ) then ! comments are ok as long as they are part of a string
+            __INC(lval) ; val(lval:lval)=c;
+!=============================================================================================================
+           elseif (any(string_open.eq.c).or.any(string_close.eq.c)) then ! beginning/finishing string parameter
+!
+!write(0,*) cmdline(i:l), qtag, qval, qstring ! aa
+!
+            if ((qtag.and.ltag.gt.0).or.qeq) then
+             __WRN3(whoami, 'Unexpected string character while processing parameter "'//tag(1:ltag)//'".  Skipping line',0)
+             qerror=.true. ; exit
+!
+            elseif (qtag.and.(ltag.eq.0)) then
+             __WRN3(whoami, 'Missing parameter name. Skipping line',0)
+             qerror=.true. ; exit
+!
+            elseif (qexec) then ! this is a valid command character
+             lexec=lexec+1; exec(lexec:lexec)=c
+!
+            elseif (qvector) then
+             __WRN3(whoami, 'Unexpected string character while processing vector parameter "'//tag(1:ltag)//'"  Skipping line',0)
+             qerror=.true. ; exit
+!
+            elseif (qval) then ! the only acceptable occurrence
+             if (qstring) then
+              if (any(string_close.eq.c)) then !  already reading a string so terminate and attempt to store
+               qstring=.false. ! the only legitimate occurrence
+!     peek ahead to make sure we have a spacer, if not, issue a warning and skip line
+!     (the convention is that a vector value must be separated from a subsequent tag)
+               c=cmdline(i+1:i+1)
+               if ( (i.lt.l) .and. (all(space.ne.c)) .and. (all(comment.ne.c))) then 
+                __WRN3(whoami, 'Error reading string value for parameter "'//tag(1:ltag)//'". Skipping line.',0)
+                qerror=.true.; exit 
+!     otherwise, attempt to add tag/value pair
+               else
+!                if (lval.eq.0) then ! this is unnecessary in view of what is below
+!                 __WRN3(whoami, 'Missing string value for parameter "'//tag(1:ltag)//'". Skipping line.',0)
+!                 qerror=.true.; exit 
+!                endif
+                call adjustleft(val(1:lval)); lval=len_trim(val(1:lval));
+                if (lval.eq.0) then
+                 __WRN3(whoami, 'Missing string value for parameter "'//tag(1:ltag)//'". Skipping line.',0)
+                 qerror=.true.; exit 
+                else ! add pair
+                 call adjustleft(val(1:lval)); lval=len_trim(val(1:lval));
+                 call message(whoami, tag(1:ltag)//'[STRING] <= "'//val(1:lval)//'"')
+                 j=params_uadd(parameters,tag,val,ltag,lval)
+                 ltag=0; lval=0
+                 cmdline=cmdline(i+1:l) ! remove tag/val pair from string
+                 call adjustleft(cmdline) ! remove tag/val pair from string
+                 l=len_trim(cmdline)
+                 i=0
+                endif ! lval
+                qtag=.true. ; ltag=0
+                qval=.false.
+               endif ! (i.lt.l)
+              else ! c=string_open
+               __WRN3(whoami, 'Unexpected string opening character while processing string parameter "'//tag(1:ltag)//'"  Skipping line',0)
+              endif ! c=string_close
+             else ! not qstring, so start reading a new string
+              if (any(string_open.eq.c)) then
+               qstring=.true. ! reading a string now
+              else ! not qstring
+               __WRN3(whoami, 'Unexpected string termination character while processing parameter "'//tag(1:ltag)//'"  Skipping line',0)
+              endif
+             endif ! qstring
+            else ! should not be here !
+             __WRN3(whoami, 'Unexpected character encountered (please report this internal error). Abort.',-1)
+             qerror=.true. ; exit
+            endif
+!=================================================================================
            elseif (any(space.eq.c)) then ! completed a tag or value (since lines cannot begin with blanks -- see above)
 !
             if (qtag) then
@@ -565,15 +648,15 @@
             elseif (qeq) then
 !      nothing
             elseif (qval) then 
-             if (qvector) then ! if we are in the process of reading a vector, then the separator (space) tags do not apply;
+             if (qvector.or.qstring) then ! if we are in the process of reading a vector/string, then the separator (space) tags do not apply;
 !                                      otherwise, a tag/value pair has been completed, so attempt to add pair and reinitialize for new tag
-              lval=lval+1; val(lval:lval)=' ' ! substitute a space for all separators
+              __INC(lval); val(lval:lval)=' ' ! substitute a space for all separators
              else
 !
               qval=.false.
               qtag=.true.
               if (lval.eq.0) then
-               call warning(whoami, 'Missing value for parameter "'//tag(1:ltag)//'". Skipping line',0)
+               __WRN3(whoami, 'Missing value for parameter "'//tag(1:ltag)//'". Skipping line',0)
                qerror=.true.; exit 
               else ! store tag and val
                call message(whoami, tag(1:ltag)//' <= '//val(1:lval))
@@ -589,14 +672,14 @@
             elseif (qexec) then ! space is a valid exec character
              lexec=lexec+1; exec(lexec:lexec)=' '
             endif ! qtag
-!
+!==============================================================================================
            elseif (any(equals.eq.c)) then ! "=" encountered : assume we have completed a tag
 ! write(0,*) qtag, qeq, qval, "tag: ", tag(1:ltag)
 ! write(0,*) "CMD:", cmdline(i+1:l)
             if (qtag) then
              qtag=.false.
              if (ltag.eq.0) then
-              call warning(whoami, 'Missing parameter name. Skipping line',0)
+              __WRN3(whoami, 'Missing parameter name. Skipping line',0)
               qerror=.true.; exit 
              endif
 !
@@ -614,12 +697,15 @@
              call adjustleft(cmdline) 
              l=len_trim(cmdline)
              i=0
-            elseif (qval) then ! expected a value but found '='
-             if (lval.eq.0) then
-              call warning(whoami, 'Missing value for parameter "'//tag(1:ltag)//'". Skipping line',0)
+            elseif (qval) then ! found '=' while reading parameter value
+             if (qstring) then ! '=' is legitimate inside strings
+              __INC(lval); val(lval:lval)='='
+!write(0,*) '= inside string ; tag= ',tag(1:ltag), '; val(so far)= ', val(1:lval)
+             elseif (lval.eq.0) then
+              __WRN3(whoami, 'Missing value for parameter "'//tag(1:ltag)//'". Skipping line',0)
               qerror=.true.; exit 
              elseif (qvector) then
-              call warning(whoami, 'Missing closing bracket for vector parameter "'//tag(1:ltag)//'". Skipping line',0)
+              __WRN3(whoami, 'Missing closing bracket for vector parameter "'//tag(1:ltag)//'". Skipping line',0)
               qerror=.true.; exit 
              else ! store tag and val (despite the misplaced '=' sign ; leave that for next cycle)
               call adjustleft(val(1:lval)); lval=len_trim(val(1:lval));
@@ -630,9 +716,9 @@
               call adjustleft(cmdline) ! remove tag/val pair from string
               l=len_trim(cmdline)
               i=0
-             endif ! lval
-             qtag=.true. ; ltag=0
-             qval=.false.
+              qtag=.true. ; ltag=0
+              qval=.false.
+             endif ! qstring
 !
             elseif (qexec) then ! this is a valid command character
              lexec=lexec+1; exec(lexec:lexec)=c
@@ -640,9 +726,11 @@
 !
 !************************************** CONTEXTS **************************************
            elseif (any(context_open.eq.c)) then ! encountered a context opening bracket
+            if (qstring) then ! allowed
+             __INC(lval) ; val(lval:lval)=c;
 !    check if already inside a context (currently nesting is not supported)
-            if (qcontext) then
-             call warning(whoami, 'Unexpected open brace while processing parameter "'//tag(1:ltag),0)
+            elseif (qcontext) then
+             __WRN3(whoami, 'Unexpected open brace while processing parameter "'//tag(1:ltag),0)
              call message(whoami, 'Nested contexts are not allowed. Skipping line.')
              qerror=.true.; exit
 !
@@ -651,7 +739,7 @@
               call toupper(tag)
 ! check to make sure the new context name is not the default name
               if (tag(1:ltag).ne.maincontext_name(1:maincontext_namelen)) then
-               call message(whoami, '======================> Switching to context "'//tag(1:ltag)//'".')
+               call message(whoami, bigline//' Switching to context "'//tag(1:ltag)//'".')
 !     note : cannot simply do this:
 !               parameters =>context%context_params  (parser_context(tag(1:ltag)))
 !     because context_params might need to be reallocated _during the call_; in the meantime, parameters points to the wrong thing
@@ -668,25 +756,27 @@
                l=len_trim(cmdline)
                i=0
               else ! context name not allowed
-               call warning(whoami, 'Context name "'//tag(1:ltag)//'" is not allowed. Skipping line.',0)
+               __WRN3(whoami, 'Context name "'//tag(1:ltag)//'" is not allowed. Skipping line.',0)
                qerror=.true.; exit 
               endif ! tag .ne. maincontext_name
              else
-              call warning(whoami, 'Missing context name. Skipping line.',0)
+              __WRN3(whoami, 'Missing context name. Skipping line.',0)
               qerror=.true.; exit 
              endif ! ltag
 !
             else
-             call warning(whoami, 'Unexpected open brace while processing parameter "'//tag(1:ltag)//'". Skipping line.',0)
+             __WRN3(whoami, 'Unexpected open brace while processing parameter "'//tag(1:ltag)//'". Skipping line.',0)
              qerror=.true.; exit
             endif ! qcontext
-!
+!===========================================================================================
            elseif (any(context_close.eq.c)) then ! encountered a context closing bracket
-            if (.not. qcontext) then ! make sure that there was an open brace
-             call warning(whoami, 'Encountered a close brace without a matching open brace. Skipping line.',0)
+            if (qstring) then ! allowed
+             __INC(lval) ; val(lval:lval)=c;
+            elseif (.not. qcontext) then ! make sure that there was an open brace
+             __WRN3(whoami, 'Encountered a close brace without a matching open brace. Skipping line.',0)
              qerror=.true.; exit
             elseif (qtag.and.ltag.eq.0) then   ! if expecting a new tag
-             call message(whoami, '======================> Returning to main context.')
+             call message(whoami, bigline//' Returning to main context.')
 !
              j=parser_context(maincontext_name) ! default context
              parameters =>context%context_params(j)
@@ -719,7 +809,7 @@
             elseif (qexec) then
              if (lexec.le.0) then
               contextname=>context%context_name(context%current)
-              call warning(whoami, 'Unexpected close brace while reading command in context "'//contextname(1:len_trim(contextname))//'". Skipping line',0)
+              __WRN3(whoami, 'Unexpected close brace while reading command in context "'//contextname(1:len_trim(contextname))//'". Skipping line',0)
               qerror=.true.; exit 
              else ! store command
 ! remove trailing space
@@ -740,20 +830,22 @@
              endif
 !
             else
-             call warning(whoami, 'Unexpected close brace while processing parameter "'//tag(1:ltag)//'". Skipping line.',0)
+             __WRN3(whoami, 'Unexpected close brace while processing parameter "'//tag(1:ltag)//'". Skipping line.',0)
              qerror=.true.; exit
             endif ! qcontext
 !************************************** VECTOR DATA *****************************************
            elseif (any(vector_open.eq.c)) then ! encountered an opening vector bracket
-            if (qtag) then ! opening bracket not allowed
-             call warning(whoami, 'Unexpected opening bracket when processing parameter "'//tag(1:ltag)//'". Skipping line.',0)
+            if (qstring) then ! allowed
+             __INC(lval) ; val(lval:lval)=c;
+            elseif (qtag) then ! opening bracket not allowed
+             __WRN3(whoami, 'Unexpected opening bracket when processing parameter "'//tag(1:ltag)//'". Skipping line.',0)
              qerror=.true.; exit
             elseif (qeq) then
-             call warning(whoami, 'Unexpected opening bracket when processing parameter "'//tag(1:ltag)//'". Skipping line.',0)
+             __WRN3(whoami, 'Unexpected opening bracket when processing parameter "'//tag(1:ltag)//'". Skipping line.',0)
              qerror=.true.; exit 
             elseif (qval) then
              if (qvector) then ! already read one bracket 
-              call warning(whoami, & 
+              __WRN3(whoami, & 
 &                          'Unexpected opening bracket when processing vector parameter "'//tag(1:ltag)//'". Skipping line.',0)
              qerror=.true.; exit
              else
@@ -764,15 +856,17 @@
              lexec=lexec+1; exec(lexec:lexec)=c
 !
             endif
-!
+!========================================================================================
            elseif (any(vector_close.eq.c)) then ! encountered a closing vector bracket
+            if (qstring) then ! allowed
+             __INC(lval) ; val(lval:lval)=c;
 !      write(0,*) '**', qtag, qeq, qval, qvector, tag, ltag, val, lval; !aa
-            if (qtag) then ! closing bracket not allowed
-             call warning(whoami, 'Unexpected closing bracket when processing parameter "'//tag(1:ltag)//'". Skipping line.',0)
+            elseif (qtag) then ! closing bracket not allowed
+             __WRN3(whoami, 'Unexpected closing bracket when processing parameter "'//tag(1:ltag)//'". Skipping line.',0)
 !              write(0,*) cmdline(i:l) ! aa
              qerror=.true.; exit
             elseif (qeq) then
-             call warning(whoami, 'Unexpected closing bracket when processing parameter "'//tag(1:ltag)//'". Skipping line.',0)
+             __WRN3(whoami, 'Unexpected closing bracket when processing parameter "'//tag(1:ltag)//'". Skipping line.',0)
              qerror=.true.; exit 
             elseif (qval) then
              qvector=.false. ! the only legitimate occurrence
@@ -780,17 +874,17 @@
 !     (the convention is that a vector value must be separated from a subsequent tag)
              c=cmdline(i+1:i+1)
              if ( (i.lt.l) .and. (all(space.ne.c)) .and. (all(comment.ne.c))) then 
-              call warning(whoami, 'Error reading vector value for parameter "'//tag(1:ltag)//'". Skipping line.',0)
+              __WRN3(whoami, 'Error reading vector value for parameter "'//tag(1:ltag)//'". Skipping line.',0)
               qerror=.true.; exit 
 !     otherwise, attempt to add tag/value pair
              else
               if (lval.eq.0) then
-               call warning(whoami, 'Missing vector value for parameter "'//tag(1:ltag)//'". Skipping line.',0)
+               __WRN3(whoami, 'Missing vector value for parameter "'//tag(1:ltag)//'". Skipping line.',0)
                qerror=.true.; exit 
               endif
               call adjustleft(val(1:lval)); lval=len_trim(val(1:lval));
               if (lval.eq.0) then
-               call warning(whoami, 'Missing vector value for parameter "'//tag(1:ltag)//'". Skipping line.',0)
+               __WRN3(whoami, 'Missing vector value for parameter "'//tag(1:ltag)//'". Skipping line.',0)
                qerror=.true.; exit 
               else ! add pair
                call adjustleft(val(1:lval)); lval=len_trim(val(1:lval));
@@ -810,10 +904,10 @@
              lexec=lexec+1; exec(lexec:lexec)=c
 !
             else ! no input mode (qtag/qeq/qval/qexec) : this should never happen
-             call warning(whoami, 'Misplaced closing bracket in input. Skipping line.',0)
+             __WRN3(whoami, 'Misplaced closing bracket in input. Skipping line.',0)
              qerror=.true.; exit
             endif 
-!
+!=============================================================================================
            elseif (any(allowed2(1:allowed_len).eq.c)) then ! check that the characters are allowed
 !
             if (qtag) then ! reading a tag
@@ -839,32 +933,34 @@
             if (qtag) then ! reading a tag
              if (all(lower2(1:26).ne.c).and.all(upper2(1:26).ne.c)) then
               if (ltag.eq.0) then 
-               call warning(whoami, 'Parameter names must start with a letter. Skipping line.',0)
+               __WRN3(whoami, 'Parameter names must start with a letter. Skipping line.',0)
                qerror=.true.; exit
               elseif (all(digits2(1:10).ne.c).and.underscore.ne.c) then
-               call warning(whoami, 'Illegal character in parameter name. Skipping line.',0)
+               __WRN3(whoami, 'Illegal character in parameter name. Skipping line.',0)
                qerror=.true.; exit
               endif
              endif
              ltag=ltag+1; tag(ltag:ltag)=c
 !
             elseif (qeq) then
-             call warning(whoami, 'Missing value for parameter "'//tag(1:ltag)//'". Skipping line.',0)
+             __WRN3(whoami, 'Missing value for parameter "'//tag(1:ltag)//'". Skipping line.',0)
              qerror=.true.; exit 
 !
             elseif (qval) then
-             lval=lval+1; val(lval:lval)=c
+             __INC(lval); val(lval:lval)=c
 !
             elseif (qexec) then ! append to command
-             lexec=lexec+1; exec(lexec:lexec)=c
+             __INC(lexec); exec(lexec:lexec)=c
 !
             else
-             call warning(whoami, 'Internal input error. Skipping line',0)
+             __WRN3(whoami, 'Internal input error (please report). Skipping line',-1)
              qerror=.true.; exit 
             endif
 !
+           elseif (qstring) then ! character is not allowed except in a string, where we currently allow anything
+             __INC(lval); val(lval:lval)=c
            else
-             call warning(whoami, 'Unrecognized character "'//c//'". Skipping line.',0)
+             __WRN3(whoami, 'Unrecognized character "'//c//'". Skipping line.',0)
              exit 
            endif ! character loop
          enddo ! while l.gt.1
@@ -875,7 +971,7 @@
 !
 !    check to make sure that the file did not end while a context was being read
        if (qcontext) then 
-        call warning(whoami, 'File ended while inside a context. Your input may be incomplete.',0)
+        __WRN3(whoami, 'File ended while inside a context. Your input may be incomplete.',0)
         qerror=.true.
         call message(whoami, 'Returning to main context.') ; 
         j=parser_context(maincontext_name)
@@ -887,7 +983,7 @@
        call MPI_BCAST(qerror,1,mpibool,0,communicator,ioerr)
 #endif
        if (qerror) then
-         call warning(whoami, 'Error(s) found in input.',0)
+         __WRN3(whoami, 'Error(s) found in input.',0)
        else
          call message(whoami, 'Input file read.')
        endif
@@ -904,7 +1000,7 @@
 #endif
        & )
 ! 
-       use output
+       __DEP_OUTPUT
 !
        character(len=*), intent(in), optional :: ctx ; int :: ictx
 !
@@ -938,7 +1034,7 @@
 #endif
        & )
 ! 
-       use output
+       __DEP_OUTPUT
 !
        character(len=*), intent(in), optional :: ctx ; int :: ictx
 !
@@ -969,7 +1065,7 @@
 ! auxiliary functions (they need not be part of this module)
        function atoi4(a, invalid)
 ! NOTE: no overflow check yet
-       use output, only: warning
+       __DEP_OUTPUT
        integer*4, intent(in) :: invalid
        int :: atoi4, i, l, j, k, sgn, base, missing
        character(len=*), intent(in) :: a
@@ -999,7 +1095,7 @@
        do j=l,1,-1
         where(digits2.eq.b(j:j)); flag=1 ; elsewhere; flag=0 ; endwhere; k=sum(maxloc(flag))-1
         if (all(flag.eq.0)) then 
-         call warning(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO INTEGER.',0)
+         __WRN3(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO INTEGER.',0)
          i=missing; sgn=1;
          exit
         else
@@ -1011,7 +1107,7 @@
        end function atoi4
        function atoi8(a, invalid)
 ! NOTE: no overflow check yet
-       use output, only: warning
+       __DEP_OUTPUT
        integer*8, intent(in) :: invalid
        int :: atoi8, i, l, j, k, sgn, base, missing
        character(len=*), intent(in) :: a
@@ -1041,7 +1137,7 @@
        do j=l,1,-1
         where(digits2.eq.b(j:j)); flag=1 ; elsewhere; flag=0 ; endwhere; k=sum(maxloc(flag))-1
         if (all(flag.eq.0)) then 
-         call warning(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO INTEGER.',0)
+         __WRN3(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO INTEGER.',0)
          i=missing; sgn=1;
          exit
         else
@@ -1053,7 +1149,7 @@
        end function atoi8
        function atoi_(a)
 ! NOTE: no overflow check yet
-       use output, only: warning
+       __DEP_OUTPUT
        int :: atoi_, i, l, j, k, sgn, base, missing
        character(len=*), intent(in) :: a
        character(len=len(a)) :: b
@@ -1082,7 +1178,7 @@
        do j=l,1,-1
         where(digits2.eq.b(j:j)); flag=1 ; elsewhere; flag=0 ; endwhere; k=sum(maxloc(flag))-1
         if (all(flag.eq.0)) then 
-         call warning(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO INTEGER.',0)
+         __WRN3(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO INTEGER.',0)
          i=missing; sgn=1;
          exit
         else
@@ -1094,8 +1190,8 @@
        end function atoi_
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        function atoiv(a,n)
-       use output, only: warning
-       __DEP_NUMBER, only: unknowni
+       __DEP_OUTPUT
+       __DEP_NUMBER
        character(len=*) :: a
        character(len=maxlinelen), allocatable :: b(:)
        __IAM(ATOIV)
@@ -1104,10 +1200,10 @@
 !
        i=numword(a)
        if (n.le.0) then
-        call warning(whoami,' Vector has nonpositive dimension',-1)
+        __WRN3(whoami,' Vector has nonpositive dimension',-1)
         return
        elseif (i.ne.n) then 
-        call warning(whoami,' Vector dimension mismatch',-1)
+        __WRN3(whoami,' Vector dimension mismatch',-1)
        endif
        i=min(i,n)
        atoiv=unknowni
@@ -1121,7 +1217,7 @@
        end function atoiv
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        function atof(a,invalid)
-       use output, only: warning
+       __DEP_OUTPUT
        float, optional, intent(in) :: invalid
        float :: atof, missing
        float :: f 
@@ -1155,7 +1251,7 @@
        do j=l,1,-1
         if (b(j:j).eq.decimal) then
          if (fraction) then ! two decimal points are invalid
-          call warning(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO REAL.',0)
+          __WRN3(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO REAL.',0)
           f=missing; sgn=1;
           exit
          else
@@ -1168,7 +1264,7 @@
         else
          where(digits2.eq.b(j:j)); flag=1 ; elsewhere; flag=0 ; endwhere; k=sum(maxloc(flag))-1
          if (all(flag.eq.0)) then 
-          call warning(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO REAL.',0)
+          __WRN3(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO REAL.',0)
           f=missing; sgn=1;
           exit
          else
@@ -1181,8 +1277,8 @@
        end function atof
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        function atofv4(a,n)
-       use output, only: warning
-       __DEP_NUMBER, only: unknownf
+       __DEP_OUTPUT
+       __DEP_NUMBER
        character(len=*) :: a
        character(len=maxlinelen), allocatable :: b(:)
        __IAM(ATOFV)
@@ -1192,10 +1288,10 @@
 !
        i=numword(a)
        if (n.le.0) then
-        call warning(whoami,' Vector has nonpositive dimension',-1)
+        __WRN3(whoami,' Vector has nonpositive dimension',-1)
         return
        elseif (i.ne.n) then 
-        call warning(whoami,' Vector dimension mismatch',-1)
+        __WRN3(whoami,' Vector dimension mismatch',-1)
        endif
        i=INT(min(i,n))
        atofv4=unknownf
@@ -1209,8 +1305,8 @@
        end function atofv4
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        function atofv8(a,n)
-       use output, only: warning
-       __DEP_NUMBER, only: unknownf
+       __DEP_OUTPUT
+       __DEP_NUMBER
        character(len=*) :: a
        character(len=maxlinelen), allocatable :: b(:)
        __IAM(ATOFV)
@@ -1220,10 +1316,10 @@
 !
        i=numword(a)
        if (n.le.0) then
-        call warning(whoami,' Vector has nonpositive dimension',-1)
+        __WRN3(whoami,' Vector has nonpositive dimension',-1)
         return
        elseif (i.ne.n) then 
-        call warning(whoami,' Vector dimension mismatch',-1)
+        __WRN3(whoami,' Vector dimension mismatch',-1)
        endif
        i=INT(min(i,n))
        atofv8=unknownf
@@ -1237,7 +1333,7 @@
        end function atofv8
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        function atol(a)
-       use output, only: error
+       __DEP_OUTPUT
        bool :: atol
        character(len=*) :: a
        character(len=maxlinelen) :: b
@@ -1261,7 +1357,7 @@
        end function atol
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
    function itoa4(i)
-   __DEP_NUMBER, only : one
+   __DEP_NUMBER, only: one
    integer*4 :: i
    integer*4, parameter :: ione=1, itwo=2
 !   character(len=((ceiling(log10(one*abs(i)+1.)))+1)) :: itoa
@@ -1273,7 +1369,7 @@
    end function itoa4
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
    function itoa8(i)
-   __DEP_NUMBER, only : one
+   __DEP_NUMBER, only: one
    integer*8 :: i
    integer*8, parameter :: ione=1, itwo=2
 !   character(len=((ceiling(log10(one*abs(i)+1.)))+1)) :: itoa
@@ -1306,6 +1402,18 @@
 !
        end subroutine toupper
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+       function ftoupper(a)
+       character(len=*) :: a
+       character(len=len(a)) :: ftoupper
+       int :: i,j
+       ftoupper=a
+!
+       do j=1, len_trim(a)
+        do i=1,26; if (lower2(i).eq.a(j:j)) then; ftoupper(j:j)=upper2(i); exit; endif; enddo
+       enddo
+!
+       end function ftoupper
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        subroutine tolower(a)
        character(len=*) :: a
        int :: i,j
@@ -1317,18 +1425,31 @@
        end subroutine tolower
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 ! this subroutine uses a custom definition of white space
-       subroutine adjustleft_1(a, space)
+       subroutine adjustleft_1(a, space, invert_)
         character(len=*) :: a
         character, intent(in) :: space(:)
+        bool, optional, intent(in) :: invert_ ! when true "space" becomes "not space" i.e. everything but "space" is considered whitespace
+        bool :: invert
         int :: l, i, j
+        if (present(invert_)) then ; invert = invert_  ; else ; invert=.false. ; endif
+!
         if (len(space).gt.0) then
          l=len(a)
          if (l.gt.0) then
           i=1
-          do while (i.le.l)
-           if (all(space.ne.a(i:i))) exit
-           i=i+1
-          enddo
+!
+          if (invert) then
+           do while (i.le.l)
+            if (any(space.eq.a(i:i))) exit
+            i=i+1
+           enddo
+          else ! invert
+           do while (i.le.l)
+            if (all(space.ne.a(i:i))) exit
+            i=i+1
+           enddo
+          endif ! invert
+
 !    move string left
           j=1
           do while (j.le.l-i+1)
@@ -1371,6 +1492,32 @@
         endif
 !
        end subroutine adjustleft_2
+!====================================================================
+       subroutine adjustleft_3(a,l) ! length passed in
+        character(len=*) :: a
+        int, intent(inout) :: l
+        int :: i, j
+        if (l.gt.0) then
+         i=1
+         do while (i.le.l)
+          if (all(space.ne.a(i:i))) exit
+          i=i+1
+         enddo
+!    move string left
+         j=1
+         do while (j.le.l-i+1)
+          a(j:j)=a(i+j-1:i+j-1)
+          j=j+1
+         enddo
+!    pad with blanks
+         do while (j.le.l)
+          a(j:j)=' '
+          j=j+1
+         enddo
+         l=l-i+1; ! new string length
+        endif
+!
+       end subroutine adjustleft_3
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
   function numword(a) ! returns the number of blank-separated words in a string
    character(len=*) :: a
@@ -1419,26 +1566,61 @@
    if (present(n)) n=l-j+1
   end function pop_string_default
 !===============================================================================
-  function pop_string_custom(a,n,space) result(b) ! same as pop_string except custom white space is passed in
+  function pop_string_custom(a,n,space,invert_) result(b) ! same as pop_string except custom white space is passed in
    character(len=*) :: a
    character(len=len(a)) :: b
-   character(len=*) :: space
+   character(len=*), intent(in) :: space
+   bool, optional, intent(in) :: invert_ ! when true "space" becomes "not space" i.e. everything but "space" is considered whitespace
+   bool :: invert
    character :: space2(len(space))
-   int, optional, intent(inout) :: n
-   int :: j,l
+   int, intent(inout) :: n
+   int :: j,k,l
+   if (present(invert_)) then ; invert = invert_  ; else ; invert=.false. ; endif
 !
    l=len(space); do j=1,l ; space2(j)=space(j:j) ; enddo
 !
-   if (present(n)) a(max(0,n)+1:)='' ! erase string beyond length n
+   a(max(0,n)+1:)='' ! erase string beyond length n
 !
-   call adjustleft(a,space2)
+   call adjustleft(a,space2,invert)
    l=len_trim(a);
-   j=scan(a(1:l),space)
+   if (invert) then
+    j=0; do k=1,l ; if ( all(space2.ne.a(k:k)) ) then ; j=k ; exit ; endif ; enddo
+   else
+    j=scan(a(1:l),space)
+   endif
    if (j.eq.0) j=l+1 ! there must be only one word
    b=a(1:j-1)
    a=a(j:l)
-   if (present(n)) n=l-j+1
+   n=l-j+1
   end function pop_string_custom
+!===============================================================================
+  function pop_string_custom2(a,n,space2, invert_) result(b) ! same as pop_string except custom white space is passed in
+   character(len=*) :: a
+   character(len=len(a)) :: b
+   character, intent(in) :: space2(:)
+   bool, optional, intent(in) :: invert_ ! when true "space" becomes "not space" i.e. everything but "space" is considered whitespace
+   bool :: invert
+   character(len=size(space2)) :: space
+   int, intent(inout) :: n
+   int :: j,k,l
+   if (present(invert_)) then ; invert = invert_  ; else ; invert=.false. ; endif
+!
+   l=size(space2); do j=1,l ; space(j:j)=space2(j) ; enddo
+!
+   a(max(0,n)+1:)='' ! erase string beyond length n
+!
+   call adjustleft(a,space2, invert)
+   l=len_trim(a);
+   if (invert) then
+    j=0; do k=1,l ; if ( all(space2.ne.a(k:k)) ) then ; j=k ; exit ; endif ; enddo
+   else
+    j=scan(a(1:l),space)
+   endif
+   if (j.eq.0) j=l+1 ! there must be only one word
+   b=a(1:j-1)
+   a=a(j:l)
+   n=l-j+1
+  end function pop_string_custom2
 !===============================================================================
   function find_tag(a,tag,n)
   character(len=*), intent(inout) :: a ! because we might be removing white space

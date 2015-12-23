@@ -10,12 +10,101 @@ __CHARMM_ONLY##IF STRINGM
 !
 !=====================================================================
 !     SUBROUTINES
+      public ftsm_write_txt
+!      public ftsm_read_txt
       public ftsm_write_dcd
       public ftsm_read_dcd
       public ftsm_write_cor
       public ftsm_read_cor
 !
       contains
+!======================================================================
+      subroutine ftsm_write_txt(ifile, col)
+
+      __DEP_MULTICOM       __CHARMM_ONLY !##MULTICOM
+      use ivector
+      use ftsm_util
+      use parser, only : itoa
+
+#include "mpitype.def"
+
+      int, intent(in) :: ifile
+      int, optional, intent(in) :: col
+!
+      bool :: qroot
+      int :: c, i, j, k, me, ierror, stat(MPI_STATUS_SIZE)
+      type (int_vector) :: iorient
+!
+      __IAM(FTSM_WRITE_TXT)
+!
+      qroot=MPI_COMM_STRNG.ne.MPI_COMM_NULL
+
+      if (.not. ftsm_check(qorient)) return
+      if (present(col)) then ; c=col; else; c=center; endif
+      if (c.lt.1.or.c.gt.num_sets) then
+       __WRN( whoami, 'INVALID COLUMN. ABORT.')
+       return
+      endif
+!
+      if (qroot) then ! only root writes string file
+#define _W write(ifile,*)
+       _W 'ftsm {'
+       _W 'numrep =',nstring,' # string replica'
+       _W 'norient=',norient,' # orientation atoms'
+       _W 'nforced=',nforced,' # forced atoms'
+       _W 'qorient=',qorient,' # whether orientation is active'
+       _W 'qorient=',qdiffrot,' # whether forced and orientation atoms are different'
+       if (nboth.gt.0) then
+        _W '# pairs of indices of overlapping forcing (1st) and orientation (2nd) coordinates:'
+        _W '(', iatom_both, ')'
+       endif
+!     now write the actual coordinates
+       _W '# rfx_y : forcing coordinate triple for coordinate #x coresponding to replica y'
+       me=ME_STRNG ;
+       do j=1, nforced
+        _W 'rf'//trim(itoa(me))//'_'//trim(itoa(j)),'=(',r_f(j,:,c),')'
+       enddo ! forced atoms
+! orientation atoms
+       if (qorient.and.qdiffrot) then
+! create indices for unique orientation coordinates
+        do j=1, norient
+         if ( nboth.eq.0 .or. all(j.ne.iatom_both(2,:)) ) then
+          k=int_vector_add(iorient,j)
+          _W 'ro'//trim(itoa(me))//'_'//trim(itoa(j)),'=(',r_o(j,:,c),')'
+         endif
+        enddo
+       endif
+!=======================================
+! receive coords from other replicas:
+       do me=1, nstring-1
+!
+__MPI_ONLY call MPI_RECV(r_f(:,:,dummy),3*nforced,mpifloat,me,me,MPI_COMM_STRNG,stat,ierror)
+!    extract coordinates
+        do j=1,nforced
+         _W 'rf'//trim(itoa(me))//'_'//trim(itoa(j)),'=(',r_f(j,:,dummy),')'
+        enddo
+!
+        if (qdiffrot.and.qorient) then
+__MPI_ONLY  call MPI_RECV(r_o(:,:,dummy),3*norient,mpifloat,me,me,MPI_COMM_STRNG,stat,ierror)
+         do i=1,iorient%last
+          j=iorient%i(i)
+          _W 'ro'//trim(itoa(me))//'_'//trim(itoa(j)),'=(',r_o(j,:,dummy),')'
+         enddo
+        endif
+!
+       enddo ! over string replicas
+       if (iorient%initialized) call int_vector_done(iorient)
+       _W '}'
+       _W
+!
+      else ! other roots
+__MPI_ONLY   call MPI_SEND(r_f(:,:,c),3*nforced,mpifloat,0,ME_STRNG, MPI_COMM_STRNG, ierror)
+       if (qdiffrot.and.qorient) then
+__MPI_ONLY        call MPI_SEND(r_o(:,:,c),3*norient,mpifloat,0,ME_STRNG,MPI_COMM_STRNG, ierror)
+       endif ! qd&qo
+      endif ! string root
+!
+      end subroutine ftsm_write_txt
 !======================================================================
       subroutine ftsm_write_dcd(ifile, col, ibeg, iend, nframes)
 !
@@ -118,12 +207,12 @@ __CHARMM_ONLY##IF STRINGM
 #ifdef __CHARMM
        ncv=ncvel ; ncvel=0  !__CHARMM_ONLY##CVELOCI ! exclude constant velocity atoms also
 #endif
-!      for first frame, output all coordinates: take from instantaneous set
+!      for first frame, output all coordinates: taken from instantaneous set
        allocate(r3(natom,3)) ; r3=0d0
        if (qorient) then ; r_com=rcom(:,instant) ; else ; r_com=zero ; endif
 #ifdef __CHARMM
        r3(:,1)=x(1:natom)-r_com(1) ! bring all coordinates to zero COM for convenience (assume rcom(:,instant) is reasonably accurate)
-       r3(:,2)=y(1:natom)-r_com(2)
+       r3(:,2)=y(1:natom)-r_com(2) !
        r3(:,3)=z(1:natom)-r_com(3)
 #elif defined (__DMOL)
        r3(:,1)=r(:,1)-r_com(1)
@@ -217,9 +306,9 @@ __MPI_ONLY        call MPI_SEND(r_o(:,:,c),3*norient,rtype,0,ME_STRNG,MPI_COMM_S
 !
       endif ! qroot
 !
-      if (associated(stringatoms)) deallocate(stringatoms)
-      if (associated(string_inds)) deallocate(string_inds)
-      if (associated(r3)) deallocate(r3)
+      __FREE(stringatoms)
+      __FREE(string_inds)
+      __FREE(r3)
 !
       end subroutine ftsm_write_dcd
 !===============================================================
