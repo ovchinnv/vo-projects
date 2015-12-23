@@ -19,10 +19,141 @@ __CHARMM_ONLY##IF STRINGM
 !
       contains
 !======================================================================
+      subroutine ftsm_read_txt(ifile, col)
+!
+#define __MYCTX __STRING(ftsm)
+!
+      __DEP_MULTICOM       __CHARMM_ONLY !##MULTICOM
+      use ivector
+      use ftsm_util
+      use parser
+      use cmd
+
+#include "mpitype.def"
+__DECL_MSGBUF
+!
+      int, intent(in) :: ifile
+      int, optional, intent(in) :: col
+!
+      bool :: qroot
+      int :: c, i, j, k, me, ierror, stat(MPI_STATUS_SIZE)
+! vars for test
+      int :: norient_, nforced_, nboth_, nstring_
+      bool :: qorient_, qdiffrot_, qerror
+      int, pointer :: iatom_both_(:,:)
+      character(len=maxlinelen) :: line
+      type (int_vector) :: iorient
+!
+      __IAM(FTSM_WRITE_TXT)
+!
+      qroot=MPI_COMM_STRNG.ne.MPI_COMM_NULL
+!
+      if (.not. ftsm_check(qorient)) return
+      if (present(col)) then ; c=col; else; c=center; endif
+      if (c.lt.1.or.c.gt.num_sets) then
+       __WRN( whoami, 'INVALID COLUMN. ABORT.')
+       return
+      endif
+!
+#define __COMPARE_PAR(__WHAT, __HOW, __NEG)\
+if (__NEG(__WHAT __HOW __CONCAT(__WHAT,_)))then;__WARN(whoami,'MISMATCH IN FTSM PARAMETER "',__STRING(__WHAT),'":',__WHAT,'(PROGRAM) vs.',__CONCAT(__WHAT,_),'(FILE)');qerror=.true.;endif
+!
+      if (qroot) then ! string roots get coordinates first
+       me=ME_STRNG ;
+       if (me.eq.0) then ! string root parses file and builds coordinate array
+! parse file
+        call parse_file(ifile, MPI_COMM_NULL) ! only root will parse
+! some basic checks/warnings
+        qerror=.false.
+        nstring_=atoi(getval_nocase("nstring",__MYCTX))
+        norient_=atoi(getval_nocase("norient",__MYCTX))
+        nforced_=atoi(getval_nocase("nforced",__MYCTX))
+        qorient_=atol(getval_nocase("qorient",__MYCTX))
+        qdiffrot_=atol(getval_nocase("qdiffrot",__MYCTX))
+!
+        __COMPARE_PAR(nstring,==,.not.)
+        __COMPARE_PAR(norient,==,.not.)
+        __COMPARE_PAR(nforced,==,.not.)
+        __COMPARE_PAR(qorient,.eqv.,.not.)
+        __COMPARE_PAR(qdiffrot,.eqv.,.not.)
+!
+        if (existtag_nocase("ioverlap",__MYCTX)) then
+         line=getval_nocase("ioverlap",__MYCTX)
+         i=numword(line)
+         if (mod(i,2).eq.1) then
+          __WARN(whoami, 'NUMBER OF OVERLAP INDICES NOT DIVISIBLE BY 2 (',i,')'); qerror=.true.
+         endif
+         nboth_=i/2 ;
+         if (nboth.gt.0) then
+          allocate(iatom_both_(2,nboth)); 
+          iatom_both=reshape( atoiv(line,2*nboth), (/2,nboth/) )
+         endif
+! now compare indices
+!        if (
+        else ! ioverlap
+         nboth_=0
+        endif ! ioverlap
+         __COMPARE_PAR(nboth,==,.not.)
+!
+        if ( nboth_.gt.0 .and. nboth.eq.nboth_) then
+         __COMPARE_PAR(iatom_both,==,.not.all)
+        endif
+!=====================================================
+! read actual coordinates
+        do j=1, nforced
+         line=getval_nocase('rf'//trim(itoa(me))//'_'//trim(itoa(j)),__MYCTX)
+!         r_f(j,:,c)=atofv(line,3)
+         read(line,*) r_f(j,:,c)
+        enddo ! forced atoms
+        if (qorient.and.qdiffrot) then
+! create indices for unique orientation coordinates
+         do j=1, norient
+          if ( nboth.eq.0 .or. all(j.ne.iatom_both(2,:)) ) then
+           k=int_vector_add(iorient,j)
+           line=getval_nocase('ro'//trim(itoa(me))//'_'//trim(itoa(j)),__MYCTX)
+!           r_o(j,:,c)=atofv(line,3)
+           read(line,*) r_o(j,:,c)
+          endif
+         enddo ! orientation atoms
+        endif ! qo
+! now, read data for other replicas and send
+        do me=1, nstring-1
+! read coordinates
+         do j=1, nforced
+         line=getval_nocase('rf'//trim(itoa(me))//'_'//trim(itoa(j)),__MYCTX)
+!         r_f(j,:,dummy)=atofv(line,3)
+         read(line,*) r_f(j,:,dummy)
+         enddo ! forced atoms
+__MPI_ONLY   call MPI_SEND(r_f(:,:,dummy),3*nforced,mpifloat,me,me, MPI_COMM_STRNG, ierror)
+         if (qorient.and.qdiffrot) then
+          do i=1,iorient%last
+           j=iorient%i(i)
+           line=getval_nocase('ro'//trim(itoa(me))//'_'//trim(itoa(j)),__MYCTX)
+!           r_o(j,:,dummy)=atofv(line,3)
+           read(line,*) r_o(j,:,dummy)
+          enddo
+__MPI_ONLY   call MPI_SEND(r_o(:,:,dummy),3*norient,mpifloat,me,me, MPI_COMM_STRNG, ierror)
+         endif ! qo
+        enddo ! me over all reps
+!
+       else ! other roots receive cooridnates
+__MPI_ONLY call MPI_RECV(r_f(:,:,c),3*nforced,mpifloat,0,me,MPI_COMM_STRNG,stat,ierror)
+        if (qorient.and.qdiffrot) then
+__MPI_ONLY call MPI_RECV(r_o(:,:,c),3*norient,mpifloat,0,me,MPI_COMM_STRNG,stat,ierror) 
+        endif !qo
+       endif ! me==0
+      endif ! qroot
+!
+      call ftsm_update_overlap_coor(ione)
+!
+      call ftsm_save_com(c)
+      if (iorient%initialized) call int_vector_done(iorient)
+!
+      end subroutine ftsm_read_txt
+!======================================================================
       subroutine ftsm_write_txt(ifile, col)
 
       __DEP_MULTICOM       __CHARMM_ONLY !##MULTICOM
-      use ivector
       use ftsm_util
       use parser, only : itoa
 
@@ -35,10 +166,10 @@ __CHARMM_ONLY##IF STRINGM
       int :: c, i, j, k, me, ierror, stat(MPI_STATUS_SIZE)
       type (int_vector) :: iorient
 !
-      __IAM(FTSM_WRITE_TXT)
+      __IAM(FTSM_READ_TXT)
 !
       qroot=MPI_COMM_STRNG.ne.MPI_COMM_NULL
-
+!
       if (.not. ftsm_check(qorient)) return
       if (present(col)) then ; c=col; else; c=center; endif
       if (c.lt.1.or.c.gt.num_sets) then
@@ -46,63 +177,67 @@ __CHARMM_ONLY##IF STRINGM
        return
       endif
 !
-      if (qroot) then ! only root writes string file
-#define _W write(ifile,*)
-       _W 'ftsm {'
-       _W 'numrep =',nstring,' # string replica'
-       _W 'norient=',norient,' # orientation atoms'
-       _W 'nforced=',nforced,' # forced atoms'
-       _W 'qorient=',qorient,' # whether orientation is active'
-       _W 'qorient=',qdiffrot,' # whether forced and orientation atoms are different'
-       if (nboth.gt.0) then
-        _W '# pairs of indices of overlapping forcing (1st) and orientation (2nd) coordinates:'
-        _W '(', iatom_both, ')'
-       endif
-!     now write the actual coordinates
-       _W '# rfx_y : forcing coordinate triple for coordinate #x coresponding to replica y'
+      call ftsm_update_overlap_coor(ione)
+!
+      if (qroot) then ! only roots provide coordinates
        me=ME_STRNG ;
-       do j=1, nforced
-        _W 'rf'//trim(itoa(me))//'_'//trim(itoa(j)),'=(',r_f(j,:,c),')'
-       enddo ! forced atoms
+       if (me.eq.0) then ! string root writes coordinates
+#define _W write(ifile,*)
+        _W '#FINITE-TEMPERATURE STRING (HUMAN-READABLE) COORDINATE FILE'
+        _W 'ftsm {'
+        _W 'nstring=',nstring,' # string replicas'
+        _W 'norient=',norient,' # orientation atoms'
+        _W 'nforced=',nforced,' # forced atoms'
+        _W 'qorient=',qorient,' # whether orientation is active'
+        _W 'qdiffrot=',qdiffrot,' # whether forced and orientation atoms are different'
+        if (nboth.gt.0) then
+         _W '# pairs of indices of overlapping forcing (1st in pair) and orientation (2nd in pair) coordinates:'
+         _W 'ioverlap=(', iatom_both, ')'
+        endif
+!     now write the actual coordinates
+        _W '# rfx_y : forcing coordinate triple for coordinate #x coresponding to replica #y'
+        do j=1, nforced
+         _W 'rf'//trim(itoa(me))//'_'//trim(itoa(j)),'=(',r_f(j,:,c),')'
+        enddo ! forced atoms
 ! orientation atoms
-       if (qorient.and.qdiffrot) then
+        if (qorient.and.qdiffrot) then
 ! create indices for unique orientation coordinates
-        do j=1, norient
-         if ( nboth.eq.0 .or. all(j.ne.iatom_both(2,:)) ) then
-          k=int_vector_add(iorient,j)
-          _W 'ro'//trim(itoa(me))//'_'//trim(itoa(j)),'=(',r_o(j,:,c),')'
-         endif
-        enddo
-       endif
+         do j=1, norient
+          if ( nboth.eq.0 .or. all(j.ne.iatom_both(2,:)) ) then
+           k=int_vector_add(iorient,j)
+           _W 'ro'//trim(itoa(me))//'_'//trim(itoa(j)),'=(',r_o(j,:,c),')'
+          endif
+         enddo
+        endif ! qo
 !=======================================
 ! receive coords from other replicas:
-       do me=1, nstring-1
+        do me=1, nstring-1
 !
 __MPI_ONLY call MPI_RECV(r_f(:,:,dummy),3*nforced,mpifloat,me,me,MPI_COMM_STRNG,stat,ierror)
 !    extract coordinates
-        do j=1,nforced
-         _W 'rf'//trim(itoa(me))//'_'//trim(itoa(j)),'=(',r_f(j,:,dummy),')'
-        enddo
-!
-        if (qdiffrot.and.qorient) then
-__MPI_ONLY  call MPI_RECV(r_o(:,:,dummy),3*norient,mpifloat,me,me,MPI_COMM_STRNG,stat,ierror)
-         do i=1,iorient%last
-          j=iorient%i(i)
-          _W 'ro'//trim(itoa(me))//'_'//trim(itoa(j)),'=(',r_o(j,:,dummy),')'
+         do j=1,nforced
+          _W 'rf'//trim(itoa(me))//'_'//trim(itoa(j)),'=(',r_f(j,:,dummy),')'
          enddo
-        endif
 !
-       enddo ! over string replicas
-       if (iorient%initialized) call int_vector_done(iorient)
-       _W '}'
-       _W
+         if (qdiffrot.and.qorient) then
+__MPI_ONLY  call MPI_RECV(r_o(:,:,dummy),3*norient,mpifloat,me,me,MPI_COMM_STRNG,stat,ierror)
+          do i=1,iorient%last
+           j=iorient%i(i)
+           _W 'ro'//trim(itoa(me))//'_'//trim(itoa(j)),'=(',r_o(j,:,dummy),')'
+          enddo
+         endif
 !
-      else ! other roots
+        enddo ! over string replicas
+        if (iorient%initialized) call int_vector_done(iorient)
+        _W '} #ftsm'
+!
+       else ! other roots send coordinates to 0
 __MPI_ONLY   call MPI_SEND(r_f(:,:,c),3*nforced,mpifloat,0,ME_STRNG, MPI_COMM_STRNG, ierror)
-       if (qdiffrot.and.qorient) then
+        if (qdiffrot.and.qorient) then
 __MPI_ONLY        call MPI_SEND(r_o(:,:,c),3*norient,mpifloat,0,ME_STRNG,MPI_COMM_STRNG, ierror)
-       endif ! qd&qo
-      endif ! string root
+        endif ! qd&qo
+       endif ! string root
+      endif ! root string nodes
 !
       end subroutine ftsm_write_txt
 !======================================================================

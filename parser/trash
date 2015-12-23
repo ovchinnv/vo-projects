@@ -1,0 +1,101 @@
+      module prm
+      __DEP_OUTPUT
+      __CHARMM_ONLY __DEP_KINDS
+!
+      __IMPNONE
+      public
+!
+      int, parameter, public :: vartaglen=200
+      int, parameter, private :: expand_incr=50
+!
+!    define a derived type to store simulation parameters
+      type params
+       character(len=vartaglen), dimension(:), pointer :: tag, val
+       int, dimension(:), pointer :: tlen, vlen
+       int :: length=0 ! length of the vector
+       int :: last ! index of last element
+       bool :: initialized=.false. ! has the vector been initialized
+      end type params
+!
+      contains
+!********************************************************************************************
+       subroutine params_init( v )
+       type (params) :: v
+!       if (associated(v%...)) deallocate(v%...) ! testing unassigned pointer is an error!
+       allocate(v%tag(expand_incr),v%val(expand_incr),v%tlen(expand_incr),v%vlen(expand_incr))
+!
+       v%tag=''; v%val=''; v%tlen=0; v%vlen=0
+       v%length=expand_incr
+       v%last=0
+       v%initialized=.true.
+       end subroutine params_init
+!********************************************************************************************
+       subroutine params_done( v )
+       type (params) :: v
+       if (associated(v%tag)) deallocate(v%tag)
+       if (associated(v%val)) deallocate(v%val)
+       if (associated(v%tlen)) deallocate(v%tlen)
+       if (associated(v%vlen)) deallocate(v%vlen)
+       v%length=0
+       v%last=0
+       v%initialized=.false.
+       end subroutine params_done
+!********************************************************************************************
+       subroutine params_expand( v )
+       type (params) :: v
+       int :: newlength
+       character(len=vartaglen), dimension(:), pointer :: ntag, nval
+       int, dimension(:), pointer :: ntlen, nvlen
+!
+       if (.not.v%initialized) then 
+        call params_init(v) 
+       else
+!    assume length is valid
+        newlength=v%length+expand_incr ! temporary storage space
+        allocate(ntag(newlength),nval(newlength),ntlen(newlength),nvlen(newlength)) ! new storage space
+        ntag(1:v%length)=v%tag; nval(1:v%length)=v%val; ntlen(1:v%length)=v%tlen; nvlen(1:v%length)=v%vlen ! copy data
+        deallocate(v%tag,v%val,v%tlen,v%vlen) ! deallocate old data
+        v%tag=>ntag; v%val=>nval; v%tlen=>ntlen; v%vlen=>nvlen ! reassign pointers
+        v%length=newlength
+       endif
+       end subroutine params_expand
+!********************************************************************************************
+       function params_add(v,newtag,newval,ltag,lval) ! add a new element to the list (not necessarily unique) 
+!                                       and return its index
+       type (params) :: v
+       int :: params_add, ltag, lval
+       character(len=*) :: newtag, newval
+       int :: j
+!
+       if (.not.v%initialized) call params_init(v)
+!    add element to the list
+       if (v%last.eq.v%length) call params_expand(v)
+       j=v%last+1
+       v%tag(j)=newtag(1:ltag); v%tlen(j)=ltag
+       v%val(j)=newval(1:lval); v%vlen(j)=lval
+       v%last=j
+       params_add=j
+       end function params_add
+!********************************************************************************************
+       function params_uadd(v,newtag,newval,ltag,lval) ! add a UNIQUE new element to the list and return its index
+!                                                         if the element already exists, overwrite and warn       
+       type (params) :: v
+       int :: j, params_uadd, ltag, lval
+       character(len=*) :: newtag, newval
+!
+       if (.not.v%initialized) call params_init(v) 
+       do j=1,v%last
+        if (v%tag(j).eq.newtag(1:ltag)) then
+!       found element
+         params_uadd=j
+         __WRN3('PARAMS_UADD','Parameter "'//newtag(1:ltag)//'" is already present and has the value "'//v%val(j)(1:v%vlen(j))//'". Will overwrite.',0)
+         v%val(j)=newval(1:lval); v%vlen(j)=lval
+         return
+        endif
+       enddo
+!    add element to the list: use regular routine
+       params_uadd=params_add(v,newtag,newval,ltag,lval)
+!
+       end function params_uadd
+!
+      end module prm

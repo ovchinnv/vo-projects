@@ -73,9 +73,10 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
       character(len=16) :: keyword
       character(len=80) :: fname
       float :: zval, k, step, voro_cut
-      int :: ifile, c1, c2, qcor, qdcd, qtxt, flen,      &
-     &           num_ave_samples, irep, i, a,            &
+      int :: ifile, c1, c2, qcor, qdcd, qtxt, flen, &
+     &           num_ave_samples, irep, i, a,                &
      &           ierror, me
+      bool :: qflocal
       float :: t, omt
 !
 #ifdef __CHARMM
@@ -1074,8 +1075,8 @@ __MPI_ONLY   call MPI_ALLGATHER(ftsm_voronoi_whereami, 1, mpiint, ftsm_voronoi_m
        qtxt=__INDX_RM(comlyn,comlen,'TXT'); qtxt = min(qtxt,1); keyword='FORMATTED'
 !
        if ((qcor+qdcd+qtxt) .gt. 1) then
-        __WRN( whoami,' MORE THAN ONE OUTPUT FORMAT REQUESTED. WILL USE TEXT.')
-        qcor=0; qdcd=0; qtxt=1;
+        __WRN( whoami,' MORE THAN ONE OUTPUT FORMAT REQUESTED. WILL USE DCD.')
+        qcor=0; qdcd=1; qtxt=0;
        endif
 !
 !      prepare file
@@ -1086,8 +1087,9 @@ __MPI_ONLY   call MPI_ALLGATHER(ftsm_voronoi_whereami, 1, mpiint, ftsm_voronoi_m
 !---------------------------------- OPEN FILE --------------------------------
        if (qroot) then
 __CHARMM_ONLY oldiol=iolev
+       qflocal=qdcd.eq.0.and.qtxt.eq.0
 !==== local files
-        if (qdcd.eq.0.and.qtxt.eq.0) then ! local write
+        if (qflocal) then ! local write
 __CHARMM_ONLY iolev=1 ! open file on all nodes
          if (flen.gt.0) __OPEN_FILE(ifile,fname,keyword,'WRITE')
         else ! dcd or text
@@ -1121,7 +1123,7 @@ __CHARMM_ONLY iolev=1 ! open file on root (which may not be zero if rex is used)
           elseif (qtxt.gt.0) then ; call ftsm_write_txt(IFILE=ifile) ;
           else ; call ftsm_write_cor(ifile) ; endif
          endif ! c1
-         if ( (qdcd.eq.0.and.qtxt.eq.0) .or. qprint) then ! close files only if they have been opened
+         if ( .not.qflocal .or. qprint) then ! close files only if they have been opened
           if (flen.gt.0) __CLOSE_FILE(ifile,'KEEP',error)
          endif
         endif ! ifile
@@ -1137,12 +1139,17 @@ __CHARMM_ONLY iolev=1 ! open file on root (which may not be zero if rex is used)
        endif
 !      can read from both coordinate files and a global dcd file (see above)
 !      can also read a frame in the DCD: specify FRAM for frame;
-       qcor=__INDX_RM(comlyn,comlen,'COR'); qcor = min(qcor,1)
-       qdcd=__INDX_RM(comlyn,comlen,'DCD'); qdcd = min(qdcd,1)
+#ifdef __CHARMM
+       qcor=__INDX_RM(comlyn,comlen,'COR'); qcor = min(qcor,1); keyword='FORMATTED'
+#else
+       qcor=__INDX_RM(comlyn,comlen,'CHM'); qcor = min(qcor,1); keyword='FORMATTED'
+#endif
+       qdcd=__INDX_RM(comlyn,comlen,'DCD'); qdcd = min(qdcd,1); keyword='UNFORMATTED'
+       qtxt=__INDX_RM(comlyn,comlen,'TXT'); qtxt = min(qtxt,1); keyword='FORMATTED'
 !
-       if ((qcor+qdcd) .gt. 1) then
-        __WRN( whoami,'MORE THAN ONE INPUT FORMAT REQUESTED. WILL USE DCD.')
-        qcor=0; qdcd=1;
+       if ((qcor+qdcd+qtxt) .gt. 1) then
+        __WRN( whoami,' MORE THAN ONE INPUT FORMAT REQUESTED. WILL USE DCD.')
+        qcor=0; qdcd=1; qtxt=0;
        endif
 !
 !      prepare file
@@ -1156,27 +1163,29 @@ __CHARMM_ONLY iolev=1 ! open file on root (which may not be zero if rex is used)
 #ifdef __CHARMM
         oldiol=iolev
 #endif
-        if (qdcd.eq.0) then
+        qflocal=qdcd.eq.0.and.(qtxt.eq.0) ! whether to open file locally on each root
+!
+        if (qflocal) then
 #ifdef __CHARMM
          iolev=1 ! open file on all processors
 #endif
-         if (flen.gt.0) __OPEN_FILE(ifile,fname,'FORMATTED','READ')
+         if (flen.gt.0) __OPEN_FILE(ifile,fname,keyword,'READ')
         else
-         if (qprint) then ! binary dcd file
+         if (qprint) then ! one (global) file
 #ifdef __CHARMM
           iolev=1
 #endif
-          if (flen.gt.0) __OPEN_FILE(ifile,fname,'UNFORMATTED','READ') ! open binary fle for DCD
+          if (flen.gt.0) __OPEN_FILE(ifile,fname,keyword,'READ')
          endif
 ! broadcast ifile so that all roots know whether handle is valid
          __BROADCAST_STRING(ifile,1,mpiint)
         endif
 #ifdef __CHARMM
         if(ifile .le. -1 ) then 
-         if (qdcd.eq.0 ) then
+         if ( qcor.eq.1 ) then
           ifile=__ISTREAM ! read local files from input file
           call rdtitl(titleb,ntitlb,ifile,0) ! 0 = card format
-         endif ! qdcd
+         endif ! qcor
         endif ! ifile
 #endif
        endif ! qroot
@@ -1188,19 +1197,22 @@ __CHARMM_ONLY iolev=1 ! open file on root (which may not be zero if rex is used)
         if (c1.gt.0) then ! column spec
          if (qprint) then ; write(_MSGBUF,6699) whoami, c1 ; __PRINT(_MSGBUF) ; endif
  6699 format(A,' READING COORDINATES INTO COLUMN ',I3)
-         if (qdcd.gt.0) then ; if (qroot) call ftsm_read_dcd(ifile, c1);
-         else; call ftsm_read_cor(ifile,c1) ;  endif
+         if     (qdcd.gt.0) then ; if (qroot) call ftsm_read_dcd(ifile, c1);
+         elseif (qtxt.gt.0) then ; if (qroot) call ftsm_read_txt(ifile, c1);
+         else; call ftsm_read_cor(ifile,c1) ;
+         endif
         else
          if (qprint) then ; write(_MSGBUF,6709) whoami ; __PRINT(_MSGBUF) ; endif
  6709 format(A,' READING COORDINATES INTO DEFAULT COLUMN.')
-         if (qdcd.gt.0) then ; if (qroot) call ftsm_read_dcd(ifile);
+         if     (qdcd.gt.0) then ; if (qroot) call ftsm_read_dcd(ifile);
+         elseif (qtxt.gt.0) then ; if (qroot) call ftsm_read_txt(ifile);
          else ; call ftsm_read_cor(ifile) ; 
          endif
         endif ! c1
        endif ! ifile >=0
 !cccccccccccccccc close file ccccccccccccccccccccccccccccccccccccc
        if (qroot) then
-        if (qdcd.eq.0.or.qprint) then
+        if (.not.qflocal.or.qprint) then
          if (flen.gt.0) __CLOSE_FILE(ifile,'KEEP',error)
         endif ! qdcd
 #ifdef __CHARMM
