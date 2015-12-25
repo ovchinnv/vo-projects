@@ -93,6 +93,7 @@ __CHARMM_ONLY##IF STRINGM
       public cv_common_grad_init ! initialize cv%grad arrays
       public cv_common_set_bc ! set boundary conditions on string (fixed or free)
       public cv_common_repa   ! reparameterize
+      public cv_common_print_header ! output basic string info
       public cv_common_print_local  ! print out cv values (i.e. z) to separate files
       public cv_common_print_global  ! print out cv values (i.e. z) to a combined file
       public cv_common_add_hist ! save an instance of theta(x)
@@ -1318,43 +1319,84 @@ __CHARMM_ONLY##ENDIF
        cv%num_hist=0; cv%beg_hist=1; cv%end_hist=0
        end subroutine cv_common_clear_hist
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       subroutine cv_common_print_local(iunit,col)
+       subroutine cv_common_print_header(ifile)
+! from a design standpont, unclear to me whether including MULTICOM everywhere is good
+       __DEP_MULTICOM
+       int :: ifile
+       __IAM(CV_COMMON_PRINT_HEADER)
+#define _W write(ifile,*)
+        _W '# DATA FOR STRING METHOD IN COLLECTIVE VARIABLES (CVs)'
+        _W 'smcv {'
+        _W 'nstring=', ME_STRNG, ' # string replicas'
+        _W 'num_cv=', cv%num_cv, ' # CVs'
+        _W 'fixed_bc0=',cv_common_fixed_0_bc,' # left (1st) endpoint fixed'
+        _W 'fixed_bc1=',cv_common_fixed_1_bc,' # right (last) endpoint fixed'
+        _W '}'
+#undef _W
+!
+       end subroutine cv_common_print_header
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       subroutine cv_common_print_local(iunit, col, qraw_)
 !      assume that unit is prepared
 !      NOTE that this is a local print!
 !      does not print fixed BC
        __DEP_OUTPUT
-       int iunit
+       __DEP_MULTICOM
+       use parser, only : itoa
+       int :: iunit
        int, optional :: col
+       bool, optional, intent(in) :: qraw_
+       bool :: qraw
 !      locals
        int :: i, c
        __IAM(CV_COMMON_PRINT_LOCAL)
 !      do work
+       if (.not.present(qraw_)) then ; qraw=qraw_ ; else ; qraw=.true. ; endif ! default behavior backward-compatible
        if (.not.present(col)) then ; c=main ; else ; c=col ; endif
        if (c.lt.1.or.c.gt.(max_hist_base+main_offset)) then
-        __WRN( whoami,'OUT OF BOUNDS. NOTHING DONE.')
+        __WRN( whoami,'COLUMN('//itoa(c)//') OUT OF BOUNDS. NOTHING DONE.')
         return
        endif
-       do i=1, cv%num_cv
-        write(iunit, real_format) cv%r(i,c)
-       enddo
+!
+       if (qraw) then
+! simple (raw) dump that is good for analysis in matlab
+        do i=1, cv%num_cv ; write(iunit, real_format) cv%r(i,c) ; enddo
+       else ! .not. qraw
+! write a human-readable file
+        call cv_common_print_header(iunit)
+#define _W write(iunit,*)
+        _W 'smcv {'
+        _W '# CVx_y : Collective Variable #y coresponding to replica #x'
+!     write coordinates
+        do i=1, cv%num_cv
+         _W 'CV'//trim(itoa(ME_STRNG))//'_'//trim(itoa(i)),' = ',cv%r(i,c)
+        enddo
+        _W '}'
+#undef _W
+       endif
+!
        end subroutine cv_common_print_local
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       subroutine cv_common_print_global(iunit,col,print_bc)
+       subroutine cv_common_print_global(iunit,col,print_bc,qraw_)
 !      assume that unit is prepared
 !      NOTE that this is a global print!
        __DEP_OUTPUT
        __DEP_MULTICOM
        __DEP_MPI
+       use parser, only: itoa
 !
 #include "mpitype.def"
 !
        int iunit
        int, optional :: col
-       bool, optional :: print_bc
+       bool, optional, intent(in) :: print_bc
+       bool, optional, intent(in) :: qraw_
+       bool :: qraw
 !      locals
        int :: i, k, c
        bool :: bc
        character(len=80) :: fmt
+       character(len=20) :: keyword
        float, pointer :: rtemp(:,:) ! temporary array for holding coords
        int :: ierror
        bool :: qroot
@@ -1363,6 +1405,7 @@ __CHARMM_ONLY##ENDIF
        qroot=(MPI_COMM_STRNG.ne.MPI_COMM_NULL)
        if (qroot) then
 !
+        if (.not.present(qraw_)) then ; qraw=qraw_ ; else ; qraw=.true. ; endif ! default behavior backward-compatible
         if (.not.present(col)) then ; c=main ; else ; c=col ; endif
         if (c.lt.1.or.c.gt.(cv%num_hist+main_offset)) then
          __WRN( whoami, 'OUT OF BOUNDS. NOTHING DONE.')
@@ -1384,42 +1427,75 @@ __CHARMM_ONLY##ENDIF
         endif
 !
         if (ME_STRNG.eq.0) then ! root writes
+         if (qraw) then
+! simple (raw) dump that is good for analysis in matlab
 !
-         if (bc) then ! write inner replicas + bc
-          write(fmt,int_format)                                         &
-     &      (SIZE_STRNG+cv_common_fixed_0_bc+cv_common_fixed_1_bc)
-          if (cv_common_fixed_0_bc.eq.1) then
-           if (cv_common_fixed_1_bc.eq.1) then
-            do i=1,cv%num_cv
-             write(iunit,'('//fmt//real_format//')')                    &
-     &       cv%r_bc_0(i), (rtemp(i,k),k=1,SIZE_STRNG), cv%r_bc_1(i)
-            enddo
+          if (bc) then ! write inner replicas + bc
+           write(fmt,int_format) (SIZE_STRNG+cv_common_fixed_0_bc+cv_common_fixed_1_bc)
+           if (cv_common_fixed_0_bc.eq.1) then
+            if (cv_common_fixed_1_bc.eq.1) then
+             do i=1,cv%num_cv
+              write(iunit,'('//fmt//real_format//')') cv%r_bc_0(i), (rtemp(i,k),k=1,SIZE_STRNG), cv%r_bc_1(i)
+             enddo ! all cv
+            else
+             do i=1,cv%num_cv
+              write(iunit,'('//fmt//real_format//')') cv%r_bc_0(i), (rtemp(i,k),k=1,SIZE_STRNG)
+             enddo
+            endif
            else
-            do i=1,cv%num_cv
-             write(iunit,'('//fmt//real_format//')')                    &
-     &       cv%r_bc_0(i), (rtemp(i,k),k=1,SIZE_STRNG)
-            enddo
+            if (cv_common_fixed_1_bc.eq.1) then
+             do i=1,cv%num_cv
+              write(iunit,'('//fmt//real_format//')') (rtemp(i,k),k=1,SIZE_STRNG), cv%r_bc_1(i)
+             enddo
+            else
+             do i=1,cv%num_cv
+              write(iunit,'('//fmt//real_format//')') (rtemp(i,k),k=1,SIZE_STRNG)
+              enddo
+            endif
            endif
-          else
-           if (cv_common_fixed_1_bc.eq.1) then
-            do i=1,cv%num_cv
-             write(iunit,'('//fmt//real_format//')')                    &
-     &       (rtemp(i,k),k=1,SIZE_STRNG), cv%r_bc_1(i)
-            enddo
-           else
-            do i=1,cv%num_cv
-             write(iunit,'('//fmt//real_format//')')                    &
-     &       (rtemp(i,k),k=1,SIZE_STRNG)
+          else ! bc; just write the inner replicas
+           write(fmt,int_format) SIZE_STRNG
+           do i=1,cv%num_cv
+            write(iunit,'('//fmt//real_format//')') (rtemp(i,k),k=1,SIZE_STRNG)
+           enddo
+          endif ! print_bc
+!==========================================
+         else ! i.e. : qraw = .false.
+         call cv_common_print_header(iunit)
+#define _W write(iunit,*)
+          _W 'smcv {'
+          _W '# CVx_y : Collective Variable #y coresponding to replica #x'
+!     write coordinates
+! check left boundary condition
+          if (bc) then
+           if (cv_common_fixed_0_bc.gt.0) then
+            keyword='CV'//trim(itoa(0))//'_'
+            do i=1, cv%num_cv
+             _W trim(keyword)//trim(itoa(i)),' = ',cv%r_bc_0(i)
             enddo
            endif
           endif
-         else ! bc; just write the inner replicas
-          write(fmt,int_format) SIZE_STRNG
-          do i=1,cv%num_cv
-           write(iunit,'('//fmt//real_format//')')                      &
-     &      (rtemp(i,k),k=1,SIZE_STRNG)
+! inner replicas
+          do k=1, SIZE_STRNG
+           keyword='CV'//trim(itoa(k+cv_common_fixed_0_bc-1))//'_'
+           do i=1, cv%num_cv
+            _W 'CV'//trim(keyword)//trim(itoa(i)),' = ',rtemp(i,k)
+           enddo
           enddo
-         endif ! print_bc
+              _W 'CV'//trim(itoa(SIZE_STRNG+1))//'_'//trim(itoa(i)),' = ',cv%r_bc_1(i)
+! check right boundary condition
+          if (bc) then
+           if (cv_common_fixed_1_bc.gt.0) then
+            keyword='CV'//trim(itoa(SIZE_STRNG + cv_common_fixed_0_bc + cv_common_fixed_0_bc - 1))//'_'
+            do i=1, cv%num_cv
+             _W trim(keyword)//trim(itoa(i)),' = ',cv%r_bc_1(i)
+            enddo
+           endif
+          endif ! bc
+          _W '}'
+#undef _W
+         endif ! qraw
+!
         endif ! ME=0
         deallocate(rtemp)
        endif ! qroot
