@@ -19,7 +19,8 @@ __CHARMM_ONLY##IF STRINGM
      &                     frames_print_local, frames_print_global,     &
      &                     frames_calc, frames, frames_initialized,     &
      &                     frames_reset_calculate,                      &
-     &                     frames_calc_align_comp
+     &                     frames_calc_align_comp, frames_print_local,  &
+     &                     frames_print_global
       use cv_quaternion, only: quat_reset_calculate, quat_done
 !
       use sm_config
@@ -104,6 +105,7 @@ __CHARMM_ONLY##IF STRINGM
       bool :: min_rmsd, voronoi_check_map
       int :: which(1)
       bool :: qroot, qslave __CHARMM_ONLY, qprint
+      bool :: qrest ! whether to read/write restart file flag
 !     tests
       float, pointer :: fd_error(:,:) ! FD gradient computation
 !
@@ -1260,6 +1262,7 @@ __MPI_ONLY     &       cv%voronoi_map, 1, mpiint, MPI_COMM_STRNG, ierror)
 !      can write both a local and a global file
 !      local is specified with 'LOCAL'; global is the default
        qall=__INDX_RM(comlyn,comlen,'LOCAL') ! all replicas print
+       qrest=(__INDX_RM(comlyn,comlen,'REST')).gt.0 ! whether to print a (complete) restart file
 !      prepare file
 !-----------------------------------------------------------------------------
        ifile=__GET_RM_I(comlyn,comlen,'UNIT',-1)
@@ -1275,20 +1278,37 @@ __MPI_ONLY     &       cv%voronoi_map, 1, mpiint, MPI_COMM_STRNG, ierror)
          if (flen.gt.0) then ; __OPEN_FILE(ifile,fname,'FORMATTED','WRITE') ; endif
         endif
         if (ifile .eq. -1) ifile=__OSTREAM ! write to output stream
+!
+        if (qrest.and.qprint) then ; write(_MSGBUF,*) whoami, ' WILL USE SMCV RESTART FORMAT';__PRINT(_MSGBUF);endif
 !---------------------------- assume file is open, write -------------------------
 !     check for column spec
         c1=sm_get_column(comlyn, comlen, qcoltag=.true., missing=-1)
         if (c1.gt.0) then
          if (qprint) then ; write(_MSGBUF,6679) whoami, c1 ; __PRINT(_MSGBUF) ; endif
  6679 format(/A,' WRITING COORDINATES FROM COLUMN ',I3)
-         if (qall.eq.0) then ; call cv_common_print_global(ifile, c1) ;
-         else ; call cv_common_print_local(ifile,c1) ; endif
+         if (qall.eq.0) then ; call cv_common_print_global(iunit=ifile,col=c1,qraw_=.not.qrest) ;
+         else ; call cv_common_print_local(ifile,c1,qraw_=.not.qrest) ; endif
         else
          if (qprint) then ; write(_MSGBUF,6689) whoami ; __PRINT(_MSGBUF) ; endif
  6689 format(/A,' WRITING COORDINATES FROM DEFAULT COLUMN.')
-         if (qall.eq.0) then ; call cv_common_print_global(ifile) ;
-         else ; call cv_common_print_local(ifile) ; endif
+         if (qall.eq.0) then ; call cv_common_print_global(ifile,qraw_=.not.qrest) ;
+         else ; call cv_common_print_local(ifile,qraw_=.not.qrest) ; endif
         endif ! c1
+!    if restart file, output additional data
+        if (qrest) then 
+#define __PAR ifile, qraw_=.false., qhead_=.false.
+         if (qall.eq.0) then ! global
+          call cv_common_print_M_global(__PAR) ! output default M array (long-term average)
+          call frames_print_global(__PAR) ! output frames
+         else
+! nothing yet
+          call cv_common_print_M_local(__PAR) ! output default M array (long-term average)
+          call frames_print_local(__PAR) ! output frames
+         endif
+         call cv_common_print_wgt(__PAR)
+#undef __PAR
+        endif ! qrest
+!
         if (qall.gt.0.or.qprint) then
          if (flen.gt.0) then ; __CLOSE_FILE(ifile,'KEEP',ierror) ; endif
 #ifdef __CHARMM

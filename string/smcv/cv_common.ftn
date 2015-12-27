@@ -150,6 +150,7 @@ __CHARMM_ONLY##IF STRINGM
       public cv_common_read_dr ! read tangent to the path
       public cv_common_compute_k ! calculate force constants using k_i=kpara*w_i^2
       public cv_common_print_M_global   ! print metric tensor
+      public cv_common_print_M_local
       public cv_common_read_M_global   ! read metric tensor
       public cv_common_compute_Minv    ! compute inverse of metric tensor
       public cv_common_rex_init       ! initialize replica exchange variables
@@ -264,7 +265,7 @@ __CHARMM_ONLY##IF STRINGM
         cv%r=__NAN
         cv%r(:,runave)=0d0    ! not necessary, but cleaner when CVs include angles which need to be averaged
         cv%r(:,previnst)=0d0  ! not necessary, but cleaner when CVs include angles
-        cv%M=0d0
+        cv%M=__NAN
         cv%type=-1
         cv%active=.true. ! all cv active by default (and for compatibility with previous code)
         cv%k=0d0
@@ -520,23 +521,52 @@ __MPI_ONLY     &        mpifloat, MPI_SUM, MPI_COMM_STRNG, ierror) ! use M inver
        cv_common_weights_initialized=.true.
        end subroutine cv_common_compute_wgt
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       subroutine cv_common_print_wgt(iunit,fmt)
+       subroutine cv_common_print_wgt(iunit,fmt,qraw_,qhead_)
        __DEP_OUTPUT
+       use parser, only : itoa
 !      only root process must call
-       int iunit
+       int, intent(in) :: iunit
        character(len=*), optional :: fmt
+       bool, optional :: qraw_, qhead_
 !      local
+       bool :: qraw, qhead
+       int :: i
        character(len=80) :: frm
        __IAM(CV_COMMON_PRINT_WGT)
 !      begin
-       if (.not.cv_common_weights_initialized)                            &
-     & __WRN(whoami,'CV WEIGHTS NOT INITIALIZED.')
-       if (.not.present(fmt)) then
-        write(frm,'("(",I5,"E15.5)")') max(cv%num_cv,1)
-       else
-        frm=fmt
-       endif
-       write(iunit,frm) cv%weight(1:cv%num_cv)
+       if (present(qraw_)) then ; qraw=qraw_ ; else ; qraw=.true. ; endif ! default behavior backward-compatible
+       if (present(qhead_)) then ; qhead=qhead_ ; else ; qhead=.true. ; endif
+       if (.not.qraw) then 
+        if(qhead) call cv_common_print_header(iunit)
+#define _W write(iunit,*)
+       _W '# Wx : weight corresponding to CV #x in a scalar product; e.g. : ( SUM_{i=1}^N cv_i x w_i ) / SUM_{i=1}^N w_i'
+       endif ! qraw
+!
+       if (.not.cv_common_weights_initialized) then
+        if (qraw) then
+         __WRN(whoami,'CV WEIGHTS NOT INITIALIZED.')
+        else
+         _W '# CV weights not initialized'
+         return
+        endif ! qraw
+       endif ! init
+!
+       if (qraw) then
+        if (.not.present(fmt)) then
+         write(frm,'("(",I5,"E15.5)")') max(cv%num_cv,1)
+        else
+         frm=fmt
+        endif
+        write(iunit,frm) cv%weight(1:cv%num_cv)
+       else ! human-readable
+        _W 'smcv {'
+        do i=1, cv%num_cv
+         _W 'W'//trim(itoa(i))//' = ',cv%weight(i)
+        enddo
+        _W '} # smcv'
+       endif ! qraw
+#undef _W
+!
        end subroutine cv_common_print_wgt
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_read_wgt(iunit)
@@ -1322,15 +1352,20 @@ __CHARMM_ONLY##ENDIF
        subroutine cv_common_print_header(ifile)
 ! from a design standpont, unclear to me whether including MULTICOM everywhere is good
        __DEP_MULTICOM
-       int :: ifile
+       use parser, only : itoa
+       int :: ifile, i
        __IAM(CV_COMMON_PRINT_HEADER)
 #define _W write(ifile,*)
         _W '# DATA FOR STRING METHOD IN COLLECTIVE VARIABLES (CVs)'
         _W 'smcv {'
-        _W 'nstring=', ME_STRNG, ' # string replicas'
-        _W 'num_cv=', cv%num_cv, ' # CVs'
-        _W 'fixed_bc0=',cv_common_fixed_0_bc,' # left (1st) endpoint fixed'
-        _W 'fixed_bc1=',cv_common_fixed_1_bc,' # right (last) endpoint fixed'
+        _W 'nstring =', SIZE_STRNG, ' # string replicas'
+        _W 'num_cv =', cv%num_cv, ' # CVs'
+!     write types
+        do i=1, cv%num_cv
+         _W '# CV'//trim(itoa(i))//': ',cv_type_names(cv%type(i))
+        enddo
+        _W 'fixed_bc0 =',cv_common_fixed_0_bc,' # left (1st) endpoint fixed'
+        _W 'fixed_bc1 =',cv_common_fixed_1_bc,' # right (last) endpoint fixed'
         _W '}'
 #undef _W
 !
@@ -1348,10 +1383,11 @@ __CHARMM_ONLY##ENDIF
        bool, optional, intent(in) :: qraw_
        bool :: qraw
 !      locals
-       int :: i, c
+       character(len=20) :: keyword
+       int :: i, c, l
        __IAM(CV_COMMON_PRINT_LOCAL)
 !      do work
-       if (.not.present(qraw_)) then ; qraw=qraw_ ; else ; qraw=.true. ; endif ! default behavior backward-compatible
+       if (present(qraw_)) then ; qraw=qraw_ ; else ; qraw=.true. ; endif ! default behavior backward-compatible
        if (.not.present(col)) then ; c=main ; else ; c=col ; endif
        if (c.lt.1.or.c.gt.(max_hist_base+main_offset)) then
         __WRN( whoami,'COLUMN('//itoa(c)//') OUT OF BOUNDS. NOTHING DONE.')
@@ -1368,10 +1404,11 @@ __CHARMM_ONLY##ENDIF
         _W 'smcv {'
         _W '# CVx_y : Collective Variable #y coresponding to replica #x'
 !     write coordinates
+        keyword='CV'//trim(itoa(ME_STRNG))//'_';l=len_trim(keyword)
         do i=1, cv%num_cv
-         _W 'CV'//trim(itoa(ME_STRNG))//'_'//trim(itoa(i)),' = ',cv%r(i,c)
+         _W keyword(1:l)//trim(itoa(i)),' = ',cv%r(i,c)
         enddo
-        _W '}'
+        _W '} # smcv'
 #undef _W
        endif
 !
@@ -1393,7 +1430,7 @@ __CHARMM_ONLY##ENDIF
        bool, optional, intent(in) :: qraw_
        bool :: qraw
 !      locals
-       int :: i, k, c
+       int :: i, k, c, l
        bool :: bc
        character(len=80) :: fmt
        character(len=20) :: keyword
@@ -1405,15 +1442,14 @@ __CHARMM_ONLY##ENDIF
        qroot=(MPI_COMM_STRNG.ne.MPI_COMM_NULL)
        if (qroot) then
 !
-        if (.not.present(qraw_)) then ; qraw=qraw_ ; else ; qraw=.true. ; endif ! default behavior backward-compatible
+        if (present(qraw_)) then ; qraw=qraw_ ; else ; qraw=.true. ; endif ! default behavior backward-compatible
         if (.not.present(col)) then ; c=main ; else ; c=col ; endif
         if (c.lt.1.or.c.gt.(cv%num_hist+main_offset)) then
          __WRN( whoami, 'OUT OF BOUNDS. NOTHING DONE.')
          return
         endif
 !
-        bc=.true.
-        if (present(print_bc)) bc=print_bc ! do we want bc printed if applicable?
+        if (present(print_bc)) then ; bc=print_bc ; else ; bc=.true. ; endif ! do we want bc printed if applicable?
 !
 !      gather all data on root
         allocate(rtemp(cv%num_cv, SIZE_STRNG))
@@ -1458,41 +1494,40 @@ __CHARMM_ONLY##ENDIF
            do i=1,cv%num_cv
             write(iunit,'('//fmt//real_format//')') (rtemp(i,k),k=1,SIZE_STRNG)
            enddo
-          endif ! print_bc
+          endif ! bc
 !==========================================
          else ! i.e. : qraw = .false.
-         call cv_common_print_header(iunit)
+          call cv_common_print_header(iunit)
 #define _W write(iunit,*)
           _W 'smcv {'
           _W '# CVx_y : Collective Variable #y coresponding to replica #x'
 !     write coordinates
 ! check left boundary condition
           if (bc) then
-           if (cv_common_fixed_0_bc.gt.0) then
-            keyword='CV'//trim(itoa(0))//'_'
+           if (cv_common_fixed_0_bc.eq.1) then
+            keyword='CV'//trim(itoa(0))//'_'; l=len_trim(keyword)
             do i=1, cv%num_cv
-             _W trim(keyword)//trim(itoa(i)),' = ',cv%r_bc_0(i)
+             _W keyword(1:l)//trim(itoa(i)),' = ',cv%r_bc_0(i)
             enddo
            endif
           endif
 ! inner replicas
           do k=1, SIZE_STRNG
-           keyword='CV'//trim(itoa(k+cv_common_fixed_0_bc-1))//'_'
+           keyword='CV'//trim(itoa(k+cv_common_fixed_0_bc-1))//'_'; l=len_trim(keyword)
            do i=1, cv%num_cv
-            _W 'CV'//trim(keyword)//trim(itoa(i)),' = ',rtemp(i,k)
+            _W keyword(1:l)//trim(itoa(i)),' = ',rtemp(i,k)
            enddo
           enddo
-              _W 'CV'//trim(itoa(SIZE_STRNG+1))//'_'//trim(itoa(i)),' = ',cv%r_bc_1(i)
 ! check right boundary condition
           if (bc) then
-           if (cv_common_fixed_1_bc.gt.0) then
-            keyword='CV'//trim(itoa(SIZE_STRNG + cv_common_fixed_0_bc + cv_common_fixed_0_bc - 1))//'_'
+           if (cv_common_fixed_1_bc.eq.1) then
+            keyword='CV'//trim(itoa(SIZE_STRNG + cv_common_fixed_0_bc + cv_common_fixed_0_bc - 1))//'_'; l=len_trim(keyword)
             do i=1, cv%num_cv
-             _W trim(keyword)//trim(itoa(i)),' = ',cv%r_bc_1(i)
+             _W keyword(1:l)//trim(itoa(i)),' = ',cv%r_bc_1(i)
             enddo
            endif
           endif ! bc
-          _W '}'
+          _W '} # smcv'
 #undef _W
          endif ! qraw
 !
@@ -1644,7 +1679,7 @@ __CHARMM_ONLY##ENDIF
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_print_forces(iunit) ! global
        int :: iunit
-       call cv_common_print_global(iunit,forces,.false.) ! do not print BC if they are present
+       call cv_common_print_global(iunit,forces,.false.,.true.) ! do not print BC if they are present; use raw format
        end subroutine cv_common_print_forces
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_read_local(iunit,col)
@@ -1862,7 +1897,7 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_print_ds(iunit,fmt)
        use sm_var, only: nstring
-       
+!
        int iunit
        character(len=*), optional :: fmt
 !      local
@@ -2205,7 +2240,7 @@ __WARN(whoami,'SOME CV COORDINATES ARE ZERO AFTER READING ON REPLICA ',me,'.')
        subroutine cv_common_rex_print_map(iunit,fmt)
        use sm_var, only: nstring
        __DEP_OUTPUT
-       
+!
 !      only root process should call
        int :: iunit
        character(len=*), optional :: fmt
@@ -3173,20 +3208,23 @@ __MPI_ONLY     &                  MPI_COMM_STRNG,ierror)
        endif ! STRNG
        end subroutine cv_common_voronoi_print_log
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       subroutine cv_common_read_M_global(ifile, ind)
+       subroutine cv_common_read_M_global(ifile, ind, qraw_)
        use sm_var, only: nstring
-!     print mass matrix; assume that cv%m(:,:,2) has what the user wants
+!     print mass matrix; unless otherwise specified assume that cv%m(:,:,4) has what the user wants
       __DEP_MULTICOM
       __DEP_MPI
 !
 #include "mpitype.def"
        int :: ifile
-       int, optional :: ind  ! M index
+       int, optional, intent(in) :: ind  ! M index
+       bool, optional, intent(in) :: qraw_
 !     locals
        int :: ierror, j, Mind
        float :: M_all(cv%num_cv, cv%num_cv, nstring)
        float :: M_me(cv%num_cv, cv%num_cv)
+       bool :: qraw
 !
+       if (present(qraw_)) then ; qraw=qraw_ ; else ; qraw=.true. ; endif ! default behavior backward-compatible
        if (present(ind)) then ; Mind=ind ; else ; Mind=4 ; endif
 !
        if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then
@@ -3226,24 +3264,30 @@ __MPI_ONLY     &                 MPI_COMM_STRNG,ierror)
 !
        end subroutine cv_common_read_M_global
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       subroutine cv_common_print_M_global(ifile, ind)
+       subroutine cv_common_print_M_global(ifile, ind, qraw_, qhead_)
        use sm_var, only: nstring
 !     print mass matrix; assume that cv%m(:,:,4) has what the user wants (long-term average)
 !
       __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
       __DEP_MPI  ! deal with other platforms later
+      __DEP_NUMBER
+      use parser, only: itoa
 !
 #include "mpitype.def"
-       int :: ifile
-       int, optional :: ind  ! M index to print
+       int, intent(in) :: ifile
+       int, optional, intent(in) :: ind  ! M index to print
+       bool, optional, intent(in) :: qraw_, qhead_
 !     locals
        character(len=80) :: fmt
-       int :: isizeM, ierror, j, Mind
+       character(len=20) :: keyword
+       int :: isizeM, ierror, j, k, Mind, l
        float :: M_all(cv%num_cv, cv%num_cv, nstring)
        float :: M_me(cv%num_cv, cv%num_cv)
+       bool :: qraw, qhead
 !
-       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then
+       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then ! replica roots only
 !
+        if (present(qraw_)) then ; qraw=qraw_ ; else ; qraw=.true. ; endif ! default behavior backward-compatible
         if (present(ind)) then ; Mind=ind ; else ; Mind=4 ; endif
 !
         isizeM=cv%num_cv;
@@ -3262,16 +3306,92 @@ __MPI_ONLY     &                 MPI_COMM_STRNG,ierror)
 !     &                 MPI_COMM_STRNG,ierror)
         write(fmt,'(I5)') cv%num_cv
         if (ME_STRNG.eq.0) then ! root writes
-         do j=1,nstring
-          write(ifile,'("% ",I5)') j
-          write(ifile,'('//fmt//real_format//')') M_all(:,:,j)
-!          write(ifile,'('//fmt//'E15.5)') M_all(:,:,j)
-!         write(ifile,'('//fmt//'F11.5)') cv%M(1:cv%num_cv,1:cv%num_cv,1)
-         enddo
+         if (qraw) then
+          do j=1,nstring
+           write(ifile,'("% ",I5)') j
+           write(ifile,'('//fmt//real_format//')') M_all(:,:,j)
+!           write(ifile,'('//fmt//'E15.5)') M_all(:,:,j)
+!           write(ifile,'('//fmt//'F11.5)') cv%M(1:cv%num_cv,1:cv%num_cv,1)
+          enddo
+!=================== human readable format
+         else
+! unclear when to print header ...
+          if (present(qhead_)) then ; qhead=qhead_ ; else ; qhead=.true. ; endif
+          if (qhead) call cv_common_print_header(ifile)
+#define _W write(ifile,*)
+          _W 'smcv {'
+          _W '# M_x_y = ( ... ) :  y column of metric tensor M corresponding to replica x ' 
+          if (any(M_all.eq.__NAN)) then
+           _W '# M not initialized'
+          else
+           do j=1,nstring
+            keyword='M_'//itoa(j-1)//'_' ; l=len_trim(keyword);
+            do k=1,cv%num_cv
+             _W keyword(1:l)//itoa(k), '=(', M_all(:,k,j),')'
+            enddo ! M columns/rows (M=M^t)
+           enddo ! replicas
+          endif ! M==nan
+          _W '} # smcv'
+         endif ! qraw
         endif ! ME
        endif ! MPI_COMM
 !
        end subroutine cv_common_print_M_global
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       subroutine cv_common_print_M_local(ifile, ind, qraw_, qhead_)
+!     print mass matrix; assume that cv%m(:,:,4) has what the user wants (long-term average)
+!
+      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
+      __DEP_MPI  ! deal with other platforms later
+      __DEP_NUMBER
+      use parser, only: itoa
+!
+#include "mpitype.def"
+       int, intent(in) :: ifile
+       int, optional, intent(in) :: ind  ! M index to print
+       bool, optional, intent(in) :: qraw_, qhead_
+!     locals
+       character(len=80) :: fmt
+       character(len=20) :: keyword
+       int :: ierror, j, k, Mind, l
+       float, pointer :: M_me(:,:)
+       bool :: qraw, qhead
+!
+       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then ! replica roots only
+!
+        if (present(qraw_)) then ; qraw=qraw_ ; else ; qraw=.true. ; endif ! default behavior backward-compatible
+        if (present(ind)) then ; Mind=ind ; else ; Mind=4 ; endif
+!
+        M_me=>cv%M(1:cv%num_cv, 1:cv%num_cv, Mind)
+!
+!        call MPI_ALLGATHER(M_me,isizeM,mpifloat,
+!     &                 M_all,isizeM,mpifloat,
+!     &                 MPI_COMM_STRNG,ierror)
+        write(fmt,'(I5)') cv%num_cv
+        if (qraw) then
+         write(ifile,'("% ",I5)') ME_STRNG
+         write(ifile,'('//fmt//real_format//')') M_me
+!=================== human readable format
+        else
+! unclear when to print header ...
+         if (present(qhead_)) then ; qhead=qhead_ ; else ; qhead=.true. ; endif
+         if (qhead) call cv_common_print_header(ifile)
+#define _W write(ifile,*)
+         _W 'smcv {'
+         _W '# M_x_y = ( ... ) :  y column of metric tensor M corresponding to replica x ' 
+         if (any(M_me.eq.__NAN)) then
+          _W '# M not initialized'
+         else
+          keyword='M_'//itoa(j-1)//'_' ; l=len_trim(keyword);
+          do k=1,cv%num_cv
+           _W keyword(1:l)//itoa(k), '=(', M_me, ')'
+          enddo ! M columns/rows (M=M^t)
+         endif ! M==nan
+         _W '} # smcv'
+        endif ! qraw
+       endif ! MPI_COMM
+!
+       end subroutine cv_common_print_M_local
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_neq_work_init()
 !      initialize variables for nonequilibrium work
