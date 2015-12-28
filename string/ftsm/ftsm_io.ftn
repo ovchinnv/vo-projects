@@ -36,12 +36,13 @@ __DECL_MSGBUF
       int, optional, intent(in) :: col
 !
       bool :: qroot
-      int :: c, i, j, k, me, ierror, stat(MPI_STATUS_SIZE)
+      int :: c, i, j, k, l, me, ierror, stat(MPI_STATUS_SIZE)
 ! vars for test
-      int :: norient_, nforced_, nboth_, nstring_
+      int :: norient_, nforced_, nboth_, nstring_, ierr
       bool :: qorient_, qdiffrot_, qerror
       int, pointer :: iatom_both_(:,:)
       character(len=maxlinelen) :: line
+      character(len=20) :: keyword
       type (int_vector) :: iorient
 !
       __IAM(FTSM_WRITE_TXT)
@@ -100,17 +101,25 @@ if (__NEG(__WHAT __HOW __CONCAT(__WHAT,_)))then;__WARN(whoami,'MISMATCH IN FTSM 
         endif
 !=====================================================
 ! read actual coordinates
+        keyword='rf'//trim(itoa(me))//'_' ; l=len_trim(keyword);
         do j=1, nforced
-         line=getval_nocase('rf'//trim(itoa(me))//'_'//trim(itoa(j)),__MYCTX)
+         line=getval_nocase(keyword(1:l)//trim(itoa(j)),__MYCTX)
 !         r_f(j,:,c)=atofv(line,3)
-         read(line,*) r_f(j,:,c)
+         if (len_trim(line).gt.0) then
+          read(line,*,iostat=ierr) r_f(j,:,c)
+          if (ierr.ne.0) then
+           __WRN(whoami, 'ERROR READING COORDINATE FROM LINE "'//trim(line)//'"')
+           cycle
+          endif
+         endif ! line
         enddo ! forced atoms
         if (qorient.and.qdiffrot) then
 ! create indices for unique orientation coordinates
+         keyword='ro'//trim(itoa(me))//'_' ; l=len_trim(keyword);
          do j=1, norient
           if ( nboth.eq.0 .or. all(j.ne.iatom_both(2,:)) ) then
            k=int_vector_add(iorient,j)
-           line=getval_nocase('ro'//trim(itoa(me))//'_'//trim(itoa(j)),__MYCTX)
+           line=getval_nocase(keyword(1:l)//trim(itoa(j)),__MYCTX)
 !           r_o(j,:,c)=atofv(line,3)
            read(line,*) r_o(j,:,c)
           endif
@@ -118,17 +127,19 @@ if (__NEG(__WHAT __HOW __CONCAT(__WHAT,_)))then;__WARN(whoami,'MISMATCH IN FTSM 
         endif ! qo
 ! now, read data for other replicas and send
         do me=1, nstring-1
+         keyword='rf'//trim(itoa(me))//'_' ; l=len_trim(keyword);
 ! read coordinates
          do j=1, nforced
-         line=getval_nocase('rf'//trim(itoa(me))//'_'//trim(itoa(j)),__MYCTX)
+          line=getval_nocase(keyword(1:l)//trim(itoa(j)),__MYCTX)
 !         r_f(j,:,dummy)=atofv(line,3)
-         read(line,*) r_f(j,:,dummy)
+          read(line,*) r_f(j,:,dummy)
          enddo ! forced atoms
 __MPI_ONLY   call MPI_SEND(r_f(:,:,dummy),3*nforced,mpifloat,me,me, MPI_COMM_STRNG, ierror)
          if (qorient.and.qdiffrot) then
+          keyword='ro'//trim(itoa(me))//'_' ; l=len_trim(keyword);
           do i=1,iorient%last
            j=iorient%i(i)
-           line=getval_nocase('ro'//trim(itoa(me))//'_'//trim(itoa(j)),__MYCTX)
+           line=getval_nocase(keyword(1:l)//trim(itoa(j)),__MYCTX)
 !           r_o(j,:,dummy)=atofv(line,3)
            read(line,*) r_o(j,:,dummy)
           enddo
