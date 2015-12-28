@@ -874,7 +874,7 @@ __MPI_ONLY     &       cv%voronoi_map, 1, mpiint, MPI_COMM_STRNG, ierror)
        elseif ((__STRNCMP(keyword,'PRIN',4)).or.(__STRNCMP(keyword,'WRIT',4))) then
 !      can write both a local and a global file
 !      local is specified with 'ALL'; global is the default
-        qall=__INDX_RM(comlyn,comlen,'ALL') ! all replicas print
+        qall = max( __INDX_RM(comlyn,comlen,'LOCAL'),__INDX_RM(comlyn,comlen,'LOCAL'))
 !      prepare file
 !-----------------------------------------------------------------------------
         ifile=__GET_RM_I(comlyn,comlen,'UNIT',-1)
@@ -906,7 +906,7 @@ __MPI_ONLY     &       cv%voronoi_map, 1, mpiint, MPI_COMM_STRNG, ierror)
        elseif (__STRNCMP(keyword,'READ',4)) then
 !      can read from both a local and a global file
 !      local is specified with 'ALL'; default is global
-        qall=__INDX_RM(comlyn,comlen,'ALL') ! all replicas read
+        qall = max( __INDX_RM(comlyn,comlen,'LOCAL'),__INDX_RM(comlyn,comlen,'LOCAL'))
 !      prepare file
         ifile=__GET_RM_I(comlyn,comlen,'UNIT',-1)
         __GET_RM_A(COMLYN,COMLEN,'NAME',4,FNAME,80,FLEN)
@@ -1261,7 +1261,7 @@ __MPI_ONLY     &       cv%voronoi_map, 1, mpiint, MPI_COMM_STRNG, ierror)
       elseif ((__STRNCMP(keyword,'PRIN',4)) .or. (__STRNCMP(keyword,'WRIT',4))) then
 !      can write both a local and a global file
 !      local is specified with 'LOCAL'; global is the default
-       qall=__INDX_RM(comlyn,comlen,'LOCAL') ! all replicas print
+       qall = max( __INDX_RM(comlyn,comlen,'LOCAL'),__INDX_RM(comlyn,comlen,'LOCAL'))
        qrest=(__INDX_RM(comlyn,comlen,'REST')).gt.0 ! whether to print a (complete) restart file
 !      prepare file
 !-----------------------------------------------------------------------------
@@ -1321,24 +1321,39 @@ __MPI_ONLY     &       cv%voronoi_map, 1, mpiint, MPI_COMM_STRNG, ierror)
 !      can read from both a local and a global file
 !      local is specified with 'LOCAL'; default is global
 !      can also read a specific column: specify SCOL x
-       qall=__INDX_RM(comlyn,comlen,'LOCAL') ! all replicas read
-       if (__INDX(comlyn, comlen, 'SCOL',4).gt.0) then
+       qall = max( __INDX_RM(comlyn,comlen,'LOCAL'),__INDX_RM(comlyn,comlen,'LOCAL'))
+       qrest=(__INDX_RM(comlyn,comlen,'REST')).gt.0 ! whether to print a (complete) restart file
+!
+! multiple ways to specify whic replica to read
+       if (__INDX(comlyn, comlen, 'FROM',4).gt.0) then
+        scol=__GET_RM_I(comlyn, comlen, 'FROM', 0)
+       elseif (__INDX(comlyn, comlen, 'SREP',4).gt.0) then
+        scol=__GET_RM_I(comlyn, comlen, 'SREP', 0)
+       elseif (__INDX(comlyn, comlen, 'SCOL',4).gt.0) then
         scol=__GET_RM_I(comlyn, comlen, 'SCOL', 0)
-        if (scol.ge.1) then ! need to know total number of replicas in CV file
-         if (qall.gt.0) then
-          __WRN(whoami,'ALL AND SCOL CANNOT BOTH BE SPECIFIED.')
+       elseif (__INDX(comlyn, comlen, 'REPL',4).gt.0) then
+        scol=__GET_RM_I(comlyn, comlen, 'REPL', 0)
+       endif
+!
+       totcol=0 ! needed so that slave routines will ignore this in some (valid) cases
+       if (.not. qrest) then ! read raw txt format
+         if (scol.ge.1) then ! need to know total number of replicas in CV file
+          if (qall.gt.0) then
+           __WRN(whoami,'ALL AND SCOL CANNOT BOTH BE SPECIFIED.')
+           return
+          endif
+          totcol=__GET_RM_I(comlyn, comlen, 'TCOL', 0)
+          if (totcol.le.0) then
+           __WRN(whoami,'MUST PROVIDE TOTAL NUMBER OF COLUMNS IN CV DATA FILE.')
+           return
+          endif
+         else ! scol.ge.1
+          __WRN(whoami,'SCOL MUST BE A POSITIVE INTEGER.')
           return
          endif
-         totcol=__GET_RM_I(comlyn, comlen, 'TCOL', 0)
-         if (totcol.le.0) then
-          __WRN(whoami,'MUST PROVIDE TOTAL NUMBER OF COLUMNS IN CV DATA FILE.')
-          return
-         endif
-        else ! scol.ge.1
-         __WRN(whoami,'SCOL MUST BE A POSITIVE INTEGER.')
-         return
-        endif
-       endif ! SCOL present
+       else ! optional; allowed in human-readable format
+        totcol=__GET_RM_I(comlyn, comlen, 'NREP', 0)
+       endif ! qrest
 !
 !      prepare file
        ifile=__GET_RM_I(comlyn,comlen,'UNIT',-1)
@@ -1361,28 +1376,41 @@ __MPI_ONLY     &       cv%voronoi_map, 1, mpiint, MPI_COMM_STRNG, ierror)
          call rdtitl(titleb,ntitlb,ifile,0) ! 0 = card format
 #endif
         endif
+!
+        if (qrest.and.qprint) then ; write(_MSGBUF,*) whoami, ' WILL USE SMCV RESTART FORMAT';__PRINT(_MSGBUF);endif
 !cccccccccccccccccc assume file is open, read ccccccccccccccccccc
         if (c1.gt.0) then ! column spec
          if (qprint) then ; write(_MSGBUF,6699) whoami, c1 ; __PRINT(_MSGBUF) ; endif
  6699 format(A,' READING COORDINATES INTO COLUMN ',I3)
-         if (qall.gt.0) then ; call cv_common_read_local(ifile, c1) ;
-         elseif (scol.ge.1) then
-          call cv_common_read_local_from_global(ifile, totcol, scol, c1)
-         else; call cv_common_read_global(ifile,c1) ; endif
-        else
+         if (qall.gt.0) then
+          call cv_common_read_local(ifile, col=c1, replica_=scol, qraw_=.not.qrest)
+         else ! qall
+          if (scol.ge.1.or.qrest) then ! restart file format processed in (more bulky) routine
+           call cv_common_read_local_from_global(ifile, replica_=scol, col=c1, numrep_=totcol, qraw_=.not.qrest)
+          else ! scol
+           call cv_common_read_global(ifile,c1) 
+          endif ! scol
+         endif ! qall
+        else ! col spec
          if (qprint) then ; write(_MSGBUF,6709) whoami ; __PRINT(_MSGBUF) ; endif
  6709 format(A,' READING COORDINATES INTO DEFAULT COLUMN.')
-         if (qall.gt.0) then ; call cv_common_read_local(ifile) ;
-         elseif (scol.ge.1) then
-          call cv_common_read_local_from_global(ifile, totcol, scol)
-         else ; call cv_common_read_global(ifile) ; endif
-        endif
+         if (qall.gt.0) then 
+          call cv_common_read_local(ifile, replica_=scol, qraw_=.not.qrest) ;
+         elseif (scol.ge.1.or.qrest) then
+          call cv_common_read_local_from_global(ifile, replica_=scol, col=c1, numrep_=totcol, qraw_=.not.qrest)
+         else
+          call cv_common_read_global(ifile) ; 
+         endif ! qall
+        endif ! col spec
         if (qall.gt.0.or.qprint) then
          if (flen.gt.0) then ; __CLOSE_FILE(ifile,'KEEP',ierror) ; endif
 #ifdef __CHARMM
          iolev=oldiol
 #endif
-        endif
+        endif ! qall
+! if restarting then also read M tensor, weights and frames
+
+!
        endif ! qroot
 !
 !     broadcast to slaves
@@ -1443,7 +1471,7 @@ __MPI_ONLY     &       cv%voronoi_map, 1, mpiint, MPI_COMM_STRNG, ierror)
         elseif ((__STRNCMP(keyword,'PRIN',4)).or.(__STRNCMP(keyword,'WRIT',4))) then ! print history
 !        can write both a local and a global file
 !        local is specified with 'ALL'; global is the default
-         qall=__INDX_RM(comlyn,comlen,'ALL') ! all replicas print
+         qall = max( __INDX_RM(comlyn,comlen,'LOCAL'),__INDX_RM(comlyn,comlen,'LOCAL'))
 !        prepare file
 !-----------------------------------------------------------------------------
          ifile=__GET_RM_I(comlyn,comlen,'UNIT',-1)
@@ -1543,7 +1571,7 @@ __MPI_ONLY     &       cv%voronoi_map, 1, mpiint, MPI_COMM_STRNG, ierror)
 !      to set k,w,g can specify atom index, or ' ALL ' to apply to all CV
 !     process CV selection
         ind=__GET_RM_I(comlyn,comlen,'IND',0)
-        qall=__INDX_RM(comlyn,comlen,'ALL')
+        qall = max( __INDX_RM(comlyn,comlen,'LOCAL'),__INDX_RM(comlyn,comlen,'LOCAL'))
         if (qall.gt.0) then ! will loop over all cv
          ibeg=1
          iend=cv%num_cv
