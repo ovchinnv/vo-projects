@@ -8,6 +8,8 @@
 !
 !
 !
+#define __OPAR(_PAR,_TYPE) _TYPE, optional, intent(in) :: __CONCAT(_PAR,_);_TYPE :: _PAR
+#define __PRESENT(_PAR,_DEF) if(present(__CONCAT(_PAR,_)))then;_PAR=__CONCAT(_PAR,_);else;_PAR=_DEF;endif
 #define __MYCTX __STRING(smcv)
 !
       module cv_common
@@ -153,7 +155,7 @@ __CHARMM_ONLY##IF STRINGM
       public cv_common_compute_k ! calculate force constants using k_i=kpara*w_i^2
       public cv_common_print_M_global   ! print metric tensor
       public cv_common_print_M_local
-      public cv_common_read_M_global   ! read metric tensor
+      public cv_common_read_M          ! read metric tensor
       public cv_common_compute_Minv    ! compute inverse of metric tensor
       public cv_common_rex_init       ! initialize replica exchange variables
       public cv_common_rex_done
@@ -529,15 +531,15 @@ __MPI_ONLY     &        mpifloat, MPI_SUM, MPI_COMM_STRNG, ierror) ! use M inver
 !      only root process must call
        int, intent(in) :: iunit
        character(len=*), optional :: fmt
-       bool, optional :: qraw_, qhead_
-!      local
-       bool :: qraw, qhead
+       __OPAR(qraw,bool)
+       __OPAR(qhead,bool)
+!
        int :: i
        character(len=80) :: frm
        __IAM(CV_COMMON_PRINT_WGT)
 !      begin
-       if (present(qraw_)) then ; qraw=qraw_ ; else ; qraw=.true. ; endif ! default behavior backward-compatible
-       if (present(qhead_)) then ; qhead=qhead_ ; else ; qhead=.true. ; endif
+       __PRESENT(qraw,.true.)
+       __PRESENT(qhead,.true.)
        if (.not.qraw) then 
         if(qhead) call cv_common_print_header(iunit)
 #define _W write(iunit,*)
@@ -571,25 +573,52 @@ __MPI_ONLY     &        mpifloat, MPI_SUM, MPI_COMM_STRNG, ierror) ! use M inver
 !
        end subroutine cv_common_print_wgt
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       subroutine cv_common_read_wgt(iunit)
+       subroutine cv_common_read_wgt(iunit, qraw_, qlocal_)
+       use parser, only : itoa, parse_file, parser_done, getval_nocase
+       use cmd
       __DEP_OUTPUT
       __DEP_MULTICOM
-      __DEP_MPI 
-      
+      __DEP_MPI
 !
 #include "mpitype.def" 
 !
-       int iunit, ierror
+       int, optional, intent(in) :: iunit
+       int :: ierror, i, l
+       __OPAR(qraw,bool)
+       __OPAR(qlocal,bool)
        __IAM(CV_COMMON_READ_WGT)
+       character(len=maxlinelen) :: line
+       character(len=20) :: keyword
+!
+       __PRESENT(qraw,.true.)
+       __PRESENT(qlocal,.false.)
 !
        if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then
-        if (ME_STRNG.eq.0) then
-         read(iunit,*) cv%weight(1:cv%num_cv) ! only root reads
-         if (any(cv%weight(1:cv%num_cv).le.0)) &
-     &   __WRN( whoami,'READ ZERO OR NEGATIVE CV WEIGHT')
-        endif ! ME_
-        if (SIZE_STRNG.gt.1) &
-     &    __BROADCAST_STRING(cv%weight, cv%num_cv, mpifloat)
+        if (qlocal.or.ME_STRNG.eq.0) then
+!
+         if (qraw) then ! raw data
+          read(iunit,*) cv%weight(1:cv%num_cv) ! only root reads
+         else ! human-readable restart
+          if (present(iunit)) call parse_file(abs(iunit), MPI_COMM_NULL, quiet_=.true.)
+          do i=1, cv%num_cv
+           line=getval_nocase('W'//trim(itoa(i)),__MYCTX)
+           if (len_trim(line).gt.0) then
+            read(line,*,iostat=ierror) cv%weight(i)
+            if (ierror.ne.0) then
+             __WRN(whoami, 'ERROR READING VARIABLE FROM LINE "'//trim(line)//'"')
+             cycle
+            endif
+           endif ! line
+          enddo ! CVs
+!
+          if(present(iunit)) then
+           if (iunit.lt.0) call parser_done()
+          endif
+!
+         endif ! qraw
+         if (any(cv%weight(1:cv%num_cv).le.0)) __WRN( whoami,'READ ZERO OR NEGATIVE CV WEIGHT')
+        endif ! qlocal or ME_STRNG==0
+        if (.not.qlocal.and.SIZE_STRNG.gt.1) __BROADCAST_STRING(cv%weight, cv%num_cv, mpifloat)
        endif ! MPI_COMM
 !    broadcast to slave nodes
        if (ME_LOCAL.ne.MPI_UNDEFINED.and.SIZE_LOCAL.gt.1) &
@@ -608,7 +637,7 @@ __MPI_ONLY     &        mpifloat, MPI_SUM, MPI_COMM_STRNG, ierror) ! use M inver
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_compute_k()
        __DEP_OUTPUT
-       
+!
        int :: i
        __IAM(CV_COMMON_COMPUTE_K)
 !
@@ -706,13 +735,11 @@ __CHARMM_ONLY##ENDIF
        end subroutine cv_common_compute_dr
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_print_dr(iunit) ! global print
-       
        int :: iunit
        call cv_common_print_global(iunit,dz,.false.) ! do not print BC
        end subroutine cv_common_print_dr
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_read_dr(iunit) ! global print
-       
        int :: iunit
 !      local
        int :: bc0, bc1
@@ -735,7 +762,6 @@ __CHARMM_ONLY##ENDIF
        __DEP_OUTPUT
        __DEP_MULTICOM
        __DEP_MPI 
-       
 !
 #include "mpitype.def"
 !
@@ -952,7 +978,7 @@ __CHARMM_ONLY##ENDIF
        cv%num_run_ave=0
 !
        end subroutine cv_common_evolve_smcv
-!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!====================================================================================
        subroutine cv_common_evolve_sd(dt) ! steepest descent evolution (no M) with temp; compare with cv_common_evolve_smcv
 !                                         temperature not added yet
       __DEP_OUTPUT
@@ -1382,14 +1408,13 @@ __CHARMM_ONLY##ENDIF
        use parser, only : itoa
        int :: iunit
        int, optional :: col
-       bool, optional, intent(in) :: qraw_
-       bool :: qraw
+       __OPAR(qraw,bool)
 !      locals
        character(len=20) :: keyword
        int :: i, c, l
        __IAM(CV_COMMON_PRINT_LOCAL)
 !      do work
-       if (present(qraw_)) then ; qraw=qraw_ ; else ; qraw=.true. ; endif ! default behavior backward-compatible
+       __PRESENT(qraw,.true.)
        if (.not.present(col)) then ; c=main ; else ; c=col ; endif
        if (c.lt.1.or.c.gt.(max_hist_base+main_offset)) then
         __WRN( whoami,'COLUMN('//itoa(c)//') OUT OF BOUNDS. NOTHING DONE.')
@@ -1429,8 +1454,7 @@ __CHARMM_ONLY##ENDIF
        int iunit
        int, optional :: col
        bool, optional, intent(in) :: print_bc
-       bool, optional, intent(in) :: qraw_
-       bool :: qraw
+       __OPAR(qraw,bool)
 !      locals
        int :: i, k, c, l
        bool :: bc
@@ -1444,7 +1468,7 @@ __CHARMM_ONLY##ENDIF
        qroot=(MPI_COMM_STRNG.ne.MPI_COMM_NULL)
        if (qroot) then
 !
-        if (present(qraw_)) then ; qraw=qraw_ ; else ; qraw=.true. ; endif ! default behavior backward-compatible
+        __PRESENT(qraw,.true.)
         if (.not.present(col)) then ; c=main ; else ; c=col ; endif
         if (c.lt.1.or.c.gt.(cv%num_hist+main_offset)) then
          __WRN( whoami, 'OUT OF BOUNDS. NOTHING DONE.')
@@ -1683,54 +1707,25 @@ __CHARMM_ONLY##ENDIF
        int :: iunit
        call cv_common_print_global(iunit,forces,.false.,.true.) ! do not print BC if they are present; use raw format
        end subroutine cv_common_print_forces
-!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       subroutine cv_common_read_local(iunit, col, replica_, qraw_)
-!      assume that unit is prepared
-!      for parallel, broadcast to slaves done by calling routine
-       __DEP_OUTPUT
-       __DEP_MULTICOM
+!=================================================================================================
+       function cv_common_check_header(ifile) result(qerror)
        use parser
        use cmd
+       __DEP_MULTICOM
 !
-       int :: iunit
-       int, optional, intent(in) :: col
-       int, optional, intent(in) :: replica_
-       bool, optional, intent(in) :: qraw_
-! locals
-       int :: i, c, replica, nstring, ierr, l
-       bool :: qraw, qerror
-       int :: nstring_, num_cv_, fixed_0_bc_, fixed_1_bc_
-       character(len=maxlinelen) :: line
-       character(len=20) :: keyword
-!
-       __IAM(CV_COMMON_READ_LOCAL)
-!      do work
-!       character(len=80) :: fmt
-!       write(fmt,int_format) max_cv_common
-       if (.not.present(col)) then ; c=main ; else ; c=col ; endif
-       if (c.lt.1.or.c.gt.(max_hist_base+main_offset)) then
-        __WRN( whoami,'OUT OF BOUNDS. NOTHING DONE.')
-        return
-       endif
-!
-       if (present(qraw_)) then ; qraw=qraw_ ; else ; qraw=.true. ; endif ! default behavior backward-compatible
-!
-       if (qraw) then
-        do i=1,cv%num_cv ! NOTE that there is only one replica dataset in a raw file, so ignore replica_ here
-!        read(iunit,'('//fmt//'F11.5)')
-         read(iunit,*) cv%r(i,c)         ! free-form read in case you want to edit entries by hand
-        enddo
-!========= human - readable restart
-       else 
-        if (present(replica_)) then ; replica=replica_ ; else ; replica=ME_STRNG ; endif
-! fire up the parser, using null communicator for local execution on each replica
-! adapted from ftsm
 #define __GETPAR(__WHAT,__TYPE) __CONCAT(__WHAT,_) =__CONCAT(ato,__TYPE) (getval_nocase(__STRING(__WHAT),__MYCTX))
 #define __COMPARE_PAR(__WHAT, __HOW, __NEG)\
 if (__NEG(__CONCAT(__PRE,__WHAT) __HOW __CONCAT(__WHAT,_)))then;__WARN(whoami,'MISMATCH IN SMCV PARAMETER "',__STRING(__WHAT),'":',__CONCAT(__PRE,__WHAT),'(PROGRAM) vs.',__CONCAT(__WHAT,_),'(FILE)');qerror=.true.;endif
 !
-! parse file
-        call parse_file(iunit, MPI_COMM_NULL) ! parse locally
+        __IAM(CV_COMMON_CHECK_HEADER)
+!
+        int, optional :: ifile ! only if present, parse file
+!
+        bool  :: qerror
+        int :: nstring
+        int :: nstring_, num_cv_, fixed_0_bc_, fixed_1_bc_
+!
+        if (present(ifile)) call parse_file(abs(ifile), MPI_COMM_NULL) ! parse locally
 ! some basic checks/warnings
         qerror=.false.
         __GETPAR(nstring,i)
@@ -1748,12 +1743,62 @@ if (__NEG(__CONCAT(__PRE,__WHAT) __HOW __CONCAT(__WHAT,_)))then;__WARN(whoami,'M
 #define __PRE cv_common_
         __COMPARE_PAR(fixed_0_bc,==,.not.)
         __COMPARE_PAR(fixed_1_bc,==,.not.)
+#undef __PRE
+!
+       if (present(ifile)) then
+        if (ifile.lt.0) call parser_done()
+       endif
+!
+       end function cv_common_check_header
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       subroutine cv_common_read_local(iunit, col, replica_, qraw_)
+!      assume that unit is prepared
+!      for parallel, broadcast to slaves done by calling routine
+       __DEP_OUTPUT
+       __DEP_MULTICOM
+       use parser
+       use cmd
+!
+       int, optional :: iunit
+       int, optional, intent(in) :: col
+       __OPAR(qraw,bool)
+       __OPAR(replica,int)
+! locals
+       int :: i, c, nstring, ierr, l
+       bool :: qerror
+       int :: nstring_, num_cv_, fixed_0_bc_, fixed_1_bc_
+       character(len=maxlinelen) :: line
+       character(len=20) :: keyword
+!
+       __IAM(CV_COMMON_READ_LOCAL)
+!      do work
+!       character(len=80) :: fmt
+!       write(fmt,int_format) max_cv_common
+       if (.not.present(col)) then ; c=main ; else ; c=col ; endif
+       if (c.lt.1.or.c.gt.(max_hist_base+main_offset)) then
+        __WRN( whoami,'OUT OF BOUNDS. NOTHING DONE.')
+        return
+       endif
+!
+       __PRESENT(qraw,.true.)
+!
+       if (qraw) then
+        do i=1,cv%num_cv ! NOTE that there is only one replica dataset in a raw file, so ignore replica_ here
+!        read(iunit,'('//fmt//'F11.5)')
+         read(iunit,*) cv%r(i,c)         ! free-form read in case you want to edit entries by hand
+        enddo
+!========= human - readable restart
+       else 
+        __PRESENT(replica,ME_STRNG)
+! fire up the parser, using null communicator for local execution on each replica
+        if (present(iunit)) call parse_file(abs(iunit), MPI_COMM_NULL) ! parse locally
+        qerror=cv_common_check_header() ! not yet sure what to do with qerror
 ! read actual coordinates
         keyword='CV'//trim(itoa(replica))//'_' ; l=len_trim(keyword);
         do i=1, cv%num_cv
          line=getval_nocase(keyword(1:l)//trim(itoa(i)),__MYCTX)
          if (len_trim(line).gt.0) then
-          read(line,*,iostat=ierr) cv%r(i,c) ! most reliable read, but DO implement an error check, please !
+          read(line,*,iostat=ierr) cv%r(i,c)
           if (ierr.ne.0) then
            __WRN(whoami, 'ERROR READING COORDINATE FROM LINE "'//trim(line)//'"')
            cycle
@@ -1761,8 +1806,10 @@ if (__NEG(__CONCAT(__PRE,__WHAT) __HOW __CONCAT(__WHAT,_)))then;__WARN(whoami,'M
          endif ! line
         enddo ! CVs
 !
-        call parser_done() ! other routines may need to re-parse the same file: it is an efficiency problem
-!                          ! also, deal with output loudness
+        if (present(iunit)) then
+         if (iunit.lt.0) call parser_done()
+        endif
+!
        endif ! qraw
 !
 !
@@ -1783,18 +1830,19 @@ if (__NEG(__CONCAT(__PRE,__WHAT) __HOW __CONCAT(__WHAT,_)))then;__WARN(whoami,'M
 !
 #include "mpitype.def"
 !
-       bool, optional, intent(in) :: qraw_
-       int :: iunit
-       int, optional, intent(in) :: numrep_  ! number of replicas in the CV data file
-       int, optional, intent(in) :: replica_ ! will read CV values corresponding to 'replica'
+       __OPAR(qraw,bool)
+       __OPAR(replica,int)
+       __OPAR(numrep,int)
+!
+       int, optional :: iunit
        int, optional, intent(in) :: col
        int :: i, k, c, l
        float, pointer :: rtemp(:,:) ! temporary array for holding coords
-       int :: ierror, numrep, replica, nstring
+       int :: ierror, nstring
        character(len=8) :: me, which ! for output
        character(len=20) :: keyword
        character(len=maxlinelen) :: line
-       bool :: qroot, qraw, qerror
+       bool :: qroot, qerror
        int :: nstring_, num_cv_, fixed_0_bc_, fixed_1_bc_
        __IAM(CV_COMMON_READ_LOCAL_FROM_GLOBAL)
 !
@@ -1809,13 +1857,13 @@ if (__NEG(__CONCAT(__PRE,__WHAT) __HOW __CONCAT(__WHAT,_)))then;__WARN(whoami,'M
         return
        endif
 !
-       if (present(qraw_)) then ; qraw=qraw_ ; else ; qraw=.true. ; endif ! default behavior backward-compatible
-       if (present(replica_)) then ; replica=replica_ ; else ; replica=ME_STRNG ; endif
+       __PRESENT(qraw,.true.)
+       __PRESENT(replica,ME_STRNG)
 !
 !     read file
        if (qroot.and.ME_STRNG.eq.0) then ! root reads, then broadcasts
         if (qraw) then
-         if (present(numrep_)) then ; numrep=numrep_ ; else ; numrep=SIZE_STRNG ; endif
+         __PRESENT(numrep,SIZE_STRNG)
          allocate(rtemp(cv%num_cv, numrep)) ; rtemp=__NAN ;
          do i=1,cv%num_cv
 !         read(iunit,'('//fmt//'D23.15)')
@@ -1824,34 +1872,19 @@ if (__NEG(__CONCAT(__PRE,__WHAT) __HOW __CONCAT(__WHAT,_)))then;__WARN(whoami,'M
         endif
        else ! human-readable restart file
 ! parse file
-        call parse_file(iunit, MPI_COMM_NULL) ! parse locally
+        if (present(iunit)) call parse_file(abs(iunit), MPI_COMM_NULL) ! parse locally
 ! some basic checks/warnings
-        qerror=.false.
+        qerror=cv_common_check_header()
         __GETPAR(nstring,i)
-         if (present(numrep_)) then 
-          if (numrep_.ne.nstring_) &
+        if (present(numrep_)) then 
+         if (numrep_.ne.nstring_) &
      & __WRN(whoami, ' SPECIFIED NUMBER OF REPLICAS ('//itoa(numrep_)//') DOES NOT MATCH RESTART FILE ('//itoa(nstring_)//').')
-          numrep=numrep_ ; 
-         else 
-          numrep=nstring_
-         endif
+         numrep=numrep_ ; 
+        else 
+         numrep=nstring_
+        endif
 !
-         allocate(rtemp(cv%num_cv, numrep)) ; rtemp=__NAN ;
-        __GETPAR(num_cv,i)
-        __GETPAR(fixed_0_bc,i)
-        __GETPAR(fixed_1_bc,i)
-!
-#undef __PRE
-#define __PRE
-        nstring=SIZE_STRNG
-        __COMPARE_PAR(nstring,==,.not.)
-#undef __PRE
-#define __PRE cv%
-        __COMPARE_PAR(num_cv,==,.not.)
-#undef __PRE
-#define __PRE cv_common_
-        __COMPARE_PAR(fixed_0_bc,==,.not.)
-        __COMPARE_PAR(fixed_1_bc,==,.not.)
+        allocate(rtemp(cv%num_cv, numrep)) ; rtemp=__NAN ;
 ! read actual coordinates
         do k=1, numrep ! as specified above
          keyword='CV'//trim(itoa(k-1))//'_' ; l=len_trim(keyword);
@@ -1866,7 +1899,9 @@ if (__NEG(__CONCAT(__PRE,__WHAT) __HOW __CONCAT(__WHAT,_)))then;__WARN(whoami,'M
           endif ! line
          enddo ! CVs
         enddo ! replicas
-        call parser_done()
+        if (present(iunit)) then
+         if (iunit.lt.0) call parser_done()
+        endif
 !
 #undef __GETPAR
 #undef __COMPARE_PAR
@@ -3330,40 +3365,98 @@ __MPI_ONLY     &                  MPI_COMM_STRNG,ierror)
        endif ! STRNG
        end subroutine cv_common_voronoi_print_log
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       subroutine cv_common_read_M_global(ifile, ind, qraw_)
+       subroutine cv_common_read_M(ifile, ind, qraw_, qlocal_, replica_)
        use sm_var, only: nstring
 !     print mass matrix; unless otherwise specified assume that cv%m(:,:,4) has what the user wants
+! NOTE : need to deal with replica input
       __DEP_MULTICOM
       __DEP_MPI
+      use parser
+      use cmd
+!
+      __IAM(CV_COMMON_READ_M)
 !
 #include "mpitype.def"
-       int :: ifile
+       int, optional :: ifile
        int, optional, intent(in) :: ind  ! M index
-       bool, optional, intent(in) :: qraw_
 !     locals
-       int :: ierror, j, Mind
+       character(len=maxlinelen) :: line
+       character(len=20) :: keyword
+       int :: ierror, j, Mind, k, l
        float :: M_all(cv%num_cv, cv%num_cv, nstring)
        float :: M_me(cv%num_cv, cv%num_cv)
-       bool :: qraw
+       __OPAR(qraw,bool)
+       __OPAR(qlocal,bool)
+       __OPAR(replica,int)
 !
-       if (present(qraw_)) then ; qraw=qraw_ ; else ; qraw=.true. ; endif ! default behavior backward-compatible
+       __PRESENT(qraw,.true.)
+       __PRESENT(qlocal,.false.)
+       __PRESENT(replica,ME_STRNG)
+!
        if (present(ind)) then ; Mind=ind ; else ; Mind=4 ; endif
 !
-       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then
+       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then ! replica roots
 !
-        if (ME_STRNG.eq.0) then ! root reads
-         do j=1,nstring
-          read(ifile,'(1X,I10)')
-          read(ifile,*) M_all(:,:,j)
-         enddo
-        endif ! ME
-        if (SIZE_STRNG.gt.1) then
-__MPI_ONLY        call MPI_SCATTER(M_all,cv%num_cv**2,mpifloat,       &
-__MPI_ONLY     &                 M_me,cv%num_cv**2,mpifloat,0,        &
-__MPI_ONLY     &                 MPI_COMM_STRNG,ierror)
-        else
-         M_me=M_all(:,:,1)
-        endif
+        if (qraw) then
+         if (qlocal) then ! all replicas read
+          read(ifile,*) M_me(:,:)
+         elseif(ME_STRNG.eq.0) then 
+          do j=1,nstring
+!           read(ifile,'(1X,I10)') ! no present use for comment field
+           read(ifile,*)
+           read(ifile,*) M_all(:,:,j)
+          enddo
+         endif ! local
+!==============================================
+        else ! human-readable restart file
+          if (qlocal) then
+           if (present(ifile)) call parse_file(abs(ifile), MPI_COMM_NULL, quiet_=.true.)
+! read matrix columns
+! need to check replica
+           keyword='M_'//itoa(replica)//'_' ; l=len_trim(keyword);
+           do k=1,cv%num_cv
+            line=getval_nocase(keyword(1:l)//itoa(k),__MYCTX)
+            if (len_trim(line).gt.0) then
+             read(line,*,iostat=ierror) M_me(:,k)
+             if (ierror.ne.0) then
+              __WRN(whoami, 'ERROR READING VARIABLE FROM LINE "'//trim(line)//'"')
+              cycle
+             endif ! error
+            endif ! line
+           enddo ! k
+          elseif (ME_STRNG.eq.0) then ! .not.qlocal
+           if (present(ifile)) call parse_file(abs(ifile), MPI_COMM_NULL, quiet_=.true.)
+! need to check replica
+           do j=1, nstring
+            keyword='M_'//itoa(j-1)//'_' ; l=len_trim(keyword);
+            do k=1,cv%num_cv
+             line=getval_nocase(keyword(1:l)//itoa(k),__MYCTX)
+             if (len_trim(line).gt.0) then
+              read(line,*,iostat=ierror) M_all(:,k,j)
+              if (ierror.ne.0) then
+               __WRN(whoami, 'ERROR READING VARIABLE FROM LINE "'//trim(line)//'"')
+               cycle
+              endif ! error
+             endif ! line
+            enddo ! k
+           enddo ! j
+          endif ! qlocal
+          if (present(ifile)) then
+           if(ifile.lt.0) call parser_done()
+          endif
+        endif ! qraw
+!
+        if (.not.qlocal) then
+! need to deal with replica at this level !
+! the problem is that in principle, some replicas could have replica_ passed in, and some, not
+! so we cannot use the presence/absence (or value ) of replica on any node
+! to make the decision on how to distribute the Ms. The only safe way if to broadcast all
+          if (SIZE_STRNG.gt.1) then
+__MPI_ONLY        __BROADCAST_STRING(M_all,nstring*cv%num_cv**2,mpifloat)
+          endif
+          M_me=M_all(:,:,replica)
+        endif ! qlocal
+!
        endif ! COMM_STRNG
 !    broadcast to slaves
        if (ME_LOCAL.ne.MPI_UNDEFINED.and.SIZE_LOCAL.gt.1)               &
@@ -3384,7 +3477,7 @@ __MPI_ONLY     &                 MPI_COMM_STRNG,ierror)
         cv_common_Minv_initialized=.true.
        endif
 !
-       end subroutine cv_common_read_M_global
+       end subroutine cv_common_read_M
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_print_M_global(ifile, ind, qraw_, qhead_)
        use sm_var, only: nstring
@@ -3398,18 +3491,18 @@ __MPI_ONLY     &                 MPI_COMM_STRNG,ierror)
 #include "mpitype.def"
        int, intent(in) :: ifile
        int, optional, intent(in) :: ind  ! M index to print
-       bool, optional, intent(in) :: qraw_, qhead_
+       __OPAR(qraw,bool)
+       __OPAR(qhead,bool)
 !     locals
        character(len=80) :: fmt
        character(len=20) :: keyword
        int :: isizeM, ierror, j, k, Mind, l
        float :: M_all(cv%num_cv, cv%num_cv, nstring)
        float :: M_me(cv%num_cv, cv%num_cv)
-       bool :: qraw, qhead
 !
        if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then ! replica roots only
 !
-        if (present(qraw_)) then ; qraw=qraw_ ; else ; qraw=.true. ; endif ! default behavior backward-compatible
+        __PRESENT(qraw,.true.)
         if (present(ind)) then ; Mind=ind ; else ; Mind=4 ; endif
 !
         isizeM=cv%num_cv;
@@ -3438,7 +3531,7 @@ __MPI_ONLY     &                 MPI_COMM_STRNG,ierror)
 !=================== human readable format
          else
 ! unclear when to print header ...
-          if (present(qhead_)) then ; qhead=qhead_ ; else ; qhead=.true. ; endif
+          __PRESENT(qhead,.true.)
           if (qhead) call cv_common_print_header(ifile)
 #define _W write(ifile,*)
           _W 'smcv {'
@@ -3471,17 +3564,17 @@ __MPI_ONLY     &                 MPI_COMM_STRNG,ierror)
 #include "mpitype.def"
        int, intent(in) :: ifile
        int, optional, intent(in) :: ind  ! M index to print
-       bool, optional, intent(in) :: qraw_, qhead_
+       __OPAR(qraw,bool)
+       __OPAR(qhead,bool)
 !     locals
        character(len=80) :: fmt
        character(len=20) :: keyword
        int :: k, Mind, l
        float, pointer :: M_me(:,:)
-       bool :: qraw, qhead
 !
        if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then ! replica roots only
 !
-        if (present(qraw_)) then ; qraw=qraw_ ; else ; qraw=.true. ; endif ! default behavior backward-compatible
+        __PRESENT(qraw,.true.)
         if (present(ind)) then ; Mind=ind ; else ; Mind=4 ; endif
 !
         M_me=>cv%M(1:cv%num_cv, 1:cv%num_cv, Mind)
@@ -3496,7 +3589,7 @@ __MPI_ONLY     &                 MPI_COMM_STRNG,ierror)
 !=================== human readable format
         else
 ! unclear when to print header ...
-         if (present(qhead_)) then ; qhead=qhead_ ; else ; qhead=.true. ; endif
+        __PRESENT(qhead,.true.)
          if (qhead) call cv_common_print_header(ifile)
 #define _W write(ifile,*)
          _W 'smcv {'
