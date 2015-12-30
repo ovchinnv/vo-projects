@@ -4,7 +4,13 @@
 !     SEPARATE MODULE FOR STORING REFERENCE FRAMES
 !     CVs that use reference (i.e. non-fixed) coordinates will use this module
 !
-!$DEC ATTRIBUTE INLINE :: eig3s
+#define __GETPAR(__WHAT,__TYPE) __CONCAT(__WHAT,_) =__CONCAT(ato,__TYPE) (getval_nocase(__STRING(__WHAT),__MYCTX))
+#define __COMPARE_PAR(__WHAT, __HOW, __NEG)\
+if (__NEG(__CONCAT(__PRE,__WHAT) __HOW __CONCAT(__WHAT,_)))then;__WARN(whoami,'MISMATCH IN SMCV PARAMETER "',__STRING(__WHAT),'":',__CONCAT(__PRE,__WHAT),'(PROGRAM) vs.',__CONCAT(__WHAT,_),'(FILE)');qerror=.true.;endif
+#define __OPAR(_PAR,_TYPE) _TYPE, optional, intent(in) :: __CONCAT(_PAR,_);_TYPE :: _PAR
+#define __PRESENT(_PAR,_DEF) if(present(__CONCAT(_PAR,_)))then;_PAR=__CONCAT(_PAR,_);else;_PAR=_DEF;endif
+#define __MYCTX __STRING(smcv)
+!
       module cv_frames
 !
 #if (defined(__CHARMM) || defined(__PARALLEL) )
@@ -634,15 +640,15 @@ __DECLARE_MSGBUF
        use parser, only : itoa
 !
        int, intent(in) :: iunit
-       bool, intent(in), optional :: qraw_, qhead_
-!      locals
+       __OPAR(qraw, bool)
+       __OPAR(qhead, bool)
+!
        int :: i, j, k, l
        character(len=20) :: keyword
-       bool :: qraw, qhead
 !       __IAM(FRAMES_PRINT_LOCAL)
 !
        if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then
-       if (present(qraw_)) then ; qraw=qraw_ ; else ; qraw=.true. ; endif ! default behavior backward-compatible
+       __PRESENT(qraw,.true.)
 !      do work
         if (qraw) then ! simple data dump good for analysis
          do i=1, frames%num_frames
@@ -676,10 +682,10 @@ __DECLARE_MSGBUF
 #include "mpitype.def"
 !
        int, intent(in) :: iunit
-       bool, intent(in), optional :: qraw_, qhead_
+       __OPAR(qraw,bool)
+       __OPAR(qhead,bool)
 !      locals
        int :: i, j, k, m, n, l
-       bool :: qraw, qhead
        character(len=20) :: keyword
 !       character(len=80 fmt
        float :: rtemp(3,3,frames%num_frames,SIZE_STRNG) ! temporary array
@@ -701,7 +707,7 @@ __MPI_ONLY     &   ierror)
        endif
 !
        if (ME_STRNG.eq.0) then ! root replica writes
-        if (present(qraw_)) then ; qraw=qraw_ ; else ; qraw=.true. ; endif ! default behavior backward-compatible
+        __PRESENT(qraw,.true.)
 !
         if (qraw) then
 !        write(fmt,'(I10)') 9*SIZE_STRNG
@@ -730,60 +736,161 @@ __MPI_ONLY     &   ierror)
        endif ! me_strng
        end subroutine frames_print_global
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       subroutine frames_read_local(iunit)
+       subroutine frames_read_local(iunit, qraw_, replica_)
 !      assume that unit is prepared
 !      NOTE that this is a local read!
-!      __DEP_OUTPUT
+       __DEP_OUTPUT
        __DEP_MULTICOM
-       __DEP_MPI 
+       __DEP_MPI
+       __DEP_CONST
+       use parser
+       use cmd
 !
-       int iunit
+       int, optional, intent(in) :: iunit
+       __OPAR(qraw, bool)
+       __OPAR(replica, int)
 !      locals
-       int :: i, j, k
+       int :: i, j, k, l, ierr
+       character(len=20) :: keyword
+       character(len=maxlinelen) :: line
+!
        __IAM(FRAMES_READ_LOCAL)
-!      do work
+!
+       __PRESENT(qraw,.true.)
+       __PRESENT(replica, ME_STRNG); if (replica.eq.__INAN) replica=ME_STRNG
+!
        if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then
-!      do work
-        do i=1, frames%num_frames
-         read(iunit,*) ((frames%r(j,k,i), j=1,3), k=1,3) ! read vectors (columns) in sequence
-        enddo
-       endif
+
+        if (qraw) then
+         if (present(iunit)) then
+          do i=1, frames%num_frames
+           read(abs(iunit),*) ((frames%r(j,k,i), j=1,3), k=1,3) ! read vectors (columns) in sequence
+          enddo
+         else
+          __WRN(whoami, 'INPUT STREAM IS UNDEFINED. NOTHING DONE.')
+         endif
+        else ! qraw
+         if (present(iunit)) call parse_file(abs(iunit), MPI_COMM_NULL) ! parse locally
+!         qerror=cv_common_check_header() ! not yet sure what to do with qerror
+!  read frame vectors
+         keyword='f'//trim(itoa(replica))//'_' ; l=len_trim(keyword);
+         do i=1, frames%num_frames
+          line=getval_nocase(keyword(1:l)//trim(itoa(i)),__MYCTX)
+          if (len_trim(line).gt.0) then
+           read(line,*,iostat=ierr) ((frames%r(j,k,i), j=1,3), k=1,3)
+           if (ierr.ne.0) then
+            __WRN(whoami, 'ERROR READING FRAME FROM LINE "'//trim(line)//'"')
+            cycle
+           endif
+          endif ! line
+         enddo ! frames
+!
+         if (present(iunit)) then
+          if (iunit.lt.0) call parser_done()
+         endif
+!
+        endif ! qraw
+       endif ! roots
+!
        end subroutine frames_read_local
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       subroutine frames_read_global(iunit)
+       subroutine frames_read_global(iunit, qraw_, replica_, numrep_)
 !      assume that unit is prepared
 !      NOTE that this is a global read!
        __DEP_OUTPUT
        __DEP_MULTICOM
        __DEP_MPI
+       __DEP_CONST
+       use parser
+       use cmd
 #include "mpitype.def"
 !
-       int iunit
-!      locals
-       int :: i, j, k, m, n
-       float :: rtemp(3,3,frames%num_frames,SIZE_STRNG) ! temporary array
-       int :: ierror
-       __IAM(FRAMES_READ_GLOBAL)
-!      do work
+       int, optional, intent(in) :: iunit
+       __OPAR(qraw,bool)
+       __OPAR(replica,int)
+       __OPAR(numrep,int)
 !
-       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then
+       int :: i, j, k, m, n, l, ierr
+       character(len=20) :: keyword
+       character(len=maxlinelen) :: line
+!       float :: rtemp(3,3,frames%num_frames,SIZE_STRNG) ! temporary array
+       float, pointer :: rtemp(:,:,:,:) ! temporary array
+       int :: ierror, nstring_
+       __IAM(FRAMES_READ_GLOBAL)
+!
+       nullify(rtemp);
+!
+       __PRESENT(qraw,.true.)
+       __PRESENT(numrep, SIZE_STRNG); if(numrep.eq.__INAN) numrep=SIZE_STRNG
+       __PRESENT(replica, ME_STRNG); if(replica.eq.__INAN) numrep=ME_STRNG
+!
+       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then ! replica roots only
         n=frames%num_frames ! number of frames
         if (ME_STRNG.eq.0) then ! root reads
-         do k=1,n
-          read(iunit,*)                                     &
-     &     (((rtemp(i,j,k,m),i=1,3),j=1,3),m=1,SIZE_STRNG) ! sequentially read vectors (columns) of all replicas from one line
-         enddo
-        endif ! whoiam
-!      scatter all data
-        if (SIZE_STRNG.gt.1) then
-__MPI_ONLY         call MPI_SCATTER(rtemp,9*n,mpifloat,               &
-__MPI_ONLY     &   frames%r(:,:,1:n),9*n,mpifloat,0,MPI_COMM_STRNG,   &
-__MPI_ONLY     &   ierror)
-        else
-         frames%r(:,:,1:n)=rtemp(:,:,:,1)
-        endif
-       endif
+         if (qraw) then ! raw data format
+          allocate(rtemp(3,3,n,numrep))
+          do k=1,n
+           read(iunit,*) (((rtemp(i,j,k,m),i=1,3),j=1,3),m=1,numrep) ! sequentially read vectors (columns) of all replicas from one line
+          enddo
+         else
+!================= human-readable restart
+          if (present(iunit)) call parse_file(abs(iunit), MPI_COMM_NULL) ! parse locally
+! some basic checks/warnings
+!          qerror=cv_common_check_header()
+          __GETPAR(nstring,i)
+          if (present(numrep_)) then
+           if (numrep_.ne.nstring_) &
+     & __WRN(whoami, ' SPECIFIED NUMBER OF REPLICAS ('//itoa(numrep_)//') DOES NOT MATCH RESTART FILE ('//itoa(nstring_)//').')
+            numrep=numrep_
+          else
+           numrep=nstring_
+          endif
 !
+          allocate(rtemp(3,3,n,numrep)) ; rtemp=__NAN ;
+! read actual coordinates
+          do m=1, numrep
+           keyword='f'//trim(itoa(m-1))//'_' ; l=len_trim(keyword);
+           do i=1, frames%num_frames
+            line=getval_nocase(keyword(1:l)//trim(itoa(i)),__MYCTX)
+            if (len_trim(line).gt.0) then
+             read(line,*,iostat=ierr) ((rtemp(j,k,i,m), j=1,3), k=1,3)
+             if (ierr.ne.0) then
+              __WRN(whoami, 'ERROR READING FRAME FROM LINE "'//trim(line)//'"')
+              cycle
+             endif ! ierr
+            endif ! line
+           enddo ! frames
+          enddo ! numrep
+!
+          if (present(iunit)) then
+           if (iunit.lt.0) call parser_done()
+          endif
+!
+         endif ! qraw
+        endif ! string root
+!
+!       broadcast all data
+        if (SIZE_STRNG.gt.1) then
+           __BROADCAST_STRING(rtemp, 9*n*numrep, mpifloat)
+! old (more efficient but restrictive) way
+!__MPI_ONLY         call MPI_SCATTER(rtemp,9*n,mpifloat,               &
+!__MPI_ONLY     &   frames%r(:,:,1:n),9*n,mpifloat,0,MPI_COMM_STRNG,   &
+!__MPI_ONLY     &   ierror)
+        endif
+!      "pick out" what I need
+        if (replica .lt. numrep .and. replica .ge. 0) then ! replica offset from 0
+          frames%r(:,:,1:n)=rtemp(:,:,:,replica+1)
+        else
+           __WRN(whoami,'REPLICA '//itoa(ME_STRNG)//' ATTEMPTED TO READ NONEXISTENT COLUMN '//itoa(replica)//'. NOTHING DONE.')
+        endif ! replica
+
+!     check for zero coordinate entries
+        if (any(frames%r(:,:,1:n).eq.__NAN)) then
+          __WRN(whoami,'SOME FRAME VECTORS UNDEFINED AFTER READING ON REPLICA '//itoa(ME_STRNG)//'.')
+        endif
+       endif ! replica roots
+!
+       __FREE(rtemp)
        end subroutine frames_read_global
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine frames_reset_calculate(grad,i)
