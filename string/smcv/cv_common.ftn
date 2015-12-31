@@ -546,7 +546,7 @@ __MPI_ONLY     &        mpifloat, MPI_SUM, MPI_COMM_STRNG, ierror) ! use M inver
        if (.not.qraw) then 
         if(qhead) call cv_common_print_header(iunit)
 #define _W write(iunit,*)
-       _W '# Wx : weight corresponding to CV #x in a scalar product; e.g. : ( SUM_{i=1}^N Wi x cv_i x cv_i ) / SUM_{i=1}^N w_i'
+       _W '# Wx : weight corresponding to CV #x in a scalar product; e.g. : ( SUM_{i=1}^N Wi x cv_i x cv_i ) / SUM_{i=1}^N Wi'
        endif ! qraw
 !
        if (.not.cv_common_weights_initialized) then
@@ -600,7 +600,7 @@ __MPI_ONLY     &        mpifloat, MPI_SUM, MPI_COMM_STRNG, ierror) ! use M inver
         if (qlocal.or.ME_STRNG.eq.0) then
 !
          if (qraw) then ! raw data
-          read(iunit,*) cv%weight(1:cv%num_cv) ! only root reads
+          read(abs(iunit),*) cv%weight(1:cv%num_cv) ! only root reads
          else ! human-readable restart
           if (present(iunit)) call parse_file(abs(iunit), MPI_COMM_NULL, quiet_=.true.)
           do i=1, cv%num_cv
@@ -1396,7 +1396,7 @@ __CHARMM_ONLY##ENDIF
         enddo
         _W 'fixed_0_bc =',cv_common_fixed_0_bc,' # is left (1st) endpoint fixed ?'
         _W 'fixed_1_bc =',cv_common_fixed_1_bc,' # is right (last) endpoint fixed ?'
-        _W '}'
+        _W '} #smcv'
 #undef _W
 !
        end subroutine cv_common_print_header
@@ -1723,7 +1723,7 @@ __CHARMM_ONLY##ENDIF
 !
         __IAM(CV_COMMON_CHECK_HEADER)
 !
-        int, optional :: ifile ! only if present, parse file
+        int, optional, intent(in) :: ifile ! only if present, parse file
 !
         bool  :: qerror
         int :: nstring
@@ -1761,6 +1761,7 @@ __CHARMM_ONLY##ENDIF
        __DEP_OUTPUT
        __DEP_MULTICOM
        __DEP_CONST
+       __DEP_NUMBER
        use parser
        use cmd
 !
@@ -1789,7 +1790,7 @@ __CHARMM_ONLY##ENDIF
        if (qraw) then
         do i=1,cv%num_cv ! NOTE that there is only one replica dataset in a raw file, so ignore replica_ here
 !        read(iunit,'('//fmt//'F11.5)')
-         read(iunit,*) cv%r(i,c)         ! free-form read in case you want to edit entries by hand
+         read(abs(iunit),*) cv%r(i,c)         ! free-form read in case you want to edit entries by hand
         enddo
 !========= human - readable restart
        else 
@@ -1830,109 +1831,106 @@ __CHARMM_ONLY##ENDIF
       __DEP_MULTICOM
       __DEP_NUMBER
       __DEP_MPI
-      use parser
+      use parser __CHARMM_ONLY , only : parse_file, parser_done, getval_nocase, atoi ! itoa in charmm/source/util/string.src
       use cmd
 !
 #include "mpitype.def"
 !
-       __OPAR(qraw,bool)
-       __OPAR(replica,int)
-       __OPAR(numrep,int)
+      __OPAR(qraw,bool)
+      __OPAR(replica,int)
+      __OPAR(numrep,int)
 !
-       int, optional :: iunit
-       int, optional, intent(in) :: col
-       int :: i, k, c, l
-       float, pointer :: rtemp(:,:) ! temporary array for holding coords
-       int :: ierror, nstring
-       character(len=8) :: me, which ! for output
-       character(len=20) :: keyword
-       character(len=maxlinelen) :: line
-       bool :: qroot, qerror
-       int :: nstring_
-       __IAM(CV_COMMON_READ_LOCAL_FROM_GLOBAL)
+      int, optional :: iunit
+      int, optional, intent(in) :: col
+      int :: i, k, c, l
+      float, pointer :: rtemp(:,:) ! temporary array for holding coords
+      int :: ierror, nstring
+      character(len=20) :: keyword
+      character(len=maxlinelen) :: line
+      bool :: qroot, qerror
+      int :: nstring_
+      __IAM(CV_COMMON_READ_LOCAL_FROM_GLOBAL)
 !
-       qroot=(MPI_COMM_STRNG.ne.MPI_COMM_NULL)
+      qroot=(MPI_COMM_STRNG.ne.MPI_COMM_NULL)
 !
-       nullify(rtemp) ;
+      nullify(rtemp) ;
 !       character(len=80) :: fmt
 !       write(fmt,int_format) max_cv_common
-       if (.not.present(col)) then ; c=main ; else ; c=col ; endif
-       if (c.lt.1.or.c.gt.(cv%num_hist+main_offset)) then
-        __WRN( whoami, 'OUT OF BOUNDS. NOTHING DONE.')
-        return
-       endif
+      if (.not.present(col)) then ; c=main ; else ; c=col ; endif
+      if (c.lt.1.or.c.gt.(cv%num_hist+main_offset)) then
+       __WRN( whoami, 'OUT OF BOUNDS. NOTHING DONE.')
+       return
+      endif
 !
-       __PRESENT(qraw,.true.)
-       __PRESENT(replica,ME_STRNG); if (replica.eq.__INAN) replica=ME_STRNG
+      __PRESENT(qraw,.true.)
+      __PRESENT(replica,ME_STRNG); if (replica.eq.__INAN) replica=ME_STRNG
+      __PRESENT(numrep,SIZE_STRNG);
 !
 !     read file
-       if (qroot.and.ME_STRNG.eq.0) then ! root reads, then broadcasts
+      if (qroot) then
+       if (ME_STRNG.eq.0) then ! root reads, then broadcasts
         if (qraw) then
-         __PRESENT(numrep,SIZE_STRNG); if (numrep.eq.__INAN) numrep=SIZE_STRNG
+         if (numrep.eq.__INAN) numrep=SIZE_STRNG
          allocate(rtemp(cv%num_cv, numrep)) ; rtemp=__NAN ;
          do i=1,cv%num_cv
 !         read(iunit,'('//fmt//'D23.15)')
           read(abs(iunit),*) (rtemp(i,k),k=1,numrep)
          enddo
-        endif
-       else ! human-readable restart file
+        else ! human-readable restart file
 ! parse file
-        if (present(iunit)) call parse_file(abs(iunit), MPI_COMM_NULL) ! parse locally
+         if (present(iunit)) call parse_file(abs(iunit), MPI_COMM_NULL) ! parse locally
 ! some basic checks/warnings
-        qerror=cv_common_check_header()
-        __GETPAR(nstring,i)
-        if (present(numrep_)) then 
-         if (numrep_.ne.nstring_) &
-     & __WRN(whoami, ' SPECIFIED NUMBER OF REPLICAS ('//itoa(numrep_)//') DOES NOT MATCH RESTART FILE ('//itoa(nstring_)//').')
-         numrep=numrep_ ; 
-        else 
-         numrep=nstring_
-        endif
+         qerror=cv_common_check_header()
+         __GETPAR(nstring,i)
+         if (present(numrep_).and.numrep.ne.__INAN) then 
+          if (numrep_.ne.nstring_) &
+     &  __WRN(whoami, ' SPECIFIED NUMBER OF REPLICAS ('//itoa(numrep_)//') DOES NOT MATCH RESTART FILE ('//itoa(nstring_)//').')
+          numrep=numrep_ ;
+         else 
+          numrep=nstring_
+         endif
 !
-        allocate(rtemp(cv%num_cv, numrep)) ; rtemp=__NAN ;
+         allocate(rtemp(cv%num_cv, numrep)) ; rtemp=__NAN ;
 ! read actual coordinates
-        do k=1, numrep ! as specified above
-         keyword='CV'//trim(itoa(k-1))//'_' ; l=len_trim(keyword);
-         do i=1, cv%num_cv
-          line=getval_nocase(keyword(1:l)//trim(itoa(i)),__MYCTX)
-          if (len_trim(line).gt.0) then
-           read(line,*,iostat=ierror) rtemp(i,k) ! most reliable read, but DO implement an error check, please !
-           if (ierror.ne.0) then
-            __WRN(whoami, 'ERROR READING COORDINATE FROM LINE "'//trim(line)//'"')
-            cycle
-           endif
-          endif ! line
-         enddo ! CVs
-        enddo ! replicas
-        if (present(iunit)) then
-         if (iunit.lt.0) call parser_done()
-        endif
-!
-       endif ! qraw
+         do k=1, numrep ! as specified above
+          keyword='CV'//trim(itoa(k-1))//'_' ; l=len_trim(keyword);
+          do i=1, cv%num_cv
+           line=getval_nocase(keyword(1:l)//trim(itoa(i)),__MYCTX)
+           if (len_trim(line).gt.0) then
+            read(line,*,iostat=ierror) rtemp(i,k) ! most reliable read, but DO implement an error check, please !
+            if (ierror.ne.0) then
+             __WRN(whoami, 'ERROR READING COORDINATE FROM LINE "'//trim(line)//'"')
+             cycle
+            endif
+           endif ! line
+          enddo ! CVs
+         enddo ! replicas
+         if (present(iunit)) then
+           if (iunit.lt.0) call parser_done()
+         endif
+        endif ! qraw
+       endif ! ME_STRNG.eq.0
 !
 !      now broadcast CV values to other nodes
-       if (qroot) then
-        if (SIZE_STRNG.gt.1) then ; __BROADCAST_STRING(rtemp, cv%num_cv * numrep, mpifloat) ; endif
+       if (SIZE_STRNG.gt.1) then 
+        __BROADCAST_STRING(numrep, 1, mpiint)
+        if (ME_STRNG.gt.0) allocate(rtemp(cv%num_cv, numrep))
+        __BROADCAST_STRING(rtemp, cv%num_cv * numrep, mpifloat)
+       endif
 !     "pick out" what I need
-        if (replica .lt. numrep .and. replica .ge. 0) then ! replica offset from 0
+       if (replica .lt. numrep .and. replica .ge. 0) then ! replica offset from 0
          cv%r(1:cv%num_cv,c)=rtemp(:,replica+1)
-        else
-         write(me,'(I8)') ME_STRNG
-         write(which,'(I8)') replica
-__WARN(whoami,'REPLICA',me,'ATTEMPTED TO READ NONEXISTENT COLUMN',which,'. NOTHING DONE.')
-        endif ! replica
-
+       else
+       __WRN(whoami,'REPLICA '//itoa(ME_STRNG)//' ATTEMPTED TO READ NONEXISTENT COLUMN '//itoa(replica)//'. NOTHING DONE.')
+       endif ! replica
 !     check for zero coordinate entries
-        if (any(cv%r(1:cv%num_cv,c).eq.__NAN)) then
-         write(me,'(I8)') ME_STRNG
-         i=len(me)
-         __TRIMA(me,i)
-__WARN(whoami,'REPLICA ',me,'HAS UNDEFINED CV COORDINATES AFTER READING.')
-        endif
-       endif ! root
+       if (any(cv%r(1:cv%num_cv,c).eq.__NAN)) then
+        __WRN(whoami,'REPLICA '//itoa(ME_STRNG)//' HAS UNDEFINED CV COORDINATES AFTER READING.')
+       endif
+      endif ! root
 !
-       __FREE(rtemp)
-       end subroutine cv_common_read_local_from_global
+      __FREE(rtemp)
+      end subroutine cv_common_read_local_from_global
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_read_global(iunit,col,read_bc)
 !      assume that unit is prepared
@@ -3375,6 +3373,7 @@ __MPI_ONLY     &                  MPI_COMM_STRNG,ierror)
       __DEP_MULTICOM
       __DEP_MPI
       __DEP_CONST
+      __DEP_NUMBER
       use parser
       use cmd
 !
@@ -3413,18 +3412,19 @@ __MPI_ONLY     &                  MPI_COMM_STRNG,ierror)
 !
         if (qraw) then
          if (qlocal) then ! all replicas read
-          read(ifile,*) M_me(:,:)
+          read(abs(ifile),*) M_me(:,:)
          elseif(ME_STRNG.eq.0) then 
           allocate(M_all(cv%num_cv, cv%num_cv, numrep)); M_all=__NAN;
           do j=1,numrep
 !           read(ifile,'(1X,I10)') ! no present use for comment field
-           read(ifile,*)
-           read(ifile,*) M_all(:,:,j)
+           read(abs(ifile),*)
+           read(abs(ifile),*) M_all(:,:,j)
           enddo
          endif ! local
 !==============================================
         else ! human-readable restart file
           if (qlocal) then
+!write(100+ME_STRNG, *) ifile, qlocal ; close(100+ME_STRNG) ;
            if (present(ifile)) call parse_file(abs(ifile), MPI_COMM_NULL, quiet_=.true.)
            __GETPAR(nstring,i) ! number of string replicas in file
            if (replica.ge.nstring_) then
@@ -3442,6 +3442,7 @@ __MPI_ONLY     &                  MPI_COMM_STRNG,ierror)
              endif ! error
             endif ! line
            enddo ! k
+
           elseif (ME_STRNG.eq.0) then ! .not.qlocal
            if (present(ifile)) call parse_file(abs(ifile), MPI_COMM_NULL, quiet_=.true.)
 ! need to check replica
@@ -3469,9 +3470,9 @@ __MPI_ONLY     &                  MPI_COMM_STRNG,ierror)
             enddo ! k
            enddo ! j
           endif ! qlocal
-          if (present(ifile)) then
-           if(ifile.lt.0) call parser_done()
-          endif
+           if ((qlocal.or.ME_STRNG.eq.0).and.present(ifile)) then
+            if(ifile.lt.0) call parser_done()
+           endif
         endif ! qraw
 !
         if (.not.qlocal) then
@@ -3480,6 +3481,8 @@ __MPI_ONLY     &                  MPI_COMM_STRNG,ierror)
 ! so we cannot use the presence/absence (or value ) of replica on any node
 ! to make the decision on how to distribute the Ms. The only safe way is to broadcastk everything
          if (SIZE_STRNG.gt.1) then
+__MPI_ONLY      __BROADCAST_STRING(numrep,1,mpiint) ! num-rep for M_all matrix
+                if (ME_STRNG.gt.0) then;allocate(M_all(cv%num_cv, cv%num_cv, numrep));M_all=__NAN;endif
 __MPI_ONLY      __BROADCAST_STRING(M_all,numrep*cv%num_cv**2,mpifloat)
          endif
 

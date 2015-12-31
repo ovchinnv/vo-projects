@@ -743,6 +743,7 @@ __MPI_ONLY     &   ierror)
        __DEP_MULTICOM
        __DEP_MPI
        __DEP_CONST
+       __DEP_NUMBER
        use parser
        use cmd
 !
@@ -801,6 +802,7 @@ __MPI_ONLY     &   ierror)
        __DEP_MULTICOM
        __DEP_MPI
        __DEP_CONST
+       __DEP_NUMBER
        use parser
        use cmd
 #include "mpitype.def"
@@ -821,16 +823,17 @@ __MPI_ONLY     &   ierror)
        nullify(rtemp);
 !
        __PRESENT(qraw,.true.)
-       __PRESENT(numrep, SIZE_STRNG); if(numrep.eq.__INAN) numrep=SIZE_STRNG
-       __PRESENT(replica, ME_STRNG); if(replica.eq.__INAN) numrep=ME_STRNG
+       __PRESENT(replica, ME_STRNG); if(replica.eq.__INAN) replica=ME_STRNG
+       __PRESENT(numrep, SIZE_STRNG)
 !
        if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then ! replica roots only
         n=frames%num_frames ! number of frames
         if (ME_STRNG.eq.0) then ! root reads
          if (qraw) then ! raw data format
+          if(numrep.eq.__INAN) numrep=SIZE_STRNG
           allocate(rtemp(3,3,n,numrep))
           do k=1,n
-           read(iunit,*) (((rtemp(i,j,k,m),i=1,3),j=1,3),m=1,numrep) ! sequentially read vectors (columns) of all replicas from one line
+           read(abs(iunit),*) (((rtemp(i,j,k,m),i=1,3),j=1,3),m=1,numrep) ! sequentially read vectors (columns) of all replicas from one line
           enddo
          else
 !================= human-readable restart
@@ -838,7 +841,7 @@ __MPI_ONLY     &   ierror)
 ! some basic checks/warnings
 !          qerror=cv_common_check_header()
           __GETPAR(nstring,i)
-          if (present(numrep_)) then
+          if (present(numrep_).and.numrep.ne.__INAN) then
            if (numrep_.ne.nstring_) &
      & __WRN(whoami, ' SPECIFIED NUMBER OF REPLICAS ('//itoa(numrep_)//') DOES NOT MATCH RESTART FILE ('//itoa(nstring_)//').')
             numrep=numrep_
@@ -871,6 +874,8 @@ __MPI_ONLY     &   ierror)
 !
 !       broadcast all data
         if (SIZE_STRNG.gt.1) then
+           __BROADCAST_STRING(numrep, 1, mpiint)
+           if (ME_STRNG.gt.0) then;allocate(rtemp(3,3,n,numrep));rtemp=__NAN;endif
            __BROADCAST_STRING(rtemp, 9*n*numrep, mpifloat)
 ! old (more efficient but restrictive) way
 !__MPI_ONLY         call MPI_SCATTER(rtemp,9*n,mpifloat,               &
