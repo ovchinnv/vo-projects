@@ -454,7 +454,7 @@ __CHARMM_ONLY##IF STRINGM
        subroutine cv_common_compute_Minv(inverse_LU, ind)
        use lu, only: inv_lu  ! matrix inverse by LU decomposition
        use multidiag, only: inv_mdiag
-       
+!
        bool, optional, intent(in) :: inverse_LU
        int, optional, intent(in) :: ind
        bool :: qLU=.true.
@@ -546,6 +546,7 @@ __MPI_ONLY     &        mpifloat, MPI_SUM, MPI_COMM_STRNG, ierror) ! use M inver
        if (.not.qraw) then 
         if(qhead) call cv_common_print_header(iunit)
 #define _W write(iunit,*)
+       _W 'smcv {'
        _W '# Wx : weight corresponding to CV #x in a scalar product; e.g. : ( SUM_{i=1}^N Wi x cv_i x cv_i ) / SUM_{i=1}^N Wi'
        endif ! qraw
 !
@@ -554,6 +555,8 @@ __MPI_ONLY     &        mpifloat, MPI_SUM, MPI_COMM_STRNG, ierror) ! use M inver
          __WRN(whoami,'CV WEIGHTS NOT INITIALIZED.')
         else
          _W '# CV weights not initialized'
+         _W 'weights_initialized = no'
+         _W '} # smcv'
          return
         endif ! qraw
        endif ! init
@@ -566,7 +569,6 @@ __MPI_ONLY     &        mpifloat, MPI_SUM, MPI_COMM_STRNG, ierror) ! use M inver
         endif
         write(iunit,frm) cv%weight(1:cv%num_cv)
        else ! human-readable
-        _W 'smcv {'
         do i=1, cv%num_cv
          _W 'W'//trim(itoa(i))//' = ',cv%weight(i)
         enddo
@@ -577,16 +579,18 @@ __MPI_ONLY     &        mpifloat, MPI_SUM, MPI_COMM_STRNG, ierror) ! use M inver
        end subroutine cv_common_print_wgt
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_read_wgt(iunit, qraw_, qlocal_)
-       use parser, only : itoa, parse_file, parser_done, getval_nocase
+       use parser, only : itoa, parse_file, parser_done, getval_nocase, existtag_nocase, getval_nocase_upper, atol
        use cmd
       __DEP_OUTPUT
       __DEP_MULTICOM
       __DEP_MPI
+      __DEP_NUMBER
 !
 #include "mpitype.def" 
 !
        int, optional, intent(in) :: iunit
        int :: ierror, i, l
+       bool :: weights_initialized
        __OPAR(qraw,bool)
        __OPAR(qlocal,bool)
        __IAM(CV_COMMON_READ_WGT)
@@ -603,15 +607,22 @@ __MPI_ONLY     &        mpifloat, MPI_SUM, MPI_COMM_STRNG, ierror) ! use M inver
           read(abs(iunit),*) cv%weight(1:cv%num_cv) ! only root reads
          else ! human-readable restart
           if (present(iunit)) call parse_file(abs(iunit), MPI_COMM_NULL, quiet_=.true.)
+          __GET_OPT_PAR_B(weights_initialized,weights_initialized,.true., __MYCTX)
+          if (.not.weights_initialized) then
+           __WRN(whoami, 'RESTART FILE REPORTS UNINITIALIZED CV WEIGHTS.');
+          endif
           do i=1, cv%num_cv
-           line=getval_nocase('W'//trim(itoa(i)),__MYCTX)
-           if (len_trim(line).gt.0) then
-            read(line,*,iostat=ierror) cv%weight(i)
-            if (ierror.ne.0) then
-             __WRN(whoami, 'ERROR READING VARIABLE FROM LINE "'//trim(line)//'"')
-             cycle
-            endif
-           endif ! line
+           keyword='W'//trim(itoa(i))
+           if (weights_initialized.or.existtag_nocase(keyword)) then
+            line=getval_nocase(keyword,__MYCTX)
+            if (len_trim(line).gt.0) then
+             read(line,*,iostat=ierror) cv%weight(i)
+             if (ierror.ne.0) then
+              __WRN(whoami, 'ERROR READING VARIABLE FROM LINE "'//trim(line)//'"')
+              cycle
+             endif
+            endif ! line
+           endif ! weights
           enddo ! CVs
 !
           if(present(iunit)) then
@@ -634,8 +645,14 @@ __MPI_ONLY     &        mpifloat, MPI_SUM, MPI_COMM_STRNG, ierror) ! use M inver
      &  __BROADCAST_LOCAL(cv%weight,cv%num_cv,mpifloat)
 #endif
 !
-       cv%wrss=1./sqrt( sum( cv%weight(1:cv%num_cv)**2) )
-       cv_common_weights_initialized=.true.
+       if (any(cv%weight(1:cv%num_cv).le.0d0)) then
+        cv_common_weights_initialized=.false.
+       else
+        cv_common_weights_initialized=.true.
+       endif
+!
+       cv%wrss=1./max(__ERRTOL, sqrt( sum( cv%weight(1:cv%num_cv)**2) ))
+!
        end subroutine cv_common_read_wgt
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_compute_k()
@@ -3382,9 +3399,10 @@ __MPI_ONLY     &                  MPI_COMM_STRNG,ierror)
 #include "mpitype.def"
        int, optional :: ifile
        int, optional, intent(in) :: ind  ! M index
-!     locals
+!
+       bool :: M_initialized
        character(len=maxlinelen) :: line
-       character(len=20) :: keyword
+       character(len=20) :: keyword(2)
        int :: ierror, j, Mind, k, l
        int :: nstring_
        float, pointer :: M_all(:,:,:)
@@ -3402,7 +3420,7 @@ __MPI_ONLY     &                  MPI_COMM_STRNG,ierror)
        __PRESENT(numrep,SIZE_STRNG); if (numrep.eq.__INAN) numrep=SIZE_STRNG
 !
        if (replica.lt.0) then
-         __WRN(whoami, ' REQUESTED NEGATIVE REPLICA NUMBER. NOTHING DONE.')
+         __WRN(whoami, 'REQUESTED NEGATIVE REPLICA NUMBER. NOTHING DONE.')
          return
        endif
 !
@@ -3427,22 +3445,30 @@ __MPI_ONLY     &                  MPI_COMM_STRNG,ierror)
 !write(100+ME_STRNG, *) ifile, qlocal ; close(100+ME_STRNG) ;
            if (present(ifile)) call parse_file(abs(ifile), MPI_COMM_NULL, quiet_=.true.)
            __GETPAR(nstring,i) ! number of string replicas in file
+           __GET_OPT_PAR_B(M_initialized,M_initialized,.true., __MYCTX)
+           if (.not.M_initialized) then
+            __WRN(whoami, 'RESTART FILE REPORTS UNINITIALIZED M TENSOR.');
+           endif
            if (replica.ge.nstring_) then
              __WRN(whoami, ' REQUESTED REPLICA NUMBER ('//itoa(replica)//') EXCEEDS RESTART STRING SIZE ('//itoa(nstring_)//').')
            endif
 ! read matrix columns
-           keyword='M_'//itoa(replica)//'_' ; l=len_trim(keyword);
+           M_me=__NAN
+           keyword(1)='M_'//itoa(replica)//'_' ; l=len_trim(keyword(1))
            do k=1,cv%num_cv
-            line=getval_nocase(keyword(1:l)//itoa(k),__MYCTX)
-            if (len_trim(line).gt.0) then
-             read(line,*,iostat=ierror) M_me(:,k)
-             if (ierror.ne.0) then
-              __WRN(whoami, 'ERROR READING VARIABLE FROM LINE "'//trim(line)//'"')
-              cycle
-             endif ! error
-            endif ! line
+            keyword(2)=keyword(1)(1:l)//itoa(k)
+            if (M_initialized.or.existtag_nocase(keyword(2),__MYCTX)) then
+             line=getval_nocase(keyword(2),__MYCTX)
+             if (len_trim(line).gt.0) then
+              read(line,*,iostat=ierror) M_me(:,k)
+              if (ierror.ne.0) then
+               __WRN(whoami, 'ERROR READING VARIABLE FROM LINE "'//trim(line)//'"')
+               cycle
+              endif ! error
+             endif ! line
+            endif ! M_initialized
            enddo ! k
-
+!
           elseif (ME_STRNG.eq.0) then ! .not.qlocal
            if (present(ifile)) call parse_file(abs(ifile), MPI_COMM_NULL, quiet_=.true.)
 ! need to check replica
@@ -3453,20 +3479,30 @@ __MPI_ONLY     &                  MPI_COMM_STRNG,ierror)
            else
             numrep=nstring_ ! go by the restart file
            endif
+           if (replica.ge.nstring_) then
+             __WRN(whoami, ' REQUESTED REPLICA NUMBER ('//itoa(replica)//') EXCEEDS RESTART STRING SIZE ('//itoa(nstring_)//').')
+           endif
+           __GET_OPT_PAR_B(M_initialized,M_initialized,.true., __MYCTX)
+           if (.not.M_initialized) then
+            __WRN(whoami, 'RESTART FILE REPORTS UNINITIALIZED M TENSOR.');
+           endif
 !
            allocate(M_all(cv%num_cv, cv%num_cv, numrep)) ; M_all=__NAN
 !
            do j=1, numrep
-            keyword='M_'//itoa(j-1)//'_' ; l=len_trim(keyword);
+            keyword(1)='M_'//itoa(j-1)//'_' ; l=len_trim(keyword(1));
             do k=1,cv%num_cv
-             line=getval_nocase(keyword(1:l)//itoa(k),__MYCTX)
-             if (len_trim(line).gt.0) then
-              read(line,*,iostat=ierror) M_all(:,k,j)
-              if (ierror.ne.0) then
-               __WRN(whoami, 'ERROR READING VARIABLE FROM LINE "'//trim(line)//'"')
-               cycle
-              endif ! error
-             endif ! line
+             keyword(2)=keyword(1)(1:l)//itoa(k)
+             if (M_initialized.or.existtag_nocase(keyword(2),__MYCTX)) then
+              line=getval_nocase(keyword(2),__MYCTX)
+              if (len_trim(line).gt.0) then
+               read(line,*,iostat=ierror) M_all(:,k,j)
+               if (ierror.ne.0) then
+                __WRN(whoami, 'ERROR READING VARIABLE FROM LINE "'//trim(line)//'"')
+                cycle
+               endif ! error
+              endif ! line
+             endif ! M_initialized
             enddo ! k
            enddo ! j
           endif ! qlocal
@@ -3578,7 +3614,7 @@ __MPI_ONLY     &                 MPI_COMM_STRNG,ierror)
           _W 'smcv {'
           _W '# M_x_y = ( ... ) :  y column of metric tensor M corresponding to replica x ' 
           if (any(M_all.eq.__NAN)) then
-           _W '# M not initialized'
+           _W 'M_initialized = no'
           else
            do j=1,nstring
             keyword='M_'//itoa(j-1)//'_' ; l=len_trim(keyword);
@@ -3636,7 +3672,7 @@ __MPI_ONLY     &                 MPI_COMM_STRNG,ierror)
          _W 'smcv {'
          _W '# M_x_y = ( ... ) :  y column of metric tensor M corresponding to replica x ' 
          if (any(M_me.eq.__NAN)) then
-          _W '# M not initialized'
+          _W 'M_initialized = no'
          else
           keyword='M_'//itoa(ME_STRNG)//'_' ; l=len_trim(keyword);
           do k=1,cv%num_cv

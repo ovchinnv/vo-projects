@@ -54,7 +54,7 @@ __CHARMM_ONLY##IF STRINGM
 !     called from dynamics
       __DEP_OUTPUT
       __DEP_MULTICOM
-      __DEP_MPI 
+      __DEP_MPI
  __DECLARE_MSGBUF
 #include "mpitype.def"
 !
@@ -73,31 +73,35 @@ __CHARMM_ONLY##IF STRINGM
      & .and.(SIZE_LOCAL.gt.1)
 !
       if (.not.cv_common_grad_initialized) call cv_common_grad_init() ! allocate cv%grad array (for derivatives)
-      call frames_reset_calculate(.true.) ! make sure that frames recalculate their axes + derivatives
-      call quat_reset_calculate(.true.) ! make sure that quaternions recalculate their values + derivatives
+      if (frames_initialized) call frames_reset_calculate(.true.) ! make sure that frames recalculate their axes + derivatives
+      if (quat_initialized) call quat_reset_calculate(.true.) ! make sure that quaternions recalculate their values + derivatives
 !
       if (.not.cv_common_weights_initialized) then
        __WRN( whoami,' CV WEIGHTS NOT INITIALIZED. WILL COMPUTE FROM M^-1(X)')
        call smcv_compute_wgt(x,y,z,mass)
       endif
-!     for off-path sampling, determine tangent vector
-      if (planar_on.and..not.cv_common_dz_initialized) then
-       __WRN( whoami,' PATH TANGENT NOT INITIALIZED. WILL COMPUTE FROM CV.')
-       call cv_common_compute_dr()
-      endif
-!     for off-path sampling simulations, need to compute dimensional k from koffp
-!     some parts of the code require a dimensional k, e.g. fe computation, dfdz;
-!     may be recoded in the future
-!     NOTE: this operation will destroy the current contents of the cv%k array
-      if (planar_on.and..not.cv_common_k_initialized) then
-       __WRN( whoami,' FORCE CONSTANTS FOR PLANAR SAMPLING UNDEFINED.')
-        write(_MSGBUF, 6765) whoami, whoami, whoami ; __PRINTL(_MSGBUF,3)  
+!     for off-path sampling, determine tangent vector + force constant
+!===============================================================================
+      if (planar_on) then 
+       if (.not.cv_common_dz_initialized) then
+        __WRN( whoami,' PATH TANGENT NOT INITIALIZED. WILL COMPUTE FROM CV.')
+        call cv_common_compute_dr()
+!
+!      for off-path sampling simulations, need to compute dimensional k from koffp
+!      some parts of the code require a dimensional k, e.g. fe computation, dfdz;
+!      may be recoded in the future
+!      NOTE: this operation will destroy the current contents of the cv%k array
+       endif
+       if (.not.cv_common_k_initialized) then
+        __WRN( whoami,' FORCE CONSTANTS FOR PLANAR SAMPLING UNDEFINED.')
+         write(_MSGBUF, 6765) whoami, whoami, whoami ; __PRINTL(_MSGBUF,3)  
  6765 format(/A, 'COMPUTING FORCE CONSTANTS FOR RESTRAINED ',/,         &
      &        A, 'DYNAMICS BY SCALING KPAR WITH CV WEIGHTS.',/,         &
      &        A, 'OVERWRITING PREVIOUSLY DEFINED FORCE CONSTANTS.')
-       call cv_common_compute_k()
-      endif
-!
+        call cv_common_compute_k()
+       endif
+      endif ! planar_on
+!================================================================================
       restraint_force_on=.false.
 !
       if (restrained_on) then ! impose restraints
@@ -415,40 +419,27 @@ __MPI_ONLY     &          mpifloat, MPI_SUM, MPI_COMM_LOCAL, ierror)
 !ccccccccccccccccccccccccc ADD FORCES cccccccccccccccccccc
        addforce=addforce2.and.cv%active(i)
 !
+#define __ARGS i,x,y,z,mass,fx,fy,fz,calctheta,deriv,addforce
+!
        select case(cv%type(i))
-          case(posi_com_x, posi_com_y, posi_com_z);
-           call cv_posi_com_calc(i,x,y,z,mass,fx,fy,fz,                 &
-     &                        calctheta,deriv,addforce)
-          case(qcomp_1, qcomp_2, qcomp_3, qcomp_4);
-           call cv_qcomp_calc(i,x,y,z,mass,fx,fy,fz,                    &
-     &                        calctheta,deriv,addforce)
-          case(angle_com);
-           call cv_angle_com_calc(i,x,y,z,mass,fx,fy,fz,                &
-     &                        calctheta,deriv,addforce)
-          case(anglvec);
-           call cv_anglvec_calc(i,x,y,z,mass,fx,fy,fz,                  &
-     &                        calctheta,deriv,addforce)
-          case(dihe_com);
-           call cv_dihe_com_calc(i,x,y,z,mass,fx,fy,fz,                 &
-     &                        calctheta,deriv,addforce)
-          case(dist_com);
-           call cv_dist_com_calc(i,x,y,z,mass,fx,fy,fz,                 &
-     &                        calctheta,deriv,addforce)
-          case(rmsd);
-           call cv_rmsd_calc(i,x,y,z,mass,fx,fy,fz,                     &
-     &                        calctheta,deriv,addforce)
-          case(drmsd);
-           call cv_drmsd_calc(i,x,y,z,mass,fx,fy,fz,                    &
-     &                        calctheta,deriv,addforce)
-          case(proj);
-           call cv_proj_calc(i,x,y,z,mass,fx,fy,fz,                     &
-     &                        calctheta,deriv,addforce)
+          case(posi_com_x, posi_com_y, posi_com_z);call cv_posi_com_calc(__ARGS)
+          case(qcomp_1, qcomp_2, qcomp_3, qcomp_4);call cv_qcomp_calc(__ARGS)
+          case(angle_com);                         call cv_angle_com_calc(__ARGS)
+          case(anglvec);                           call cv_anglvec_calc(__ARGS)
+          case(dihe_com);                          call cv_dihe_com_calc(__ARGS)
+          case(dist_com);                          call cv_dist_com_calc(__ARGS)
+          case(rmsd);                              call cv_rmsd_calc(__ARGS)
+          case(drmsd);                             call cv_drmsd_calc(__ARGS)
+          case(proj);                              call cv_proj_calc(__ARGS)
           case(cvrms); ! may not be correct if running in parallel in case slave cvs on a different node -- so skip here & force compute below
-          if (.not. qgrp) call cv_cvrms_calc(i,x,y,z,mass,fx,fy,fz,     &
-     &                        calctheta,deriv,addforce)
-          case default
-           __WRN( whoami, 'UNKNOWN CV SPECIFIED.')
+           if (.not. qgrp) then 
+            call cv_cvrms_calc(__ARGS)
+           else
+            cycle
+           endif
+          case default;           __WRN( whoami, 'UNKNOWN CV SPECIFIED.')
        end select
+#undef __ARGS
 !     update force prefactor (planar sampling)
        fpre=fpre+cv%r(i,forces2)*cv%r(i,dz)/cv%weight(i) ! for planar force; incorrect for inactive cv or cvrms; also obsolete
       enddo ! over all cv
@@ -494,40 +485,23 @@ __MPI_ONLY      endif
         endif
 !
         addforce=addforce2.and.cv%active(i)
+!
+#define __ARGS i,x,y,z,mass,fx,fy,fz,calctheta,deriv,addforce,f
+!
         select case(cv%type(i))
-          case(posi_com_x, posi_com_y, posi_com_z);
-           call cv_posi_com_calc(i,x,y,z,mass,fx,fy,fz,                 &
-     &                           calctheta,deriv,addforce,f)
-          case(qcomp_1, qcomp_2, qcomp_3, qcomp_4);
-           call cv_qcomp_calc(i,x,y,z,mass,fx,fy,fz,                    &
-     &                        calctheta,deriv,addforce,f)
-          case(angle_com);
-           call cv_angle_com_calc(i,x,y,z,mass,fx,fy,fz,                &
-     &                            calctheta,deriv,addforce,f)
-          case(anglvec);
-           call cv_anglvec_calc(i,x,y,z,mass,fx,fy,fz,                  &
-     &                          calctheta,deriv,addforce,f)
-          case(dihe_com);
-           call cv_dihe_com_calc(i,x,y,z,mass,fx,fy,fz,                 &
-     &                           calctheta,deriv,addforce,f)
-          case(rmsd);
-           call cv_rmsd_calc(i,x,y,z,mass,fx,fy,fz,                     &
-     &                           calctheta,deriv,addforce,f)
-          case(drmsd);
-           call cv_drmsd_calc(i,x,y,z,mass,fx,fy,fz,                    &
-     &                           calctheta,deriv,addforce,f)
-          case(proj);
-           call cv_proj_calc(i,x,y,z,mass,fx,fy,fz,                     &
-     &                           calctheta,deriv,addforce,f)
-          case(dist_com);
-           call cv_dist_com_calc(i,x,y,z,mass,fx,fy,fz,                 &
-     &                           calctheta,deriv,addforce,f)
-          case(cvrms); ! force computation of restraint value & derivative here (see above for comments)
-           call cv_cvrms_calc(i,x,y,z,mass,fx,fy,fz,                    &
-     &                           qgrp, qgrp, addforce,f)
-          case default
-           __WRN(' SMCV_ADDFORCE>','UNKNOWN CV SPECIFIED.')
+          case(posi_com_x, posi_com_y, posi_com_z);call cv_posi_com_calc(__ARGS)
+          case(qcomp_1, qcomp_2, qcomp_3, qcomp_4);call cv_qcomp_calc(__ARGS)
+          case(angle_com);                         call cv_angle_com_calc(__ARGS)
+          case(anglvec);                           call cv_anglvec_calc(__ARGS)
+          case(dihe_com);                          call cv_dihe_com_calc(__ARGS)
+          case(dist_com);                          call cv_dist_com_calc(__ARGS)
+          case(rmsd);                              call cv_rmsd_calc(__ARGS)
+          case(drmsd);                             call cv_drmsd_calc(__ARGS)
+          case(proj);                              call cv_proj_calc(__ARGS)
+          case(cvrms);                             call cv_cvrms_calc(__ARGS)
+          case default ;                  __WRN( whoami, 'UNKNOWN CV SPECIFIED.')
         end select
+#undef __ARGS
        enddo ! over all cv
       endif ! planar_on
 !
@@ -608,37 +582,23 @@ __MPI_ONLY      endif
        endif
 !
        do i=ibeg, iend
+!
+! force arrays not used in args below
+#define __ARGS i,x,y,z,mass,x,y,z,calctheta,deriv,.false. 
+!
         select case(cv%type(i))
-         case(posi_com_x, posi_com_y, posi_com_z);
-          call cv_posi_com_calc(i,x,y,z,mass,x,y,z,calctheta,           &
-     &      deriv,.false.) ! force arguments are dummies
-         case(qcomp_1, qcomp_2, qcomp_3, qcomp_4);
-          call cv_qcomp_calc(i,x,y,z,mass,x,y,z,calctheta,              &
-     &      deriv,.false.)
-         case(angle_com);
-          call cv_angle_com_calc(i,x,y,z,mass,x,y,z,calctheta,          &
-     &      deriv,.false.)
-         case(anglvec);
-          call cv_anglvec_calc(i,x,y,z,mass,x,y,z,calctheta,            &
-     &      deriv,.false.)
-         case(dihe_com);
-          call cv_dihe_com_calc(i,x,y,z,mass,x,y,z,calctheta,           &
-     &      deriv,.false.)
-         case(rmsd);
-          call cv_rmsd_calc(i,x,y,z,mass,x,y,z,calctheta,               &
-     &      deriv,.false.)
-         case(drmsd);
-          call cv_drmsd_calc(i,x,y,z,mass,x,y,z,calctheta,              &
-     &      deriv,.false.)
-         case(proj);
-          call cv_proj_calc(i,x,y,z,mass,x,y,z,calctheta,               &
-     &      deriv,.false.)
-         case(dist_com);
-          call cv_dist_com_calc(i,x,y,z,mass,x,y,z,calctheta,           &
-     &      deriv,.false.)
+         case(posi_com_x, posi_com_y, posi_com_z);call cv_posi_com_calc(__ARGS)
+         case(qcomp_1, qcomp_2, qcomp_3, qcomp_4);call cv_qcomp_calc(__ARGS)
+         case(angle_com);                         call cv_angle_com_calc(__ARGS)
+         case(anglvec);                           call cv_anglvec_calc(__ARGS)
+         case(dihe_com);                          call cv_dihe_com_calc(__ARGS)
+         case(dist_com);                          call cv_dist_com_calc(__ARGS)
+         case(rmsd);                              call cv_rmsd_calc(__ARGS)
+         case(drmsd);                             call cv_drmsd_calc(__ARGS)
+         case(proj);                              call cv_proj_calc(__ARGS)
          case(cvrms);
           if (.not.qgrp1) then
-          call cv_cvrms_calc(i,x,y,z,mass,x,y,z,calctheta,deriv,.false.)
+           call cv_cvrms_calc(__ARGS)
           else
            cycle ! continue without updating average since it would be incorrect
           endif
@@ -677,7 +637,7 @@ __MPI_ONLY     &    MPI_GRAD_TYPE, MPI_COMM_LOCAL, ierror)
 !*************************************************************************
         do i=1, cv%num_cv
          if (cv%type(i).eq.cvrms) then
-          call cv_cvrms_calc(i,x,y,z,mass,x,y,z,calctheta,deriv,.false.)
+          call cv_cvrms_calc(__ARGS)
 !    update running average
           v=cv%r(i,instant)
           cv%r(i,j)=v
@@ -686,6 +646,7 @@ __MPI_ONLY     &    MPI_GRAD_TYPE, MPI_COMM_LOCAL, ierror)
           cv%r(i,runave)=u-t*v
          endif
         enddo
+#undef __ARGS
 !*************************************************************************
        endif ! qgrp1
 !
@@ -852,41 +813,24 @@ __MPI_ONLY     &    MPI_GRAD_TYPE, MPI_COMM_LOCAL, ierror)
        endif
 !
        do i=ibeg, iend
+! force arrays not used below
+#define __ARGS i,x,y,z,mass,x,y,z,calctheta,deriv,.false.
+!
         select case(cv%type(i))
-         case(posi_com_x, posi_com_y, posi_com_z);
-          call cv_posi_com_calc(i,x,y,z,mass,x,y,z,calctheta,           &
-     &      deriv,.false.) ! force arguments are dummies
-         case(qcomp_1, qcomp_2, qcomp_3, qcomp_4);
-          call cv_qcomp_calc(i,x,y,z,mass,x,y,z,calctheta,              &
-     &      deriv,.false.)
-         case(angle_com);
-          call cv_angle_com_calc(i,x,y,z,mass,x,y,z,calctheta,          &
-     &      deriv,.false.)
-         case(anglvec);
-          call cv_anglvec_calc(i,x,y,z,mass,x,y,z,calctheta,            &
-     &      deriv,.false.)
-         case(dihe_com);
-          call cv_dihe_com_calc(i,x,y,z,mass,x,y,z,calctheta,           &
-     &      deriv,.false.)
-         case(rmsd);
-          call cv_rmsd_calc(i,x,y,z,mass,x,y,z,calctheta,               &
-     &      deriv,.false.)
-         case(drmsd);
-          call cv_drmsd_calc(i,x,y,z,mass,x,y,z,calctheta,              &
-     &      deriv,.false.)
-         case(proj);
-          call cv_proj_calc(i,x,y,z,mass,x,y,z,calctheta,               &
-     &      deriv,.false.)
-         case(dist_com);
-          call cv_dist_com_calc(i,x,y,z,mass,x,y,z,calctheta,           &
-     &      deriv,.false.)
-         case(cvrms);
-          call cv_cvrms_calc(i,x,y,z,mass,x,y,z,calctheta,              &
-     &      deriv,.false.)
-         case default
-         __WRN( whoami, 'UNKNOWN CV SPECIFIED.')
+          case(posi_com_x, posi_com_y, posi_com_z);call cv_posi_com_calc(__ARGS)
+          case(qcomp_1, qcomp_2, qcomp_3, qcomp_4);call cv_qcomp_calc(__ARGS)
+          case(angle_com);                         call cv_angle_com_calc(__ARGS)
+          case(anglvec);                           call cv_anglvec_calc(__ARGS)
+          case(dihe_com);                          call cv_dihe_com_calc(__ARGS)
+          case(dist_com);                          call cv_dist_com_calc(__ARGS)
+          case(rmsd);                              call cv_rmsd_calc(__ARGS)
+          case(drmsd);                             call cv_drmsd_calc(__ARGS)
+          case(proj);                              call cv_proj_calc(__ARGS)
+          case(cvrms);                             call cv_cvrms_calc(__ARGS)
+          case default ;                  __WRN( whoami, 'UNKNOWN CV SPECIFIED.')
         end select
-       enddo ! loop over cv
+#undef __ARGS
+       enddo ! i-loop over cv
 !
 __MPI_ONLY       if (qgrp.and.calc_cv_para) then
 __MPI_ONLY!     communicate cv values + gradients using custom types
