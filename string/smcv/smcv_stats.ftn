@@ -1,0 +1,1014 @@
+      module smcv_stats
+!
+#if (defined(__CHARMM) || defined(__PARALLEL) )
+__CHARMM_ONLY##IF STRINGM
+!
+      __IMPNONE
+      private
+      public smcv_stat_init
+      public smcv_stat
+!
+ __DECLARE_MSGBUF
+!
+      contains
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      subroutine smcv_stat_init(comlyn, comlen)
+!
+      use sm_var
+      use sm_config,only: vtime_offset, rextime_offset, evolve_smooth_on
+      use cv_common,only:cv_common_neq_work_init, cv_common_rex_read_map, max_hist_base
+!
+      __DEP_OUTPUT
+      __DEP_SIZE
+      __DEP_PARSER 
+      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
+      __DEP_MPI 
+      __IMPNONE
+!====================================================================
+      CHARACTER(LEN=*) :: COMLYN
+      int :: comlen
+!
+      int :: wtag_len, rex_flen_old __CHARMM_ONLY, ierror
+#ifdef __CHARMM
+      int :: oldiol
+#endif
+!
+      character(len=80) :: rex_fname_old
+      __IAM(SMCV_STAT_INIT)
+!
+      bool :: qroot, qprint
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      qroot=MPI_COMM_STRNG.ne.MPI_COMM_NULL
+      qprint=qroot.and.ME_STRNG.eq.0
+#ifdef __CHARMM
+      if (qprint) then; oldiol=iolev; iolev=0; endif
+#endif
+!     begin
+!     reset iteration counter
+!     did the user specify it?
+      stat_iteration_counter=__GET_RM_I(comlyn, comlen, 'COUN', -1)
+      stat_iteration_counter=max(stat_iteration_counter,0)
+      if (stat_iteration_counter.gt.0) then
+       if (qprint) then ; write(_MSGBUF,639) whoami, stat_iteration_counter ; __PRINT(_MSGBUF) ; endif
+ 639  format(A,' SETTING ITERATION COUNTER TO ',I7)
+      endif
+!
+      cv_fname=''
+      output_cv=.false.
+!
+      cv_hist_fname=''
+      output_cv_hist=.false. ! more efficient than cv output above if a finely-sampled history is desired
+      cv_hist_nskip=0
+      cv_hist_qall=.false.
+!
+      forces_fname=''
+      output_forces=.false.
+!
+      voronoi_fname=''
+      output_voronoi_hist=.false.
+      output_voronoi_log=.false.
+      output_voronoi_map=.false.
+!
+      rmsd_ave_fname=''
+      output_rmsd_ave=.false.
+!
+      rmsd0_fname=''
+      output_rmsd0=.false.
+!
+      dsdt_fname=''
+      output_dsdt=.false.
+!
+      c_fname=''
+      output_curvature=.false.
+!
+      s_fname=''
+      output_arclength=.false.
+!
+      fe_fname=''
+      output_fe=.false.
+!
+      work_fname=''
+      work_tag=''
+      output_work=.false.
+!
+      rex_fname_old=''
+      rex_fname=''
+      output_rex_log=.false.
+      output_rex_map=.false.
+!
+      wgt_fname=''
+      output_wgt=.false.
+!
+      M_fname=''
+      output_M=.false.
+
+!ccccccccccccccccc first process the RMSD-related commands
+!!!!!!!!!!!!!! RMSD from static structure in comp (zts/fts)
+      if (__INDX_RM(comlyn,comlen,'RMSD').gt.0) then ! request for RMSD
+       output_rmsd0=.true.
+       __GET_RM_A(COMLYN,COMLEN,'RNAM',4,rmsd0_fname,80,rmsd0_flen)
+       if (rmsd0_flen.eq.0) then
+         __WRN(whoami,'NO RMSD FILE NAME SPECIFIED. WILL WRITE TO STDOUT.')
+         rmsd0_funit=__OSTREAM
+       else
+         if (__INDX_RM(comlyn,comlen,'RAPP').gt.0) then ! APPEND?
+           rform='APPEND'
+         else
+           rform='WRITE'
+         endif
+       endif
+!ccccccccccc print summary
+       if (qprint) then
+         if (rmsd0_flen.gt.0) then
+          write(_MSGBUF,660 ) whoami,rmsd0_fname(1:rmsd0_flen)
+         else
+          write(_MSGBUF,661 ) whoami
+         endif
+         __PRINT(_MSGBUF)
+       endif
+ 660  format(A,' WILL WRITE STRING RMSD TO FILE ',A)
+ 661  format(A,' WILL WRITE STRING RMSD TO STDOUT.')
+!
+      endif !! RMSD
+!!!!!!!!!!!!!! RMSD from structure at the previous step (zts/fts)
+      if (__INDX_RM(comlyn,comlen,'DELS').gt.0) then
+        output_dsdt=.true.
+        __GET_RM_A(COMLYN,COMLEN,'DNAM',4,dsdt_fname,80,dsdt_flen)
+        if (dsdt_flen.eq.0) then
+         __WRN(whoami,'NO DELS FILE NAME SPECIFIED. WILL WRITE TO STDOUT.')
+         dsdt_funit=__OSTREAM
+        else
+         if (__INDX_RM(comlyn,comlen,'DAPP').gt.0) then ! APPEND?
+           dform='APPEND'
+         else
+           dform='WRITE'
+         endif
+        endif
+!ccccccccccc print summary
+        if (qprint) then
+         if (dsdt_flen.gt.0) then
+          write(_MSGBUF,650 ) whoami,dsdt_fname(1:dsdt_flen)
+         else
+          write(_MSGBUF,651 ) whoami
+         endif
+         __PRINT(_MSGBUF)
+        endif
+ 650  format(A,' WILL WRITE STRING RMSD(I,I+1) TO FILE ',A)
+ 651  format(A,' WILL WRITE STRING RMSD(I,I+1) TO STDOUT.')
+!
+      endif !
+!!!!!!!!!!!!!! RMSD from average structure (zts/fts)
+      if (__INDX_RM(comlyn,comlen,'RMSA').gt.0) then
+        output_rmsd_ave=.true.
+        __GET_RM_A(COMLYN,COMLEN,'RANM',4,rmsd_ave_fname,80,rmsd_ave_flen)
+        if (rmsd_ave_flen.eq.0) then
+         __WRN(whoami,'NO RMSA FILE NAME SPECIFIED. WILL WRITE TO STDOUT.')
+         rmsd_ave_funit=__OSTREAM
+        else
+         if (__INDX_RM(comlyn,comlen,'RAAP').gt.0) then ! APPEND?
+           raform='APPEND'
+         else
+           raform='WRITE'
+         endif
+        endif
+!ccccccccccc print summary
+        if (qprint) then
+         if (rmsd_ave_flen.gt.0) then
+          write(_MSGBUF,6500 ) whoami,rmsd_ave_fname(1:rmsd_ave_flen)
+         else
+          write(_MSGBUF,6510 ) whoami
+         endif
+         __PRINT(_MSGBUF)
+        endif
+ 6500 format(A,' WILL WRITE STRING RMSD FROM AVERAGE STRUC. TO FILE ',A)
+ 6510 format(A,' WILL WRITE STRING RMSD FROM AVERAGE STRUC. TO STDOUT.')
+!
+!     set number of samples in the average ( to continue a calculation )
+        num_average_samples=max(__GET_RM_I(comlyn,comlen,'NAVE',0),0)
+!       same value for cv
+        call cv_set_ave_samples(num_average_samples)
+        if (qprint) then ; write(_MSGBUF,6511) whoami, num_average_samples ; __PRINT(_MSGBUF) ; endif
+ 6511 format(A,' SETTING NUMBER OF SAMPLES IN THE AVERAGE SET TO ',I7)
+!
+      endif !
+!!!!!!!!!!!!!! ARCLENGTH
+      if (__INDX_RM(comlyn,comlen,'ARCL').gt.0) then
+        output_arclength=.true.
+        __GET_RM_A(COMLYN,COMLEN,'ANAM',4,s_fname,80,s_flen)
+        if (s_flen.eq.0) then
+         __WRN(whoami,'STRING LENGTH FILE NAME NOT SPECIFIED. WILL WRITE TO STDOUT.')
+         s_funit=__OSTREAM
+        else
+         if (__INDX_RM(comlyn,comlen,'AAPP').gt.0) then ! APPEND?
+           sform='APPEND'
+         else
+           sform='WRITE'
+         endif
+        endif
+!ccccccccccc print summary
+        if (qprint) then
+         if (s_flen.gt.0) then
+          write(_MSGBUF,652) whoami,s_fname(1:s_flen)
+         else
+          write(_MSGBUF,653) whoami
+         endif
+         __PRINT(_MSGBUF)
+        endif
+ 652  format(A,' WILL WRITE STRING LENGTH TO FILE ',A)
+ 653  format(A,' WILL WRITE STRING LENGTH TO STDOUT.')
+!
+      endif ! ARCLENGTH
+!!!!!!!!!!!!!! CURVATURE
+      if (__INDX_RM(comlyn,comlen,'CURV').gt.0) then
+        output_curvature=.true.
+        __GET_RM_A(COMLYN,COMLEN,'CVNM',4,c_fname,80,c_flen)
+        if (c_flen.eq.0) then
+         __WRN(whoami,'CURVATURE FILE NAME NOT SPECIFIED. WILL WRITE TO STDOUT.')
+         c_funit=__OSTREAM
+        else
+         if (__INDX_RM(comlyn,comlen,'CAPP').gt.0) then ! APPEND?
+           cform='APPEND'
+         else
+           cform='WRITE'
+         endif
+        endif
+!ccccccccccc print summary
+        if (qprint) then
+         if (c_flen.gt.0) then
+          write(_MSGBUF,6521) whoami,c_fname(1:c_flen)
+         else
+          write(_MSGBUF,6531) whoami
+         endif
+         __PRINT(_MSGBUF)
+        endif
+ 6521 format(A,' WILL WRITE CURVATURE TO FILE ',A)
+ 6531 format(A,' WILL WRITE CURVATURE TO STDOUT.')
+!
+      endif ! CURVATURE
+!!!!!!!!!!!!!! FREE ENERGY
+      if (__INDX_RM(comlyn,comlen,'FREE').gt.0) then
+        output_fe=.true.
+        __GET_RM_A(COMLYN,COMLEN,'FENM',4,fe_fname,80,fe_flen)
+        if (fe_flen.eq.0) then
+         __WRN(whoami,'NO F.E. FILE NAME SPECIFIED. WILL WRITE TO STDOUT.')
+         fe_funit=__OSTREAM
+        else
+         if (__INDX_RM(comlyn,comlen,'FAPP').gt.0) then ! APPEND?
+           feform='APPEND'
+         else
+           feform='WRITE'
+         endif
+        endif
+!ccccccccccc print summary cccccccccccccccccccccccccccccccccccccc
+        if (qprint) then
+         if (fe_flen.gt.0) then
+          write(_MSGBUF,6520) whoami,fe_fname(1:fe_flen)
+         else
+          write(_MSGBUF,6530) whoami
+         endif
+         __PRINT(_MSGBUF)
+        endif
+ 6520 format(A,' WILL WRITE FREE ENERGY TO FILE ',A)
+ 6530 format(A,' WILL WRITE FREE ENERGY TO STDOUT.')
+!
+      endif ! F.E.
+!ccccccccccccccccccccccccccc NONEQ. WORK cccccccccccccccccccccccc
+      if (__INDX_RM(comlyn,comlen,'WORK').gt.0) then
+        output_work=.true.
+        call cv_common_neq_work_init() ! initialize force and position arrays
+        __GET_RM_A(COMLYN,COMLEN,'WKNM',4,work_fname,80,work_flen)
+        if (work_flen.eq.0) then
+         __WRN(whoami,'NO F.E. FILE NAME SPECIFIED. WILL WRITE TO STDOUT.')
+         work_funit=__OSTREAM
+        else
+         if (__INDX_RM(comlyn,comlen,'WKAP').gt.0) then ! APPEND?
+          wkform='APPEND'
+         else
+          wkform='WRITE'
+         endif
+        endif
+! specify tag that identifies the work calculated with a particular process
+        __GET_RM_A(COMLYN,COMLEN,'WTAG',4,work_tag,8,wtag_len)
+        if (wtag_len.eq.0) then
+         __WRN(whoami,'WORK TAG NOT SPECIFIED.')
+        endif
+!ccccccccccc print summary
+        if (qprint) then
+         if (work_flen.gt.0) then
+          write(_MSGBUF,6523) whoami,work_fname(1:work_flen)
+         else
+          write(_MSGBUF,6533) whoami
+         endif
+         __PRINT(_MSGBUF)
+        endif
+ 6523 format(A,' WILL WRITE NON-EQ. WORK TO FILE ',A)
+ 6533 format(A,' WILL WRITE NON-EQ. WORK TO STDOUT.')
+!
+      endif ! F.E.
+!cccccccccc process CV output options ccccccccccccccccccccccc
+      if (__INDX_RM(comlyn,comlen,'COLV').gt.0) then
+!       get file name
+        __GET_RM_A(COMLYN,COMLEN,'CNAM',4,cv_fname,80,cv_flen)
+!ccccccccccc print summary
+        if (cv_flen.gt.0) then
+         output_cv=.true.
+         if (qprint) then
+           write(_MSGBUF,6620 ) whoami,cv_fname(1:cv_flen)
+           __PRINT(_MSGBUF)
+         endif
+         if (__INDX_RM(comlyn,comlen,'CVAP').gt.0) then ! APPEND?
+           cvform='APPEND'
+         else
+           cvform='WRITE'
+         endif
+        else
+          __WRN(whoami,'NO FILE NAME GIVEN. WILL NOT WRITE CV.')
+        endif
+ 6620 format(A,' WILL WRITE CV TIME SERIES TO FILE ',A,'.')
+!
+      endif ! cv output
+!cccccccccc process CV history array output  ccccccccccccccccccccccc
+      if (__INDX_RM(comlyn,comlen,'HIST').gt.0) then
+!       get file name
+        __GET_RM_A(COMLYN,COMLEN,'HNAM',4,cv_hist_fname,80,cv_hist_flen)
+!ccccccccccc print summary
+        if (cv_hist_flen.gt.0) then
+         if (evolve_smooth_on) then
+          __WRN(whoami, 'CV HISTORY OUTPUT CONFLICTS WITH TRAJECTORY SMOOTHING (BECAUSE BOTH ERASE HISTORY). YOU HAVE BEEN WARNED.') 
+         endif
+!
+         output_cv_hist=.true.
+!
+!        whether to open files locally on all replicas
+!
+         cv_hist_qall = max( __INDX_RM(comlyn,comlen,'ALL'),__INDX_RM(comlyn,comlen,'LOCAL')).gt.0
+         if (cv_hist_qall) then
+          write(_MSGBUF(5), '(2A)') whoami, ' EACH REPLICA WILL WRITE A (LOCAL) HISTORY FILE'
+         endif
+!
+!        whether to skip history
+         cv_hist_nskip=__GET_RM_I(comlyn, comlen, 'SKIP',0) ! number of entries to skip
+         if (cv_hist_nskip.gt.0) then
+          write(_MSGBUF(4), '(2A)') whoami, 'WILL OMIT THE FIRST '//itoa(cv_hist_nskip)//' ENTRIES AT EACH WRITE.'
+         elseif( cv_hist_nskip.lt.0 ) then
+          __WRN(whoami, 'NUMBER OF HISTORY ENTRIES TO SKIP MUST BE NONNEGATIVE. RESET TO ZERO.')
+          cv_hist_nskip=0
+         endif
+!
+         if (qprint) then
+           write(_MSGBUF(1),6720 ) whoami,cv_hist_fname(1:cv_hist_flen)
+           write(_MSGBUF(2),'(2A)') whoami, ' HISTORY ARRAY SIZE IS '//itoa(max_hist_base)//', WHICH REPRESENTS THE LONGEST TIME SERIES THAT CAN BE WRITTEN.'
+           write(_MSGBUF(3),'(2A)') whoami, ' "HISF" IN DYNAMICS SHOULD BE SET ACCORDINGLY'
+           __PRINT(_MSGBUF)
+         endif
+!
+         if (__INDX_RM(comlyn,comlen,'HAPP').gt.0) then ! APPEND?
+           cvhform='APPEND'
+         else
+           cvhform='WRITE'
+         endif
+        else
+          __WRN(whoami,'NO FILE NAME GIVEN. WILL NOT WRITE CV.')
+        endif
+ 6720 format(A,' WILL WRITE CV HISTORY ARRAY TO FILE ',A,'.')
+!
+      endif ! cv history output
+!ccccccccccccccccccccccc output weights cccccccccccccccccccccc
+      if (__INDX_RM(comlyn,comlen,'WEIG').gt.0) then
+!       get file name
+        __GET_RM_A(COMLYN,COMLEN,'WTNM',4,wgt_fname,80,wgt_flen)
+!ccccccccccc print summary
+        if (wgt_flen.gt.0) then
+         output_wgt=.true.
+         if (qprint) then
+          write(_MSGBUF,6621) whoami,wgt_fname(1:wgt_flen)
+          __PRINT(_MSGBUF)
+         endif
+         if (__INDX_RM(comlyn,comlen,'WTAP').gt.0) then ! APPEND?
+           wgtform='APPEND'
+         else
+           wgtform='WRITE'
+         endif
+        else
+          __WRN(whoami,'NO FILE NAME GIVEN. WILL NOT WRITE CV WEIGHTS.')
+        endif
+ 6621 format(A,' WILL WRITE CV WEIGHTS TO FILE ',A,'.')
+!
+      endif ! cv output
+!cccccccccccc process Voronoi histogram output options ccccccccccc
+      voronoi_flen=0
+      if (__INDX_RM(comlyn,comlen,'VORO').gt.0) then
+!       get file name
+        __GET_RM_A(COMLYN,COMLEN,'VNAM',4,voronoi_fname,80,voronoi_flen)
+!ccccccccccc print summary
+        if (voronoi_flen.gt.0) then
+         output_voronoi_hist=.true.
+         if (qprint) then
+          write(_MSGBUF,6622) whoami,voronoi_fname(1:voronoi_flen)
+         endif
+        else
+         __WRN(whoami,'NO FILE NAME GIVEN. WILL NOT WRITE VORONOI HISTOGRAMS.')
+        endif
+ 6622 format(A,' WILL WRITE VORONOI HISTOGRAMS TO FILE ',A,'.DAT')
+!
+      endif ! voronoi histograms
+!cccccccccccccc voronoi map cccccccccccccccccccccccccccccccccccccccc
+      if (__INDX_RM(comlyn,comlen,'VMAP').gt.0) then
+!       get file name
+        if (voronoi_flen.eq.0) then
+         __GET_RM_A(COMLYN,COMLEN,'VNAM',4,voronoi_fname,80,voronoi_flen)
+        endif
+!
+        if (voronoi_flen.gt.0) then
+         output_voronoi_map=.true.
+         if (qprint) then
+          write(_MSGBUF,6627) whoami,voronoi_fname(1:voronoi_flen)
+          __PRINT(_MSGBUF)
+         endif
+        else
+          __WRN(whoami,'NO FILE NAME GIVEN. WILL NOT WRITE VORONOI MAP.')
+        endif
+ 6627 format(A,' WILL WRITE VORONOI MAP TO FILE ',A,'.MAP')
+!
+      endif ! voronoi map
+!cccccccccccccc voronoi log cccccccccccccccccccccccccccccccccccccccc
+      if (__INDX_RM(comlyn,comlen,'VLOG').gt.0) then
+!       get file name
+        if (voronoi_flen.eq.0) then
+         __GET_RM_A(COMLYN,COMLEN,'VNAM',4,voronoi_fname,80,voronoi_flen)
+        endif
+!       check for timestep offset
+        vtime_offset=__GET_RM_I(comlyn, comlen, 'VOFF', 0);
+        if (vtime_offset.gt.0) then
+         if (qprint) then ; write(_MSGBUF,6624) whoami, vtime_offset ; __PRINT(_MSGBUF) ; endif
+ 6624 format(A,' WILL OFFSET STEP COUNTER IN VORONOI LOG BY ',I10)
+        endif
+!
+        if (voronoi_flen.gt.0) then
+         output_voronoi_log=.true.
+         if (qprint) then
+          write(_MSGBUF,6623) whoami,voronoi_fname(1:voronoi_flen)
+          __PRINT(_MSGBUF)
+         endif
+         if (__INDX_RM(comlyn,comlen,'VLAP').gt.0) then ! APPEND?
+           vlform='APPEND'
+         else
+           vlform='WRITE'
+         endif ! vlap
+!
+        else
+          __WRN(whoami,'NO FILE NAME GIVEN. WILL NOT WRITE VORONOI LOG.')
+        endif ! voronoi_flen.gt.0
+ 6623 format(A,' WILL WRITE VORONOI LOG TO BINARY FILE ',A,'.DAT')
+!
+      endif ! complete voronoi log
+!cccccccccccc replica exchange map cccccccccccccc
+      rex_flen=0
+      if (__INDX_RM(comlyn,comlen,'REXM').gt.0) then
+!       get file name
+        __GET_RM_A(COMLYN,COMLEN,'RXNM',4,rex_fname,80,rex_flen)
+!       check if user specified an custom map (e.g. from an older run)
+        __GET_RM_A(COMLYN,COMLEN,'RXOL',4,rex_fname_old,80,rex_flen_old)
+!
+        if (rex_flen.gt.0) then
+         output_rex_map=.true.
+         if (qprint) then
+          write(_MSGBUF,6721) whoami,rex_fname(1:rex_flen)
+          __PRINT(_MSGBUF) 
+         endif
+         if (rex_flen_old.gt.0) then
+          if (qprint) then
+            write(_MSGBUF,6722) whoami,rex_fname_old(1:rex_flen_old) ; __PRINT(_MSGBUF)
+            rex_funit=-1
+            __OPEN_FILE(rex_funit,rex_fname_old(1:rex_flen_old),'FORMATTED','READ')
+          endif
+          call cv_common_rex_read_map(rex_funit)
+          if (qprint) then ;__CLOSE_FILE(rex_funit, 'KEEP', ierror) ; endif
+         endif
+!
+        else
+          __WRN(whoami,'NO FILE NAME GIVEN. WILL NOT WRITE REPLICA EXCHANGE MAP.')
+        endif
+ 6721 format(A,' WILL WRITE REPLICA EXCHANGE MAP TO FILE ',A,'.MAP')
+ 6722 format(A,' WILL RESTART FROM REPLICA EXCHANGE MAP IN FILE ',A)
+!
+      endif ! replica exchange map
+!cccccccccccccc replica exchange log cccccccccccccccccccccccccccccccccccccccc
+      if (__INDX_RM(comlyn,comlen,'REXL').gt.0) then
+!       get file name
+        if (rex_flen.eq.0) then
+         __GET_RM_A(COMLYN,COMLEN,'RXNM',4,rex_fname,80,rex_flen)
+        endif
+!       check for timestep offset
+        rextime_offset=__GET_RM_I(comlyn, comlen, 'ROFF', 0);
+        if (rextime_offset.gt.0) then
+         if (qprint) then ; write(_MSGBUF,6724) whoami, whoami,rextime_offset ;  __PRINT(_MSGBUF) ; endif
+ 6724 format(A,' WILL OFFSET STEP COUNTER IN REPLICA EXCHANGE LOG BY '  &
+     &       /,A,' ',I10)
+        endif
+!
+        if (rex_flen.gt.0) then
+         output_rex_log=.true.
+         if (qprint) then
+           write(_MSGBUF,6723) whoami,whoami,rex_fname(1:rex_flen)
+           __PRINT(_MSGBUF)
+         endif
+         if (__INDX_RM(comlyn,comlen,'RXAP').gt.0) then ! APPEND?
+           rxlform='APPEND'
+         else
+           rxlform='WRITE'
+         endif ! rxap
+        else
+          __WRN(whoami,'NO FILE NAME GIVEN. WILL NOT WRITE REPLICA EXCHANGE LOG.')
+        endif ! rex_flen.gt.0
+ 6723 format(A,' WILL WRITE REPLICA EXCHANGE LOG TO FILE ',/,           &
+     & A,' ',A,'.DAT')
+!
+      endif ! replica exchange log
+!cccccccccccccccccc process forces output options cccccccccccccccccc
+      if (__INDX_RM(comlyn,comlen,'FORC').gt.0) then
+!       get nergy file name
+        __GET_RM_A(COMLYN,COMLEN,'FCNM',4,forces_fname,80,forces_flen)
+!ccccccccccc print summary
+        if (forces_flen.gt.0) then
+         output_forces=.true.
+         if (qprint) then
+          write(_MSGBUF,6625) whoami,forces_fname(1:forces_flen)
+         __PRINT(_MSGBUF)
+         endif
+         if (__INDX_RM(comlyn,comlen,'FCAP').gt.0) then ! APPEND?
+           fform='APPEND'
+         else
+           fform='WRITE'
+         endif
+        else
+         __WRN(whoami,'NO FILE NAME GIVEN. WILL NOT WRITE AVERAGE FORCE.')
+        endif
+ 6625 format(A,' WILL WRITE AVERAGE FORCE TO FILE ',A,'.')
+      endif ! forces
+!ccccccccccccccccc process M matrix output options ccccccccccccccccc
+      if (__INDX_RM(comlyn, comlen, 'MMAT').gt.0) then
+!
+        __GET_RM_A(COMLYN,COMLEN,'MNAM',4,M_fname,80,M_flen)
+        if (M_flen.gt.0) then
+         output_M=.true.
+         if (qprint) then ; write(_MSGBUF,6626) whoami,M_fname(1:M_flen) ; __PRINT(_MSGBUF) ; endif
+        else
+         __WRN(whoami,'NO FILE NAME GIVEN. WILL NOT WRITE M TENSOR.')
+        endif
+ 6626 format(A,' WILL WRITE SHORT-TERM AVERAGED TENSOR M TO FILE ',A,'.')
+      endif
+!
+#ifdef __CHARMM
+      if (qprint) iolev=oldiol
+#endif
+!      if we got this far, we are probably OK
+      stat_initialized=.true.
+!
+      end subroutine smcv_stat_init
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      subroutine smcv_stat()
+!     output statistics for SMCV
+      use sm_var
+      use sm_config, only: calc_cv_para, calc_Mtensor_para __CHARMM_ONLY , izero, ione, itwo, ithree, ifour
+      use cv_common
+      __DEP_OUTPUT
+      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
+      __DEP_PARSER 
+      __DEP_MPI  ! deal with other platforms later (never)
+      __DEP_NUMBER
+!
+      __IMPNONE
+!
+#include "mpitype.def"
+!
+      int :: ierror, i, ifile, fmt_r_len
+      float :: rmsd0, rmsd0_all(nstring), dsdt, dsdt_all(nstring)
+      float :: mywork, allwork(nstring)
+      character(len=8) :: work_tags(nstring)
+      character(len=80) :: fmt, fmt_real, fmt_int ! format strings for output
+#ifdef __CHARMM
+      int :: oldiol
+#endif
+      __IAM(SMCV_STAT)
+!
+      bool :: qroot, qprint, qgrp
+!
+      interface
+       subroutine smcv_init(maxcv)
+        __IMPNONE
+        int, optional :: maxcv
+       end subroutine smcv_init
+      end interface
+!
+      qroot=MPI_COMM_STRNG.ne.MPI_COMM_NULL
+      qprint=qroot.and.ME_STRNG.eq.0
+      qgrp=MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.SIZE_LOCAL.gt.1
+!
+!     ad hoc fix for REX
+#ifdef __CHARMM
+      if (qprint) then ; oldiol=iolev; iolev=0; endif
+#endif
+!cccccccccccccccccccccc begin ccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+! check if the user has made an initialization call
+      if (.not.smcv_initialized) call smcv_init()
+      if (.not.stat_initialized) then
+       __WRN(whoami,'NO OUTPUT OPTIONS SELECTED. NOTHING DONE')
+       return
+      endif
+!
+      stat_iteration_counter=stat_iteration_counter+1
+!     define number format string for output
+!
+      write(fmt_real,*) nstring
+      fmt_r_len=len(fmt_real)
+      __TRIMA(fmt_real,fmt_r_len)
+!
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      if (output_rmsd0) then
+!      weighting is taken care of in cv_common class
+          rmsd0=cv_common_rmsd(ione,ithree) ! we will keep the initial reference coords in col. 3
+          if (qroot) then
+           if (SIZE_STRNG.gt.1) then 
+__MPI_ONLY  call mpi_gather(rmsd0,1,mpifloat,rmsd0_all,1,mpifloat,0,MPI_COMM_STRNG, ierror)
+           else
+            rmsd0_all=rmsd0
+           endif !size
+          endif ! root 
+          if (qprint) then ! root writes
+           if (rmsd0_funit.eq.__OSTREAM) then
+            fmt='("RMSD0> ",I5," ",'//fmt_real(1:fmt_r_len)//'F15.5)'
+           else
+            rmsd0_funit=-1
+            __OPEN_FILE(rmsd0_funit, rmsd0_fname,'FORMATTED',rform)
+            fmt='(I5," ",'//fmt_real(1:fmt_r_len)//'F15.5)'
+           endif
+           write(rmsd0_funit,fmt) stat_iteration_counter,               &
+     &     (rmsd0_all(i),i=1,nstring)
+!
+           if (rmsd0_funit.ne.__OSTREAM) then
+            __CLOSE_FILE(rmsd0_funit, 'KEEP', ierror)
+           endif
+          endif ! qprint
+          rform='APPEND'
+      endif
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      if (output_dsdt) then
+!      weighting is taken care of in cv_common class
+          dsdt=cv_common_rmsd(ione,itwo) ! we will keep the previous coords in col. 2
+          if (qroot) then 
+           if (SIZE_STRNG.gt.1) then
+__MPI_ONLY  call mpi_gather(dsdt,1,mpifloat,dsdt_all,1,mpifloat,0,MPI_COMM_STRNG, ierror)
+           else
+            dsdt_all=dsdt
+           endif ! size
+          endif ! root
+          if (qprint) then ! root writes
+           if (dsdt_funit.eq.__OSTREAM) then
+            fmt='("DLEN> ",I5," ",'//fmt_real(1:fmt_r_len)//'F15.5)'
+           else
+            dsdt_funit=-1
+            __OPEN_FILE(dsdt_funit, dsdt_fname,'FORMATTED',dform)
+            fmt='(I5," ",'//fmt_real(1:fmt_r_len)//'F15.5)'
+           endif
+           write(dsdt_funit,fmt) stat_iteration_counter,                &
+     &     (dsdt_all(i),i=1,nstring)
+!     flush unit: close and reopen
+           if (dsdt_funit.ne.__OSTREAM) then
+            __CLOSE_FILE(dsdt_funit, 'KEEP', ierror)
+           endif
+          endif ! qprint
+          dform='APPEND'
+      endif
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      if (output_rmsd_ave) then ! rmsd with respect to the running average structure
+!      weighting is taken care of in cv_common class
+!      call to update running average
+          call cv_common_update_ave()
+          rmsd0=cv_common_rmsd(ione,ifour) ! we will keep the average coords in col. 4
+          if (qroot) then 
+           if (SIZE_STRNG.gt.1) then
+__MPI_ONLY  call mpi_gather(rmsd0,1,mpifloat,rmsd0_all,1,mpifloat,0,MPI_COMM_STRNG, ierror)
+           else
+            rmsd0_all=rmsd0
+           endif
+          endif
+          if (qprint) then ! root writes
+           if (rmsd_ave_funit.eq.__OSTREAM) then
+            fmt='("RMSD_AVE> ",I5," ",'//fmt_real(1:fmt_r_len)//'F15.5)'
+           else
+            rmsd_ave_funit=-1
+            __OPEN_FILE(rmsd_ave_funit, rmsd_ave_fname,'FORMATTED',raform)
+            fmt='(I5," ",'//fmt_real(1:fmt_r_len)//'F15.5)'
+           endif
+           write(rmsd_ave_funit,fmt) stat_iteration_counter,            &
+     &     (rmsd0_all(i),i=1,nstring)
+!     flush unit: close and reopen
+           if (rmsd_ave_funit.ne.__OSTREAM) then
+            __CLOSE_FILE(rmsd_ave_funit, 'KEEP', ierror)
+           endif
+          endif ! qprint
+          raform='APPEND'
+      endif
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      if (output_arclength) then
+       if (qprint) then
+         write(fmt_int,'(I5)') stat_iteration_counter
+         if (s_funit.eq.__OSTREAM) then
+          fmt='("ARCL> '//fmt_int(1:5)//' ",'                           &
+     &                  //fmt_real(1:fmt_r_len)//'F15.5)'
+         else
+          s_funit=-1
+          __OPEN_FILE(s_funit, s_fname,'FORMATTED',sform)
+          fmt='("'//fmt_int(1:5)//' ",'//fmt_real(1:fmt_r_len)//'F15.5)'
+         endif
+         call cv_common_print_ds(s_funit, fmt)
+!     flush unit: close and reopen
+         if (s_funit.ne.__OSTREAM) then
+          __CLOSE_FILE(s_funit, 'KEEP', ierror)
+         endif
+!     done
+       endif ! qprint
+       sform='APPEND'
+      endif
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      if (output_curvature) then
+       if (qprint) then
+         write(fmt_int,'(I5)') stat_iteration_counter
+         if (c_funit.eq.__OSTREAM) then
+          fmt='("CURV> '//fmt_int(1:5)//' ",'                           &
+     &                  //fmt_real(1:fmt_r_len)//'F11.5)'
+         else
+          c_funit=-1
+          __OPEN_FILE(c_funit, c_fname,'FORMATTED', cform)
+          fmt='("'//fmt_int(1:5)//' ",'//fmt_real(1:fmt_r_len)//'F11.5)'
+         endif
+         call cv_common_print_curvature(c_funit, fmt)
+!     flush unit: close and reopen
+         if (c_funit.ne.__OSTREAM) then
+          __CLOSE_FILE(c_funit, 'KEEP', ierror)
+!     done
+         endif
+       endif ! qprint
+       cform='APPEND'
+      endif
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      if (output_fe) then
+       if (qprint) then
+         write(fmt_int,'(I5)') stat_iteration_counter
+         if (fe_funit.eq.__OSTREAM) then
+          fmt='("FE> '//fmt_int(1:5)//' ",'                             &
+     &                //fmt_real(1:fmt_r_len)//'F15.5)'
+         else
+          fe_funit=-1
+          __OPEN_FILE(fe_funit, fe_fname,'FORMATTED',feform)
+          fmt='("'//fmt_int(1:5)//' ",'//fmt_real(1:fmt_r_len)//'F15.5)'
+         endif
+         call cv_common_print_feav(fe_funit, fmt)
+!     flush unit: close and reopen
+         if (fe_funit.ne.__OSTREAM) then
+          __CLOSE_FILE(fe_funit, 'KEEP', ierror)
+!     done
+         endif
+       endif ! qprint
+       feform='APPEND'
+      endif
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      if (output_work) then
+!     gather work
+       mywork=cv_common_neq_get_work()
+!     if running in parallel, need to reduce work from slave nodes
+       if (MPI_COMM_LOCAL.ne.MPI_COMM_NULL.and.SIZE_LOCAL.gt.1          &
+     & .and.calc_cv_para) then
+__MPI_ONLY        call MPI_REDUCE(mywork, allwork(1), 1, mpifloat,    &
+__MPI_ONLY     &   MPI_SUM, 0, MPI_COMM_LOCAL, ierror) ! reduce on all group roots
+        mywork=allwork(1)
+       endif
+!    gather work from all nodes into one output buffer
+       if (qroot) then
+        if (SIZE_STRNG.gt.1) then
+__MPI_ONLY  call mpi_gather(mywork, 1, mpifloat, allwork, 1, mpifloat, 0, MPI_COMM_STRNG, ierror)
+__MPI_ONLY  call mpi_gather(work_tag, 8, MPI_BYTE, work_tags, 8, MPI_BYTE, 0, MPI_COMM_STRNG, ierror)
+        else
+         allwork=mywork ; work_tags=work_tag
+        endif
+       endif
+! write
+       if (qprint) then
+         write(fmt_int,'(I5)') stat_iteration_counter
+         if (work_funit.eq.__OSTREAM) then
+          fmt='("WORK> '//fmt_int(1:5)//' ",A8,F15.5)'
+         else
+          work_funit=-1
+          __OPEN_FILE(work_funit, work_fname,'FORMATTED', wkform)
+          fmt='("'//fmt_int(1:5)//' ",A8,F15.5)'
+         endif
+         do i=1,nstring
+          write(work_funit,fmt) work_tags(i), allwork(i)
+         enddo
+!     flush unit: close and reopen
+         if (work_funit.ne.__OSTREAM) then
+          __CLOSE_FILE(work_funit, 'KEEP', ierror)
+         endif
+!     done
+       endif ! qprint
+       wkform='APPEND'
+      endif ! output_work
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      if (output_voronoi_hist) then ! output voronoi data
+        if (voronoi_flen.eq.0) then
+         __WRN(whoami,'NO FILE NAME SPECIFIED. WILL NOT WRITE VORONOI DATA.')
+        else
+         if (qprint) then
+          ifile=-1
+          voronoi_fname(voronoi_flen+1:voronoi_flen+4)='.dat'
+          __OPEN_FILE(ifile,voronoi_fname(1:voronoi_flen+4),'FORMATTED','WRITE')
+          voronoi_fname(voronoi_flen+1:)=''
+         endif
+         call cv_common_print_voro_data(ifile) ! all root processes enter
+         if (qprint) then ; __CLOSE_FILE(ifile,'KEEP',ierror) ; endif
+        endif
+      endif
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      if (output_voronoi_log) then
+       if (voronoi_flen.eq.0) then
+         __WRN(whoami,'NO FILE NAME SPECIFIED. WILL NOT WRITE VORONOI LOG.')
+       else
+         if (qprint) then
+           vlog_funit=-1
+           voronoi_fname(voronoi_flen+1:voronoi_flen+4)='.log'
+           __OPEN_FILE(vlog_funit,voronoi_fname(1:voronoi_flen+4),'UNFORMATTED', vlform)
+           voronoi_fname(voronoi_flen+1:)=''
+         endif
+         vlform='APPEND'
+         if (qroot) call cv_common_voronoi_print_log(vlog_funit)
+!    flush unit:
+         if (qprint) then ; __CLOSE_FILE(vlog_funit,'KEEP',ierror) ; endif
+       endif
+      endif
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      if (output_voronoi_map) then ! output voronoi map
+        if (voronoi_flen.eq.0) then
+         __WRN(whoami,'NO FILE NAME SPECIFIED. WILL NOT WRITE VORONOI MAP.')
+        else
+!    put 'whereami' into the map
+          if (qroot) then 
+           if (SIZE_STRNG.gt.1) then
+__MPI_ONLY       call MPI_ALLGATHER(cv%voronoi_whereami,1,mpiint, &
+__MPI_ONLY     &      cv%voronoi_map,1,mpiint,MPI_COMM_STRNG,ierror)
+           else
+            cv%voronoi_map(mestring+1)=cv%voronoi_whereami
+           endif
+          endif
+!
+          if (qgrp) then
+#ifdef __CHARMM
+           __BROADCAST_LOCAL_4B(cv%voronoi_map,nstring)  !__CHARMM_ONLY##.not.INTEGER8
+           __BROADCAST_LOCAL_8B(cv%voronoi_map,nstring)  !__CHARMM_ONLY##INTEGER8
+#elif defined (__DMOL)
+           __BROADCAST_LOCAL(cv%voronoi_map,nstring,mpiint)
+#endif
+          endif ! qgrp
+!
+         if (qroot) then
+          ifile=-1
+          voronoi_fname(voronoi_flen+1:voronoi_flen+4)='.map'
+          if (qprint) then 
+           __OPEN_FILE(ifile,voronoi_fname(1:voronoi_flen+4), 'FORMATTED','WRITE')
+           voronoi_fname(voronoi_flen+1:)=''
+          endif
+          call cv_common_print_voro_map(ifile)
+          if (qprint) then ; __CLOSE_FILE(ifile,'KEEP',ierror) ; endif
+         endif ! qroot
+        endif
+      endif
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      if (output_rex_map) then ! output replica exchange map
+        if (rex_flen.eq.0) then
+         __WRN(whoami,'NO FILE NAME SPECIFIED. WILL NOT WRITE REPLICA EXCHANGE MAP.')
+        else
+         if (qprint) then
+          rex_funit=-1
+          rex_fname(rex_flen+1:rex_flen+4)='.map'
+          __OPEN_FILE(rex_funit,rex_fname(1:rex_flen+4), 'FORMATTED','WRITE')
+          rex_fname(rex_flen+1:)=''
+!
+          call cv_common_rex_print_map(rex_funit)
+!
+          __CLOSE_FILE(rex_funit,'KEEP',ierror)
+         endif ! qprint
+        endif
+      endif
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      if (output_rex_log) then
+       if (rex_flen.eq.0) then
+         __WRN(whoami,'NO FILE NAME SPECIFIED. WILL NOT WRITE REPLICA EXCHANGE LOG.')
+       else
+        if (qprint) then
+         rex_funit=-1
+         rex_fname(rex_flen+1:rex_flen+4)='.dat' ! append to name
+         __OPEN_FILE(rex_funit,rex_fname(1:rex_flen+4),'FORMATTED', rxlform)
+         rex_fname(rex_flen+1:)='' ! erase extension
+        endif
+        rxlform='APPEND'
+!
+        call cv_common_rex_print_log(rex_funit)
+!    flush unit:
+        if (qprint) then ; __CLOSE_FILE(rex_funit,'KEEP',ierror) ; endif
+       endif
+      endif
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      if (output_cv) then
+        if (qprint) then
+         cv_funit=-1
+         __OPEN_FILE(cv_funit, cv_fname,'FORMATTED', cvform)
+         write(cv_funit,'("% ",I8)') stat_iteration_counter ! % is a MATLAB comment
+        endif
+        cvform='APPEND'
+        call cv_common_print_global(cv_funit)
+!    flush unit:
+        if (qprint) then ; __CLOSE_FILE(cv_funit, 'KEEP', ierror) ; endif
+      endif
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      if (output_cv_hist) then
+        if (qroot) then
+#ifdef __CHARMM
+          cv_hist_funit=-1
+          oldiol=iolev
+          if (cv_hist_qall) iolev=0 ! trick to open file on all nodes
+#endif
+!
+          __OPEN_FILE(cv_hist_funit,cv_hist_fname,'FORMATTED',cvhform)
+!---------------------------- assume file is open, write -------------------------
+          if (cv_hist_qall) then
+           call cv_common_print_hist_local(cv_hist_funit,cv_hist_nskip)
+          else
+           call cv_common_print_hist_global(cv_hist_funit,cv_hist_nskip)
+          endif
+          cvhform='APPEND'
+          __CLOSE_FILE(cv_hist_funit,'KEEP',ierror)
+#ifdef __CHARMM
+          iolev=oldiol
+#endif
+          call cv_common_clear_hist() 
+        endif ! qroot
+      endif
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      if (output_forces) then
+       if (qprint) then
+        forces_funit=-1
+        __OPEN_FILE(forces_funit, forces_fname,'FORMATTED',fform);
+        write(forces_funit,'("% ",I8)') stat_iteration_counter ! % is a MATLAB comment
+       endif
+       fform='APPEND'
+       call cv_common_print_forces(forces_funit)
+!    flush unit:
+       if (qprint) then ; __CLOSE_FILE(forces_funit, 'KEEP', ierror) ; endif
+      endif
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      if (output_wgt) then
+       if (qprint) then
+         wgt_funit=-1
+         __OPEN_FILE(wgt_funit, wgt_fname,'FORMATTED', wgtform);
+         write(wgt_funit,'("% ",I8)') stat_iteration_counter ! % is a MATLAB comment
+         call cv_common_print_wgt(wgt_funit)
+!    flush unit:
+         __CLOSE_FILE(wgt_funit, 'KEEP', ierror)
+       endif
+       wgtform='APPEND'
+      endif
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      if (output_M) then
+!    if running in parallel, combine partial M entries
+       if (qgrp.and.calc_Mtensor_para) then
+!
+! print the short-term average (gather on root)
+! broadcast all rows, but only num_cv columns
+__MPI_ONLY        call MPI_REDUCE(cv%M(1,1,1),cv%M(1,1,2),max_cv_common*cv%num_cv, &
+__MPI_ONLY     &                  mpifloat, MPI_SUM, 0, MPI_COMM_LOCAL, ierror)
+       else ! qgrp
+        cv%M(1:cv%num_cv,1:cv%num_cv,2)=cv%M(1:cv%num_cv,1:cv%num_cv,1)
+       endif ! qgrp
+!
+       if (qroot) then
+        if (M_flen.eq.0) then
+         __WRN(whoami,'NO FILE NAME SPECIFIED. WILL NOT WRITE M TENSOR.')
+        else
+         ifile=-1
+         __OPEN_FILE(ifile, M_fname(1:M_flen), 'FORMATTED', 'WRITE')
+         call cv_common_print_M_global(ifile,IND=2) ! print the short-term average (long-term average by default)
+         __CLOSE_FILE(ifile,'KEEP',ierror)
+        endif ! M_flen
+       endif ! qroot
+      endif ! output_M
+!     ad hoc fix for REX
+#ifdef __CHARMM
+      if (qprint) iolev=oldiol
+#endif
+!
+      end subroutine smcv_stat
+!=========================================================================
+__CHARMM_ONLY##ENDIF
+#endif
+      end module smcv_stats
+!

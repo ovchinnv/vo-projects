@@ -1,6 +1,6 @@
 ROOT=../..
 CVOBJ=cv_posi_com.o cv_dist_com.o cv_angle_com.o cv_anglvec.o cv_dihe_com.o cv_rmsd.o cv_drmsd.o cv_proj.o cv_quaternion.o cv_qcomp.o
-OBJS=cv_types.o cv_common.o cv_frames.o cv_cvrms.o smcv_master.o smcv.o smcv_add.o $(CVOBJ)
+OBJS=cv_types.o cv_common.o cv_frames.o cv_cvrms.o smcv_master.o smcv.o smcv_add.o smcv_stats.o $(CVOBJ)
 NAME=string/smcv
 DEPS=output vectors bestfit constants multicom random lu multidiag parser dynamol parser
 
@@ -22,6 +22,6 @@ cv_posi_com.o cv_quaternion.o: cv_frames.o
 cv_proj.o : cv_drmsd.o
 cv_qcomp.o : cv_quaternion.o
 cv_cvrms.o : $(CVOBJ)
-smcv.o : smcv_master.o cv_frames.o cv_quaternion.o cv_common.o
+smcv.o : smcv_master.o cv_frames.o cv_quaternion.o cv_common.o smcv_stats.o
 smcv_add.o : $(CVOBJ) cv_quaternion.o cv_types.o cv_common.o cv_frames.o cv_cvrms.o
-smcv_master.o : cv_common.o $(CVOBJ) cv_cvrms.o
+smcv_master.o : cv_common.o $(CVOBJ) cv_cvrms.o smcv_stats.o
