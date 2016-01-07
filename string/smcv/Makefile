@@ -16,6 +16,7 @@ include $(COMMON)/Makefile.inc
 
 cv_frames.o : cv_common.o
 cv_common.o smcv_add.o smcv.o : $(COMMON)/sm_config.mod $(COMMON)/sm_var.mod $(COMMON)/mpi_compat_stub.mod $(COMMON)/multicom_serial_string.mod
+cv_common.o : cv_types.o
 
 $(CVOBJ) cv_cvrms.o : cv_types.o cv_common.o
 cv_posi_com.o cv_quaternion.o: cv_frames.o 

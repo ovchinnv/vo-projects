@@ -54,6 +54,9 @@ __CHARMM_ONLY##IF STRINGM
       float, dimension(:), pointer   :: gamma
       float, dimension(:), pointer   :: weight
       float :: wrss ! one over root-sum-square of the weight array
+! 2016 : for flat-bottom potential
+      float, dimension(:), pointer :: fbwidth ! width of flat-bottom (fb) region of harmonic potential
+      int, dimension(:), pointer :: num_fb_ave ! number of averages in the fb region of the potential
       int :: num_cv=0 ! number of active collective vars
       int :: num_hist=0 ! number of snapshots in the history
       int :: beg_hist=1 ! index in the history that corresponds to the oldest snapshot (first)
@@ -123,6 +126,7 @@ __CHARMM_ONLY##IF STRINGM
       public cv_common_set_w  ! set weight
       public cv_common_set_active  ! set active flag
       public cv_common_set_g  ! set gamma
+      public cv_common_set_fbwidth  ! set width of the flat-bottom region of potential
       public cv_common_set_dt  ! set default timestep
       public cv_common_set_r  ! set collective variable value
       public cv_common_print_curvature ! print out curvature
@@ -204,9 +208,10 @@ __CHARMM_ONLY##IF STRINGM
      &                              instant=9,                          & ! (instantaneous) theta(x)
      &                              previnst=10,                        & ! previous value of (instantaneous) theta(x)
      &                              forces=11,                          & ! average forces on z (dF/dz) for evolution
-     &                              forces2=12 ! instantaneous forces (not used for evolution)
+     &                              forces2=12,                         & ! instantaneous forces (not used for evolution)
+     &                              fbave=13                              ! average conditional on flat-bottom region of potential
 !
-      int, parameter, public :: main_offset=12 ! num of parameters above
+      int, parameter, public :: main_offset=13 ! num of parameters above
 !
       character(len=8), parameter, public :: real_format='(E23.15)'
       character(len=5), parameter, public :: int_format='(I10)'
@@ -263,6 +268,8 @@ __CHARMM_ONLY##IF STRINGM
         allocate(cv%active(max_cv_common))
         allocate(cv%k(max_cv_common))
         allocate(cv%gamma(max_cv_common))
+        allocate(cv%fbwidth(max_cv_common))
+        allocate(cv%num_fb_ave(max_cv_common))
         allocate(cv%weight(max_cv_common))
         allocate(cv%ds(nrep-1))
         allocate(cv%curvature(nrep-2))
@@ -279,6 +286,7 @@ __CHARMM_ONLY##IF STRINGM
         cv%kpara=0d0
         cv%kperp=0d0
         cv%gamma=0d0
+        cv%fbwidth=zero
         cv%weight=0d0 ! need to be initialized by user
         cv%ds=0d0
         cv%curvature=0d0
@@ -288,11 +296,12 @@ __CHARMM_ONLY##IF STRINGM
         cv%work=0d0
         cv%num_average_samples=0
         cv%num_fe_samples=0
+        cv%num_fb_ave=0
        endif
        end subroutine cv_common_init
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_done()
-       
+!
        int :: i
        cv%num_cv=0
        call cv_common_clear_hist()
@@ -309,17 +318,14 @@ __CHARMM_ONLY##IF STRINGM
         endif
 !
         do i=1, max_cv_common
-         if (associated(cv%priv(i)%p))                                  &
-     &     deallocate(cv%priv(i)%p) ! free private memory
-         if (associated(cv%priv(i)%amap_ptr))                           &
-     &     deallocate(cv%priv(i)%amap_ptr) ! free pointer array to atom map
-         if (associated(cv%priv(i)%pr))                                 &
-     &     deallocate(cv%priv(i)%pr) ! free private memory
+         __FREE(cv%priv(i)%p)
+         __FREE(cv%priv(i)%amap_ptr)
+         __FREE(cv%priv(i)%pr)
         enddo
         call int_vlist_done(cv%amap) ! deallocate amap if necessasry
 !
         deallocate(cv%M)
-        if (associated(cv%grad)) deallocate(cv%grad)
+        __FREE(cv%grad)
         nullify(cv%gradx)
         nullify(cv%grady)
         nullify(cv%gradz)
@@ -331,6 +337,8 @@ __CHARMM_ONLY##IF STRINGM
         deallocate(cv%k)
         deallocate(cv%gamma)
         deallocate(cv%weight)
+        deallocate(cv%fbwidth)
+        deallocate(cv%num_fb_ave)
         deallocate(cv%ds)
         deallocate(cv%curvature)
         deallocate(cv%fe)
@@ -348,13 +356,12 @@ __CHARMM_ONLY##IF STRINGM
        endif
        end subroutine cv_common_done
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       function cv_common_add(k,gamma,weight,type)
+       function cv_common_add(type,k,gamma,weight,fbwidth)
       __DEP_OUTPUT
       __DEP_NUMBER 
-      
 !
        int :: type
-       float, optional :: k, gamma, weight
+       float, optional :: k, gamma, weight, fbwidth
 !      locals
        int j
        int cv_common_add ! returns index into cv array
@@ -368,16 +375,17 @@ __CHARMM_ONLY##IF STRINGM
         cv%r(j,:)=__NAN ! undefined value
         cv%r(j,runave)=0d0    ! not strictly necessary, but cleaner when CVs include angles which need to be averaged
         cv%r(j,previnst)=0d0  !
+        cv%r(j,fbave)=__NAN   !
 !
         cv%k(j)=0d0
         if (present(k)) then
-         if (k.ge.0d0) then  ! negative k are ignored
+         if (k.ge.zero) then  ! negative k are ignored
           cv%k(j)=k
          endif
         endif
 !
         if (present(gamma)) then
-         if (gamma.gt.0d0) then
+         if (gamma.gt.zero) then
           cv%gamma(j)=1d0/gamma; ! disallow zero
          else
           __WRN(whoami,'NONPOSITIVE GAMMA SPECIFIED. WILL RESET TO 1.0.')
@@ -387,9 +395,20 @@ __CHARMM_ONLY##IF STRINGM
          cv%gamma(j)=1d0;
         endif
 !
+        if (present(fbwidth)) then
+         if (fbwidth.ge.zero) then
+          cv%fbwidth(j)=fbwidth
+         else
+          __WRN(whoami,'NEGATIVE WIDTH OF FLAT-BOTTOM POTENTIAL SPECIFIED. WILL SET TO ZERO.')
+          cv%fbwidth(j)=zero;
+         endif
+        else
+         cv%fbwidth(j)=zero;
+        endif
+!
         cv%weight(j)=0d0
         if (present(weight)) then
-         if (weight.gt.0d0) then  ! negative weights are ignored
+         if (weight.gt.zero) then  ! negative weights are ignored
           cv%weight(j)=weight
          endif
         endif
@@ -2184,18 +2203,36 @@ __CHARMM_ONLY##ENDIF
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_set_kperp(k)
        __DEP_OUTPUT
-       
+!
        float :: k
 !
        __IAM(CV_COMMON_SET_KPERP)
        if (k.lt.0d0) &
-     & __WRN(whoami,' NEGATIVE FORCE CONSTANT SPECIFIED. NOTHING DONE.')
+     & __WRN(whoami,' NEGATIVE FORCE CONSTANT SPECIFIED. YOU HAVE BEEN WARNED.')
        cv%kperp=k
        cv_common_kperp_initialized=.true.
        end subroutine cv_common_set_kperp
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       subroutine cv_common_set_fbwidth(i,dw)
+       __DEP_OUTPUT
+       __DEP_NUMBER
+!
+       int :: i
+       float :: dw
+!
+       __IAM(CV_COMMON_SET_FBWIDTH)
+!
+       if (i.gt.0.and.i.le.cv%num_cv) then
+        if (dw.lt.zero) then
+          __WRN(whoami,' NEGATIVE WIDTH FLAT-BOTTOM REGION OF RESTRAINT SPECIFIED. NOTHING DONE.')
+        else
+         cv%fbwidth(i)=dw
+        endif
+       endif
+       end subroutine cv_common_set_fbwidth
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_set_g(i,gamma)
-       
+!
        int :: i
        float :: gamma
 !
