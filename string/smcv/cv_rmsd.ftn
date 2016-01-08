@@ -20,7 +20,7 @@ __CHARMM_ONLY##IF PARALLEL
 !
       contains
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       function cv_rmsd_add(ind_o,ind_f,r_o,r_f,ow,fw,k,gamma,weight) ! note: i is the atom index in the PSF
+       function cv_rmsd_add(ind_o,ind_f,r_o,r_f,ow,fw,k,gamma,weight) result(l) ! note: i is the atom index in the PSF
        use cv_types
        __DEP_OUTPUT
 !
@@ -30,10 +30,12 @@ __CHARMM_ONLY##IF PARALLEL
 !      locals
        int :: i, j, l, m, ind, num_int, norient, nforced, num_real, &
      &  qdiffrot ! qdiffrot indicates that derivatives of rotation matrix need not be computed (oset=fset; ow=fw)
-       bool :: found, cv_rmsd_add
+       bool :: found
        type (int_vector) :: unique_amap_ptr ! contains a unique list of atom map pointers (to speed up gradient computation, etc)
 !
        __IAM(CV_RMSD_ADD)
+!
+       l=0
 !
        if (.not.(associated(r_o).and.                                   &
      &           associated(r_f).and.                                   &
@@ -42,7 +44,6 @@ __CHARMM_ONLY##IF PARALLEL
      &           associated(ow).and.                                    &
      &           associated(fw))) then
         __WRN(whoami, ' UNALLOCATED POINTER ARRAY. ABORT.')
-        cv_rmsd_add=.false.
         return
        endif
        norient=size(ind_o)
@@ -78,7 +79,7 @@ __CHARMM_ONLY##IF PARALLEL
         if (found) exit
        enddo
 !
-       if (.not.found) then ! (if found -- do nothing)
+       if (.not.found) then
         l=__CV_COMMON_ADD(rmsd)
         if  (l.gt.0) then
 !     allocate private data
@@ -138,8 +139,6 @@ __CHARMM_ONLY##IF PARALLEL
            ind=ind+1
           enddo
 !
-         cv_rmsd_add=.true.
-!
          m=unique_amap_ptr%last ! number of unique atoms this cv depends on
          allocate(cv%priv(l)%amap_ptr(m+1)) ! add one to include length of list
          cv%priv(l)%amap_ptr(1)=m;
@@ -149,11 +148,10 @@ __CHARMM_ONLY##IF PARALLEL
 !
         else ! out of bounds
          __WRN( whoami,' ERROR ADDING RMSD CV. NOTHING DONE.')
-         cv_rmsd_add=.false.
         endif
        else ! found
          __WRN( whoami,' RMSD CV ALREADY PRESENT. NOTHING DONE.')
-         cv_rmsd_add=.false.
+         l=0
        endif
 !
        end function cv_rmsd_add
@@ -388,6 +386,8 @@ __CHARMM_ONLY##IF PARALLEL
 !      NOTE that the forces calculated here are NOT acting on the CV, as in
 !      the evolution subroutine, but on the simulation atoms
        d=cv%r(i,zcur)-theta ! zcur contains reference coords (combination of main+comp)
+! FB modification (FB statistics updated outside):
+       d=max(zero, d - cv%fbwidth(i)) + min(zero, d + cv%fbwidth(i))
 !
        f=cv%k(i)*d !    note that f is not divided by 1/sqrt(mass)
        cv%r(i,forces2)=f

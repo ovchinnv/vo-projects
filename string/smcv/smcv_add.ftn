@@ -2,15 +2,23 @@
 ! THIS FILE CONTAINS ROUTINES FOR ADDING NEW CV
 ! THERE IS A SEPARATE ROUTINE FOR EACH CV TYPE
 !
+      module smcv_add
+!
 #if (defined(__CHARMM) || defined(__PARALLEL) )
 __CHARMM_ONLY##IF STRINGM
+!
+      __IMPNONE
+      private
+      public smcv_add_cv
+      public smcv_frame_add
+!
+      contains
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccc
-      subroutine smcv_add(COMLYN,COMLEN)
+      subroutine smcv_add_cv(COMLYN,COMLEN)
       use cv_types
       use cv_common
       use cv_quaternion, only: quat_initialized, quat, quat_init
-      use sm_config, only: qt_send_displ, qt_send_count,                &
-     &                     imap_displ, imap_count
+      use sm_config, only: qt_send_displ, qt_send_count, imap_displ, imap_count
 !
       __DEP_OUTPUT
       __DEP_PARSER
@@ -22,16 +30,19 @@ __CHARMM_ONLY##IF STRINGM
       character(len=*) :: COMLYN
       int :: COMLEN
 !    local
-      int i, j, k, ind
+      int :: i, j, k, ind_
       bool :: qfbwidth
+      float :: fbwidth
       character(len=20) :: keyword
       __IAM(SMCV_ADD)
 !
       keyword=__NEXTLONGA(comlyn,comlen)  ! directive
+!
+      ind_=0
 ! preprocessor tricks to simplify code
       qfbwidth=.true. ! whether to ckeck for flat-bottom width specification after default add
       if (.false.) then ! note that the statements below _WILL_ be executed
-#define __TRY(__WHAT) elseif (__STRNCMP(keyword,__STRING(__WHAT),len(__STRING(__WHAT)))) then;ind=__CONCAT3(smcv_,__WHAT,_add)(__ADD_ARGS)
+#define __TRY(__WHAT) elseif (__STRNCMP(keyword,__STRING(__WHAT),len(__STRING(__WHAT)))) then;ind_=__CONCAT3(smcv_,__WHAT,_add)(__ADD_ARGS)
 #define __ADD_ARGS comlyn, comlen
 #define smcv_POSI_COM_X_add(__1,...) smcv_posi_com_add(__1, posi_com_x)
 #define smcv_POSI_COM_Y_add(__1,...) smcv_posi_com_add(__1, posi_com_y)
@@ -43,11 +54,11 @@ __CHARMM_ONLY##IF STRINGM
       __TRY(POSI_COM_Y)
       __TRY(POSI_COM_Z)
       __TRY(DIHE_COM)
-!      __TRY(ANGLE_COM)
+      __TRY(ANGLE_COM)
       __TRY(ANGLVEC)
       __TRY(DIST_COM)
       __TRY(FRAME)      ; qfbwidth=.false.
-      __TRY(QUATERNION) ; qfbwidth=.false.
+      __TRY(QUATERNION) ; qfbwidth=.false. ; ! this need not be in principle, but I struggle to envision a physical scenario in which it is useful; maybe later
 ! more quaternion-related code :
 !     (re)compute quaternion index limits (for parallelization) after each addition
 !
@@ -76,16 +87,20 @@ __CHARMM_ONLY##IF STRINGM
         __WARN(whoami,'UNRECOGNIZED CV TYPE: ',keyword)
       endif
 !
-      if (qfbwidth.and.ind.gt.0) then
-       fbwidth=__GET_RM_F(comlyn, comlen, 'FBWIDTH', 0.0d0)   ! can specify force constant manually
-       call cv_common_set_fbwidth(ind,fbwidth)
+      if (ind_.gt.0) then
+       if (qfbwidth) then
+        fbwidth=__GET_RM_F(comlyn, comlen, 'FBWIDTH', 0.0d0)   ! can specify force constant manually
+        call cv_common_set_fbwidth(ind_,fbwidth)
+       else
+        __WRN(whoami, 'FLAT-BOTTOM POTENTIALS ARE NOT SUPPORTED FOR CV '//trim(cv_type_names(cv%type(ind_)))//'. NOTHING DONE')
+       endif
       endif
 !
-      end subroutine smcv_add
+      end subroutine smcv_add_cv
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 !cccccccccccccccccccc CV-SPECIFIC CODE ccccccccccccccccccccccccccccccccccccccccccccccc
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-      subroutine smcv_posi_com_add(comlyn, comlen, cvtype)
+      function smcv_posi_com_add(comlyn, comlen, cvtype) result(ind)
       use cv_posi_com
       use cv_types
       use ivector
@@ -112,8 +127,7 @@ __CHARMM_ONLY##IF STRINGM
  __DECLARE_DMOL_SELECT
 #endif
 !
-      int :: i, j, nslct
-      bool :: ok
+      int :: i, j, nslct, ind
       float :: k, gam, w
       int :: frame
       type (int_vector) :: posi_com_list ! for storing atom indices
@@ -136,6 +150,7 @@ __CHARMM_ONLY##IF STRINGM
       gam=__GET_RM_F(comlyn, comlen, 'GAMM', 1.0d0) ! friction coefficient
       frame=__GET_RM_I(comlyn, comlen, 'FRAM', 0) ! coordinate frame index for this position variable
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      ind=0
 !     now process atom selections;
 !     expecting 1 atom group
 #ifdef __CHARMM
@@ -202,16 +217,16 @@ __CHARMM_ONLY##IF STRINGM
      & ' WEIGHT =',F7.3,' AND GAMMA =',F7.3)
 !
 !       now attempt to add CV
-      ok=cv_posi_com_add(cvtype,posi_com_list,k,gam,w,max(frame,0)) ! no mass weighting; disallow negative frame indices
-      if (.not.ok) then
+      ind=cv_posi_com_add(cvtype,posi_com_list,k,gam,w,max(frame,0)) ! no mass weighting; disallow negative frame indices
+      if (ind.le.0) then
        __WRN(whoami,'COULD NOT ADD CV')
       endif
 !     deallocate lists
       call int_vector_done(posi_com_list)
 !     done!
-      end subroutine smcv_posi_com_add
+      end function smcv_posi_com_add
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-      subroutine smcv_dihe_com_add(comlyn, comlen)
+      function smcv_dihe_com_add(comlyn, comlen) result(ind)
       use cv_dihe_com
       use ivector
 !
@@ -236,8 +251,7 @@ __CHARMM_ONLY##IF STRINGM
 #endif
  __DECLARE_MSGBUF
 !
-      int :: i, j, atom_group, nslct
-      bool :: ok
+      int :: i, j, atom_group, nslct, ind
       float :: k, gam, w
       type (int_vector), dimension(4) :: dihe_com_list ! for storing atom indices
 !
@@ -249,6 +263,7 @@ __CHARMM_ONLY##IF STRINGM
       w=__GET_RM_F(comlyn, comlen, 'WEIG', -1.0d0)  ! can specify weight manually
       gam=__GET_RM_F(comlyn, comlen, 'GAMM', 1.0d0) ! friction coeff.
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      ind=0
 !     now process atom selections;
 !     expecting 4 atom selections that specify each atom group in succession;
 !     process each selection sequentially
@@ -314,14 +329,14 @@ __CHARMM_ONLY##IF STRINGM
      & ' WEIGHT =',F7.3,' AND GAMMA =',F7.3)
 !
 !       now attempt to add CV
-      ok=cv_dihe_com_add(dihe_com_list,k,gam,w) ! no mass weighting
-      if (.not.ok) then
+      ind=cv_dihe_com_add(dihe_com_list,k,gam,w) ! no mass weighting
+      if (ind.le.0) then
        __WRN(whoami,'COULD NOT ADD CV')
       endif
 !     deallocate lists
       do i=1,4; call int_vector_done(dihe_com_list(i)); enddo
 !     done!
-      end subroutine smcv_dihe_com_add
+      end function smcv_dihe_com_add
 !
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       function smcv_angle_com_add(comlyn, comlen) result(ind)
@@ -361,6 +376,7 @@ __CHARMM_ONLY##IF STRINGM
       w=__GET_RM_F(comlyn, comlen, 'WEIG', -1.0d0)  ! can specify weight manually
       gam=__GET_RM_F(comlyn, comlen, 'GAMM', 1.0d0) ! friction
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      ind=0
 !     now process atom selections;
 !     expecting 3 atom selections that specify each atom group in succession;
 !     process each selection sequentially
@@ -432,7 +448,7 @@ __CHARMM_ONLY##IF STRINGM
       end function smcv_angle_com_add
 !
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-      subroutine smcv_dist_com_add(comlyn, comlen)
+      function smcv_dist_com_add(comlyn, comlen) result(ind)
       use cv_dist_com
       use ivector
       __DEP_OUTPUT
@@ -457,8 +473,7 @@ __CHARMM_ONLY##IF STRINGM
  __DECLARE_DMOL_SELECT
 #endif
 !
-      int :: i, j, atom_group, nslct
-      bool :: ok
+      int :: i, j, atom_group, nslct, ind
       float :: k, gam, w
       type (int_vector), dimension(2) :: dist_com_list ! for storing atom indices
 !
@@ -470,6 +485,7 @@ __CHARMM_ONLY##IF STRINGM
       w=__GET_RM_F(comlyn, comlen, 'WEIG', -1.0d0)  ! can specify weight manually
       gam=__GET_RM_F(comlyn, comlen, 'GAMM', 1.0d0) ! friction coeff.
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      ind=0
 !     now process atom selections;
 !     expecting 2 atom selections that specify each atom group in succession;
 !     process each selection sequentially
@@ -534,17 +550,17 @@ __CHARMM_ONLY##IF STRINGM
      & ' WEIGHT =',F7.3,' AND GAMMA =',F7.3)
 !
 !       now attempt to add CV
-      ok=cv_dist_com_add(dist_com_list,k,gam,w) ! no mass weighting
-      if (.not.ok) then
+      ind=cv_dist_com_add(dist_com_list,k,gam,w) ! no mass weighting
+      if (ind.le.0) then
        __WRN(whoami,'COULD NOT ADD CV')
       endif
 !     deallocate lists
       do i=1,2; call int_vector_done(dist_com_list(i)); enddo
 !     done!
-      end subroutine smcv_dist_com_add
+      end function smcv_dist_com_add
 !
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-      subroutine smcv_anglvec_add(comlyn, comlen)
+      function smcv_anglvec_add(comlyn, comlen) result(ind)
       use cv_anglvec
       use ivector
       __DEP_OUTPUT
@@ -571,8 +587,7 @@ __CHARMM_ONLY##IF STRINGM
  __DECLARE_DMOL_SELECT
 #endif
 !
-      int :: i, ipt, j, l, nslct
-      bool :: ok
+      int :: i, ipt, j, l, nslct, ind
       float :: k, gam, w
       type (int_vector), dimension(4) :: atom_list ! for storing atom indices
       int :: f1, f2
@@ -587,6 +602,7 @@ __CHARMM_ONLY##IF STRINGM
       w=__GET_RM_F(comlyn, comlen, 'WEIG', -1.0d0)  ! can specify weight manually
       gam=__GET_RM_F(comlyn, comlen, 'GAMM', 1.0d0) ! friction
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      ind=0
 !    check for frame specification, so that comlyn is cleaned up
       f1=__GET_RM_I(comlyn, comlen,'FR1',0)
       f2=__GET_RM_I(comlyn, comlen,'FR2',0)
@@ -680,18 +696,17 @@ __CHARMM_ONLY##IF STRINGM
      & ' WEIGHT =',F7.3,' AND GAMMA =',F7.3)
 !
 !       now attempt to add CV
-      ok=cv_anglvec_add(atom_list,p,f1,f2,k,gam,w) ! no mass weighting
-      if (.not.ok) then
+      ind=cv_anglvec_add(atom_list,p,f1,f2,k,gam,w) ! no mass weighting
+      if (ind.le.0) then
        __WRN(whoami,'COULD NOT ADD CV')
       endif
 !     deallocate lists
       do i=1,4; call int_vector_done(atom_list(i)); enddo
 !     done!
-      end subroutine smcv_anglvec_add
-!
+      end function smcv_anglvec_add
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccc
 !    'frame' is not really a CV but processed here for convenience
-      subroutine smcv_frame_add(comlyn, comlen)
+      function smcv_frame_add(comlyn, comlen) result(ind)
       use cv_frames
       use ivector
       __DEP_OUTPUT
@@ -713,8 +728,7 @@ __CHARMM_ONLY##IF STRINGM
 #elif defined(__DMOL)
  __DECLARE_DMOL_SELECT
 #endif
-      int :: i, j, nslct
-      bool :: ok
+      int :: i, j, nslct, ind
       type (int_vector) :: frame_list ! for storing atom indices
 !
       __IAM(SMCV_FRAME_ADD)
@@ -774,16 +788,16 @@ __CHARMM_ONLY##IF STRINGM
 !
   665 format(/A,' WILL ADD NEW REFERENCE FRAME')
 !       now attempt to add frame
-      ok=(frames_add(frame_list).gt.0) !
-      if (.not.ok) then
+      ind=frames_add(frame_list)
+      if (ind.le.0) then
        __WRN(whoami,'COULD NOT ADD FRAME.')
       endif
 !     deallocate lists
       call int_vector_done(frame_list)
 !     done!
-      end subroutine smcv_frame_add
+      end function smcv_frame_add
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccc
-      subroutine smcv_quaternion_add(comlyn, comlen)
+      function smcv_quaternion_add(comlyn, comlen) result(ind)
       use cv_qcomp
       use cv_types
       __DEP_OUTPUT
@@ -799,9 +813,8 @@ __CHARMM_ONLY##IF STRINGM
       int :: comlen
 !    locals
       __STRING_PAR(cv_name,QUATERNION)
-      bool :: ok
       float :: k, gam, w
-      int :: f1, f2
+      int :: f1, f2, ind
 !
       __IAM(SMCV_QUATERNION_ADD)
 !
@@ -813,6 +826,7 @@ __CHARMM_ONLY##IF STRINGM
       f1=__GET_RM_I(comlyn, comlen, 'FRA1', 0) ! coordinate frame index 1
       f2=__GET_RM_I(comlyn, comlen, 'FRA2', 0) ! coordinate frame index 2
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      ind=0
 !     print short summary
       if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.ME_STRNG.eq.0) then
 !
@@ -845,18 +859,18 @@ __CHARMM_ONLY##IF STRINGM
      & ' WEIGHT =',F7.3,' AND GAMMA =',F7.3)
 !
 !       now attempt to add quaternion components, one by one:
-      ok=   cv_qcomp_add(qcomp_1, f1, f2, k, gam, w)                    &
-     & .and.cv_qcomp_add(qcomp_2, f1, f2, k, gam, w)                    &
-     & .and.cv_qcomp_add(qcomp_3, f1, f2, k, gam, w)                    &
-     & .and.cv_qcomp_add(qcomp_4, f1, f2, k, gam, w)
+      ind=min(cv_qcomp_add(qcomp_1, f1, f2, k, gam, w),                  &
+     &        cv_qcomp_add(qcomp_2, f1, f2, k, gam, w),                  &
+     &        cv_qcomp_add(qcomp_3, f1, f2, k, gam, w),                  &
+     &        cv_qcomp_add(qcomp_4, f1, f2, k, gam, w))
 !
-      if (.not.ok) then
+      if (ind.le.0) then
        __WRN(whoami,'COULD NOT ADD QUATERNION CV')
       endif
 !     done!
-      end subroutine smcv_quaternion_add
+      end function smcv_quaternion_add
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-      subroutine smcv_cvrms_add(comlyn, comlen)
+      function smcv_cvrms_add(comlyn, comlen) result(ind)
 !     this CV is an RMS combination of existing CV; experimental and not fully implemented (intented for steered dynamics)
       use cv_cvrms
       use parselist
@@ -872,7 +886,7 @@ __CHARMM_ONLY##IF STRINGM
       int :: comlen
 !    locals
       __STRING_PAR(cv_name, CVRMS)
-      bool :: ok
+      int :: ind
       float :: k, gam, w
       type (int_vector) :: cv_list ! for storing cv indices used to calculate RMS
 !
@@ -884,6 +898,7 @@ __CHARMM_ONLY##IF STRINGM
       w=__GET_RM_F(comlyn, comlen, 'WEIG', -1.0d0)  ! can specify weight manually
       gam=__GET_RM_F(comlyn, comlen, 'GAMM', 1.0d0) ! friction coeff.
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      ind=0
 ! specify cv to use in the RMS definition
       call ilist_parse(cv_list, comlyn) ! will return allocated cv_list with the indices
 !
@@ -903,28 +918,28 @@ __CHARMM_ONLY##IF STRINGM
      & ' WEIGHT =',F8.3,' AND GAMMA =',F8.3)
 !
 !       now attempt to add CV
-      ok=cv_cvrms_add(cv_list,k,gam,w) ! no mass weighting
-      if (.not.ok) then
+      ind=cv_cvrms_add(cv_list,k,gam,w) ! no mass weighting
+      if (ind.le.0) then
        __WRN(whoami,'COULD NOT ADD CV')
       endif
 !     deallocate list
       call int_vector_done(cv_list)
 !     done!
-      end subroutine smcv_cvrms_add
+      end function smcv_cvrms_add
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-      subroutine smcv_rmsd_add(comlyn, comlen, cvtype)
+      function smcv_rmsd_add(comlyn, comlen, cvtype) result(ind)
 !     much of the code taken from RTMD sources in ../misc
       use cv_rmsd, only : cv_rmsd_add
       use cv_drmsd, only : cv_drmsd_add
       use cv_proj, only : cv_proj_add
       use cv_types
       __DEP_OUTPUT
-      __DEP_SIZE 
-      __DEP_COORDINATES 
-      __DEP_PARSER 
-      __DEP_NUMBER 
+      __DEP_SIZE
+      __DEP_COORDINATES
+      __DEP_PARSER
+      __DEP_NUMBER
       __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
-      __DEP_MPI 
+      __DEP_MPI
       __DEP_SELECT
 !
       __IMPNONE
@@ -933,14 +948,14 @@ __CHARMM_ONLY##IF STRINGM
       int :: cvtype
 !    locals
       character(len=5) :: cv_name
-      bool :: ok, oset
+      bool :: oset
       float :: k, gam, w, rtarget_com(3)
 !
       float, pointer :: rtarget_o(:,:), rtarget_f(:,:),                &
      &                  rtarget1_o(:,:), rtarget1_f(:,:),              &
      &                  orientWeights(:), forcedWeights(:)
       int, pointer :: iatom_o(:), iatom_f(:)
-      int :: norient, nforced
+      int :: norient, nforced, ind
 !
 #ifdef __CHARMM
       int :: iselct(natom), jselct(natom)
@@ -957,6 +972,8 @@ __CHARMM_ONLY##IF STRINGM
       bool :: use_main, use_comp, qroot, qmass, qtwo ! qtwo: true if using two target structures
 !
       __IAM(SMCV_RMSD_ADD)
+!
+      ind=0
 !
       select case (cvtype)
        case(rmsd ); cv_name='RMSD '; qtwo=.false.
@@ -1310,25 +1327,25 @@ __CHARMM_ONLY##IF STRINGM
 !
       endif ! qroot
 !       now attempt to add CV
-      ok=.false.
+      ind=0
       select case(cvtype)
        case(rmsd);
-        ok=cv_rmsd_add(iatom_o, iatom_f, rtarget_o, rtarget_f,          &
+        ind=cv_rmsd_add(iatom_o, iatom_f, rtarget_o, rtarget_f,          &
      &               orientWeights, forcedWeights,                      &
      &               k, gam, w)
        case(drmsd);
-        ok=cv_drmsd_add(iatom_o, iatom_f, rtarget_o, rtarget_f,         &
+        ind=cv_drmsd_add(iatom_o, iatom_f, rtarget_o, rtarget_f,         &
      &               rtarget1_o, rtarget1_f,                            &
      &               orientWeights, forcedWeights,                      &
      &               k, gam, w)
        case(proj);
-        ok=cv_proj_add(iatom_o, iatom_f, rtarget_o, rtarget_f,          &
+        ind=cv_proj_add(iatom_o, iatom_f, rtarget_o, rtarget_f,          &
      &               rtarget1_o, rtarget1_f,                            &
      &               orientWeights, forcedWeights,                      &
      &               k, gam, w)
       end select
 !
-      if (.not.ok) then
+      if (ind.le.0) then
        __WRN(whoami,'COULD NOT ADD CV')
       endif
 !     deallocate variables
@@ -1336,7 +1353,8 @@ __CHARMM_ONLY##IF STRINGM
      &           orientWeights, forcedWeights)
       if (qtwo) deallocate(rtarget1_o, rtarget1_f)
 !
-      end subroutine smcv_rmsd_add
+      end function smcv_rmsd_add
 !
 __CHARMM_ONLY##ENDIF
 #endif
+      end module smcv_add

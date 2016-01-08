@@ -23,6 +23,6 @@ cv_posi_com.o cv_quaternion.o: cv_frames.o
 cv_proj.o : cv_drmsd.o
 cv_qcomp.o : cv_quaternion.o
 cv_cvrms.o : $(CVOBJ)
-smcv.o : smcv_master.o cv_frames.o cv_quaternion.o cv_common.o smcv_stats.o
+smcv.o : smcv_master.o cv_frames.o cv_quaternion.o cv_common.o smcv_stats.o smcv_add.o $(COMMON)/ftsm/ftsm_var.mod
 smcv_add.o : $(CVOBJ) cv_quaternion.o cv_types.o cv_common.o cv_frames.o cv_cvrms.o
 smcv_master.o : cv_common.o $(CVOBJ) cv_cvrms.o smcv_stats.o

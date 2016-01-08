@@ -23,7 +23,7 @@ __CHARMM_ONLY##IF STRINGM
 !
       contains
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       function cv_qcomp_add(type,fr1,fr2,k,gamma,weight) ! note: i is the atom index in the PSF
+       function cv_qcomp_add(type,fr1,fr2,k,gamma,weight) result(l) ! note: i is the atom index in the PSF
        __DEP_OUTPUT
  __DECLARE_MSGBUF
        int :: type, fr1, fr2
@@ -32,12 +32,13 @@ __CHARMM_ONLY##IF STRINGM
        int :: i, j, l
        int :: f1, f2, ii, jj, ncomf
        int, pointer :: indf(:)
-       bool :: found, cv_qcomp_add
+       bool :: found
        character(len=1) :: pos
 !
        __IAM(CV_QCOMP_ADD)
 !
 !    check that input options are valid
+       l=0
 !cccccccccccccccc  check frame indices ccccccccccccccccccccccccccccccccc
        if (fr1.ge.0.and.fr1.le.frames%num_frames) then
         f1=fr1
@@ -84,17 +85,15 @@ __CHARMM_ONLY##IF STRINGM
          j=quat_add(f1, f2)
          if  (j.eq.0) then
           __WRN( whoami,' COULD NOT ADD QUATERNION. NOTHING DONE.')
-          cv_qcomp_add=.false.
           return
          endif
        endif
 !    check for duplicate CV (exact identical entry only)
        found=.false.
-       do l=1, cv%num_cv
-        if (cv%type(l).eq.type) then
-         if (j.eq.cv%priv(l)%p(1)) then
-    __WARN( whoami,' QUAT_',pos,'CV ALREADY PRESENT. NOTHING DONE.')
-            cv_qcomp_add=.false.
+       do i=1, cv%num_cv
+        if (cv%type(i).eq.type) then
+         if (j.eq.cv%priv(i)%p(1)) then
+            __WRN( whoami,' QUAT_'//pos//' CV ALREADY PRESENT. NOTHING DONE.')
             return
          endif
         endif
@@ -130,15 +129,15 @@ __CHARMM_ONLY##IF STRINGM
           deallocate(indf)
         endif
 !****************************************************************************************
-        cv_qcomp_add=.true.
        else ! out of bounds
         __WARN( whoami,' ERROR ADDING QCOMP_',pos,'CV. NOTHING DONE.')
-        cv_qcomp_add=.false.
        endif
        end function cv_qcomp_add
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_qcomp_calc(i,x,y,z,mass,fx,fy,fz,                  &
      &                             calctheta,deriv,addforce,fext)
+!
+       __DEP_CONST
 !
        float :: x(:), y(:), z(:),                                      &
      &           fx(:), fy(:), fz(:), mass(:)
@@ -199,6 +198,8 @@ __CHARMM_ONLY##IF STRINGM
 !      NOTE that the forces calculated here are NOT acting on the CV, as in
 !      the evolution subroutine, but on the simulation atoms
        dummy=cv%r(i,zcur)-cv%r(i,instant) ! zcur contains reference coords (combination of main+comp)
+! FB modification (FB statistics updated outside):
+       dummy=max(zero, dummy - cv%fbwidth(i)) + min(zero, dummy + cv%fbwidth(i))
 !
        f=cv%k(i)*dummy     !   note that f is not divided by 1/sqrt(mass)
        cv%r(i,forces2)=f
