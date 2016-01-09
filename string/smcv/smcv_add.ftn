@@ -6,43 +6,53 @@
 !
 #if (defined(__CHARMM) || defined(__PARALLEL) )
 __CHARMM_ONLY##IF STRINGM
+      use cv_types
+      use cv_common
+      use ivector
+      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
+      __DEP_MPI
+      __DEP_OUTPUT
+      __DEP_SIZE
+      __DEP_COORDINATES
+      __DEP_PARSER 
+      __DEP_MPI 
+      __DEP_SELECT
 !
       __IMPNONE
+!
+ __DECLARE_MSGBUF
+
       private
       public smcv_add_cv
       public smcv_frame_add
 !
+      bool, save :: qroot
+!
+#define __SETQROOT qroot=MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.ME_STRNG.eq.0
+!
       contains
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine smcv_add_cv(COMLYN,COMLEN)
-      use cv_types
-      use cv_common
       use cv_quaternion, only: quat_initialized, quat, quat_init
       use sm_config, only: qt_send_displ, qt_send_count, imap_displ, imap_count
-!
-      __DEP_OUTPUT
-      __DEP_PARSER
-      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
-      __IMPNONE
-!
- __DECLARE_MSGBUF
 !
       character(len=*) :: COMLYN
       int :: COMLEN
 !    local
-      int :: i, j, k, ind_
+      int :: i, j, k, ind
       bool :: qfbwidth
       float :: fbwidth
       character(len=20) :: keyword
       __IAM(SMCV_ADD)
+__SETQROOT
 !
       keyword=__NEXTLONGA(comlyn,comlen)  ! directive
 !
-      ind_=0
+      ind=0
 ! preprocessor tricks to simplify code
       qfbwidth=.true. ! whether to ckeck for flat-bottom width specification after default add
       if (.false.) then ! note that the statements below _WILL_ be executed
-#define __TRY(__WHAT) elseif (__STRNCMP(keyword,__STRING(__WHAT),len(__STRING(__WHAT)))) then;ind_=__CONCAT3(smcv_,__WHAT,_add)(__ADD_ARGS)
+#define __TRY(__WHAT) elseif (__STRNCMP(keyword,__STRING(__WHAT),len(__STRING(__WHAT)))) then;ind=__CONCAT3(smcv_,__WHAT,_add)(__ADD_ARGS)
 #define __ADD_ARGS comlyn, comlen
 #define smcv_POSI_COM_X_add(__1,...) smcv_posi_com_add(__1, posi_com_x)
 #define smcv_POSI_COM_Y_add(__1,...) smcv_posi_com_add(__1, posi_com_y)
@@ -87,12 +97,14 @@ __CHARMM_ONLY##IF STRINGM
         __WARN(whoami,'UNRECOGNIZED CV TYPE: ',keyword)
       endif
 !
-      if (ind_.gt.0) then
+      if (ind.gt.0) then
        if (qfbwidth) then
         fbwidth=__GET_RM_F(comlyn, comlen, 'FBWIDTH', 0.0d0)   ! can specify force constant manually
-        call cv_common_set_fbwidth(ind_,fbwidth)
+        call cv_common_set_fbwidth(ind,fbwidth)
+        if (qroot) then ; write(_MSGBUF,6769) whoami,fbwidth ; __PRINT(_MSGBUF) ; endif
+ 6769 format(A,' WILL SET WIDTH OF FLAT-BOTTOM REGION OF POTENTIAL TO ',F7.3,'.')
        else
-        __WRN(whoami, 'FLAT-BOTTOM POTENTIALS ARE NOT SUPPORTED FOR CV '//trim(cv_type_names(cv%type(ind_)))//'. NOTHING DONE')
+        __WRN(whoami, 'FLAT-BOTTOM POTENTIALS ARE NOT SUPPORTED FOR CV '//trim(cv_type_names(cv%type(ind)))//'. NOTHING DONE')
        endif
       endif
 !
@@ -102,18 +114,6 @@ __CHARMM_ONLY##IF STRINGM
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       function smcv_posi_com_add(comlyn, comlen, cvtype) result(ind)
       use cv_posi_com
-      use cv_types
-      use ivector
-      __DEP_OUTPUT
-      __DEP_SIZE
-      __DEP_COORDINATES
-      __DEP_PARSER 
-      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
-      __DEP_MPI 
-      __DEP_SELECT
-!
-      __IMPNONE
- __DECLARE_MSGBUF
 !
       character(len=*) comlyn
       int :: comlen
@@ -143,6 +143,7 @@ __CHARMM_ONLY##IF STRINGM
         __WRN( whoami, 'UNKNOWN CV TYPE. NOTHING DONE.')
         return
       end select
+__SETQROOT
 !     first check for CV options
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       k=__GET_RM_F(comlyn, comlen, 'FORC', 0.0d0)   ! can specify force constant manually
@@ -194,7 +195,7 @@ __CHARMM_ONLY##IF STRINGM
 #endif
 !
 !     print short summary
-      if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.ME_STRNG.eq.0) then
+      if (qroot) then
        if (w.lt.0d0) then
         write(_MSGBUF, 664) whoami,cv_name,k,gam
        else
@@ -228,16 +229,6 @@ __CHARMM_ONLY##IF STRINGM
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       function smcv_dihe_com_add(comlyn, comlen) result(ind)
       use cv_dihe_com
-      use ivector
-!
-      __DEP_OUTPUT
-      __DEP_COORDINATES
-      __DEP_PARSER 
-      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
-      __DEP_MPI 
-      __DEP_SELECT
-!
-      __IMPNONE
 !
       character(len=*) :: comlyn
       int :: comlen
@@ -249,7 +240,6 @@ __CHARMM_ONLY##IF STRINGM
 #elif defined (__DMOL)
  __DECLARE_DMOL_SELECT
 #endif
- __DECLARE_MSGBUF
 !
       int :: i, j, atom_group, nslct, ind
       float :: k, gam, w
@@ -257,6 +247,7 @@ __CHARMM_ONLY##IF STRINGM
 !
       __IAM(SMCV_DIHE_COM_ADD)
 !
+__SETQROOT
 !     first check for CV options
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       k=__GET_RM_F(comlyn, comlen, 'FORC', 0.0d0)   ! can specify force constant manually
@@ -314,7 +305,7 @@ __CHARMM_ONLY##IF STRINGM
       enddo ! loop over dihe_com selections
 !
 !     print short summary
-      if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.ME_STRNG.eq.0) then
+      if (qroot) then
        if (w.lt.0d0) then
         write(_MSGBUF, 664) whoami,cv_name,k,gam
        else
@@ -341,17 +332,6 @@ __CHARMM_ONLY##IF STRINGM
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       function smcv_angle_com_add(comlyn, comlen) result(ind)
       use cv_angle_com
-      use ivector
-      __DEP_OUTPUT
-      __DEP_SIZE 
-      __DEP_COORDINATES 
-      __DEP_PARSER 
-      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
-      __DEP_MPI 
-      __DEP_SELECT
-      __IMPNONE
-!
- __DECLARE_MSGBUF
 !
       character(len=*) :: comlyn
       int :: comlen
@@ -369,6 +349,7 @@ __CHARMM_ONLY##IF STRINGM
       type (int_vector), dimension(3) :: angle_com_list ! for storing atom indices
 !
       __IAM(SMCV_ANGLE_COM_ADD)
+__SETQROOT
 !
 !     first check for CV options
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -423,7 +404,7 @@ __CHARMM_ONLY##IF STRINGM
       enddo ! loop over angle_com selections
 !
 !     print short summary
-      if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.ME_STRNG.eq.0) then
+      if (qroot) then
        if (w.lt.0d0) then
         write(_MSGBUF, 664) whoami,cv_name,k,gam
        else
@@ -450,23 +431,12 @@ __CHARMM_ONLY##IF STRINGM
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       function smcv_dist_com_add(comlyn, comlen) result(ind)
       use cv_dist_com
-      use ivector
-      __DEP_OUTPUT
-      __DEP_SIZE 
-      __DEP_COORDINATES 
-      __DEP_PARSER 
-      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
-      __DEP_MPI 
-      __DEP_SELECT
-!
-      __IMPNONE
 !
       character(len=*) comlyn
       int :: comlen
 !    locals
       __STRING_PAR(cv_name, DIST_COM)
 !
- __DECLARE_MSGBUF
 #ifdef __CHARMM
       int :: imode, iselct(natom)
 #elif defined (__DMOL)
@@ -479,6 +449,7 @@ __CHARMM_ONLY##IF STRINGM
 !
       __IAM(SMCV_DIST_COM_ADD)
 !
+__SETQROOT
 !     first check for CV options
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       k=__GET_RM_F(comlyn, comlen, 'FORC', 0.0d0)   ! can specify force constant manually
@@ -535,7 +506,7 @@ __CHARMM_ONLY##IF STRINGM
       enddo ! loop over dist_com selections
 !
 !     print short summary
-      if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.ME_STRNG.eq.0) then
+      if (qroot) then
        if (w.lt.0d0) then
         write(_MSGBUF, 664) whoami,cv_name,k,gam
        else
@@ -562,24 +533,12 @@ __CHARMM_ONLY##IF STRINGM
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       function smcv_anglvec_add(comlyn, comlen) result(ind)
       use cv_anglvec
-      use ivector
-      __DEP_OUTPUT
-      __DEP_SIZE 
-      __DEP_COORDINATES 
-      __DEP_PARSER 
-      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
-      __DEP_MPI 
-      __DEP_SELECT
-!
-      __IMPNONE
 !
       character(len=*) :: comlyn
       int :: comlen
 !    locals
       __STRING_PAR(cv_name, ANGLVEC)
       character(len=8) :: key
-!
- __DECLARE_MSGBUF
 !
 #ifdef __CHARMM
       int ::  imode, iselct(natom)
@@ -596,6 +555,7 @@ __CHARMM_ONLY##IF STRINGM
 !
       __IAM(SMCV_ANGLVEC_ADD)
 !
+__SETQROOT
 !     first check for CV options
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       k=__GET_RM_F(comlyn, comlen, 'FORC', 0.0d0)   ! can specify force constant manually
@@ -681,7 +641,7 @@ __CHARMM_ONLY##IF STRINGM
       endif
 !
 !     print short summary
-      if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.ME_STRNG.eq.0) then
+      if (qroot) then
        if (w.lt.0d0) then
         write(_MSGBUF, 664) whoami,cv_name,k,gam
        else
@@ -708,17 +668,6 @@ __CHARMM_ONLY##IF STRINGM
 !    'frame' is not really a CV but processed here for convenience
       function smcv_frame_add(comlyn, comlen) result(ind)
       use cv_frames
-      use ivector
-      __DEP_OUTPUT
-      __DEP_SIZE 
-      __DEP_COORDINATES 
-      __DEP_PARSER 
-      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
-      __DEP_MPI 
-      __DEP_SELECT
-!
-      __IMPNONE
- __DECLARE_MSGBUF
 !
       character(len=*) :: comlyn
       int :: comlen
@@ -733,6 +682,7 @@ __CHARMM_ONLY##IF STRINGM
 !
       __IAM(SMCV_FRAME_ADD)
 !
+__SETQROOT
 !     process atom selections;
 !     specify atom group
 #ifdef __CHARMM
@@ -782,7 +732,7 @@ __CHARMM_ONLY##IF STRINGM
 #endif
 !
 !     print short summary
-      if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.ME_STRNG.eq.0) then
+      if (qroot) then
        write(_MSGBUF, 665) whoami ; __PRINT(_MSGBUF)
       endif
 !
@@ -799,15 +749,6 @@ __CHARMM_ONLY##IF STRINGM
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccc
       function smcv_quaternion_add(comlyn, comlen) result(ind)
       use cv_qcomp
-      use cv_types
-      __DEP_OUTPUT
-      __DEP_PARSER 
-      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
-      __DEP_MPI 
-      __DEP_SELECT
-      __IMPNONE
-!
- __DECLARE_MSGBUF
 !
       character(len=*) :: comlyn
       int :: comlen
@@ -818,6 +759,7 @@ __CHARMM_ONLY##IF STRINGM
 !
       __IAM(SMCV_QUATERNION_ADD)
 !
+__SETQROOT
 !     first check for CV options
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       k=__GET_RM_F(comlyn, comlen, 'FORC', 0.0d0)   ! can specify force constant manually
@@ -828,7 +770,7 @@ __CHARMM_ONLY##IF STRINGM
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       ind=0
 !     print short summary
-      if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.ME_STRNG.eq.0) then
+      if (qroot) then
 !
        if (w.lt.0d0) then
         write(_MSGBUF, 664) whoami,cv_name,k,gam
@@ -874,13 +816,6 @@ __CHARMM_ONLY##IF STRINGM
 !     this CV is an RMS combination of existing CV; experimental and not fully implemented (intented for steered dynamics)
       use cv_cvrms
       use parselist
-      use ivector
-      __DEP_OUTPUT
-      __DEP_PARSER
-      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
-      __DEP_MPI
-      __IMPNONE
-      __DECLARE_MSGBUF
 !
       character(len=*) :: comlyn
       int :: comlen
@@ -892,6 +827,7 @@ __CHARMM_ONLY##IF STRINGM
 !
       __IAM(SMCV_CVRMS_ADD)
 !
+__SETQROOT
 !     first check for CV options
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       k=__GET_RM_F(comlyn, comlen, 'FORC', 0.0d0)   ! can specify force constant manually
@@ -903,7 +839,7 @@ __CHARMM_ONLY##IF STRINGM
       call ilist_parse(cv_list, comlyn) ! will return allocated cv_list with the indices
 !
 !     print short summary
-      if (MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.ME_STRNG.eq.0) then
+      if (qroot) then
        if (w.lt.0d0) then
         write(_MSGBUF, 664) whoami,cv_name,k,gam
        else
@@ -932,17 +868,9 @@ __CHARMM_ONLY##IF STRINGM
       use cv_rmsd, only : cv_rmsd_add
       use cv_drmsd, only : cv_drmsd_add
       use cv_proj, only : cv_proj_add
-      use cv_types
-      __DEP_OUTPUT
-      __DEP_SIZE
-      __DEP_COORDINATES
-      __DEP_PARSER
+      __DEP_CONST
       __DEP_NUMBER
-      __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
-      __DEP_MPI
-      __DEP_SELECT
 !
-      __IMPNONE
       character(len=*) :: comlyn
       int :: comlen
       int :: cvtype
@@ -964,7 +892,6 @@ __CHARMM_ONLY##IF STRINGM
  __DECLARE_DMOL_SELECT
  int, pointer :: iselct(:), jselct(:)
 #endif
- __DECLARE_MSGBUF
 !
       int :: i, j, n
       float :: a, b
@@ -973,6 +900,7 @@ __CHARMM_ONLY##IF STRINGM
 !
       __IAM(SMCV_RMSD_ADD)
 !
+__SETQROOT
       ind=0
 !
       select case (cvtype)
@@ -983,8 +911,6 @@ __CHARMM_ONLY##IF STRINGM
         __WRN( whoami, 'UNKNOWN CV REQUESTED. NOTHING DONE.');
         return
       end select
-!
-      qroot=(MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.ME_STRNG.eq.0)
 !
 !     first check for CV options
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
