@@ -224,8 +224,8 @@ __MPI_ONLY     &          mpifloat, MPI_SUM, MPI_COMM_LOCAL, ierror)
       subroutine smcv_addforce(x,y,z,mass,fx,fy,fz,t)
       __DEP_OUTPUT
       __DEP_MULTICOM
-      __DEP_CONST 
-      __DEP_MPI 
+      __DEP_CONST
+      __DEP_MPI
 !
       float :: x(:), y(:), z(:), mass(:),                              & ! mass(size(x,1)) ,
      &          fx(:), fy(:), fz(:)
@@ -276,13 +276,15 @@ __MPI_ONLY     &          mpifloat, MPI_SUM, MPI_COMM_LOCAL, ierror)
 !      do i=1, cv%num_cv ! loop over all CV
       do i=ibeg, iend ! loop over CV assigned to this slave in the group
        r=(s*cv%r(i,main)+one_m_s*cv%r(i,comp)) ! combination of main and comp; then, what is zcur ? ANS: zcur=r later
-! the code below is just to compute NEQ work
+! ====================================================================
+! the code below (first select case statement) is (1) to compute NEQ work
+! (2) to compute the correct zcurrent, as we advance from zcomp to zmain
 !
        select case(cv%type(i))
 !      EXPERIMENTAL:
-!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-!      quaternion slerp (sloppy)
-       case(qcomp_1)
+!================= recompute interpolation using =====================
+!===== quaternion spherical linear interpolation (SLERP ; a bit sloppy)
+       case(qcomp_1, qcomp_2, qcomp_3, qcomp_4)
         qbeg=i; qend=qbeg+3; qnorm=0d0; qdp=0d0; k=0
         do j=qbeg, qend;
          k=k+1
@@ -296,7 +298,7 @@ __MPI_ONLY     &          mpifloat, MPI_SUM, MPI_COMM_LOCAL, ierror)
 ! interpolate
         W=acos(q12(1))
         q12(1)=cos(s*W)
-        W=sin(s*W)/sin(W)
+        W=sin(s*W)/sin(W) ! note that this tends to s as W tends to 0 (should probably include this case ?)
         q12(2:4)=W*q12(2:4)
 ! compute new quaternion
         q1(1)=q0(1)*q12(1)-q0(2)*q12(2)-q0(3)*q12(3)-q0(4)*q12(4)
@@ -306,110 +308,25 @@ __MPI_ONLY     &          mpifloat, MPI_SUM, MPI_COMM_LOCAL, ierror)
 !
         qnorm=1./sqrt(q1(1)**2+q1(2)**2+q1(3)**2+q1(4)**2)
         q1=q1*qnorm
+!===== EXPERIMENTAL ABOVE: quaternion slerp
+        select case(cv%type(i)) ! second case statement to set quaternion component
+         case(qcomp_1) ; r=q1(1)
+         case(qcomp_2) ; r=q1(2)
+         case(qcomp_3) ; r=q1(3)
+         case default  ; r=q1(4) ! only remaining possibility
+        end select
 !
-        r=q1(1)
-!        write(601,*) r, cv%r(i,instant)
         dummy=(r-cv%r(i,zcur))
-!
-       case(qcomp_2)
-        qbeg=i-1; qend=qbeg+3; qnorm=0d0; qdp=0d0; k=0
-        do j=qbeg, qend;
-         k=k+1
-         q1(k)=cv%r(j,main);  q0(k)=cv%r(j,comp);
-        enddo
-        q12(1)=q0(1)*q1(1)+q0(2)*q1(2)+q0(3)*q1(3)+q0(4)*q1(4)    ! cos W
-        if (q12(1).lt.0) q1=-q1 ! take shortest interpolation path
-        q12(2)=q0(1)*q1(2)-q1(1)*q0(2) - (q0(3)*q1(4)-q0(4)*q1(3))
-        q12(3)=q0(1)*q1(3)-q1(1)*q0(3) - (q0(4)*q1(2)-q0(2)*q1(4))
-        q12(4)=q0(1)*q1(4)-q1(1)*q0(4) - (q0(2)*q1(3)-q0(3)*q1(2))
-! interpolate
-        W=acos(q12(1))
-        q12(1)=cos(s*W)
-        W=sin(s*W)/sin(W)
-        q12(2:4)=W*q12(2:4)
-! compute new quaternion
-        q1(1)=q0(1)*q12(1)-q0(2)*q12(2)-q0(3)*q12(3)-q0(4)*q12(4)
-        q1(2)=q0(1)*q12(2)+q12(1)*q0(2) + (q0(3)*q12(4)-q0(4)*q12(3))
-        q1(3)=q0(1)*q12(3)+q12(1)*q0(3) + (q0(4)*q12(2)-q0(2)*q12(4))
-        q1(4)=q0(1)*q12(4)+q12(1)*q0(4) + (q0(2)*q12(3)-q0(3)*q12(2))
-!
-        qnorm=1./sqrt(q1(1)**2+q1(2)**2+q1(3)**2+q1(4)**2)
-        q1=q1*qnorm
-!
-        r=q1(2)
-!        write(601,*) r, cv%r(i,instant)
-        dummy=(r-cv%r(i,zcur))
-!
-       case(qcomp_3)
-        qbeg=i-2; qend=qbeg+3; qnorm=0d0; qdp=0d0; k=0
-        do j=qbeg, qend;
-         k=k+1
-         q1(k)=cv%r(j,main);  q0(k)=cv%r(j,comp);
-        enddo
-        q12(1)=q0(1)*q1(1)+q0(2)*q1(2)+q0(3)*q1(3)+q0(4)*q1(4)    ! cos W
-        if (q12(1).lt.0) q1=-q1 ! take shortest interpolation path
-        q12(2)=q0(1)*q1(2)-q1(1)*q0(2) - (q0(3)*q1(4)-q0(4)*q1(3))
-        q12(3)=q0(1)*q1(3)-q1(1)*q0(3) - (q0(4)*q1(2)-q0(2)*q1(4))
-        q12(4)=q0(1)*q1(4)-q1(1)*q0(4) - (q0(2)*q1(3)-q0(3)*q1(2))
-! interpolate
-        W=acos(q12(1))
-        q12(1)=cos(s*W)
-        W=sin(s*W)/sin(W)
-        q12(2:4)=W*q12(2:4)
-! compute new quaternion
-        q1(1)=q0(1)*q12(1)-q0(2)*q12(2)-q0(3)*q12(3)-q0(4)*q12(4)
-        q1(2)=q0(1)*q12(2)+q12(1)*q0(2) + (q0(3)*q12(4)-q0(4)*q12(3))
-        q1(3)=q0(1)*q12(3)+q12(1)*q0(3) + (q0(4)*q12(2)-q0(2)*q12(4))
-        q1(4)=q0(1)*q12(4)+q12(1)*q0(4) + (q0(2)*q12(3)-q0(3)*q12(2))
-!
-        qnorm=1./sqrt(q1(1)**2+q1(2)**2+q1(3)**2+q1(4)**2)
-        q1=q1*qnorm
-!
-        r=q1(3)
-!        write(601,*) r, cv%r(i,instant)
-        dummy=(r-cv%r(i,zcur))
-!
-       case(qcomp_4)
-        qbeg=i-3; qend=qbeg+3; qnorm=0d0; qdp=0d0; k=0
-        do j=qbeg, qend;
-         k=k+1
-         q1(k)=cv%r(j,main);  q0(k)=cv%r(j,comp);
-        enddo
-        q12(1)=q0(1)*q1(1)+q0(2)*q1(2)+q0(3)*q1(3)+q0(4)*q1(4)    ! cos W
-        if (q12(1).lt.0) q1=-q1 ! take shortest interpolation path
-        q12(2)=q0(1)*q1(2)-q1(1)*q0(2) - (q0(3)*q1(4)-q0(4)*q1(3))
-        q12(3)=q0(1)*q1(3)-q1(1)*q0(3) - (q0(4)*q1(2)-q0(2)*q1(4))
-        q12(4)=q0(1)*q1(4)-q1(1)*q0(4) - (q0(2)*q1(3)-q0(3)*q1(2))
-! interpolate
-        W=acos(q12(1))
-        q12(1)=cos(s*W)
-        W=sin(s*W)/sin(W)
-        q12(2:4)=W*q12(2:4)
-! compute new quaternion
-        q1(1)=q0(1)*q12(1)-q0(2)*q12(2)-q0(3)*q12(3)-q0(4)*q12(4)
-        q1(2)=q0(1)*q12(2)+q12(1)*q0(2) + (q0(3)*q12(4)-q0(4)*q12(3))
-        q1(3)=q0(1)*q12(3)+q12(1)*q0(3) + (q0(4)*q12(2)-q0(2)*q12(4))
-        q1(4)=q0(1)*q12(4)+q12(1)*q0(4) + (q0(2)*q12(3)-q0(3)*q12(2))
-!
-        qnorm=1./sqrt(q1(1)**2+q1(2)**2+q1(3)**2+q1(4)**2)
-        q1=q1*qnorm
-!
-        r=q1(4)
-!        write(601,*) r, cv%r(i,instant)
-!        write(601,*) '%'
-        dummy=(r-cv%r(i,zcur))
-
-!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-!ccccc EXPERIMENTAL ABOVE: quaternion slerp
+!====================================================================
 !
        case(dihe_com)
          dummy=(r-cv%r(i,zcur))
          dummy=modulo(dummy,TWOPI)
-         if (dummy.gt.PI) dummy=dummy-TWOPI ! pick the smallest angular displacement
+         if (dummy.gt.PI) __INCR(dummy,-TWOPI) ! pick the smallest angular displacement
        case(angle_com, anglvec) ! cannot tell between theta/-theta
          dummy=(abs(r)-abs(cv%r(i,zcur)))
          dummy=modulo(dummy,TWOPI)
-         if (dummy.gt.PI) dummy=dummy-TWOPI ! pick the smallest angular displacement
+         if (dummy.gt.PI) __INCR(dummy,-TWOPI) ! pick the smallest angular displacement
        case default
          dummy=(r-cv%r(i,zcur))
        end select
@@ -521,7 +438,7 @@ __MPI_ONLY      endif
       bool :: update_average ! whether the current dataset should be included with the cv running average
 !                                (it is always added to history)
       int :: i, j, k, imap, ibeg, iend, kbeg, kend, ierror
-      float :: u, v, t, t1, dot_pr
+      float :: u, v, t, t1, dot_pr, tfb, tfb1
       bool :: deriv, calctheta, qgrp, qgrp1
       int :: cvlist(cv%num_cv) ! for fast M tensor computation
       int :: cvlistsize, ii, jj
@@ -551,11 +468,12 @@ __MPI_ONLY      endif
 !
       if (update_average) then
        cv%num_run_ave=cv%num_run_ave+1
-       t=1.0d0/(cv%num_run_ave);
+       t=one/(cv%num_run_ave);
       endif
-      t1=1d0-t
+!      t1=one-t
       if (restraint_force_on) then ! if this flag is set, then cv and derivatives are already known
-       do i=1, cv%num_cv
+!
+       do i=1, cv%num_cv ! loop over all CV
         v=cv%r(i,instant)
         cv%r(i,j)=v
 !     VO 3.24.09: correct for angle average
@@ -566,11 +484,33 @@ __MPI_ONLY      endif
         select case(cv%type(i));
          case(dihe_com, angle_com, anglvec);
           v=modulo(v,TWOPI)
-          if (v.gt.PI) v=v-TWOPI
+          if (v.gt.PI) __INCR(v,-TWOPI)
         end select
 !
         cv%r(i,runave)=u-t*v
-       enddo
+!====================================================================
+! also deal with flat-bottom potential averages here.
+! Note that this average is used for statistics purposes
+! it is reset after every stats output
+! (1) compute absolute distance between sample and restraint center
+        if (cv%fbwidth(i).gt.zero) then
+         v=cv%r(i,zcur)-cv%r(i,instant)
+         select case(cv%type(i));
+          case(dihe_com, angle_com, anglvec); v=modulo(v,TWOPI); if (v.gt.PI) __INCR(v,-TWOPI)
+         end select
+! (2) if sample within flat bottom window, add to average
+         if (abs(v).le.cv%fbwidth(i)) then ! update average
+          v=cv%r(i,fbave)-cv%r(i,instant)
+          select case(cv%type(i)) ! correction for angle average
+           case(dihe_com, angle_com, anglvec); v=modulo(v,TWOPI); if (v.gt.PI) __INCR(v,-TWOPI)
+          end select
+          __INC(cv%num_fb_ave(i))
+          __INCR(cv%r(i,fbave), -v/cv%num_fb_ave(i))
+         endif ! abs(v)
+        endif ! fbwidth
+!
+       enddo !cv
+!
       else ! need to compute
 !
        qgrp1=qgrp.and.calc_cv_para
@@ -582,7 +522,7 @@ __MPI_ONLY      endif
         iend=cv%num_cv
        endif
 !
-       do i=ibeg, iend
+       do i=ibeg, iend ! loop over local CVs only (NOTE: hist first updated for local cv; then for remaining cv; see end of loop )
 !
 ! force arrays not used in args below
 #define __ARGS i,x,y,z,mass,x,y,z,calctheta,deriv,.false. 
@@ -621,6 +561,28 @@ __MPI_ONLY      endif
         end select
 !
         cv%r(i,runave)=u-t*v
+!====================================================================
+! also deal with flat-bottom potential averages here
+! see notes above;
+! Also note that in this case, the averages are local, and are
+! to be combined at output (there is no reason to communicate more often than that)
+! (1) compute absolute distance between sample and restraint center
+        if (cv%fbwidth(i).gt.zero) then
+         v=cv%r(i,zcur)-cv%r(i,instant)
+         select case(cv%type(i));
+          case(dihe_com, angle_com, anglvec); v=modulo(v,TWOPI); if (v.gt.PI) __INCR(v,-TWOPI)
+         end select
+! (2) if sample within flat bottom window, add to average
+         if (abs(v).le.cv%fbwidth(i)) then ! update average
+          v=cv%r(i,fbave)-cv%r(i,instant)
+          select case(cv%type(i)) ! correction for angle average
+           case(dihe_com, angle_com, anglvec); v=modulo(v,TWOPI); if (v.gt.PI) __INCR(v,-TWOPI)
+          end select
+          __INC(cv%num_fb_ave(i))
+          __INCR(cv%r(i,fbave), -v/cv%num_fb_ave(i))
+         endif ! abs(v)
+        endif ! fbwidth
+!
        enddo ! loop over cv
 !
        if (qgrp1) then
@@ -629,6 +591,7 @@ __MPI_ONLY        call mpi_allgatherv(cv%r(ibeg,1),cv_send_count(ME_LOCAL+1),   
 __MPI_ONLY     &    MPI_CV_TYPE3I,                                                &
 __MPI_ONLY     &    cv%r, cv_send_count, cv_send_displ,                           &
 __MPI_ONLY     &    MPI_CV_TYPE3I, MPI_COMM_LOCAL, ierror)
+! gradients needed to compute M below
 __MPI_ONLY        call mpi_allgatherv(cv%grad(ibeg,1,1,1),                        &
 __MPI_ONLY     &    cv_send_count(ME_LOCAL+1),MPI_GRAD_TYPE,                      &
 __MPI_ONLY     &    cv%grad, cv_send_count, cv_send_displ,                        &
