@@ -289,22 +289,27 @@ __MPI_ONLY     &         1, MPI_LOGICAL, MPI_LAND, MPI_COMM_STRNG, ierror)
 !      reset internal interation counter for smcv_master
        olditeration=0
 !
-       repa_on=(__INDX_RM(comlyn,comlen, 'REPA').gt.0)
+       repa_on=(__INDX_RM(comlyn,comlen,'REPA').gt.0)
        if (repa_on) repa_freq=__GET_RM_I(comlyn,comlen,'REPF',0)
 !
-       hist_freq=__GET_RM_I(comlyn,comlen,'HISF',0)
+       if (__INDX(comlyn, comlen, 'HISF', 4).gt.0) then
+        hist_freq=__GET_RM_I(comlyn,comlen,'HISF',0)
+        hist_calc_M = .not.( __INDX_RM(comlyn, comlen, 'SKIPM') .gt. 0 ) ! unless skipm present, calculate average of M
+       endif
 !
        stat_on=(__INDX_RM(comlyn,comlen, 'STAT').gt.0)
        if (stat_on) stat_freq=__GET_RM_I(comlyn,comlen,'STAF',0)
 !
        evolve_cv_on=(__INDX_RM(comlyn,comlen, 'EVOL').gt.0)
        if (evolve_cv_on) then
+        evolve_smcv_on=(__INDX_RM(comlyn,comlen,'SMCV').gt.0) ! this the standard SMCV evolution (optional to specify b/c it is default)
         evolve_freq=__GET_RM_I(comlyn,comlen,'EVOF',0)
         evolve_nskip=__GET_RM_I(comlyn,comlen,'EVOS',0)
+!
 !       express in terms of history frequency
         if (hist_freq.gt.0) evolve_nskip=evolve_nskip/hist_freq
 !
-        evolve_step=__GET_RM_F(comlyn,comlen,'EVST',0.0d0) ! evolution step
+        evolve_step=__GET_RM_F(comlyn,comlen,'EVST',0.0d0) ! evolution step ! this option not relevant for all types of dynamics
 ! ----- types of evolution
         evolve_smooth_on=(__INDX_RM(comlyn,comlen,'SMOO').gt.0) ! smooth trajectory
         if (evolve_smooth_on) then
@@ -327,10 +332,29 @@ __MPI_ONLY     &         1, MPI_LOGICAL, MPI_LAND, MPI_COMM_STRNG, ierror)
 !
         evolve_aver_on=(__INDX_RM(comlyn,comlen,'AVER').gt.0) ! z=mean(theta)
         if (evolve_aver_on) then
-         num_ave_cv_samples=__GET_RM_I(comlyn,comlen,'NAVE',0) ! initial number of samples in the averages
-!                                                           setting this large will dampen initial fluctuations
+         num_ave_cv_samples=__GET_RM_I(comlyn,comlen,'NAVE',0) ! initial number of samples in the averages                                                          setting this large will dampen initial fluctuations
         endif
-       endif
+!
+!======== check for multiple inputs
+        i=0;
+        if (evolve_expo_on)   __INC(i)
+        if (evolve_bd_on)     __INC(i)
+        if (evolve_aver_on)   __INC(i)
+        if (evolve_smooth_on) __INC(i)
+        if (evolve_smcv_on)   __INC(i)
+!
+        if (i.ne.1) then
+         if (i.gt.1) then
+          __WRN(whoami,'MORE THAN ONE EVOLUTION SCHEME REQUESTED. WILL USE SMCV.')
+          evolve_expo_on=.false.
+          evolve_aver_on=.false.
+          evolve_smooth_on=.false.
+          evolve_bd_on=.false.
+         endif ! i
+         evolve_smcv_on=.true. ! also default option
+        endif ! i
+!
+       endif ! evolve_cv_on
 !
        restrained_on=(__INDX_RM(comlyn,comlen, 'RSTR').gt.0)
        if (restrained_on) then
@@ -397,20 +421,6 @@ __MPI_ONLY     &         1, MPI_LOGICAL, MPI_LAND, MPI_COMM_STRNG, ierror)
      &      whoami, ' THE FIRST', evolve_nskip,                         &
      &      ' ITERATIONS AFTER STRING EVOLUTION WILL NOT CONTRIBUTE TO AVERAGES.' ; __PRINT(_MSGBUF)
 !       type of evolution
-            i=0;
-            if (evolve_expo_on)   i=i+1
-            if (evolve_bd_on)     i=i+1
-            if (evolve_aver_on)   i=i+1
-            if (evolve_smooth_on) i=i+1
-!
-            if (i.gt.1) then
-             __WRN(whoami,'MORE THAN ONE EVOLUTION SCHEME REQUESTED. WILL USE SMCV.')
-             evolve_expo_on=.false.
-             evolve_aver_on=.false.
-             evolve_smooth_on=.false.
-             evolve_bd_on=.false.
-            endif
-!
             if (evolve_expo_on) then
                write(_MSGBUF,671) whoami, whoami, evolve_expo_mem ; __PRINT(_MSGBUF)
  671  format(A,' CV EVOLUTION WILL BE OF THE FORM:',/,                  &
@@ -427,7 +437,7 @@ __MPI_ONLY     &         1, MPI_LOGICAL, MPI_LAND, MPI_COMM_STRNG, ierror)
                write(_MSGBUF,6720) whoami, whoami, evolve_step, evolve_bd_T ; __PRINT(_MSGBUF)
  6720 format(A,' WILL EVOLVE CV USING BD ADVANCEMENT',/,                &
      &       A,' AT T=',F8.3,' WITH STEP=',F11.5)
-            else
+            elseif (evolve_smcv_on) then
                write(_MSGBUF,673) whoami, whoami, evolve_step ; __PRINT(_MSGBUF)
  673  format(A,' WILL EVOLVE CV USING SMCV ADVANCEMENT ',/,             &
      &       A,' WITH STEP=',F11.5)
@@ -440,7 +450,18 @@ __MPI_ONLY     &         1, MPI_LOGICAL, MPI_LAND, MPI_COMM_STRNG, ierror)
      & ' ITERATIONS.')
         endif ! repa_on
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-        if (hist_freq.gt.0) then ; write(_MSGBUF,667) whoami, hist_freq ; __PRINT(_MSGBUF) ; endif
+        if (hist_freq.gt.0) then
+         write(_MSGBUF,667) whoami, hist_freq
+         if (.not.hist_calc_M) then
+          if (evolve_cv_on.and.evolve_smcv_on) then
+           __WRN(whoami, 'SMCV EVOLUTION REQUIRES CALCULATING M TENSOR. WILL ENABLE.')
+           hist_calc_M=.true.
+          else
+           write(_MSGBUF(2),'(2A)') whoami, ' **** M TENSOR UPDATES ARE DISABLED ****'
+          endif ! evolve_cv_on
+         endif ! hist_calc_M
+          __PRINT(_MSGBUF)
+        endif
  667  format(A,' WILL SAVE CV VALUES AFTER EVERY ', I7, ' ITERATIONS.')
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
         if (restrained_on) then
