@@ -6,6 +6,9 @@ DEPS=output vectors bestfit constants multicom random lu multidiag parser dynamo
 
 COMMON=..
 
+# to compile ACEMD Plugin
+include MakeACEMD.inc
+
 LOCALMACROS=-include source.defs -include $(COMMON)/source.defs 
 LOCALMACROS+=-include $(ROOT)/dmol.defs
 LOCALDEPS=source.defs $(ROOT)/mpitype.def $(COMMON)/source.defs 
@@ -13,6 +16,9 @@ LOCALDEPS+=$(ROOT)/dmol.defs
 
 include $(ROOT)/Makefile.inc
 include $(COMMON)/Makefile.inc
+# rules and definitions for compiling the ACEMD Plugin
+
+
 
 cv_frames.o : cv_common.o
 cv_common.o smcv_add.o smcv.o : $(COMMON)/sm_config.mod $(COMMON)/sm_var.mod $(COMMON)/mpi_compat_stub.mod $(COMMON)/multicom_serial_string.mod
@@ -26,3 +32,6 @@ cv_cvrms.o : $(CVOBJ)
 smcv.o : smcv_master.o cv_frames.o cv_quaternion.o cv_common.o smcv_stats.o smcv_add.o $(COMMON)/ftsm/ftsm_var.mod
 smcv_add.o : $(CVOBJ) cv_quaternion.o cv_types.o cv_common.o cv_frames.o cv_cvrms.o
 smcv_master.o : cv_common.o $(CVOBJ) cv_cvrms.o smcv_stats.o
+
+clean::
+	for d in $(SUBDIRS); do (cd $$d; $(MAKE) clean); done
