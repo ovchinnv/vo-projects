@@ -1,7 +1,7 @@
 ROOT=../../..
 STRING=../../
 SMCV=../
-OBJS=plugin-smcv.o minimal_system.o
+OBJS=plugin-smcv.o minimal_system.o smcv_acemd.o
 
 NAME=string/smcv/acemd
 

@@ -4,4 +4,4 @@
 #else
 #define __EXTERN extern
 #endif
-__EXTERN void smcv_init_from_acemd (const __CINT, const __CFLOAT *,const  __CFLOAT *,const __CCHAR *);
+__EXTERN void smcv_init_from_acemd (const __CINT, const __CFLOAT *,const  __CFLOAT *, const __CCHAR * , const __CCHAR *);
