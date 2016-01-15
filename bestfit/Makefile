@@ -1,7 +1,10 @@
 ROOT=..
 OBJS=bestfit.o
 NAME=bestfit
-DEPS=constants output parser multicom vectors parselist
+DEPS=constants multicom
+#parselist : parser vectors
+#multicom : parselist
+#parser: output
 #
 CBINDOBJS=bestfit_c.o
 BINDSOURCES=$(OBJS:%.o=%_.F90) $(CBINDOBJS:%.o=%_.F90)

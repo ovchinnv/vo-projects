@@ -32,7 +32,7 @@ MPI_HOME=/usr/lib/openmpi
 FORTRAN_COMPILER=$(notdir $(FC))
 DEFS+=-Dint=integer -Dfloat=real*8 -Dbool=logical -Dmpiint=MPI_INTEGER -Dmpifloat=MPI_REAL8 -Dmpichar=MPI_CHARACTER -Dmpiint4=MPI_INTEGER4\
      -Dmpibool=MPI_LOGICAL -Dint1="integer(kind=KIND('a'))" -D__RCOMP -D__DMOL -D__CHES -D__EDDIE -D__$(FORTRAN_COMPILER) \
-     -Dint4mpi=integer -D__DEBUG -D__TIMER -D__PARALLEL -D__STRING_SERIAL #-D__PATHSCALE #-Dint4mpi="integer(KIND=MPI_INTEGER_KIND)" 
+     -Dint4mpi=integer -D__DEBUG -D__TIMER -D__STRING_SERIAL -D__PARALLEL #-D__PATHSCALE #-Dint4mpi="integer(KIND=MPI_INTEGER_KIND)" 
 
 # ! note: the VEC routines are probably slower
 
@@ -71,10 +71,10 @@ TESTMSG=-include $(ROOT)/test.msg
 GLOBALDEPS=$(ROOT)/source.defs $(ROOT)/source.msg 
 GLOBALDEPS+=$(ROOT)/contexts.def $(ROOT)/setcomm.def  $(ROOT)/exec.def
 
-MPI_INCLUDE=-I $(MPI_HOME)/include -I $(MPI_HOME) -I $(MPI_HOME)/lib
-MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lpthread -lmpich -lmpichf90 -lmpl # -lmpi -lmpi_f90 -lmpi_f77 # mpich
-MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lpthread -lmpi -lmpi_f90 -lmpi_f77 # older openmpi
-MPI_LIBS=-L $(MPI_HOME)/lib -L $(MPI_HOME) -lmpi -lmpi_mpifh -lmpi_usempif08  # newer openmpi w/ F08
+MPI_INCLUDE=-I $(MPI_HOME) # -I $(MPI_HOME)/include -I $(MPI_HOME)/lib
+MPI_LIBS=-L $(MPI_HOME) -L $(MPI_HOME)/lib -lpthread -lmpich -lmpichf90 -lmpl # -lmpi -lmpi_f90 -lmpi_f77 # mpich
+MPI_LIBS=-L $(MPI_HOME) -L $(MPI_HOME)/lib -lpthread -lmpi -lmpi_f90 -lmpi_f77 # older openmpi
+MPI_LIBS=-L $(MPI_HOME) -lmpi -lmpi_mpifh -lmpi_usempif08  # newer openmpi w/ F08
 #MPI_INCLUDE=
 #MPI_LIBS=
 
@@ -97,34 +97,38 @@ FPPFLAGS = -P -C -I $(ROOT) -nostdinc # -nostdinc : avoid including files automa
 DEBUG = -g
 
 .SUFFIXES:
-.SUFFIXES: .o .F90 .a .H .h .c .f .F .stamp
+.SUFFIXES: .o .F90 .a .so .H .h .c .f .F .stamp
 
-default: $(ROOT)/$(NAME).stamp
 all : default
+default: $(ROOT)/$(NAME).stamp
 ########################### OBJECTS ##########################
 %.o:%.f $(LIBDEPS)
-	$(FC) $(FFLAGS) $(DEFS) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $< -o $@
+	$(FC) $(FFLAGS) $(DEFS) $(PIC) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $< -o $@
 %.o:%.c $(CLIBDEPS)
-	$(CC) $(LOCALDEFS) $(CFLAGS) $< -o $@
+	$(CC) $(LOCALDEFS) $(CFLAGS) $(PIC) $< -o $@
 %.o:%.F90 $(LIBDEPS)
-	$(FC) $(FFLAGS) $(DEFS) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $< -o $@
+	$(FC) $(FFLAGS) $(DEFS) $(PIC) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $< -o $@
+%.mod:%.F90 $(LIBDEPS)
+	$(FC) $(FFLAGS) $(DEFS) $(PIC) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $< -o /dev/null
 %__.o:%_.F90 $(LIBDEPS)
 	$(FC) $(FFLAGS) $(DEFS) $(PIC) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $< -o $@
 %.o:%.F $(LIBDEPS)
-	$(FC) $(FFLAGS) $(DEFS) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $< -o $@
-%.a:
-	$(AR) $(AFLAGS) $@ $(OBJS) $(LOBJS)
+	$(FC) $(FFLAGS) $(DEFS) $(PIC) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $< -o $@
+%.a:    $(OBJS) $(HEADS)
+	$(AR) $(AFLAGS) $@ $(LOBJS)
+	file=$@ ; if [ -f $$file ] ; then ln -fs `pwd`/$$file ${ROOT}/lib/$$file; 2>/dev/null; fi
+%.so:   $(OBJS) $(HEADS)
+	$(LD) $(LDFLAGS) -shared $(LOBJS) -o $@
 	file=$@ ; if [ -f $$file ] ; then ln -fs `pwd`/$$file ${ROOT}/lib/$$file; 2>/dev/null; fi
 ###############################################################
 # DISTRIBUTION DIRS
 DISTRIB=$(addprefix $(ROOT)/, include obj lib)
 $(DISTRIB):
-	echo $@
-	if [ ! -d "$@" ] ; then mkdir -p $@ ; fi
+	if [ ! -d "$@" ] ; then mkdir -p $@ ; fi ; #echo $@
 
 ###################### STAMPS KEEP TRACK OF DEPENDENCIES ON DIRECTORIES (OR OTHER COMPOUND OBJECTS): #####
 # try searching for module file in uppercase for pathscale
-$(ROOT)/$(NAME).stamp:: $(OBJS) $(HEADS) $(DISTRIB)
+$(ROOT)/$(NAME).stamp:: $(OBJS) $(MODS) $(HEADS) $(DISTRIB)
 	for file in $(OBJS); do \
 	ln -fs `pwd`/$$file ${ROOT}/obj/$$file; \
 	file=$${file%.*}.mod ; if [ -f $$file  ] ; then ln -fs `pwd`/$$file ${ROOT}/include/$$file; fi ;\
@@ -134,7 +138,7 @@ $(ROOT)/$(NAME).stamp:: $(OBJS) $(HEADS) $(DISTRIB)
 	for file in $(HEADS); do \
 	ln -fs `pwd`/$$file ${ROOT}/include/$$file; \
         done;
-	echo -n > $@
+	touch $@
 ####################### GENERIC STAMP RESULTS IN DIFFERENT BEHAVIOR : ####################################
 %.stamp::
 	DIR=$@ ; DIR=$(ROOT)/$${DIR%.*} ; echo $$DIR ; if [ -d $$DIR ] ; then cd $$DIR; $(MAKE) ; fi
@@ -142,6 +146,7 @@ $(ROOT)/$(NAME).stamp:: $(OBJS) $(HEADS) $(DISTRIB)
 %.h:%.H $(LOCALDEPS) $(GLOBALDEPS)
 	$(FPP) $(FPPFLAGS) $(DEFS) $(LOCALDEFS) $(GLOBALMACROS) $(LOCALMACROS) -P $< > $@
 %.F90:%.ftn $(LOCALDEPS) $(GLOBALDEPS)
+	file1=$@ ; file2=$${file1%.F90}.o ; touch $$file2
 	sed 's/\([^\#]\)\(\/\/\)/\1\^\^/g' $< | $(FPP) $(FPPFLAGS) $(DEFS) $(LOCALDEFS) -U__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(MSG) $(INCLUDES) -P | sed 's/\^\^/\/\//g' > $@
 %.src:%.ftn $(LOCALDEPS) $(GLOBALDEPS) $(ROOT)/charmm.msg
 	sed 's/\([^\#]\)\(\/\/\)/\1\^\^/g' $< | $(FPP) $(FPPFLAGS) -D__CHARMM -D__CHARMM_VER=$(CHARMM_MAJOR_VERSION) $(GLOBALMACROS) $(LOCALMACROS) $(CHMSG) -P | sed 's/\^\^/\/\//g' > $@
@@ -188,4 +193,5 @@ libraries: $(ROOT)/$(NAME).stamp
 clean::
 	rm -f *.mod *.a *.so $(ROOT)/$(NAME).stamp $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(EXE) $(HEADS) test.F90 test.dat test.out test.o 
 	if [ -f test ] ; then rm -f test ; fi
+	pushd ../ >/dev/null; rm -f $(ROOT)/$(NAME).stamp ; popd >/dev/null
 charmm::$(addsuffix .stamp, $(CHMDEPS))

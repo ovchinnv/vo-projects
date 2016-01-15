@@ -4,46 +4,36 @@
 #define __BINDC use, intrinsic :: iso_c_binding
 !
 #define _ME smcv_init_from_acemd
-__CSUB(_ME, n, mass, charge, inputname, outputname)
+__CSUB(_ME, n, mass, charge, inputname, il, outputname, ol)
  __BINDC
  use minimal_system
  __DEP_CONST
  __DEP_PARSER
+ __DEP_OUTPUT
+ __DEP_FILES
+ __DEP_MPI
  __IMPNONE
- int( __FCINT), intent(in) :: n
+ int( __FCINT), intent(in), value :: n, il, ol
  real(__FCFLOAT), intent(in), dimension(n) :: mass, charge
- character(kind=__FCCHAR, len=1), intent(in) :: inputname, outputname
+ type (c_ptr), value, intent(in) :: inputname, outputname
 !
- character(len=:), allocatable :: ifname, ofname
+ character(len=il), pointer :: ifname
+ character(len=ol), pointer :: ofname
+
  int :: i, fid
  __IAM(_ME)
 !
-! initialize
-! process file names
-! input file
-  i=1
-  do
-   if ( inputname(i:i)==C_NULL_CHAR ) exit;
-  enddo
-  allocate(character(len=i-1) :: ifname); ifname=inputname(1:i)
-! output file
-  i=1
-  do
-   if ( outputname(i:i)==C_NULL_CHAR ) exit;
-  enddo
-  allocate(character(len=i-1) :: ofname); ofname=outputname(1:i)
+ call c_f_pointer(inputname, ifname)
+ call c_f_pointer(outputname, ofname)
 !
- call output_init(ofname) ; __DEALL(ofname);
+ call output_init(ofname)
 !
  if (n<0) then
   __WRN(whoami, 'NUMBER OF ATOMS MUST BE POSITIVE (RECEIVED '//itoa(n)//')')
   return
  else
 
-  __FREE(r)
-  __FREE(rcomp)
-  __FREE(m)
-  __FREE(q)
+  call smcv_done_from_acemd()
   __MESSAGE(whoami, 'INITIALIZING SMCV PLUGIN WITH '//itoa(n)//' ATOMS');
   allocate(r(3,n), rcomp(3,n), m(n), q(n))
   m=mass
@@ -52,9 +42,34 @@ __CSUB(_ME, n, mass, charge, inputname, outputname)
   fid=-1
   call files_open(fid, ifname, 'FORMATTED', 'READ')
 ! parse input file
+  call parse_file(fid, MPI_COMM_NULL, quiet_=.false.)
+  call files_close(fid)
+!
+  call smcv_exec()
 
+  call parser_done()
   initialized=.true.
 !
  endif
 
 end subroutine _ME
+#undef _ME
+
+
+
+
+#define _ME smcv_done_from_acemd
+__CSUB(_ME)
+ __BINDC
+ use minimal_system
+ use sm_var, only : smcv_initialized
+!
+ if (smcv_initialized) call smcv_done()
+!
+ __FREE(r)
+ __FREE(rcomp)
+ __FREE(m)
+ __FREE(q)
+!
+ initialized=.false.
+end

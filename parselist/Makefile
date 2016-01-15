@@ -1,7 +1,8 @@
 ROOT=..
 OBJS=parselist.o
 NAME=parselist
-DEPS=parser
+DEPS=parser vectors
+#vectors : output
 
 include $(ROOT)/Makefile.inc
 

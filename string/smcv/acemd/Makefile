@@ -1,7 +1,8 @@
 ROOT=../../..
-STRING=../../
-SMCV=../
+STRING=../..
+SMCV=..
 OBJS=plugin-smcv.o minimal_system.o smcv_acemd.o
+HEADS=smcv.h
 
 NAME=string/smcv/acemd
 
@@ -11,6 +12,8 @@ include $(ROOT)/Makefile.inc
 
 LOCALMACROS+=-include $(SMCV)/source.defs -include $(ROOT)/source.defs -include source.defs
 LOCALDEPS+=$(SMCV)/source.defs $(ROOT)/source.defs source.defs
+
+smcv_acemd.o : minimal_system.o $(STRING)/sm_var.o
 
 plugin-smcv.o : plugin-smcv.c aceplug.h smcv.h $(LOCALDEPS)
 	$(CC) $(CFLAGS) $(LOCALDEFS) $(LOCALMACROS) $< -o $@

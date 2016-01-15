@@ -3,13 +3,14 @@ COMMON=.
 OBJS=
 NAME=continua
 SUBDIRS=io common objects chest # eddie
-DEPS=
+DEPS+=$(addprefix $(NAME)/,$(SUBDIRS))
+
 LOCALDEPS=
 
 include $(ROOT)/Makefile.inc
 include $(COMMON)/Makefile.inc
 
-$(ROOT)/$(NAME).stamp:: $(SUBDIRS)
+#$(ROOT)/$(NAME).stamp:: $(SUBDIRS)
 
 $(SUBDIRS) : $(addprefix $(NAME)/, $(addsuffix .stamp, $(SUBDIRS)))
 

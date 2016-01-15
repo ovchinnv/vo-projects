@@ -1,7 +1,9 @@
 ROOT=..
 OBJS=multicom.o multicom_aux.o ifstack.o
 NAME=multicom
-DEPS=vectors output parser parselist
+DEPS=parselist
+#parser: output
+#parselist : parser vectors
 
 LOCALMACROS=-include source.defs
 LOCALDEPS=source.defs

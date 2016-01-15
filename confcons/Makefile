@@ -2,7 +2,10 @@ ROOT=..
 DYNA=$(ROOT)/dynamol
 OBJS=chirality.o confcons.o
 NAME=confcons
-DEPS=constants output multicom parser dynamol
+DEPS=dynamol
+#multicom: output parser
+#dynamol: multicom
+#dynamol: constants
 
 # NOTE : use += vs. = to avoid including in charmm distrib per charmm_distrib script in root (a trick)
 LOCALMACROS=-include source.defs
