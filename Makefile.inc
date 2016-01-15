@@ -146,7 +146,6 @@ $(ROOT)/$(NAME).stamp:: $(OBJS) $(MODS) $(HEADS) $(DISTRIB)
 %.h:%.H $(LOCALDEPS) $(GLOBALDEPS)
 	$(FPP) $(FPPFLAGS) $(DEFS) $(LOCALDEFS) $(GLOBALMACROS) $(LOCALMACROS) -P $< > $@
 %.F90:%.ftn $(LOCALDEPS) $(GLOBALDEPS)
-	file1=$@ ; file2=$${file1%.F90}.o ; touch $$file2
 	sed 's/\([^\#]\)\(\/\/\)/\1\^\^/g' $< | $(FPP) $(FPPFLAGS) $(DEFS) $(LOCALDEFS) -U__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(MSG) $(INCLUDES) -P | sed 's/\^\^/\/\//g' > $@
 %.src:%.ftn $(LOCALDEPS) $(GLOBALDEPS) $(ROOT)/charmm.msg
 	sed 's/\([^\#]\)\(\/\/\)/\1\^\^/g' $< | $(FPP) $(FPPFLAGS) -D__CHARMM -D__CHARMM_VER=$(CHARMM_MAJOR_VERSION) $(GLOBALMACROS) $(LOCALMACROS) $(CHMSG) -P | sed 's/\^\^/\/\//g' > $@
@@ -189,7 +188,8 @@ libs : libraries
 libraries: $(ROOT)/$(NAME).stamp
 	for d in $(DIRS); do (cd $$d; $(MAKE) libraries); done
 
-.SILENT : %.stamp clean $(DISTRIB) force_look
+.SILENT : %.stamp $(DISTRIB) force_look
+#.SILENT : clean
 clean::
 	rm -f *.mod *.a *.so $(ROOT)/$(NAME).stamp $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(EXE) $(HEADS) test.F90 test.dat test.out test.o 
 	if [ -f test ] ; then rm -f test ; fi
