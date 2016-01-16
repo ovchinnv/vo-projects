@@ -1,11 +1,12 @@
 ! a collection of subroutines to ccall the SMCV code from ACEMD plugin interface
 !
 #define __CSUB(__NAME, ...) subroutine __NAME (__VA_ARGS__) bind(c, name=__STRING(__NAME))
-#define __BINDC use, intrinsic :: iso_c_binding
+#define __CFUN(__NAME, ...) function __NAME (__VA_ARGS__) bind(c, name=__STRING(__NAME))
+#define __CBIND use, intrinsic :: iso_c_binding
 !
 #define _ME smcv_init_from_acemd
-__CSUB(_ME, n, mass, charge, inputname, il, outputname, ol)
- __BINDC
+ __CFUN(_ME, n, mass, charge, inputname, il, outputname, ol)
+ __CBIND
  use minimal_system
  __DEP_CONST
  __DEP_PARSER
@@ -13,6 +14,7 @@ __CSUB(_ME, n, mass, charge, inputname, il, outputname, ol)
  __DEP_FILES
  __DEP_MPI
  __IMPNONE
+ int(__FCINT) :: _ME
  int( __FCINT), intent(in), value :: n, il, ol
  real(__FCFLOAT), intent(in), dimension(n) :: mass, charge
  type (c_ptr), value, intent(in) :: inputname, outputname
@@ -22,6 +24,7 @@ __CSUB(_ME, n, mass, charge, inputname, il, outputname, ol)
 
  int :: i, fid
  __IAM(_ME)
+ _ME=1
 !
  call c_f_pointer(inputname, ifname)
  call c_f_pointer(outputname, ofname)
@@ -32,10 +35,10 @@ __CSUB(_ME, n, mass, charge, inputname, il, outputname, ol)
   __WRN(whoami, 'NUMBER OF ATOMS MUST BE POSITIVE (RECEIVED '//itoa(n)//')')
   return
  else
-
   call smcv_done_from_acemd()
   __MESSAGE(whoami, 'INITIALIZING SMCV PLUGIN WITH '//itoa(n)//' ATOMS');
-  allocate(r(3,n), rcomp(3,n), m(n), q(n))
+  allocate(r(3,n), rcomp(3,n), f(3,n), m(n), q(n))
+  natom=n
   m=mass
   q=charge
   r=__NAN
@@ -47,24 +50,61 @@ __CSUB(_ME, n, mass, charge, inputname, il, outputname, ol)
   call files_close(fid)
 !
   call smcv_exec()
-
-  call parser_done()
-  initialized=.true.
+!
+! note that it would be a good (great) idea to pass the array of the indices of all the atoms
+! that are used back to the plugin to save on the memory access during simulation
+! especially if only a small number of atoms are used
+!
+  if (.not.fatal_warning()) then 
+   initialized=.true.
+   _ME=0
+  endif
 !
  endif
 
+end function _ME
+#undef _ME
+!===================================================================
+#define _ME smcv_master_from_acemd
+ __CSUB(_ME, iteration_, r_acemd, f_acemd, e)
+ __CBIND
+ use minimal_system
+ use cv_common, only : cv
+ __DEP_CONST
+ use smcv_master, only : smcv_main
+ __IMPNONE
+ int(C_LONG), value, intent(in) :: iteration_
+ real(__FCFLOAT), intent(in), dimension(3, natom) :: r_acemd
+ real(C_FLOAT), intent(out), dimension(3, natom) :: f_acemd
+ real(__FCFLOAT), intent(out) :: e
+!
+ int :: alistsize, iteration
+ int, pointer :: atomlist(:)
+ iteration=iteration_ ; ! convert to int
+! load coordinates
+ alistsize=cv%amap%last
+ atomlist=>cv%amap%i ! list of all atoms that are needed by CVs
+ r(:,atomlist(1:alistsize))=r_acemd(:,atomlist(1:alistsize))
+ f(:,atomlist(1:alistsize))=zero ! start from zero force
+!
+ call smcv_main(__X, __Y, __Z, __XCOMP, __YCOMP, __ZCOMP, m, f(1,:), f(2,:), f(3,:), iteration)
+! update acemd forces
+ f_acemd(:,atomlist(1:alistsize)) = f(:,atomlist(1:alistsize))
+! update energy
+ e=zero ; ! not computed yet
+!
 end subroutine _ME
 #undef _ME
-
-
-
-
+!===================================================================
 #define _ME smcv_done_from_acemd
-__CSUB(_ME)
- __BINDC
+ __CSUB(_ME)
+ __CBIND
  use minimal_system
  use sm_var, only : smcv_initialized
+ __DEP_PARSER, only : parser_done
+ __IMPNONE
 !
+ call parser_done()
  if (smcv_initialized) call smcv_done()
 !
  __FREE(r)
