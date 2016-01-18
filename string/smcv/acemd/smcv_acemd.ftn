@@ -1,4 +1,19 @@
-! a collection of subroutines to ccall the SMCV code from ACEMD plugin interface
+module smcv_acemd
+ use minimal_system
+
+ __DEP_CONST
+
+ __IMPNONE
+
+ private
+
+ bool, save :: defer_init_until_dyna=.false. ! if true, will call initializer after coordinates are available
+ bool :: initialized=.false.
+ int :: iteration
+
+ contains
+! a collection of subroutines to call the SMCV code from ACEMD plugin interface
+! module encapsulation allows storage
 !
 #define __CSUB(__NAME, ...) subroutine __NAME (__VA_ARGS__) bind(c, name=__STRING(__NAME))
 #define __CFUN(__NAME, ...) function __NAME (__VA_ARGS__) bind(c, name=__STRING(__NAME))
@@ -7,13 +22,11 @@
 #define _ME smcv_init_from_acemd
  __CFUN(_ME, n, mass, charge, inputname, il, outputname, ol)
  __CBIND
- use minimal_system
  __DEP_CONST
  __DEP_PARSER
  __DEP_OUTPUT
  __DEP_FILES
  __DEP_MPI
- __IMPNONE
  int(__FCINT) :: _ME
  int( __FCINT), intent(in), value :: n, il, ol
  real(__FCFLOAT), intent(in), dimension(n) :: mass, charge
@@ -42,6 +55,7 @@
   m=mass
   q=charge
   r=__NAN
+  rcomp=__NAN
 ! open input file
   fid=-1
   call files_open(fid, ifname, 'FORMATTED', 'READ')
@@ -49,14 +63,22 @@
   call parse_file(fid, MPI_COMM_NULL, quiet_=.false.)
   call files_close(fid)
 !
+ __GET_OPT_PAR_B(defer_init_dyna, defer_init_until_dyna, .false., __STRING(__SMCVCTX));
+!
+! defer initialization until coordinates are available
+ if ( defer_init_until_dyna ) then 
+  __MESSAGE(whoami, 'WILL DEFER EXECUTION OF INITIALIZATION STACK UNTIL DYNAMICS');
+ else
+   __MESSAGE(whoami, 'EXECUTING INITIALIZATION STACK');
   call smcv_exec()
+ endif
 !
 ! note that it would be a good (great) idea to pass the array of the indices of all the atoms
 ! that are used back to the plugin to save on the memory access during simulation
 ! especially if only a small number of atoms are used
 !
   if (.not.fatal_warning()) then 
-   initialized=.true.
+   initialized=.not. defer_init_until_dyna
    _ME=0
   endif
 !
@@ -65,33 +87,52 @@
 end function _ME
 #undef _ME
 !===================================================================
-#define _ME smcv_master_from_acemd
+#define _ME smcv_dyna_from_acemd
  __CSUB(_ME, iteration_, r_acemd, f_acemd, e)
  __CBIND
- use minimal_system
  use cv_common, only : cv
  __DEP_CONST
+ __DEP_OUTPUT
  use smcv_master, only : smcv_main
- __IMPNONE
  int(C_LONG), value, intent(in) :: iteration_
  real(__FCFLOAT), intent(in), dimension(3, natom) :: r_acemd
  real(C_FLOAT), intent(out), dimension(3, natom) :: f_acemd
  real(__FCFLOAT), intent(out) :: e
 !
- int :: alistsize, iteration
+ __IAM(_ME)
+ int :: alistsize
  int, pointer :: atomlist(:)
- iteration=iteration_ ; ! convert to int
-! load coordinates
- alistsize=cv%amap%last
- atomlist=>cv%amap%i ! list of all atoms that are needed by CVs
- r(:,atomlist(1:alistsize))=r_acemd(:,atomlist(1:alistsize))
- f(:,atomlist(1:alistsize))=zero ! start from zero force
-!
- call smcv_main(__X, __Y, __Z, __XCOMP, __YCOMP, __ZCOMP, m, f(1,:), f(2,:), f(3,:), iteration)
-! update acemd forces
- f_acemd(:,atomlist(1:alistsize)) = f(:,atomlist(1:alistsize))
-! update energy
+
  e=zero ; ! not computed yet
+!
+ if (initialized .or. defer_init_until_dyna) then
+
+  iteration=iteration_ ; ! convert to int
+!
+  if (initialized) then ! just load coordinates
+! load coordinates
+   alistsize=cv%amap%last
+   atomlist=>cv%amap%i ! list of all atoms that are needed by CVs
+   r(:,atomlist(1:alistsize))=r_acemd(:,atomlist(1:alistsize))
+  else 
+! complete initialization
+   __MESSAGE(whoami, 'EXECUTING INITIALIZATION STACK');
+! load all coords (we do not know which ones we will need b/c initialization is incomplete)
+   r=r_acemd
+   call smcv_exec()
+   initialized=.true.
+! now the atom list should be defined -- use it below for forces
+   alistsize=cv%amap%last
+   atomlist=>cv%amap%i ! list of all atoms that are needed by CVs
+  endif
+!
+  f(:,atomlist(1:alistsize))=zero ! start from zero force
+  call smcv_main(__X, __Y, __Z, __XCOMP, __YCOMP, __ZCOMP, m, f(1,:), f(2,:), f(3,:), iteration)
+! update acemd forces
+! note that per CHARMM convention, which the plugin code inherits, forces correspond to grad V, not -grad V !
+  f_acemd(:,atomlist(1:alistsize)) = - f(:,atomlist(1:alistsize))
+! update energy
+ endif
 !
 end subroutine _ME
 #undef _ME
@@ -99,10 +140,8 @@ end subroutine _ME
 #define _ME smcv_done_from_acemd
  __CSUB(_ME)
  __CBIND
- use minimal_system
  use sm_var, only : smcv_initialized
  __DEP_PARSER, only : parser_done
- __IMPNONE
 !
  call parser_done()
  if (smcv_initialized) call smcv_done()
@@ -114,3 +153,4 @@ end subroutine _ME
 !
  initialized=.false.
 end
+end module smcv_acemd

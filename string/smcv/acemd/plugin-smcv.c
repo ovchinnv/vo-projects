@@ -81,7 +81,7 @@ aceplug_err_t aceplug_calcforces(struct aceplug_sim_t *s) {
   r[j++] = s -> pos[i].z;
  }
 //
- smcv_master_from_acemd(iteration,r,fr, &smcv_energy);
+ smcv_dyna_from_acemd(iteration,r,fr, &smcv_energy);
 //
  for (int i=0, j=0 ; i< s->natoms ; i++) {
   s -> frc[i].x+=fr[j++];
