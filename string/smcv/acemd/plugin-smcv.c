@@ -14,6 +14,7 @@ aceplug_err_t aceplug_init(struct aceplug_sim_t *s, int argc, char **argkey, cha
  __CCHAR *inputfile = NULL, *logfile = NULL;
  __CINT ilen=0, llen=0, ierr=0;
  __CCHAR* deflogfile = "smcv.log" ;
+ __CINT * atomlist = NULL ; // to maintain a list of atoms that are needed by plugin; other coordinates to be omitted
 //
  printf("# SMCV PLUGIN: Initializing ...\n");
 //
@@ -44,11 +45,12 @@ aceplug_err_t aceplug_init(struct aceplug_sim_t *s, int argc, char **argkey, cha
   printf("'\n");
  }
 
-
  __CINT natoms=0;
  __CFLOAT *m=NULL, *q=NULL;
 
  natoms = s->natoms ;
+//
+ s->privdata = NULL; // initialize private pointer
 //
  m = (__CFLOAT *) calloc(natoms, sizeof(__CFLOAT));
  q = (__CFLOAT *) calloc(natoms, sizeof(__CFLOAT));
@@ -59,7 +61,11 @@ aceplug_err_t aceplug_init(struct aceplug_sim_t *s, int argc, char **argkey, cha
 //
  ilen=strlen(inputfile);
  llen=strlen(logfile);
- ierr=smcv_init_from_acemd(natoms, m, q, inputfile, ilen, logfile, llen) ;
+ ierr=smcv_init_from_acemd(natoms, m, q, inputfile, ilen, logfile, llen, &atomlist) ;
+ if (atomlist!=NULL) { // atom indices provided; store them as private data
+  s->privdata = atomlist ;
+ printf("%d\n", atomlist[2]);
+ }
  free(m);
  free(q);
 //
@@ -68,26 +74,66 @@ aceplug_err_t aceplug_init(struct aceplug_sim_t *s, int argc, char **argkey, cha
 //==========================================================
 aceplug_err_t aceplug_calcforces(struct aceplug_sim_t *s) {
  int n = s->natoms ;
+ int i, j;
+ __CINT * atomlist = NULL, *m ; // list of atom indices required by plugin
  __CFLOAT *r = malloc( n * 3 * sizeof(__CFLOAT) ) ; //positions
  float *fr   = calloc( n * 3 , sizeof(float) ) ; //forces
+ __CFLOAT *rptr;
+ float *fptr;
  __CFLOAT smcv_energy;
  long int iteration =s->step ;
 //
  if ( s-> plugin_load_positions() ) {return ACEPLUG_ERR;}
  if ( s-> plugin_load_forces() ) {return ACEPLUG_ERR;}
- for (int i=0, j=0 ; i< s->natoms ; i++) {
-  r[j++] = s -> pos[i].x;
-  r[j++] = s -> pos[i].y;
-  r[j++] = s -> pos[i].z;
- }
 //
- smcv_dyna_from_acemd(iteration,r,fr, &smcv_energy);
+ if (s->privdata==NULL) { // provide all coords
+  for (i=0, rptr=r ; i< s->natoms ; i++) {
+   *(rptr++) = s -> pos[i].x;
+   *(rptr++) = s -> pos[i].y;
+   *(rptr++) = s -> pos[i].z;
+  }
+// compute plugin forces
+  smcv_dyna_from_acemd(iteration, r, fr, &smcv_energy, &atomlist); // might return valid atomlist
+// apply plugin forces
+  if (atomlist!=NULL) { // atom indices provided; store them as private data and use for adding forces
+   s->privdata = atomlist++ ; // point to atomlist and go to first atom index
+   for (m=atomlist+atomlist[-1] ; atomlist<m ; atomlist++) { // iterate until atomlist points to the last index
+    j=*atomlist ;
+    fptr=fr + 3*j ;
+    s -> frc[j].x+= *(fptr++);
+    s -> frc[j].y+= *(fptr++);
+    s -> frc[j].z+= *(fptr);
+   }
+  } else { // no atomlist provided; loop over all atoms
+   for (i=0, fptr=fr ; i< s->natoms ; i++) {
+    s -> frc[i].x+= *(fptr++);
+    s -> frc[i].y+= *(fptr++);
+    s -> frc[i].z+= *(fptr++);
+   }
+  } // atomlist
+ } else { // privdata not null : loop over only the desired indices
+  atomlist = (__CINT*)s->privdata+1 ;// first entry skipped; it is the number of atoms (see line below)
+  for (m=atomlist + atomlist[-1]  ; atomlist<m ; atomlist++) { // iterate until atomlist points to the last index
+   j=*atomlist ;
+   rptr=r + 3*j ;
+   *(rptr++) = s -> pos[j].x;
+   *(rptr++) = s -> pos[j].y;
+   *(rptr++) = s -> pos[j].z;
+  }
 //
- for (int i=0, j=0 ; i< s->natoms ; i++) {
-  s -> frc[i].x+=fr[j++];
-  s -> frc[i].y+=fr[j++];
-  s -> frc[i].z+=fr[j++];
- }
+  smcv_dyna_from_acemd(iteration, r, fr, &smcv_energy, &atomlist); // atomlist should not be modified in this call
+//
+  atomlist = (__CINT*)s->privdata+1 ;// first entry skipped; it is the number of atoms (see line below)
+  for (m=atomlist+atomlist[-1] ; atomlist<m ; atomlist++) { // iterate until atomlist points to the last index
+   j=*atomlist ;
+   fptr=fr + 3*j ;
+   s -> frc[j].x+= *(fptr++);
+   s -> frc[j].y+= *(fptr++);
+   s -> frc[j].z+= *(fptr);
+  }
+
+ } // s-> privdata
+//
  free(r);
  free(fr);
  if ( s-> plugin_update_forces() ) { return ACEPLUG_ERR;}
