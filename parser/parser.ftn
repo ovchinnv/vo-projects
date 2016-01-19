@@ -34,9 +34,11 @@
       character, parameter :: underscore='_'
       character, parameter, public :: hyphen='-'
       character, parameter :: slash='/'
+      character, parameter :: colon=':'
       character, parameter, public :: tab=char(9)
       character, parameter, public :: space(4) = (/' ', tab, ',',';'/)
       character, parameter :: comment(4) = (/'*','!','#','%'/)
+      character, parameter :: nextline(1)=(/hyphen/)
       character, parameter :: equals(1) = (/'='/)
       character, parameter :: vector_open(2)=(/'(','['/)
       character, parameter :: vector_close(2)=(/')',']'/)
@@ -44,9 +46,9 @@
       character, parameter :: context_close(1)=(/'}'/)
       character, parameter :: string_open(1)=(/'"'/)
       character, parameter :: string_close(1)=(/'"'/) ! do not have to be the same -- see code below
-      character(len=200), parameter :: allowed=upper//lower//digits//decimal//underscore//hyphen//slash//tilde
+      character(len=200), parameter :: allowed=upper//lower//digits//decimal//underscore//hyphen//slash//tilde//colon
 #ifdef __STRING_SERIAL
-      character(len=2), parameter :: exec_start='e:'
+      character(len=2), parameter :: exec_start=':'
 #else
       character(len=5), parameter :: exec_start='exec:'
 #endif
@@ -480,11 +482,12 @@
        __IAM(PARSE_FILE)
 !
        int :: allowed_len
-       character :: allowed2(200),c
+       character :: allowed2(200),c,cc
        bool :: qtag, qeq, qval, qexec, qerror ! active : tag, equals, value, executable line, error flag
        bool :: qvector ! flag that is active when we are reading a vector (certain default behavior is overridden)
        bool :: qstring ! flag that is active when we are reading a character string (anything is allowed inside)
        bool :: qcontext ! flag that is active when any context other than the main context is active
+       bool :: qcontinue ! flag that is set when a line continuation symbol is found, which forces read of a new line w/o change of state
 !
        integer :: ioerr
        int :: l=0, ltag=0, lval=0, lexec=0
@@ -516,9 +519,10 @@
        qerror=.false.
        qexec=.false.
        qstring=.false.
+       qcontinue=.false.
        if (.not. parser_initialized) call parser_init()
        if(qloud) __MESSAGE(whoami, 'Reading input file.')
-       do while (.true.)
+ lines:do while (.true.)
 #ifdef __PARALLEL
         if (me.le.0) read(fid,'(A)',IOSTAT=ioerr) cmdline ! if running in parallel, then only the root node is passed a valid handle
         if (communicator.ne.MPI_COMM_NULL) call MPI_BCAST(ioerr,1,mpiint,0,communicator,ierr)
@@ -541,19 +545,35 @@
          if (any(comment.eq.cmdline(1:1))) l=1 ! skip lines that are comments
 !
          i=0
-         qtag=.true. ; ltag=0 ! each line is required to begin with a tag
-         qval=.false.; lval=0
-         qeq=.false.
-         qvector=.false.      ! this implies that a vector entry currently cannot span multiple lines
-         qexec=.false.        ! this implies that an executable command currently cannot span multiple lines
-         qstring=.false.      ! string cannot span multiple lines
+         if (qcontinue) then ! continued line
+          qcontinue=.false.
+         else ! normal line
+          qtag=.true. ; ltag=0 ! each line is required to begin with a tag
+          qval=.false.; lval=0
+          qeq=.false.
+          qvector=.false.      ! this implies that a vector entry currently cannot span multiple lines
+          qexec=.false.        ! this implies that an executable command currently cannot span multiple lines
+          qstring=.false.      ! string cannot span multiple lines
+         endif
 !
-         do while (l.ge.1)
+ chars:  do while (l.ge.1)
            i=i+1
            c=cmdline(i:i)
-!     write(0,*) tag(1:ltag), val(1:lval),i
+!          continuation :
+           if (any(nextline.eq.c) .and. .not. qstring) then ! continuation found
+!           quickly scan remainder of line to make sure nothing but comments remain
+            do j=i+1, l
+             cc=cmdline(j:j)
+             if (any(space.eq.cc)) cycle
+             if (any(comment.eq.cc)) then
+              qcontinue=.true.
+              cycle lines
+             endif
+             exit ! if we are here then a command character was encountered, in which case continuation is disallowed
+            enddo
+           endif
+!          EOL : 
            if ( (any(comment.eq.c).and..not.qstring).or.(i.eq.l)) then ! end of command line
-!write(0,*) "EOL:", qtag, tag(1:ltag), '=', val(1:lval)
             if ((qtag.and.i.gt.1).or.qeq) then
              __WRN3(whoami,'Unexpected end of line',0)
              qerror=.true.; exit 
@@ -933,7 +953,7 @@
            elseif (any(allowed2(1:allowed_len).eq.c)) then ! check that the characters are allowed
 !
             if (qtag) then ! reading a tag
-             if (ltag.eq.0) then 
+             if (ltag.eq.0) then
 ! test for executable line; if executable tag found, switch off qtag, switch on qexec
               j=len_trim(exec_start)
 !              write(0,*) cmdline(i:l)
@@ -985,11 +1005,11 @@
              __WRN3(whoami, 'Unrecognized character "'//c//'". Skipping line.',0)
              exit 
            endif ! character loop
-         enddo ! while l.gt.1
+          enddo chars ! while l.gt.1
         else ! end of file
          exit
         endif
-       enddo ! over all lines in the file
+       enddo lines ! over all lines in the file
 !
 !    check to make sure that the file did not end while a context was being read
        if (qcontext) then 
