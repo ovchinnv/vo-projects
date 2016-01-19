@@ -75,6 +75,7 @@ aceplug_err_t aceplug_init(struct aceplug_sim_t *s, int argc, char **argkey, cha
 aceplug_err_t aceplug_calcforces(struct aceplug_sim_t *s) {
  int n = s->natoms ;
  int i, j;
+ __CINT ierr;
  __CINT * atomlist = NULL, *m ; // list of atom indices required by plugin
  __CFLOAT *r = malloc( n * 3 * sizeof(__CFLOAT) ) ; //positions
  float *fr   = calloc( n * 3 , sizeof(float) ) ; //forces
@@ -93,7 +94,7 @@ aceplug_err_t aceplug_calcforces(struct aceplug_sim_t *s) {
    *(rptr++) = s -> pos[i].z;
   }
 // compute plugin forces
-  smcv_dyna_from_acemd(iteration, r, fr, &smcv_energy, &atomlist); // might return valid atomlist
+  ierr=smcv_dyna_from_acemd(iteration, r, fr, &smcv_energy, &atomlist); // might return valid atomlist
 // apply plugin forces
   if (atomlist!=NULL) { // atom indices provided; store them as private data and use for adding forces
    s->privdata = atomlist++ ; // point to atomlist and go to first atom index
@@ -121,7 +122,7 @@ aceplug_err_t aceplug_calcforces(struct aceplug_sim_t *s) {
    *(rptr++) = s -> pos[j].z;
   }
 //
-  smcv_dyna_from_acemd(iteration, r, fr, &smcv_energy, &atomlist); // atomlist should not be modified in this call
+  ierr=smcv_dyna_from_acemd(iteration, r, fr, &smcv_energy, &atomlist); // atomlist should not be modified in this call
 //
   atomlist = (__CINT*)s->privdata+1 ;// first entry skipped; it is the number of atoms (see line below)
   for (m=atomlist+atomlist[-1] ; atomlist<m ; atomlist++) { // iterate until atomlist points to the last index
@@ -139,7 +140,7 @@ aceplug_err_t aceplug_calcforces(struct aceplug_sim_t *s) {
  if ( s-> plugin_update_forces() ) { return ACEPLUG_ERR;}
  if ( s-> plugin_add_energy(ENERGY_EXTERNAL,smcv_energy) ) { return ACEPLUG_ERR;}
 //
- return ACEPLUG_OK;
+ return (ierr>0) ? ACEPLUG_ERR : ACEPLUG_OK ;
 }
 //==========================================================
 aceplug_err_t aceplug_endstep(struct aceplug_sim_t *s) {
