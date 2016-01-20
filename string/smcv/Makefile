@@ -2,8 +2,8 @@ ROOT=../..
 CVOBJ=cv_posi_com.o cv_dist_com.o cv_angle_com.o cv_anglvec.o cv_dihe_com.o cv_rmsd.o cv_drmsd.o cv_proj.o cv_quaternion.o cv_qcomp.o
 OBJS=cv_types.o cv_common.o cv_frames.o cv_cvrms.o smcv_master.o smcv.o smcv_add.o smcv_stats.o $(CVOBJ)
 HEAD=interface.h
-NAME=string/smcv mpi_stub
-DEPS=output vectors bestfit constants multicom random lu multidiag parser dynamol parser
+NAME=string/smcv
+DEPS=output vectors bestfit constants multicom random lu multidiag parser dynamol parser mpi_stub
 
 COMMON=..
 
@@ -30,5 +30,8 @@ smcv.o : smcv_master.o cv_frames.o cv_quaternion.o cv_common.o smcv_stats.o smcv
 smcv_add.o : $(CVOBJ) cv_quaternion.o cv_types.o cv_common.o cv_frames.o cv_cvrms.o
 smcv_master.o : cv_common.o $(CVOBJ) cv_cvrms.o smcv_stats.o
 
+smcv.src : interface.ch
+
 clean::
 	for d in $(SUBDIRS); do (cd $$d; $(MAKE) clean); done
+	rm -f interface.ch
