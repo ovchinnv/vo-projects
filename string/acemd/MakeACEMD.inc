@@ -1,9 +1,5 @@
 LIB=libsmcv_acemd.so
 LIBS+=$(LIB)
-#SUBDIRS=acemd
-#DEPS+=$(addprefix $(NAME)/,$(SUBDIRS))
-LOCALDEFS+=-D__ACEMD
-
 LINKOBJS=constants.o output.o parser.o cmd.o prm.o ivector.o ivector_list.o parselist.o files.o lu.o multidiag.o isort.o\
          sm_var.o sm_config.o ftsm_var.o smcv.o smcv_add.o smcv_master.o sm_util.o smcv_stats.o\
          cv_types.o cv_common.o cv_frames.o cv_quaternion.o \
@@ -11,5 +7,6 @@ LINKOBJS=constants.o output.o parser.o cmd.o prm.o ivector.o ivector_list.o pars
          cv_qcomp.o \
          plugin-smcv.o minimal_system.o smcv_acemd.o
 
+default : acemd
 acemd : all $(LIB)
 $(LIB) : acemd.stamp MakeACEMD.inc

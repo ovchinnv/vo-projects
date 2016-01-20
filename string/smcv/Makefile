@@ -2,13 +2,10 @@ ROOT=../..
 CVOBJ=cv_posi_com.o cv_dist_com.o cv_angle_com.o cv_anglvec.o cv_dihe_com.o cv_rmsd.o cv_drmsd.o cv_proj.o cv_quaternion.o cv_qcomp.o
 OBJS=cv_types.o cv_common.o cv_frames.o cv_cvrms.o smcv_master.o smcv.o smcv_add.o smcv_stats.o $(CVOBJ)
 HEAD=interface.h
-NAME=string/smcv
+NAME=string/smcv mpi_stub
 DEPS=output vectors bestfit constants multicom random lu multidiag parser dynamol parser
 
 COMMON=..
-
-# to compile ACEMD Plugin
-include MakeACEMD.inc
 
 LOCALMACROS=-include source.defs -include $(COMMON)/source.defs 
 LOCALMACROS+=-include $(ROOT)/dmol.defs
@@ -21,7 +18,7 @@ include $(COMMON)/Makefile.inc
 smcv_add.F90: $(ROOT)/dmol_select_macro.def
 
 cv_frames.o : cv_common.o
-cv_common.o smcv_add.o smcv.o : $(COMMON)/sm_config.mod $(COMMON)/sm_var.o $(COMMON)/mpi_compat_stub.mod $(COMMON)/multicom_serial_string.mod
+cv_common.o smcv_add.o smcv.o : $(COMMON)/sm_config.mod $(COMMON)/sm_var.mod $(COMMON)/multicom_serial_string.mod
 cv_common.o : cv_types.o
 
 $(CVOBJ) cv_cvrms.o : cv_types.o cv_common.o

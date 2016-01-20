@@ -1,10 +1,10 @@
 ROOT=..
 OBJS=cmd.o prm.o parser.o
 NAME=parser
-DEPS=output constants
+DEPS=output constants mpi_stub
 
 LOCALMACROS=-include source.defs
-LOCALDEPS=source.defs 
+LOCALDEPS=source.defs
 
 LINKOBJS=output.o
 

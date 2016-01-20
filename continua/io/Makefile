@@ -2,7 +2,7 @@ ROOT=../..
 COMMON=..
 OBJS=plot3dio.o util.o formats.o chestio.o fieldio.o
 NAME=continua/io
-DEPS=parser output files
+DEPS=parser output files mpi_stub
 
 include $(ROOT)/Makefile.inc
 include $(COMMON)/Makefile.inc

@@ -1,5 +1,5 @@
 ROOT=..
-OBJS=stats.o sysinfo.o system.o sysmanip.o verlet.o dmol.o pca.o
+OBJS=stats.o sysinfo.o system.o sysmanip.o verlet.o dmol.o pca.o minimal_system.o
 NAME=dynamol
 INCLUDES=-I $(ROOT)/include
 DEPS=files bestfit random state

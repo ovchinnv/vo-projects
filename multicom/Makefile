@@ -1,7 +1,7 @@
 ROOT=..
 OBJS=multicom.o multicom_aux.o ifstack.o
 NAME=multicom
-DEPS=parselist
+DEPS=parselist mpi_stub
 #parser: output
 #parselist : parser vectors
 

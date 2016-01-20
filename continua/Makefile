@@ -12,6 +12,8 @@ include $(COMMON)/Makefile.inc
 
 #$(ROOT)/$(NAME).stamp:: $(SUBDIRS)
 
+all : $(SUBDIRS)
+
 $(SUBDIRS) : $(addprefix $(NAME)/, $(addsuffix .stamp, $(SUBDIRS)))
 
 chest : force_look
