@@ -472,9 +472,6 @@ __MPI_ONLY      endif
 !    also update running average
       t=0d0 ! default behavior does not modify runinng average (see below)
 !
-!      write(6,*) 'hist index', j
-!       write(600+whoiam,*) update_average, j
-!
       if (update_average) then
        cv%num_run_ave=cv%num_run_ave+1
        t=one/(cv%num_run_ave);
@@ -486,14 +483,15 @@ __MPI_ONLY      endif
         v=cv%r(i,instant)
         cv%r(i,j)=v
 !     VO 3.24.09: correct for angle average
-!     VO : note that even with num_run_ave=0 we do not "forget" the offset: this is not great
+!     VO : note that even with num_run_ave=0 we do not "forget" the offset: this is not great (so is runave is initialized with,e.g., -10^n, this order persists)
         u=cv%r(i,runave)
-        v=u-v
-!
         select case(cv%type(i));
-         case(dihe_com, angle_com, anglvec);
-          v=modulo(v,TWOPI)
-          if (v.gt.PI) __INCR(v,-TWOPI)
+         case(dihe_com);
+          v=u-v;         v=modulo(v,TWOPI); if (v.gt.PI) v=v-TWOPI
+         case(angle_com, anglvec);
+          v=u-sign(v,u); v=modulo(v,TWOPI); if (v.gt.PI) v=v-TWOPI
+         case default;
+          v=u-v
         end select
 !
         cv%r(i,runave)=u-t*v
@@ -503,16 +501,33 @@ __MPI_ONLY      endif
 ! it is reset after every stats output
 ! (1) compute absolute distance between sample and restraint center
         if (cv%fbwidth(i).gt.zero) then
-         v=cv%r(i,zcur)-cv%r(i,instant)
          select case(cv%type(i));
-          case(dihe_com, angle_com, anglvec); v=modulo(v,TWOPI); if (v.gt.PI) __INCR(v,-TWOPI)
+          case(dihe_com)
+           v=cv%r(i,zcur)-cv%r(i,instant)
+           v=modulo(v,TWOPI); if (v.gt.PI) __INCR(v,-TWOPI)
+!=============
+          case(angle_com, anglvec)
+           v=cv%r(i,zcur)-sign(cv%r(i,instant),cv%r(i,zcur))
+           v=modulo(v,TWOPI); if (v.gt.PI) __INCR(v,-TWOPI)
+!=============
+          case default ;
+           v=cv%r(i,zcur)-cv%r(i,instant)
          end select
 ! (2) if sample within flat bottom window, add to average
          if (abs(v).le.cv%fbwidth(i)) then ! update average
-          v=cv%r(i,fbave)-cv%r(i,instant)
-          select case(cv%type(i)) ! correction for angle average
-           case(dihe_com, angle_com, anglvec); v=modulo(v,TWOPI); if (v.gt.PI) __INCR(v,-TWOPI)
+          select case(cv%type(i));
+           case(dihe_com)
+            v=cv%r(i,fbave)-cv%r(i,instant)
+            v=modulo(v,TWOPI); if (v.gt.PI) __INCR(v,-TWOPI)
+!=============
+           case(angle_com, anglvec)
+            v=cv%r(i,fbave)-sign(cv%r(i,instant),cv%r(i,fbave))
+            v=modulo(v,TWOPI); if (v.gt.PI) __INCR(v,-TWOPI)
+!=============
+           case default ;
+            v=cv%r(i,fbave)-cv%r(i,instant)
           end select
+!
           __INC(cv%num_fb_ave(i))
           __INCR(cv%r(i,fbave), -v/cv%num_fb_ave(i))
          endif ! abs(v)
@@ -560,13 +575,15 @@ __MPI_ONLY      endif
         v=cv%r(i,instant)
         cv%r(i,j)=v
 !    VO 3.24.09: correct for angle average
-        u=cv%r(i,runave)
-        v=u-v
 !
+        u=cv%r(i,runave)
         select case(cv%type(i));
-         case(dihe_com, angle_com, anglvec);
-          v=modulo(v,TWOPI)
-          if (v.gt.PI) v=v-TWOPI
+         case(dihe_com);
+          v=u-v;         v=modulo(v,TWOPI); if (v.gt.PI) v=v-TWOPI
+         case(angle_com, anglvec);
+          v=u-sign(v,u); v=modulo(v,TWOPI); if (v.gt.PI) v=v-TWOPI
+         case default;
+          v=u-v
         end select
 !
         cv%r(i,runave)=u-t*v
@@ -577,16 +594,33 @@ __MPI_ONLY      endif
 ! to be combined at output (there is no reason to communicate more often than that)
 ! (1) compute absolute distance between sample and restraint center
         if (cv%fbwidth(i).gt.zero) then
-         v=cv%r(i,zcur)-cv%r(i,instant)
          select case(cv%type(i));
-          case(dihe_com, angle_com, anglvec); v=modulo(v,TWOPI); if (v.gt.PI) __INCR(v,-TWOPI)
+          case(dihe_com)
+           v=cv%r(i,zcur)-cv%r(i,instant)
+           v=modulo(v,TWOPI); if (v.gt.PI) __INCR(v,-TWOPI)
+!=============
+          case(angle_com, anglvec)
+           v=cv%r(i,zcur)-sign(cv%r(i,instant),cv%r(i,zcur))
+           v=modulo(v,TWOPI); if (v.gt.PI) __INCR(v,-TWOPI)
+!=============
+          case default ;
+           v=cv%r(i,zcur)-cv%r(i,instant)
          end select
 ! (2) if sample within flat bottom window, add to average
          if (abs(v).le.cv%fbwidth(i)) then ! update average
-          v=cv%r(i,fbave)-cv%r(i,instant)
-          select case(cv%type(i)) ! correction for angle average
-           case(dihe_com, angle_com, anglvec); v=modulo(v,TWOPI); if (v.gt.PI) __INCR(v,-TWOPI)
+          select case(cv%type(i));
+           case(dihe_com)
+            v=cv%r(i,fbave)-cv%r(i,instant)
+            v=modulo(v,TWOPI); if (v.gt.PI) __INCR(v,-TWOPI)
+!=============
+           case(angle_com, anglvec)
+            v=cv%r(i,fbave)-sign(cv%r(i,instant),cv%r(i,fbave))
+            v=modulo(v,TWOPI); if (v.gt.PI) __INCR(v,-TWOPI)
+!=============
+           case default ;
+            v=cv%r(i,fbave)-cv%r(i,instant)
           end select
+!
           __INC(cv%num_fb_ave(i))
           __INCR(cv%r(i,fbave), -v/cv%num_fb_ave(i))
          endif ! abs(v)
