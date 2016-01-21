@@ -238,7 +238,7 @@ __MPI_ONLY     &          mpifloat, MPI_SUM, MPI_COMM_LOCAL, ierror)
       int :: k
 !
       int :: i, j, qbeg, qend, ibeg, iend, ierror
-      float :: s, one_m_s, r, fpre, f, fpara, fperp, qnorm, qdp
+      float :: s, r, fpre, f, fpara, fperp, qnorm, qdp
       bool :: deriv, addforce, addforce2, calctheta, qgrp
       __IAM(SMCV_ADDFORCE)
 !
@@ -252,7 +252,6 @@ __MPI_ONLY     &          mpifloat, MPI_SUM, MPI_COMM_LOCAL, ierror)
       else
        s=1d0
       endif
-      one_m_s=1d0-s
 !
       calctheta=.true. ; deriv=.true. ; addforce2=.true.
 !
@@ -275,7 +274,9 @@ __MPI_ONLY     &          mpifloat, MPI_SUM, MPI_COMM_LOCAL, ierror)
 !       update current z-restraints, compute non-eq work, and add new forces
 !      do i=1, cv%num_cv ! loop over all CV
       do i=ibeg, iend ! loop over CV assigned to this slave in the group
-       r=(s*cv%r(i,main)+one_m_s*cv%r(i,comp)) ! combination of main and comp; then, what is zcur ? ANS: zcur=r later
+! NOTE: below, will combine cv value from main and comp into r; 
+! note also that simple interpolation can only be used for certain cv
+! for others, e.g. angles, dihedrals and quaternions, special interpolation is needed
 ! ====================================================================
 ! the code below (first select case statement) is (1) to compute NEQ work
 ! (2) to compute the correct zcurrent, as we advance from zcomp to zmain
@@ -320,20 +321,27 @@ __MPI_ONLY     &          mpifloat, MPI_SUM, MPI_COMM_LOCAL, ierror)
 !====================================================================
 !
        case(dihe_com)
-         dummy=(r-cv%r(i,zcur))
+!    compute average accounting for periodicity (i.e. choosing the smallest angular displacement)
+         r = cv%r(i,comp) - cv%r(i,main) ; r=modulo(r,TWOPI); if (r.gt.PI) __INCR(r,-TWOPI)
+         r = cv%r(i,comp) - s * r ;
+         dummy=(r-cv%r(i,zcur)); dummy=modulo(dummy,TWOPI) ; if (dummy.gt.PI) __INCR(dummy,-TWOPI)
+!
+       case(angle_com, anglvec) ! cannot tell between theta/-theta ; mod(t,2pi) needed when t is not necessarily within [0,360)
+         r = cv%r(i,comp) - sign(cv%r(i,main),cv%r(i,comp)) ; r=modulo(r,TWOPI); if (r.gt.PI) __INCR(r,-TWOPI)
+         r = cv%r(i,comp) - s * r
+         dummy=r-sign(cv%r(i,zcur),r)
          dummy=modulo(dummy,TWOPI)
          if (dummy.gt.PI) __INCR(dummy,-TWOPI) ! pick the smallest angular displacement
-       case(angle_com, anglvec) ! cannot tell between theta/-theta
-         dummy=(abs(r)-abs(cv%r(i,zcur)))
-         dummy=modulo(dummy,TWOPI)
-         if (dummy.gt.PI) __INCR(dummy,-TWOPI) ! pick the smallest angular displacement
+!
        case default
+         r = cv%r(i,comp) - cv%r(i,main)
+         r = cv%r(i,comp) - s * r ;
          dummy=(r-cv%r(i,zcur))
        end select
 !
 !      compute nonequilibrium work -- u
        cv%work=cv%work+cv%r(i,forces2)*dummy ! update work; forces2 contains instantaneous force
-       cv%r(i,zcur)=r                        ! update current restrains
+       __INCR(cv%r(i,zcur), dummy)           ! update current restrains
 !ccccccccccccccccccccccccc ADD FORCES cccccccccccccccccccc
        addforce=addforce2.and.cv%active(i)
 !
