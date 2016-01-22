@@ -23,37 +23,35 @@ __CHARMM_ONLY##IF STRINGM
       contains
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 !      this function does the job for x, y, and z positions
-       function cv_posi_com_add(type,atom_list,k,gamma,weight,frame) result(l)
+       function cv_posi_com_add(type,atom_list,k,gamma,weight,frame,vec) result(l)
        __DEP_OUTPUT
+       __DEP_CONST
+       __DEP_NUMBER
+       __DEP_BESTFIT
        __DECLARE_MSGBUF
 !
        float  :: k, gamma, weight
        int, optional :: frame ! reference frame
        type (int_vector) :: atom_list
+       float, intent(in) :: vec(3)
 !      locals
        int :: type, j, l, m, ind, num_int, ncom, ii, jj, ncomf
        int, pointer :: indf(:)
        bool :: found
+       float :: vnorm
        character(len=1) :: pos
        type (int_vector) :: unique_amap_ptr ! contains a unique list of atom map pointers (to speed up gradient computation, etc)
 !
        __IAM(CV_POSI_COM_ADD)
 !
        l=0
-!
-       select case (type)
-        case (posi_com_x); pos='X'
-        case (posi_com_y); pos='Y'
-        case (posi_com_z); pos='Z'
-        case default;
-         __WRN( whoami, 'UNKNOWN CV TYPE. NOTHING DONE.')
-         return
-       end select
+       vnorm=norm3(vec)
 !
 !    check for duplicate CV (exact identical entry only)
        found=.false.
        do l=1, cv%num_cv
         if (cv%type(l).eq.type) then
+! first, check integer private data (atom selection)
          ncom=atom_list%last
          found=ncom.eq.cv%priv(l)%p(1)
          ind=2
@@ -62,15 +60,36 @@ __CHARMM_ONLY##IF STRINGM
      &         (atom_list%i(j).eq.cv%amap%i(cv%priv(l)%p(ind)))
            ind=ind+1
          enddo
-         if (found) found=(frame.eq.cv%amap%i(cv%priv(l)%p(ind)))
-        endif
+         found=(frame.eq.cv%amap%i(cv%priv(l)%p(ind)))
+! second, check real private data (projection vector spec)
+! the convention is that if a vector is determined from selection, its norm will be nonpositive (abs taken at calc)
+         if (cv%priv(l)%pr(4).gt.0) then
+          if (found) found=(vnorm.gt.0)
+          do m=1,2 ! third component is determined by norm
+           if (found) found = abs( vnorm*vec(m) - cv%priv(l)%pr(4)*cv%priv(l)%pr(m) ).lt.__ERRTOL
+          enddo
+         else ! the value of the cv vector norm is zero (or negative, which means that it was initialized w/ zero)
+          if (found) found=vnorm.eq.zero ! atom selections are the same, and both vectors are to be computed at first calc. assume a duplicate
+         endif
+        endif ! cv_type
         if (found) exit
        enddo
 !
        if (.not.found) then ! (if found -- do nothing)
         l=__CV_COMMON_ADD(type)
         if  (l.gt.0) then
-!     allocate private data
+!     allocate private data : projection vector (real)
+         allocate(cv%priv(l)%pr(4)) ; ! keep original vector spec, and also norm for faster computation
+         cv%priv(l)%pr(1:3)=vec
+         cv%priv(l)%pr(4)=vnorm
+         if (vnorm.lt.__ERRTOL ) then
+          write(_MSGBUF,'(A)')  whoami//' A VALID PROJECTION VECTOR WAS NOT SPECIFIED.'
+          write(_MSGBUF(2),'(A)')  whoami//' WILL USE THE VECTOR TO SELECTION COM IN SPECIFIED FRAME [FIRST COMPUTED VALUE].'
+         else
+          vnorm=one/vnorm ! store reciprocal
+         endif
+         cv%priv(l)%pr(4)=vnorm
+!     atom selection data (integer)
 !     space needed:
          ncom=atom_list%last
          num_int = 1 + ncom + 1 ! number of ints needded for storage (last entry for reference frame VO 2.27)
@@ -118,10 +137,10 @@ __CHARMM_ONLY##IF STRINGM
          call int_vector_done(unique_amap_ptr)
 !
         else ! out of bounds
-__WARN( whoami,'ERROR ADDING POSITION_COM_',pos,' CV. NOTHING DONE.')
+__WARN( whoami,'ERROR ADDING POSITION_COM CV. NOTHING DONE.')
         endif
        else ! found
-__WARN( whoami,' POSITION_COM_',pos,' CV ALREADY PRESENT. NOTHING DONE.')
+__WARN( whoami,' POSITION_COM CV ALREADY PRESENT. NOTHING DONE.')
          l=0
        endif
        end function cv_posi_com_add
@@ -130,6 +149,8 @@ __WARN( whoami,' POSITION_COM_',pos,' CV ALREADY PRESENT. NOTHING DONE.')
        subroutine cv_posi_com_calc(i,x,y,z,mass,fx,fy,fz,calctheta,     &
      &                             deriv,addforce,fext)
 !
+       __CHARMM_ONLY use sm_var, only: Id3
+       __DEP_BESTFIT
        __DEP_CONST
        __DEP_NUMBER
 !
@@ -152,18 +173,14 @@ __WARN( whoami,' POSITION_COM_',pos,' CV ALREADY PRESENT. NOTHING DONE.')
 !      variables for cv and derivative calculations
        float :: com(3), f, w, totm1
        float :: A(3,3) ! orthogonal transformation matrix
+       float :: dummy3(3) ! dummy vector
        float :: dA(3,3) ! derivative of A
        float :: p(3) ! position in the local reference frame
+       float :: vec(3), vnorm ! projection vector and its norm
        bool :: qframe ! is a local coordinate frame defined for this CV
        int, pointer :: priv(:)
+       __IAM(CV_POSI_COM_CALC)
 !
-!    get cv type
-       type=cv%type(i)
-       select case(type);
-        case(posi_com_x); type=1
-        case(posi_com_y); type=2
-        case(posi_com_z); type=3
-       end select
 !      do work:
 ! look up atom index in the private array of CV i; obtain the PSF index from amap
        ncom1=cv%priv(i)%p(1)
@@ -200,16 +217,31 @@ __WARN( whoami,' POSITION_COM_',pos,' CV ALREADY PRESENT. NOTHING DONE.')
 !
         if (qframe) then ! if this position is relative to a local frame, obtain frame gradients
          call frames_calc(frame,x,y,z,mass,deriv)
-         A=transpose(frames%r(:,:,frame)); ! transformation matrix
-         com(:)=com(:)-frames%o(:,frame)
-         p(:)=matmul(A,com); ! components in local frame
+!         A=transpose(frames%r(:,:,frame)); ! transformation matrix
+         A=frames%r(:,:,frame); ! making transposition implicit
+         com=com-frames%o(:,frame) !
+!         p=matmul(A,com); ! components in local frame
+         p=matmul(com,A); ! transposition implicit
         else
-         A=RESHAPE( (/1d0,0d0,0d0,0d0,1d0,0d0,0d0,0d0,1d0/),(/3,3/) ) ! for later use
-         p(:)=com(:); ! trivial transformation
+         A=Id3; ! identity
+         p=com; ! trivial transformation
         endif
 !
+! check that the projection vector is defined properly
+        if (cv%priv(i)%pr(4).eq.zero) then ! this is the first calculation; set vector from p
+         vnorm=norm3(p)
+         if (vnorm.gt.__ERRTOL) then ! only if norn nonzero
+          cv%priv(i)%pr(1:3)=p
+          cv%priv(i)%pr(4)=-one/vnorm ! keep negative as indicator
+         else
+          __WRN(whoami, 'CANNOT SET PROJECTION VECTOR: SELECTION COM IS AT FRAME ORIGIN.')
+         endif
+        endif
+! obtain norm an projection vector
+        vec = cv%priv(i)%pr(1:3) * abs(cv%priv(i)%pr(4)) ! normalized to one
+!
         cv%r(i,previnst)=cv%r(i,instant)
-        cv%r(i,instant)=p(type)
+        cv%r(i,instant)=dot_product(p,vec)
 !cccccccccccccccccc now compute derivative
         if (deriv) then
 !     compute derivatives w.r.t. COM components
@@ -240,28 +272,35 @@ __WARN( whoami,' POSITION_COM_',pos,' CV ALREADY PRESENT. NOTHING DONE.')
 !
            indf=frames%priv(frame)%p(ii:jj)
 !
+!     derivatives wrt atoms that define the frame
 !     loop over all atoms in the frame definition
-!
+!     note implicited transposition
           do j=1, ncomf ! loop over frame atoms
            ind=indf(j) ! index into atom map
            w=1d0/sqrt(mass(cv%amap%i(ind))) ! actual psf index
            f=frames%grado(ind,frame);
+           dummy3=f*matmul(A,vec) ! precompute frame origin derivative contribution
+!    NOTE : here compute vec \dot (dA^T * p) - vec \dot A do ; do is the derivative of frame origin 
+!           the 1st term is the same as p\dot ( dA * vec) ; 
 !    gradx
-           dA=transpose(frames%gradrx(:,:,ind,frame))
-           dummy=dA(type,1)*com(1)+dA(type,2)*com(2)+dA(type,3)*com(3)  &
-     &          -A(type,1)*f
+!           dA=transpose(frames%gradrx(:,:,ind,frame))
+!           dummy=dot_product(vec,matmul(dA,p)-f*A(:,1))
+           dA=frames%gradrx(:,:,ind,frame)
+           dummy=dot_product(matmul(p,dA),vec)-dummy3(1)
            cv%gradx(i,ind,1)=dummy
            cv%gradx(i,ind,2)=dummy*w
 !    grady
-           dA=transpose(frames%gradry(:,:,ind,frame))
-           dummy=dA(type,1)*com(1)+dA(type,2)*com(2)+dA(type,3)*com(3)  &
-     &          -A(type,2)*f
+!           dA=transpose(frames%gradry(:,:,ind,frame))
+!           dummy=dot_product(vec,matmul(dA,p)-f*A(:,2))
+           dA=frames%gradry(:,:,ind,frame)
+           dummy=dot_product(matmul(p,dA),vec)-dummy3(2)
            cv%grady(i,ind,1)=dummy
            cv%grady(i,ind,2)=dummy*w
 !    gradz
-           dA=transpose(frames%gradrz(:,:,ind,frame))
-           dummy=dA(type,1)*com(1)+dA(type,2)*com(2)+dA(type,3)*com(3)  &
-     &            -A(type,3)*f
+!           dA=transpose(frames%gradrz(:,:,ind,frame))
+!           dummy=dot_product(vec,matmul(dA,p)-f*A(:,3))
+           dA=frames%gradrz(:,:,ind,frame)
+           dummy=dot_product(matmul(p,dA),vec)-dummy3(3)
            cv%gradz(i,ind,1)=dummy
            cv%gradz(i,ind,2)=dummy*w
           enddo ! over frame atoms
@@ -270,22 +309,25 @@ __WARN( whoami,' POSITION_COM_',pos,' CV ALREADY PRESENT. NOTHING DONE.')
          deallocate(indf)
 !      __DBGOUT(*, whoiam, 'computed frame component')
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!     derivativer wrt actual position coordinates
 !     loop over all atoms in the CV COM
          do j=1,ncom1
           ind=ind1(j)
           w=sqrt(totm1/m1(j)) ! for mass-weighting
+! note the implicited transposition above, i.e. A here is no longer A^T, but A
+          dummy3=m1(j)*matmul(A,vec) ! compute
 !    gradx
-          dummy=A(type,1)*m1(j)
-          cv%gradx(i,ind,1)=cv%gradx(i,ind,1)+dummy
-          cv%gradx(i,ind,2)=cv%gradx(i,ind,2)+dummy*w
+!          dummy=dot_product(vec,A(:,1))*m1(j) ! here, A was A transpose
+          cv%gradx(i,ind,1)=cv%gradx(i,ind,1)+dummy3(1)
+          cv%gradx(i,ind,2)=cv%gradx(i,ind,2)+dummy3(1)*w
 !    grady
-          dummy=A(type,2)*m1(j)
-          cv%grady(i,ind,1)=cv%grady(i,ind,1)+dummy
-          cv%grady(i,ind,2)=cv%grady(i,ind,2)+dummy*w
+!          dummy=dot_product(vec,A(:,2))*m1(j)
+          cv%grady(i,ind,1)=cv%grady(i,ind,1)+dummy3(2)
+          cv%grady(i,ind,2)=cv%grady(i,ind,2)+dummy3(2)*w
 !    gradz
-          dummy=A(type,3)*m1(j)
-          cv%gradz(i,ind,1)=cv%gradz(i,ind,1)+dummy
-          cv%gradz(i,ind,2)=cv%gradz(i,ind,2)+dummy*w
+!          dummy=dot_product(vec,A(:,3))*m1(j)
+          cv%gradz(i,ind,1)=cv%gradz(i,ind,1)+dummy3(3)
+          cv%gradz(i,ind,2)=cv%gradz(i,ind,2)+dummy3(3)*w
          enddo
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
         endif ! deriv
@@ -345,11 +387,14 @@ __WARN( whoami,' POSITION_COM_',pos,' CV ALREADY PRESENT. NOTHING DONE.')
       __DEP_MULTICOM
       __DEP_MPI
       __DEP_ATOMID
+      __DEP_CONST
+      use sm_var
 !
        __DECLARE_MSGBUF
        int :: i, j, type, ii, jj, iatom
        character(len=8) :: sid, rid, ren, ac
        character(len=1) :: pos
+       float :: vnorm, vec(3)
 !
        int :: ncom1, frame
        int, pointer, dimension(:) :: ind1
@@ -359,14 +404,10 @@ __WARN( whoami,' POSITION_COM_',pos,' CV ALREADY PRESENT. NOTHING DONE.')
 !
 !    check type just in case
        type=cv%type(i)
-       select case (type)
-        case (posi_com_x); pos='X'
-        case (posi_com_y); pos='Y'
-        case (posi_com_z); pos='Z'
-        case default;
-         __WRN( whoami,' UNKNOWN POSITION_COM CV. NOTHING DONE.')
-         return
-       end select
+       if (type.ne.posi_com) then
+        __WRN(whoami,' WRONG CV TYPE RECEIVED.')
+        return
+       endif
 !
        if (ME_STRNG.eq.0) then
         ncom1=cv%priv(i)%p(1)
@@ -379,12 +420,21 @@ __WARN( whoami,' POSITION_COM_',pos,' CV ALREADY PRESENT. NOTHING DONE.')
 !
         if (frame.ge.1) then
          write(_MSGBUF,'(A, I3)')                                          &
-     &  _TAB//' '//pos//' POSITION-COM RELATIVE TO LOCAL FRAME ',frame
-         __PRINT(_MSGBUF)
+     &  _TAB//' POSITION-COM RELATIVE TO LOCAL FRAME ',frame
         else
-         write(_MSGBUF,'(A)') _TAB//' '//pos//' POSITION-COM'
-         __PRINT(_MSGBUF)
+         write(_MSGBUF,'(A)') _TAB//' POSITION-COM'
         endif
+!
+        vnorm=cv%priv(i)%pr(4)
+        vec=cv%priv(i)%pr(1:3)
+        if (abs(vnorm).lt.__ERRTOL) then
+         write(_MSGBUF(2), '(A)') _TAB//' PROJECTION VECTOR WILL BE DEFINED AS THE FIRST COMPUTED POSITION OF SELECTION COM'
+        elseif(vnorm.gt.0) then
+         write(_MSGBUF(2),'(A,3'//real_fmt//',A)')  whoami//' THE PROJECTION VECTOR IS (', vec, ')'
+        else ! <0
+         write(_MSGBUF(2),'(A,3'//real_fmt//',A)')  whoami//' THE PROJECTION VECTOR WAS SET FROM INITIAL SELECTION COM POSITION AS (', vec, ')'
+        endif
+        __PRINT(_MSGBUF)
 !
         do j=1, ncom1;
          iatom=cv%amap%i(ind1(j)) ! actual psf index
