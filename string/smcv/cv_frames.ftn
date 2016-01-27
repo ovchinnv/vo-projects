@@ -16,6 +16,7 @@ if (__NEG(__CONCAT(__PRE,__WHAT) __HOW __CONCAT(__WHAT,_)))then;__WARN(whoami,'M
 __CHARMM_ONLY##IF STRINGM
 !
       __CHARMM_ONLY __DEP_KINDS
+      __DEP_NUMBER
       use ivector_list
       use cv_common, only: cv, priv_ptr, main, comp, cv_common_rmsd, cv_common_print_header
       __IMPNONE
@@ -61,6 +62,9 @@ __CHARMM_ONLY##IF STRINGM
       ! parameters
       int, parameter, public :: max_frames=10
 !
+!      bool, private :: qdebug=.true.
+      bool, private :: qdebug=.false.
+!
       contains
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine frames_init()
@@ -80,8 +84,8 @@ __CHARMM_ONLY##IF STRINGM
          nullify(frames%priv(i)%pr) ! initialize pointer array
         enddo
         frames_initialized=.true.
-        frames%o=0d0
-        frames%r=0d0
+        frames%o=zero
+        frames%r=zero
         frames%recalculate=.true.
         frames%recalculate_grad=.true.
        endif
@@ -163,7 +167,7 @@ __CHARMM_ONLY##IF STRINGM
            ind=ind+1
          enddo
          frames_add=l
-         frames%r(:,:,l)=0d0 ! do NOT change this; otherwise the axes may not be right-handed (see calc)
+         frames%r(:,:,l)=0d0
          frames%o(:,l)=0d0
         else ! out of bounds
          __WRN( whoami,' ERROR ADDING FRAME. NOTHING DONE.')
@@ -226,6 +230,7 @@ __DECLARE_MSGBUF
        __DEP_BESTFIT
        __DEP_OUTPUT
        __DEP_NUMBER
+       __DEP_CONST
 !
        int :: i ! which frame to calculate
        float :: x(:), y(:), z(:), mass(:)
@@ -292,9 +297,9 @@ __DECLARE_MSGBUF
        ycom1=ycom1*totm1;
        zcom1=zcom1*totm1;
 !      how much did the origin move from previous step?
-       dist=sqrt( (frames%o(1,i)-xcom1)**2 +                            &
-     &            (frames%o(2,i)-ycom1)**2 +                            &
-     &            (frames%o(3,i)-zcom1)**2 )
+!       dist=sqrt( (frames%o(1,i)-xcom1)**2 +                            &
+!     &            (frames%o(2,i)-ycom1)**2 +                            &
+!     &            (frames%o(3,i)-zcom1)**2 )
        frames%o(1,i)=xcom1
        frames%o(2,i)=ycom1
        frames%o(3,i)=zcom1
@@ -323,11 +328,25 @@ __DECLARE_MSGBUF
        C(3,1)=C(1,3);
        C(3,2)=C(2,3);
 !      diagonalize the correlation matrix to obtain coordinate frame
-       call eig3s(C, mu, A1); ! eigenvectors are the principal axes (invA)
-
-!      write(6,*) whoiam,' : evectors :', A1 ! aardvark
-!      write(6,*) whoiam,' : evalues :', mu
-!      write(6,*) whoiam,' orthogonal?', matmul(transpose(invA),invA) : YES
+       call eig3s(C, mu, A1); ! eigenvectors are the principal axes (A1)
+!
+       if (qdebug) then
+        __DEBUG_OUT(*, whoami, '> C matrix:')
+        __DEBUG_OUT('(3E30.23)', C)
+        __DEBUG_OUT(*, whoami, '> E-VALUES:')
+        __DEBUG_OUT('(3E22.15)', mu)
+        __DEBUG_OUT(*, whoami, '> E-VECTORS:')
+        __DEBUG_OUT('(3E22.15)', A1)
+!     verify directly that matrix orthonormal:
+        __DEBUG_OUT(*, whoami, '> max | U x U^T - I | (should be 0):')
+        __DEBUG_OUT('(3E22.15)', maxval ( abs ( matmul(A1,transpose(A1)) - Id3) ) )
+!     verify directly that diagonalization is correct:
+        A2(:,1)=mu(1)*A1(:,1);A2(:,2)=mu(2)*A1(:,2);A2(:,3)=mu(3)*A1(:,3)! aa
+        __DEBUG_OUT(*, whoami, '> max | RR - U x M x U^T | (should be 0):')
+        __DEBUG_OUT('(3E22.15)', maxval ( abs ( matmul(A2,transpose(A1))-C) ) )
+        __DEBUG_FLUSH
+       endif
+!
 !     compute overlap of the new axes with the old:
        detA=A1(1,1)*(A1(2,2)*A1(3,3)-A1(2,3)*A1(3,2))+                  &
      &      A1(1,2)*(A1(2,3)*A1(3,1)-A1(2,1)*A1(3,3))+                  &
@@ -394,15 +413,15 @@ __DECLARE_MSGBUF
 !       write(100+whoiam,*) A1(1,:);
 !       write(100+whoiam,*) A1(2,:);
 !       write(100+whoiam,*) A1(3,:);
-!       write(100+whoiam,*) '********'
+!      write(666, *) frames%r(:,:,i)
+!      write(666, *) '********'
     ! aardvark
        frames%recalculate(i)=.false. ! indicate that the new axes are known
 !cccccccccccccccccc now compute derivative cccccccccccccccccccc
        if (deriv.and.frames%recalculate_grad(i)) then
 !     compute derivatives w.r.t. COM components
 !      check for gradient initialization
-        if (.not.frames_grad_initialized)                               &
-     &    call frames_grad_init()
+        if (.not.frames_grad_initialized) call frames_grad_init()
 !
 !    compute dAij/dCpq
 !
@@ -423,7 +442,7 @@ __DECLARE_MSGBUF
      &          a12*(a23*a31-a21*a33)+                                  &
      &          a13*(a21*a32-a22*a31)
 !
-         if (abs(detA).lt.tol) then
+         if (abs(detA).lt.__ERRTOL) then
           __WRN(whoami,' EXCEPTION: A MATRIX IS SINGULAR. NOTHING DONE.')
           return
          else
@@ -446,18 +465,21 @@ __DECLARE_MSGBUF
 !     & (/3,3/)))) ! note: fills column-wise
 !      stop
 !
-!    loop over all components in C_pq:
+!    loop over components in C_pq:
+!    Note that C is symmetric and therefore C_pq changes identically with C_qp
+!
          do p=1,3
           do q=1,p
 !     construct right hand side vector (b)
-           do r=2,3
-             b(r-1)=v(q) * ( v(p)*v(r)-Id3(r,p) ) +                         & ! dC_pq contribution
-     &                     (1 - Id3(p,q)) *                                    &
-     &              v(p) * ( v(q)*v(r)-Id3(r,q) ) ! dC_qp contribution
+           do r=2,3 ! in the paper, 'r' is 'i'
+             b(r-1)=v(q) * ( v(p)*v(r)-Id3(r,p) ) + & ! dC_pq contribution
+     &                     ( one - Id3(p,q)) *      & ! this term multiplies the next, and simply ensures that for p=q we only compute 1* d/dC_pp
+     &              v(p) * ( v(q)*v(r)-Id3(r,q) )     ! dC_qp contribution
            enddo
-           b(3)=0d0;
+           b(3)=zero
 !       compute derivative dV/dC
-! note: only entries for which p >= q are populated; in fact, we really are computing dV/dC_pq + dV/dC_qp (this is OK b/c Cij=Cji)
+! note: only entries for which p >= q are populated; in fact, we really are computing dV/dC_pq + dV/dC_qp (this is OK b/c Cij=Cji; i.e. we use the derivatives
+! wrt C_pq in that combination only !)
            dVdC(:,j,p,q)=matmul(invA,b);
 !           write(700+whoiam,*) j, p, q, dVdC(:,j,p,q)
           enddo ! q
@@ -512,8 +534,8 @@ __DECLARE_MSGBUF
      &       dVdC(j,k,2,1) *     y1(q) +                                & ! coordinates are premultiplied by mass above
      &       dVdC(j,k,3,1) *     z1(q) )
 !    gradient w.r.t y-position
-           frames%gradry(j,k,ind,i) =                                   &
-     &       (                                                          &
+           frames%gradry(j,k,ind,i) =                                   & ! note also that it is possible to remove the two here and remove 1-Kd(p,q)
+     &       (                                                          & ! term above ; for now, keeping this way for clarity
      &       dVdC(j,k,2,1) *     x1(q) +                                &
      &       dVdC(j,k,2,2) *2d0* y1(q) +                                &
      &       dVdC(j,k,3,2) *     z1(q) )

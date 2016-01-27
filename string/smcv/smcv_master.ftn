@@ -226,6 +226,7 @@ __MPI_ONLY     &          mpifloat, MPI_SUM, MPI_COMM_LOCAL, ierror)
       __DEP_OUTPUT
       __DEP_MULTICOM
       __DEP_CONST
+      __DEP_NUMBER
       __DEP_MPI
 !
       float :: x(:), y(:), z(:), mass(:),                              & ! mass(size(x,1)) ,
@@ -234,7 +235,7 @@ __MPI_ONLY     &          mpifloat, MPI_SUM, MPI_COMM_LOCAL, ierror)
 !    local
       float :: dummy
 !    slerp
-      float :: q0(4),q1(4),q12(4),W
+      float :: q0(4),q1_(4),q12(4),W
       int :: k
 !
       int :: i, j, qbeg, qend, ibeg, iend, ierror
@@ -284,39 +285,44 @@ __MPI_ONLY     &          mpifloat, MPI_SUM, MPI_COMM_LOCAL, ierror)
        select case(cv%type(i))
 !      EXPERIMENTAL:
 !================= recompute interpolation using =====================
-!===== quaternion spherical linear interpolation (SLERP ; a bit sloppy)
-       case(qcomp_1, qcomp_2, qcomp_3, qcomp_4)
-        qbeg=i; qend=qbeg+3; qnorm=0d0; qdp=0d0; k=0
+!===== quaternion spherical linear interpolation (SLERP)
+!  sloppy because the code below is recomputed for each quaternion component, hence "experimental"
+!  also notice index hacks involving qcomp_1,2,3,4 to compute indices
+!  1/26/2015 : latest hack is to assume that q1 survives after 1st component processed
+!  and simply set r=q1(2-4) for the remaining ones:
+       case(qcomp_1)
+        qbeg=i
+! - (cv%type(i) - qcomp_1) ; ! hack to get cv index of 1st component
+        qend=qbeg+3; k=0
         do j=qbeg, qend;
          k=k+1
-         q1(k)=cv%r(j,main);  q0(k)=cv%r(j,comp);
+         q1_(k)=cv%r(j,main);  q0(k)=cv%r(j,comp);
         enddo
-        q12(1)=q0(1)*q1(1)+q0(2)*q1(2)+q0(3)*q1(3)+q0(4)*q1(4)    ! cos W
-        if (q12(1).lt.0) q1=-q1 ! take shortest interpolation path
-        q12(2)=q0(1)*q1(2)-q1(1)*q0(2) - (q0(3)*q1(4)-q0(4)*q1(3))
-        q12(3)=q0(1)*q1(3)-q1(1)*q0(3) - (q0(4)*q1(2)-q0(2)*q1(4))
-        q12(4)=q0(1)*q1(4)-q1(1)*q0(4) - (q0(2)*q1(3)-q0(3)*q1(2))
+        q12(1)=q0(1)*q1_(1)+q0(2)*q1_(2)+q0(3)*q1_(3)+q0(4)*q1_(4)    ! cos W
+        if (q12(1).lt.0) q1_=-q1_ ! take shortest interpolation path
+        q12(2)=q0(1)*q1_(2)-q1_(1)*q0(2) - (q0(3)*q1_(4)-q0(4)*q1_(3))
+        q12(3)=q0(1)*q1_(3)-q1_(1)*q0(3) - (q0(4)*q1_(2)-q0(2)*q1_(4))
+        q12(4)=q0(1)*q1_(4)-q1_(1)*q0(4) - (q0(2)*q1_(3)-q0(3)*q1_(2))
 ! interpolate
         W=acos(q12(1))
         q12(1)=cos(s*W)
-        W=sin(s*W)/sin(W) ! note that this tends to s as W tends to 0 (should probably include this case ?)
+        if ( abs(W).gt.__ERRTOL ) then ; W=sin(s*W)/sin(W) ; else ; W = s ; endif
         q12(2:4)=W*q12(2:4)
 ! compute new quaternion
-        q1(1)=q0(1)*q12(1)-q0(2)*q12(2)-q0(3)*q12(3)-q0(4)*q12(4)
-        q1(2)=q0(1)*q12(2)+q12(1)*q0(2) + (q0(3)*q12(4)-q0(4)*q12(3))
-        q1(3)=q0(1)*q12(3)+q12(1)*q0(3) + (q0(4)*q12(2)-q0(2)*q12(4))
-        q1(4)=q0(1)*q12(4)+q12(1)*q0(4) + (q0(2)*q12(3)-q0(3)*q12(2))
+        q1_(1)=q0(1)*q12(1)-q0(2)*q12(2)-q0(3)*q12(3)-q0(4)*q12(4)
+        q1_(2)=q0(1)*q12(2)+q12(1)*q0(2) + (q0(3)*q12(4)-q0(4)*q12(3))
+        q1_(3)=q0(1)*q12(3)+q12(1)*q0(3) + (q0(4)*q12(2)-q0(2)*q12(4))
+        q1_(4)=q0(1)*q12(4)+q12(1)*q0(4) + (q0(2)*q12(3)-q0(3)*q12(2))
 !
-        qnorm=1./sqrt(q1(1)**2+q1(2)**2+q1(3)**2+q1(4)**2)
-        q1=q1*qnorm
+        qnorm=one/sqrt(q1_(1)**2+q1_(2)**2+q1_(3)**2+q1_(4)**2)
+        q1_=q1_*qnorm
+!        r=q1_( 1 + cv%type(i) - qcomp_1 )
+        r=q1_(1)
+        dummy=(r-cv%r(i,zcur))
+!============== other components assume that correct q1_ interpolant is known
+       case(qcomp_2, qcomp_3, qcomp_4)
+        r=q1_( 1 + cv%type(i) - qcomp_1 )
 !===== EXPERIMENTAL ABOVE: quaternion slerp
-        select case(cv%type(i)) ! second case statement to set quaternion component
-         case(qcomp_1) ; r=q1(1)
-         case(qcomp_2) ; r=q1(2)
-         case(qcomp_3) ; r=q1(3)
-         case default  ; r=q1(4) ! only remaining possibility
-        end select
-!
         dummy=(r-cv%r(i,zcur))
 !====================================================================
 !
@@ -341,6 +347,7 @@ __MPI_ONLY     &          mpifloat, MPI_SUM, MPI_COMM_LOCAL, ierror)
 !
 !      compute nonequilibrium work -- u
        cv%work=cv%work+cv%r(i,forces2)*dummy ! update work; forces2 contains instantaneous force
+                                             ! note, however, that zcur set is NAN at 1st iteration
        __INCR(cv%r(i,zcur), dummy)           ! update current restrains
 !ccccccccccccccccccccccccc ADD FORCES cccccccccccccccccccc
        addforce=addforce2.and.cv%active(i)
@@ -442,6 +449,7 @@ __MPI_ONLY      endif
       __DEP_NUMBER
       __DEP_MPI
       use sm_var, only : hist_calc_M
+      use cv_common, only : histcol
 !
       float :: x(:), y(:), z(:), mass(:) ! mass(size(x,1))
       bool :: update_average ! whether the current dataset should be included with the cv running average
@@ -480,8 +488,8 @@ __MPI_ONLY      endif
       if (restraint_force_on) then ! if this flag is set, then cv and derivatives are already known
 !
        do i=1, cv%num_cv ! loop over all CV
+        cv%r(i,j)=cv%r(i,histcol) ! history output; histcol typically, but not necessarily, instant
         v=cv%r(i,instant)
-        cv%r(i,j)=v
 !     VO 3.24.09: correct for angle average
 !     VO : note that even with num_run_ave=0 we do not "forget" the offset: this is not great (so is runave is initialized with,e.g., -10^n, this order persists)
         u=cv%r(i,runave)
@@ -572,8 +580,8 @@ __MPI_ONLY      endif
         end select
 !    update running average
 !    add history
+        cv%r(i,j)=cv%r(i,histcol)
         v=cv%r(i,instant)
-        cv%r(i,j)=v
 !    VO 3.24.09: correct for angle average
 !
         u=cv%r(i,runave)
@@ -646,8 +654,8 @@ __MPI_ONLY     &    MPI_GRAD_TYPE, MPI_COMM_LOCAL, ierror)
          if (cv%type(i).eq.cvrms) then
           call cv_cvrms_calc(__ARGS)
 !    update running average
+          cv%r(i,j)=cv%r(i,histcol) ! if histcol is instant then it is changed above for cvrms
           v=cv%r(i,instant)
-          cv%r(i,j)=v
           u=cv%r(i,runave)
           v=u-v
           cv%r(i,runave)=u-t*v
@@ -658,7 +666,7 @@ __MPI_ONLY     &    MPI_GRAD_TYPE, MPI_COMM_LOCAL, ierror)
        endif ! qgrp1
 !
 ! also need to add history for non-local indices (could also gather history on root before output, but is this not faster?)
-       cv%r(1:cv%num_cv, j)=cv%r(1:cv%num_cv, instant)
+       cv%r(1:cv%num_cv, j)=cv%r(1:cv%num_cv, histcol)
 !
       endif ! restraint_force_on
 !
@@ -1191,7 +1199,7 @@ __MPI_ONLY     &       nodelist, 1, mpiint, MPI_COMM_STRNG, ierror)
           case default ;                  __WRN( whoami, 'UNKNOWN CV SPECIFIED.')
        end select
 #undef __ARGS
-!     now cv%r(i,instant) is filled
+!     now cv%r(i,instant) is filled: copy from instant to desired column
        if (present(c)) then
         call cv_common_fill(i,cv%r(i,instant),c)
        else
