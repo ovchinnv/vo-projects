@@ -89,12 +89,14 @@
       public adjustleft
       public adjustleft_1, adjustleft_2
       public numword
+      public parser_clear_context
 ! CHARMM-compatibility routines
       public pop_string
       public find_tag
       public remove_tag
       public get_remove_parameter
       public toupper
+      public ftoupper
       public tolower
       public itoa
       public ftoa
@@ -194,6 +196,18 @@
        nullify(newparams, newcommands, newnames)
 !
        end subroutine parser_context_expand
+!********************************************************************************************
+       subroutine parser_clear_context(cname)
+!    erase all statements and parameters from context (but keep the context defined)
+!    note that this is a cheating "quick" clear, which simply sets the length to zero
+       character(len=*), intent(in) :: cname
+       int :: ictx
+       ictx=parser_find_context(cname)
+       if (ictx.gt.0) then
+        context%context_params(ictx)%last=0
+        context%context_commands(ictx)%last=0
+       endif
+       end subroutine parser_clear_context
 !********************************************************************************************
        function parser_find_context(cname)
 !    find the array index of a context specified by cname
@@ -773,7 +787,7 @@
              __INC(lval) ; val(lval:lval)=c;
 !    check if already inside a context (currently nesting is not supported)
             elseif (qcontext) then
-             __WRN3(whoami, 'Unexpected open brace while processing parameter "'//tag(1:ltag),0)
+             __WRN3(whoami, 'Unexpected open brace while processing parameter "'//tag(1:ltag)//'".',0)
              __WRN(whoami, 'Nested contexts are not allowed. Skipping line.')
              qerror=.true.; exit
 !
@@ -870,6 +884,7 @@
               j=parser_context(maincontext_name) ! default context
               parameters =>context%context_params(j)
               executables=>context%context_commands(j)
+              qcontext=.false.
              endif
 !
             else
@@ -1437,7 +1452,7 @@
    end function ltoa
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        subroutine toupper(a)
-       character(len=*) :: a
+       character(len=*), intent(inout) :: a
        int :: i,j
 !
        do j=1, len_trim(a)
@@ -1447,7 +1462,7 @@
        end subroutine toupper
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        function ftoupper(a)
-       character(len=*) :: a
+       character(len=*), intent(in) :: a
        character(len=len(a)) :: ftoupper
        int :: i,j
        ftoupper=a
@@ -1459,7 +1474,7 @@
        end function ftoupper
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
        subroutine tolower(a)
-       character(len=*) :: a
+       character(len=*), intent(inout) :: a
        int :: i,j
 !
        do j=1, len_trim(a)
@@ -1666,10 +1681,12 @@
    n=l-j+1
   end function pop_string_custom2
 !===============================================================================
-  function find_tag(a,tag,n_)
+  function find_tag(a,tag,n_,qnocase_)
   character(len=*), intent(in) :: a
   character(len=*) :: tag
   int, optional, intent(in) :: n_ ! search up to this length
+  bool, optional, intent(in) :: qnocase_
+  bool :: qnocase
   int :: ltag, i, j, k, find_tag, n, ntrim
   character(len=len(tag)) :: tcopy
   character(len=len(a)) :: acopy
@@ -1683,7 +1700,9 @@
 !
   tcopy=tag; call adjustleft(tcopy,space2); ltag=len_trim(tcopy)
   acopy=a(1:n);  call adjustleft(acopy,space2); ntrim=len_trim(acopy) ! ntrim <= n
-
+!
+  if (present(qnocase_)) then; qnocase=qnocase_; else; qnocase=.false.; endif; if (qnocase) then; call toupper(acopy); call toupper(tcopy); endif
+!
   j=0 ! not found flag
   if (ltag.gt.0.and.ntrim.ge.ltag) then ! proceed only if tag nontrivial and could fit inside string 
 ! note: we are only looking for matches that correspond to a new word (not mid-word)
@@ -1705,10 +1724,12 @@
   find_tag=j
   end function find_tag
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-  function remove_tag(a,tag,n_) result(j)
+  function remove_tag(a,tag,n_,qnocase_) result(j)
   character(len=*) :: a
   character(len=*) :: tag
   int, optional, intent(inout) :: n_
+  bool, optional, intent(in) :: qnocase_
+  bool :: qnocase
   int :: ltag, i, j, k, n, ntrim
   character(len=len(a)) :: right, acopy
   character(len=len(tag)) :: tcopy
@@ -1722,7 +1743,9 @@
 
   tcopy=tag; call adjustleft(tcopy,space2); ltag=len_trim(tcopy)
   acopy=a(1:n);  call adjustleft(acopy,space2); ntrim=len_trim(acopy) ! ntrim <= n
-
+!
+  if (present(qnocase_)) then; qnocase=qnocase_; else; qnocase=.false.; endif; if (qnocase) then; call toupper(acopy); call toupper(tcopy); endif
+!
   j=0
   if (ltag.gt.0.and.ntrim.ge.ltag) then ! proceed only if tag nontrivial and could fit inside string 
 ! note: we are only looking for matches that correspond to a new word (not mid-word)
@@ -1749,10 +1772,12 @@
 !
   end function remove_tag
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-  function get_remove_parameter(a,tag,n_) result(b)
+  function get_remove_parameter(a,tag,n_,qnocase_) result(b)
   character(len=*) :: a
   character(len=*) :: tag
   int, optional, intent(inout) :: n_
+  bool, optional, intent(in) :: qnocase_
+  bool :: qnocase
   int :: ltag, i, j, k, n, ntrim
   character(len=len(a)) :: right, acopy, b
   character(len=len(tag)) :: tcopy
@@ -1768,7 +1793,9 @@
 
   tcopy=tag; call adjustleft(tcopy,space2); ltag=len_trim(tcopy)
   acopy=a(1:n);  call adjustleft(acopy,space2); ntrim=len_trim(acopy) ! ntrim <= n
-
+!
+  if (present(qnocase_)) then; qnocase=qnocase_; else; qnocase=.false.; endif; if (qnocase) then; call toupper(acopy); call toupper(tcopy); endif
+!
   j=0
   if (ltag.gt.0.and.ntrim.ge.ltag) then ! proceed only if tag nontrivial and could fit inside string 
 ! note: we are only looking for matches that correspond to a new word (not mid-word)
