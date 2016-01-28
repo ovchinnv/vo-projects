@@ -62,8 +62,11 @@ __CHARMM_ONLY##IF STRINGM
       ! parameters
       int, parameter, public :: max_frames=10
 !
+#ifdef __DEBUG
 !      bool, private :: qdebug=.true.
-      bool, private :: qdebug=.false.
+      bool, private :: qdebug=.false., &
+     &                fd_grad=.true. ! whether to compute gradients by FD
+#endif
 !
       contains
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -247,7 +250,8 @@ __DECLARE_MSGBUF
 !       float :: invA(3,3), dum(3,3) ! auxiliary matrix
        float, dimension(3,3) :: C, A1, A2, A3, A4, invA ! 5.21.09: align frames the `correct` way
        float :: a11, a12, a13, a21, a22, a23, a31, a32, a33
-       float :: detA, dist, corr1, corr2, corr3, corr4, cmax, dum
+       float :: detA, corr1, corr2, corr3, corr4, cmax, dum
+       float :: dh, odh ! for FD
        float :: mu(3), e ! eigenvalues
        float :: b(3), v(3) ! auxiliary vector
        float :: dVdC(3,3,3,3); ! derivative of axis( evector v w.r.t. correlation matrix Cij)
@@ -304,7 +308,7 @@ __DECLARE_MSGBUF
        frames%o(2,i)=ycom1
        frames%o(3,i)=zcom1
 !
-       C=0d0; ! initialize correlation matrix
+       C=zero ; ! initialize correlation matrix
        do j=1, ncom1;
         x1(j)=x1(j)-xcom1;
         y1(j)=y1(j)-ycom1;
@@ -330,6 +334,7 @@ __DECLARE_MSGBUF
 !      diagonalize the correlation matrix to obtain coordinate frame
        call eig3s(C, mu, A1); ! eigenvectors are the principal axes (A1)
 !
+#ifdef __DEBUG
        if (qdebug) then
         __DEBUG_OUT(*, whoami, '> C matrix:')
         __DEBUG_OUT('(3E30.23)', C)
@@ -346,6 +351,7 @@ __DECLARE_MSGBUF
         __DEBUG_OUT('(3E22.15)', maxval ( abs ( matmul(A2,transpose(A1))-C) ) )
         __DEBUG_FLUSH
        endif
+#endif
 !
 !     compute overlap of the new axes with the old:
        detA=A1(1,1)*(A1(2,2)*A1(3,3)-A1(2,3)*A1(3,2))+                  &
@@ -405,7 +411,7 @@ __DECLARE_MSGBUF
 !        endif
 !       enddo
 !
-       ! aardvark
+! aardvark
 !       write(100+whoiam,*) dist, dpr ! ,mu,
 !     &  A1(1,1)*(A1(2,2)*A1(3,3)-A1(2,3)*A1(3,2))+
 !     &  A1(1,2)*(A1(2,3)*A1(3,1)-A1(2,1)*A1(3,3))+
@@ -415,7 +421,7 @@ __DECLARE_MSGBUF
 !       write(100+whoiam,*) A1(3,:);
 !      write(666, *) frames%r(:,:,i)
 !      write(666, *) '********'
-    ! aardvark
+! aardvark
        frames%recalculate(i)=.false. ! indicate that the new axes are known
 !cccccccccccccccccc now compute derivative cccccccccccccccccccc
        if (deriv.and.frames%recalculate_grad(i)) then
@@ -423,6 +429,9 @@ __DECLARE_MSGBUF
 !      check for gradient initialization
         if (.not.frames_grad_initialized) call frames_grad_init()
 !
+#ifdef __DEBUG
+        if (.not.fd_grad) then
+#endif
 !    compute dAij/dCpq
 !
 !    loop over principal axes (vectors)
@@ -468,6 +477,7 @@ __DECLARE_MSGBUF
 !    loop over components in C_pq:
 !    Note that C is symmetric and therefore C_pq changes identically with C_qp
 !
+!         b(3)=zero ! do not need t=to use this component explicitly
          do p=1,3
           do q=1,p
 !     construct right hand side vector (b)
@@ -476,11 +486,14 @@ __DECLARE_MSGBUF
      &                     ( one - Id3(p,q)) *      & ! this term multiplies the next, and simply ensures that for p=q we only compute 1* d/dC_pp
      &              v(p) * ( v(q)*v(r)-Id3(r,q) )     ! dC_qp contribution
            enddo
-           b(3)=zero
 !       compute derivative dV/dC
 ! note: only entries for which p >= q are populated; in fact, we really are computing dV/dC_pq + dV/dC_qp (this is OK b/c Cij=Cji; i.e. we use the derivatives
 ! wrt C_pq in that combination only !)
-           dVdC(:,j,p,q)=matmul(invA,b);
+!           dVdC(:,j,p,q)=matmul(invA,b);
+! use the fact that b(3)=0:
+            dVdC(1,j,p,q)=invA(1,1)*b(1)+invA(1,2)*b(2)
+            dVdC(2,j,p,q)=invA(2,1)*b(1)+invA(2,2)*b(2)
+            dVdC(3,j,p,q)=invA(3,1)*b(1)+invA(3,2)*b(2)
 !           write(700+whoiam,*) j, p, q, dVdC(:,j,p,q)
           enddo ! q
          enddo ! p
@@ -501,7 +514,6 @@ __DECLARE_MSGBUF
 !        write(600+whoiam,*) '*****************'
 !        stop
 !ccccccccccccccccccc tested matlab code cccccccccccccccccccccccccccccccccccccccccccccccccccc
-
 !dvdA1=zeros(3,3,3,3); % 1 - vec#; 2 - vec component; 3 - matrix row; 4 - matrix column
 !
 !for i=1:3
@@ -548,77 +560,62 @@ __DECLARE_MSGBUF
           enddo ! k
          enddo ! j
         enddo ! q
-! aardvark: test gradient calculation by FD: PASSED
-!        write(700+whoiam,*) dVdC(:,:,1,:)
-!        write(700+whoiam,*) frames%gradrz(:,:,:,i)
-!        write(700+whoiam,*) frames%grado(:,i)
-
-!       detA=0.0001
-       if (.false.) then ! hardwired FD test
+#ifdef __DEBUG
 !
-       do k=1,ncom1
-!
-        do j=1, ncom1;
-         ind=cv%amap%i(ind1(j)) ! actual psf index
-         x1(j)=x(ind); y1(j)=y(ind); z1(j)=z(ind); m1(j)=mass(ind)
-        enddo
-!
-        x1(k)=x1(k)+detA; ! perturbation
-
-!    now we have all the coordinates
-        totm1=1d0/sum(m1);
-!
-        xcom1=0d0; ycom1=0d0; zcom1=0d0;
-        do j=1, ncom1;
-         xcom1=xcom1+x1(j)*m1(j);
-         ycom1=ycom1+y1(j)*m1(j);
-         zcom1=zcom1+z1(j)*m1(j);
-        enddo
-        xcom1=xcom1*totm1;
-        ycom1=ycom1*totm1;
-        zcom1=zcom1*totm1;
-!
-        C=0; ! initialize correlation matrix
-        do j=1, ncom1;
-         x1(j)=x1(j)-xcom1;
-         y1(j)=y1(j)-ycom1;
-         z1(j)=z1(j)-zcom1;
-!    compute mass-weighted correlation matrix
-         C(1,1)=C(1,1)+x1(j)*x1(j)*m1(j);
-         C(1,2)=C(1,2)+x1(j)*y1(j)*m1(j);
-         C(1,3)=C(1,3)+x1(j)*z1(j)*m1(j);
-!
-         C(2,2)=C(2,2)+y1(j)*y1(j)*m1(j);
-         C(2,3)=C(2,3)+y1(j)*z1(j)*m1(j);
-!
-         C(3,3)=C(3,3)+z1(j)*z1(j)*m1(j);
-!
-         x1(j)=x1(j)*m1(j)
-         y1(j)=y1(j)*m1(j)
-         z1(j)=z1(j)*m1(j)
-        enddo
-!      enforce symmetry
-        C(2,1)=C(1,2);
-        C(3,1)=C(1,3);
-        C(3,2)=C(2,3);
-!      diagonalize the correlation matrix to obtain coordinate frame
-        call eig3s(C, mu, invA); ! eigenvectors are the principal axes (invA)
-        frames%gradrz(:,:,k,i)=(invA-frames%r(:,:,i))/detA;
-!
-        frames%grado(k,i)=(xcom1-frames%o(1,i))/detA;
-
-!       write(700+mestring,*)   k, frames%grado(k,i)
-
-       enddo ! k
-
-!        write(600+whoiam,*) frames%gradrx(:,:,:,i)
-!        write(600+whoiam,*) frames%gradry(:,:,:,i)
-!        write(600+whoiam,*) frames%gradrz(:,:,:,i)
-!        write(700+whoiam,*) frames%grado(:,i)
-!        stop
-
-! aardvark: done test gradients using FD: PASSED
-       endif ! hardwired FD test
+        else ! frame derivatives by FD
+         dh=0.00001d0 ! FD increment
+         odh=two/dh !
+         do k=1,ncom1
+!======x
+          do j=1,ncom1
+           ind=cv%amap%i(ind1(j))
+           x1(j)=x(ind); y1(j)=y(ind); z1(j)=z(ind)
+          enddo
+          __INCR(x1(k),dh)
+#include "cv_frames_calc.def"
+          frames%gradrx(:,:,k,i)=A1-frames%r(:,:,i)
+          frames%grado(k,i)=xcom1-frames%o(1,i)
+          do j=1,ncom1
+           ind=cv%amap%i(ind1(j))
+           x1(j)=x(ind); y1(j)=y(ind); z1(j)=z(ind)
+          enddo
+          __INCR(x1(k),-dh)
+#include "cv_frames_calc.def"
+          frames%gradrx(:,:,k,i)=odh*(frames%gradrx(:,:,k,i)-(A1-frames%r(:,:,i))) ! 2nd order
+          frames%grado(k,i)=odh*(frames%grado(k,i)-(xcom1-frames%o(1,i)))
+!======y
+          do j=1,ncom1
+           ind=cv%amap%i(ind1(j))
+           x1(j)=x(ind); y1(j)=y(ind); z1(j)=z(ind)
+          enddo
+          __INCR(y1(k),dh)
+#include "cv_frames_calc.def"
+          frames%gradry(:,:,k,i)=A1-frames%r(:,:,i)
+          do j=1,ncom1
+           ind=cv%amap%i(ind1(j))
+           x1(j)=x(ind); y1(j)=y(ind); z1(j)=z(ind)
+          enddo
+          __INCR(y1(k),-dh)
+#include "cv_frames_calc.def"
+          frames%gradry(:,:,k,i)=odh*(frames%gradry(:,:,k,i)-(A1-frames%r(:,:,i)))
+!======z
+          do j=1,ncom1
+           ind=cv%amap%i(ind1(j))
+           x1(j)=x(ind); y1(j)=y(ind); z1(j)=z(ind)
+          enddo
+          __INCR(z1(k),dh)
+#include "cv_frames_calc.def"
+          frames%gradrz(:,:,k,i)=A1-frames%r(:,:,i)
+          do j=1,ncom1
+           ind=cv%amap%i(ind1(j))
+           x1(j)=x(ind); y1(j)=y(ind); z1(j)=z(ind)
+          enddo
+          __INCR(z1(k),-dh)
+#include "cv_frames_calc.def"
+          frames%gradrz(:,:,k,i)=odh*(frames%gradrz(:,:,k,i)-(A1-frames%r(:,:,i)))
+         enddo ! k
+        endif ! gradients by fd
+#endif /* __DEBUG */
 !cccccccccccccccccccccccccc done with derivatives cccccccccccccccccccccccc
         frames%recalculate_grad(i)=.false. ! indicate that derivatives are known
        endif ! deriv
