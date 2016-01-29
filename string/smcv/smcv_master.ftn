@@ -249,7 +249,7 @@ __MPI_ONLY     &          mpifloat, MPI_SUM, MPI_COMM_LOCAL, ierror)
       if (qgrp) call smcv_compute_frames_quat_para(x,y,z,mass)
 !
       if (present(t)) then
-       if (t.ge.0d0.and.t.le.1d0) then ; s=t ; else ; s=1d0 ; endif
+       if (t.ge.zero.and.t.le.one) then ; s=t ; else ; s=one ; endif
       else
        s=1d0
       endif
@@ -290,40 +290,43 @@ __MPI_ONLY     &          mpifloat, MPI_SUM, MPI_COMM_LOCAL, ierror)
 !  also notice index hacks involving qcomp_1,2,3,4 to compute indices
 !  1/26/2015 : latest hack is to assume that q1 survives after 1st component processed
 !  and simply set r=q1(2-4) for the remaining ones:
-       case(qcomp_1)
-        qbeg=i
-! - (cv%type(i) - qcomp_1) ; ! hack to get cv index of 1st component
+!  however, this will not work if the quaternion components are distributed across
+!  cpus
+       case(qcomp_1, qcomp_2, qcomp_3, qcomp_4)
+        qbeg=i - (cv%type(i) - qcomp_1) ; ! hack to get cv index of 1st component
         qend=qbeg+3; k=0
-        do j=qbeg, qend;
-         k=k+1
-         q1_(k)=cv%r(j,main);  q0(k)=cv%r(j,comp);
-        enddo
-        q12(1)=q0(1)*q1_(1)+q0(2)*q1_(2)+q0(3)*q1_(3)+q0(4)*q1_(4)    ! cos W
-        if (q12(1).lt.0) q1_=-q1_ ! take shortest interpolation path
-        q12(2)=q0(1)*q1_(2)-q1_(1)*q0(2) - (q0(3)*q1_(4)-q0(4)*q1_(3))
-        q12(3)=q0(1)*q1_(3)-q1_(1)*q0(3) - (q0(4)*q1_(2)-q0(2)*q1_(4))
-        q12(4)=q0(1)*q1_(4)-q1_(1)*q0(4) - (q0(2)*q1_(3)-q0(3)*q1_(2))
-! interpolate
-        W=acos(q12(1))
-        q12(1)=cos(s*W)
-        if ( abs(W).gt.__ERRTOL ) then ; W=sin(s*W)/sin(W) ; else ; W = s ; endif
-        q12(2:4)=W*q12(2:4)
-! compute new quaternion
-        q1_(1)=q0(1)*q12(1)-q0(2)*q12(2)-q0(3)*q12(3)-q0(4)*q12(4)
-        q1_(2)=q0(1)*q12(2)+q12(1)*q0(2) + (q0(3)*q12(4)-q0(4)*q12(3))
-        q1_(3)=q0(1)*q12(3)+q12(1)*q0(3) + (q0(4)*q12(2)-q0(2)*q12(4))
-        q1_(4)=q0(1)*q12(4)+q12(1)*q0(4) + (q0(2)*q12(3)-q0(3)*q12(2))
+! compute below for first component quaternion ON THIS NODE
+        if (i.eq.qbeg    &       ! this is the first quaternion component
+     &   .or. i.eq.ibeg  ) then  ! the index of this component is ibeg, which means that i-1 (ibeg-1) component has not been computed
+
+         do j=qbeg, qend;
+          k=k+1
+          q1_(k)=cv%r(j,main);  q0(k)=cv%r(j,comp);
+         enddo
+         q12(1)=q0(1)*q1_(1) + q0(2)*q1_(2) + q0(3)*q1_(3) + q0(4)*q1_(4) ! "difference in quaternions", i.e. q12 = q0 x q1^-1, which give the half-angle cosine
+         q12(2)=q0(1)*q1_(2)-q1_(1)*q0(2) - (q0(3)*q1_(4)-q0(4)*q1_(3))   ! extract axis components
+         q12(3)=q0(1)*q1_(3)-q1_(1)*q0(3) - (q0(4)*q1_(2)-q0(2)*q1_(4))
+         q12(4)=q0(1)*q1_(4)-q1_(1)*q0(4) - (q0(2)*q1_(3)-q0(3)*q1_(2))
 !
-        qnorm=one/sqrt(q1_(1)**2+q1_(2)**2+q1_(3)**2+q1_(4)**2)
-        q1_=q1_*qnorm
-!        r=q1_( 1 + cv%type(i) - qcomp_1 )
-        r=q1_(1)
+         if (q12(1).lt.zero) q12=-q12 ! if cosine < 0, then can go in the other direction which would give a positive cosine value
+! interpolate
+         W=acos(q12(1)) ! note that this is a half-angle
+         q12(1)=cos(s*W)
+         if ( abs(W).gt.__ERRTOL ) then ; W=sin(s*W)/sin(W) ; else ; W = s ; endif
+         q12(2:4)=W*q12(2:4) ! adjust angle keeping the same vector 
+! compute new quaternion
+         q1_(1)=q0(1)*q12(1)-q0(2)*q12(2)-q0(3)*q12(3)-q0(4)*q12(4)     ! new angle
+         q1_(2)=q0(1)*q12(2)+q12(1)*q0(2) + (q0(3)*q12(4)-q0(4)*q12(3)) ! new vector
+         q1_(3)=q0(1)*q12(3)+q12(1)*q0(3) + (q0(4)*q12(2)-q0(2)*q12(4))
+         q1_(4)=q0(1)*q12(4)+q12(1)*q0(4) + (q0(2)*q12(3)-q0(3)*q12(2))
+!
+         qnorm=one/sqrt(q1_(1)**2+q1_(2)**2+q1_(3)**2+q1_(4)**2) ! normalize to 1
+         q1_=q1_*qnorm
+        endif
+        r=q1_( 1 + cv%type(i) - qcomp_1 ) ! take the correct component
         dummy=(r-cv%r(i,zcur))
-!============== other components assume that correct q1_ interpolant is known
-       case(qcomp_2, qcomp_3, qcomp_4)
-        r=q1_( 1 + cv%type(i) - qcomp_1 )
-!===== EXPERIMENTAL ABOVE: quaternion slerp
-        dummy=(r-cv%r(i,zcur))
+!
+! END OF EXPERIMENTAL ^
 !====================================================================
 !
        case(dihe_com)
