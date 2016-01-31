@@ -14,7 +14,7 @@ LOCALDEPS+=acemd.defs
 
 include $(ROOT)/Makefile.inc
 
-sm_util.o: splines.o
+sm_util.o: splines.o multicom_serial_string.o
 
 charmm:: $(CHARMM_SOURCES)
 ifneq ($(CHARMM_DIR),.)
