@@ -18,7 +18,8 @@ aceplug_err_t aceplug_init(struct aceplug_sim_t *s, int argc, char **argkey, cha
 //
  printf("# SMCV PLUGIN: Initializing ...\n");
 //
- for (int i=0; i<argc; i++){
+ int i;
+ for (i=0; i<argc; i++){
   if ( !(strcmp(argkey[i], "input")) || !(strcmp(argkey[i], "inputfile"))) {
    inputfile=argval[i];
   } else if ( !(strcmp(argkey[i], "output")) || !(strcmp(argkey[i], "outputfile")) || !(strcmp(argkey[i], "log")) || !(strcmp(argkey[i], "logfile"))) {
@@ -54,7 +55,7 @@ aceplug_err_t aceplug_init(struct aceplug_sim_t *s, int argc, char **argkey, cha
 //
  m = (__CFLOAT *) calloc(natoms, sizeof(__CFLOAT));
  q = (__CFLOAT *) calloc(natoms, sizeof(__CFLOAT));
- for (int i=0; i<natoms; i++){
+ for (i=0; i<natoms; i++){
   m[i]=s->mass[i];
   q[i]=s->charge[i];
  }
