@@ -894,8 +894,8 @@ __FMTNOW
       int :: comlen
       int :: cvtype
 !    locals
-      character(len=5) :: cv_name
-      bool :: oset
+      character(len=5) :: cv_name, keyword
+      bool :: qorient, qtrans, qrota, qrms
       float :: rtarget_com(3)
 !
       float, pointer :: rtarget_o(:,:), rtarget_f(:,:),                &
@@ -944,122 +944,105 @@ __SETQROOT
       nullify(iselct, jselct)
 #endif
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-!     look for orientation atom selection
-      oset=.false. ! is there a separate orientation specification?
-      i=__INDX_RM(comlyn,comlen,'ORIE') ! find the position of `ORIE`
-      oset=(i.gt.0)
-!     first determine whether a selection keyword follows orie
-      if (oset) then
+!     look for forcing atom selection
+      if (__INDX(comlyn, comlen, 'RMS',3).gt.0) then
+       keyword='RMS'
+      elseif (__INDX(comlyn, comlen, 'FORC',4).gt.0) then
+       keyword='FORC'
+      elseif (__INDX(comlyn, comlen, 'FC',2).gt.0) then
+       keyword='FC'
+      endif
+!
+      i=__INDX_RM(comlyn,comlen,trim(keyword))
+      qrms=(i.gt.0)
+!     first determine whether a selection keyword follows
+      if (qrms) then
        n=comlen-i+1
        j=__INDX(comlyn(i:comlen), n, 'SELE', 4)
        if (j.le.0) then ! only if the ORIE directive exists
-         __WRN(whoami,'ATOM SELECTION MUST BE SPECIFIED AFTER ORIE.')
+         __WRN(whoami,'ATOM SELECTION MUST BE SPECIFIED AFTER '//trim(keyword)//'.')
          return
         endif
-      endif
-!*************************************************************************************
-!     look for the first selection
-!*************************************************************************************
-      j=__INDX(comlyn, comlen, 'SELE', 4)
-      if (j.eq.0) then ! sele keyword does not exist
-       __WRN(whoami, 'RMSD ATOMS NOT SPECIFIED. NOTHING DONE.');
-       return
-      elseif (j.le.i.or..not.oset) then ! no 'orie', or first occurrence of sele before orie (deleted by __INDXa above)
-!     assume that this is the forcing set selection
-#ifdef __CHARMM
-       IMODE=0
-       CALL SELRPN(COMLYN,COMLEN,jselct,NATOM,1,IMODE,                  &
-     &      .FALSE.,1,' ',0,RESID,RES,IBASE,SEGID,NICTOT,NSEG,          &
-     &      .TRUE.,X,Y,Z,.TRUE.,1,WMAIN)
-       IF(IMODE.NE.0) THEN
-          CALL WRNDIE(0,whoami,'RMSD ATOMS SELECTION ERROR')
-          RETURN
-       ENDIF
-#elif defined(__DMOL)
-#undef __INDEX
-#define __INDEX jselct
-#include "dmol_select_macro.def"
-#endif
-! orientation selection
-       if (oset) then
+!
+! process forcing atom selection
+!
 #ifdef __CHARMM
         IMODE=0
-        CALL SELRPN(COMLYN,COMLEN,iselct,NATOM,1,IMODE,                 &
+        CALL SELRPN(COMLYN,COMLEN,jselct,NATOM,1,IMODE,                 &
      &      .FALSE.,1,' ',0,RESID,RES,IBASE,SEGID,NICTOT,NSEG,          &
      &      .TRUE.,X,Y,Z,.TRUE.,1,WMAIN)
         IF(IMODE.NE.0) THEN
-         CALL WRNDIE(0,whoami,'ORIENTATION ATOMS SELECTION ERROR')
+         CALL WRNDIE(0,whoami,'FORCED/RMSD ATOMS SELECTION ERROR')
          RETURN
         ENDIF
+        nforced=count( jselct(1:natom).gt.0 )
 #elif defined(__DMOL)
-#undef  __INDEX
-#define __INDEX iselct
-#include "dmol_select_macro.def"
-#endif
-       endif
-!
-      else ! first selection after orie
-#ifdef __CHARMM
-       IMODE=0
-       CALL SELRPN(COMLYN,COMLEN,iselct,NATOM,1,IMODE,                  &
-     &      .FALSE.,1,' ',0,RESID,RES,IBASE,SEGID,NICTOT,NSEG,          &
-     &      .TRUE.,X,Y,Z,.TRUE.,1,WMAIN)
-       IF(IMODE.NE.0) THEN
-        CALL WRNDIE(0,whoami,'ORIENTATION ATOMS SELECTION ERROR')
-        RETURN
-       ENDIF
-!     forcing set selection
-       IMODE=0
-       CALL SELRPN(COMLYN,COMLEN,jselct,NATOM,1,IMODE,                  &
-     &      .FALSE.,1,' ',0,RESID,RES,IBASE,SEGID,NICTOT,NSEG,          &
-     &      .TRUE.,X,Y,Z,.TRUE.,1,WMAIN)
-       IF(IMODE.NE.0) THEN
-          CALL WRNDIE(0,whoami,'RMSD ATOMS SELECTION ERROR')
-          RETURN
-       ENDIF
-!   number of atoms
-       norient=count( iselct(1:natom).gt.0 )
-       nforced=count( jselct(1:natom).gt.0 )
-!
-#elif defined(__DMOL)
-! first selection (orientation atoms)
-#define __INDEX iselct
-#include "dmol_select_macro.def"
-! second selection (forcing atoms)
 #undef  __INDEX
 #define __INDEX jselct
 #include "dmol_select_macro.def"
-!
-      if (associated(iselct)) then ; norient=size(iselct) ; else ; norient=0 ; endif
-      if (associated(jselct)) then ; nforced=size(jselct) ; else ; nforced=0 ; endif
+       if (associated(jselct)) then ; nforced=size(jselct) ; else ; nforced=0 ; endif
 #endif
-!
-      endif
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+      else
+       nforced=0
+      endif ! qrms
+!=======================================================================
       if (nforced.eq.0) then
-       __WRN(whoami, 'RMSD ATOMS NOT SPECIFIED. NOTHING DONE.')
+       __WRN(whoami, ' FORCED/RMSD ATOMS NOT SPECIFIED. NOTHING DONE.')
        return
       endif
-!
-      if (.not.oset) then ! use forced atoms for orientation too
-       norient=nforced
-#ifdef __CHARMM
-       iselct=jselct
-#elif defined (__DMOL)
-       iselct=>jselct
-#endif
-      endif
-!
-! currently we require at least three atoms for orientation
-!
-      if (norient.lt.3) then
-        __WRN(whoami,' FEWER THAN THREE ATOMS SELECTED FOR ORIENTATION. ABORT.')
+!=======================================================================
+!     look for orientation atom selection
+      i=__INDX_RM(comlyn,comlen,'ORIE')
+      qorient=(i.gt.0)
+!     first determine whether a selection keyword follows orie
+      if (qorient) then
+       n=comlen-i+1
+       j=__INDX(comlyn(i:comlen), n, 'SELE', 4)
+       if (j.le.0) then ! only if the ORIE directive exists
+        __WRN(whoami,'ATOM SELECTION MUST BE SPECIFIED AFTER ORIE.')
         return
+       endif
+!
+! process orientation selection
+!
+#ifdef __CHARMM
+       IMODE=0
+       CALL SELRPN(COMLYN,COMLEN,iselct,NATOM,1,IMODE,                 &
+     &      .FALSE.,1,' ',0,RESID,RES,IBASE,SEGID,NICTOT,NSEG,         &
+     &      .TRUE.,X,Y,Z,.TRUE.,1,WMAIN)
+       IF(IMODE.NE.0) THEN
+         CALL WRNDIE(0,whoami,'ORIENTATION ATOMS SELECTION ERROR')
+         RETURN
+       ENDIF
+       norient=count( iselct(1:natom).gt.0 )
+#elif defined(__DMOL)
+#undef __INDEX
+#define __INDEX iselct
+#include "dmol_select_macro.def"
+       if (associated(iselct)) then ; norient=size(iselct) ; else ; norient=0 ; endif
+#endif
+! check for no-rotation and no-translation options in the orientation
+       qtrans=(__INDX_RM(comlyn, comlen,'NOTR').eq.0)
+       qrota=(__INDX_RM(comlyn, comlen,'NORO').eq.0)
+       if (.not.(qtrans.or.qrota)) then
+        __WRN(whoami, 'ORIENTATION WILL BE DISABLED BECAUSE TRANSLATIONAL AND ROTATIONAL FITTING ARE BOTH OFF.')
+        qorient=.false.
+        norient=0
+       endif
+      else
+       norient=0
+      endif ! qorie
+!
+! check to make sure we have at least two orientation atoms
+!
+      if (qorient.and.norient.lt.2) then
+       __WRN(whoami,' FEWER THAN THREE ATOMS SELECTED FOR ORIENTATION. ABORT.')
+       return
       endif
 !
       qmass=(__INDX_RM(comlyn, comlen, 'MASS').gt.0) ! mass-weighting flag
 !
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! done with selections
+!============================================================== done with selections
       allocate(iatom_o(norient),                                        &
      &  iatom_f(nforced),                                               &
      &  rtarget_o(norient,3),                                           &
@@ -1079,24 +1062,28 @@ __SETQROOT
       norient=0
       nforced=0
 !
-      do i=1,natom
+      if (qorient) then
+       do i=1,natom
         if (iselct(i).gt.0) then
          norient=norient+1
          iatom_o(norient)=i
         endif
+       enddo
+      endif
 !
-        if (jselct(i).gt.0) then
-         nforced=nforced+1
-         iatom_f(nforced)=i
-        endif
-!
+      do i=1,natom
+       if (jselct(i).gt.0) then
+        nforced=nforced+1
+        iatom_f(nforced)=i
+       endif
       enddo
+!      enddo
 #elif defined(__DMOL)
 ! NOTE that in DMOL, iselct has a different meaning: it stores the atom indices, rather than flags
       if (associated(iselct)) then ; iatom_o=iselct ; deallocate(iselct) ; endif
       if (associated(jselct)) then ; iatom_f=jselct ; deallocate(jselct) ; endif
 #endif
-!!!!!!!!! mass-weighting
+!========== mass-weighting
       if (qmass) then
         do i=1,norient
          orientWeights(i)=                                              &
@@ -1109,7 +1096,7 @@ __SETQROOT
         enddo
 !
       endif
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!========================================================
 !     load and save coordinates of the target structure
       use_main=((__INDX_RM(comlyn,comlen,'MAIN')).gt.0)
       use_comp=((__INDX_RM(comlyn,comlen,'COMP')).gt.0)
@@ -1181,11 +1168,11 @@ __SETQROOT
       endif ! use_comp
 !
 !      check for undefined values
-      if (any(rtarget_o.eq.__NAN).or.any(rtarget_f.eq.__NAN)) then
+      if ( (qorient.and.any(rtarget_o.eq.__NAN)).or.any(rtarget_f.eq.__NAN)) then
         __WRN(whoami,'FIRST TARGET STRUCTURE HAS UNDEFINED COORDINATES. QUITTING.')
         return
       elseif (qtwo) then
-       if (any(rtarget1_o.eq.__NAN).or.any(rtarget1_f.eq.__NAN)) then
+       if ( (qorient.and.any(rtarget1_o.eq.__NAN)).or.any(rtarget1_f.eq.__NAN)) then
         __WRN(whoami,'SECOND TARGET STRUCTURE HAS UNDEFINED COORDINATES. QUITTING.')
         return
        endif
@@ -1194,40 +1181,44 @@ __SETQROOT
 ! normalize weighting coefficients
 ! note: routines in rtmd_aux do _not_ perform normalization; result affects FP precision, analytically, there is no difference
 !
-      a=sum(orientWeights)
-      b=sum(forcedWeights)
-      if (abs(a).gt.__ERRTOL) then
+      if (qorient) then
+       a=sum(orientWeights)
+       if (abs(a).gt.__ERRTOL) then
         a=one/a
         orientWeights=a*orientWeights
+       endif
       endif
 !
+      b=sum(forcedWeights)
       if (abs(b).gt.__ERRTOL) then
-        b=one/b
-        forcedWeights=b*forcedWeights
+       b=one/b
+       forcedWeights=b*forcedWeights
       endif
 !
 ! translate target structure so that its centroid is at the origin
-      rtarget_com=matmul(transpose(rtarget_o),orientWeights)
+      if (qorient .and. qrota) then ! only if orientation and translational fitting are enabled
+       rtarget_com=matmul(transpose(rtarget_o),orientWeights)
 !
-      rtarget_o(:,1)=rtarget_o(:,1)-rtarget_com(1)
-      rtarget_o(:,2)=rtarget_o(:,2)-rtarget_com(2)
-      rtarget_o(:,3)=rtarget_o(:,3)-rtarget_com(3)
+       rtarget_o(:,1)=rtarget_o(:,1)-rtarget_com(1)
+       rtarget_o(:,2)=rtarget_o(:,2)-rtarget_com(2)
+       rtarget_o(:,3)=rtarget_o(:,3)-rtarget_com(3)
 !
-      rtarget_f(:,1)=rtarget_f(:,1)-rtarget_com(1)
-      rtarget_f(:,2)=rtarget_f(:,2)-rtarget_com(2)
-      rtarget_f(:,3)=rtarget_f(:,3)-rtarget_com(3)
+       rtarget_f(:,1)=rtarget_f(:,1)-rtarget_com(1)
+       rtarget_f(:,2)=rtarget_f(:,2)-rtarget_com(2)
+       rtarget_f(:,3)=rtarget_f(:,3)-rtarget_com(3)
 !
-      if (qtwo) then ! repeat for second structure
-       rtarget_com=matmul(transpose(rtarget1_o),orientWeights)
+       if (qtwo) then ! repeat for second structure
+        rtarget_com=matmul(transpose(rtarget1_o),orientWeights)
 !
-       rtarget1_o(:,1)=rtarget1_o(:,1)-rtarget_com(1)
-       rtarget1_o(:,2)=rtarget1_o(:,2)-rtarget_com(2)
-       rtarget1_o(:,3)=rtarget1_o(:,3)-rtarget_com(3)
+        rtarget1_o(:,1)=rtarget1_o(:,1)-rtarget_com(1)
+        rtarget1_o(:,2)=rtarget1_o(:,2)-rtarget_com(2)
+        rtarget1_o(:,3)=rtarget1_o(:,3)-rtarget_com(3)
 !
-       rtarget1_f(:,1)=rtarget1_f(:,1)-rtarget_com(1)
-       rtarget1_f(:,2)=rtarget1_f(:,2)-rtarget_com(2)
-       rtarget1_f(:,3)=rtarget1_f(:,3)-rtarget_com(3)
-      endif
+        rtarget1_f(:,1)=rtarget1_f(:,1)-rtarget_com(1)
+        rtarget1_f(:,2)=rtarget1_f(:,2)-rtarget_com(2)
+        rtarget1_f(:,3)=rtarget1_f(:,3)-rtarget_com(3)
+       endif ! qtwo
+      endif ! qorient
 !
 !    print summary
       if (qroot) then
@@ -1241,29 +1232,42 @@ __SETQROOT
 __FMTW
 __FMTNOW
 !
-       write(_MSGBUF(2),103) whoami, nforced
-       write(_MSGBUF(2),100) whoami, norient
-       i=3 ;
-       if (qmass) then ; write(_MSGBUF(i),102) whoami ; __INC(i) ; endif
+       i=1;
+       __INC(i);write(_MSGBUF(i),103) whoami, nforced
+
+       if (qorient) then
+        __INC(i);write(_MSGBUF(i),100) whoami, norient
+        if (.not.qrota) then
+         __INC(i);write(_MSGBUF(i),'(2A)') whoami, 'BEST-FIT SUPERPOSITION WILL NOT INCLUDE ROTATIONAL FITTING'
+        endif
+        if (.not.qtrans) then
+         __INC(i);write(_MSGBUF(i),'(2A)') whoami, 'BEST-FIT SUPERPOSITION WILL NOT INCLUDE TRANSLATIONAL FITTING'
+        endif
+!
+       else ! no orientation
+        __INC(i);write(_MSGBUF(i),'(2A)') whoami,'WILL NOT USE BEST-FIT SUPERPOSITION IN RMSD COMPUTATION'
+       endif
+       if (qmass) then 
+        __INC(i);write(_MSGBUF(i),102) whoami
+       endif
        if (qtwo) then
         if (use_comp) then
-         write(_MSGBUF(i),105) whoami, 'COMP'
+         __INC(i);write(_MSGBUF(i),105) whoami, 'COMP'
         else
-         write(_MSGBUF(i),105) whoami, 'MAIN'
+         __INC(i);write(_MSGBUF(i),105) whoami, 'MAIN'
         endif
        else
         if (use_comp) then
-         write(_MSGBUF(i),104) whoami, 'COMP'
+         __INC(i);write(_MSGBUF(i),104) whoami, 'COMP'
         else
-         write(_MSGBUF(i),104) whoami, 'MAIN'
+         __INC(i);write(_MSGBUF(i),104) whoami, 'MAIN'
         endif
        endif
        __PRINT(_MSGBUF)
 !
- 100  format(A,' WILL ORIENT TARGET STRUCTURE(S) BASED ON ',i5,         &
-     & ' ATOMS')
+ 100  format(A,' WILL SUPERPOSE TARGET STRUCTURE(S) BASED ON ',i5,' (ORIENTATION) ATOMS')
  102  format(A,' WILL USE MASS-WEIGHTING.')
- 103  format(A,' ',i5,' FORCED ATOMS FOUND.')
+ 103  format(A,' ',i5,' FORCED/RMSD ATOMS FOUND.')
  104  format(A,' TARGET STRUCTURE TAKEN FROM ',A,' SET.')
  105  format(A,' FIRST TARGET STRUCTURE TAKEN FROM ',A,' SET.')
 !
@@ -1272,16 +1276,16 @@ __FMTNOW
       ind=0
       select case(cvtype)
        case(rmsd);
-        ind=cv_rmsd_add(iatom_o, iatom_f, rtarget_o, rtarget_f,          &
+        ind=cv_rmsd_add(iatom_o, iatom_f, rtarget_o, rtarget_f,         &
      &               orientWeights, forcedWeights,                      &
      &               k, gam, w)
        case(drmsd);
-        ind=cv_drmsd_add(iatom_o, iatom_f, rtarget_o, rtarget_f,         &
+        ind=cv_drmsd_add(iatom_o, iatom_f, rtarget_o, rtarget_f,        &
      &               rtarget1_o, rtarget1_f,                            &
      &               orientWeights, forcedWeights,                      &
      &               k, gam, w)
        case(proj);
-        ind=cv_proj_add(iatom_o, iatom_f, rtarget_o, rtarget_f,          &
+        ind=cv_proj_add(iatom_o, iatom_f, rtarget_o, rtarget_f,         &
      &               rtarget1_o, rtarget1_f,                            &
      &               orientWeights, forcedWeights,                      &
      &               k, gam, w)
