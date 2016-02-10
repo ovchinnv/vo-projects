@@ -64,7 +64,6 @@ aceplug_err_t aceplug_init(struct aceplug_sim_t *s, int argc, char **argkey, cha
  ierr=smcv_init_from_acemd(natoms, m, q, inputfile, ilen, logfile, llen, &atomlist) ;
  if (atomlist!=NULL) { // atom indices provided; store them as private data
   s->privdata = atomlist ;
- printf("%d\n", atomlist[2]);
  }
  free(m);
  free(q);
