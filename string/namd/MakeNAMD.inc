@@ -7,6 +7,11 @@ LINKOBJS=constants.o output.o parser.o cmd.o prm.o ivector.o ivector_list.o pars
          cv_qcomp.o minimal_system.o smcv_namd.o splines.o rng.o clcg.o mpi_compat_stub.o
 
 default : namd
-namd : all $(LIB)
+namd : $(LIB)
+$(LIB) : $(LOBJS) MakeNAMD.inc
+
+GlobalMasterSMCV.h:GlobalMasterSMCV.H $(LOCALDEPS) $(GLOBALDEPS)
+	$(FPP) $(FPPFLAGS) $(DEFS) $(LOCALDEFS) $(GLOBALMACROS) $(LOCALMACROS) -P $< > $@
 	cat source.defs >> GlobalMasterSMCV.h
-$(LIB) : namd.stamp MakeNAMD.inc
+
+

@@ -3,7 +3,7 @@ ROOT=../..
 COMMON=..
 OBJS=plugin-smcv.o smcv_acemd.o
 HEADS=smcv.h
-DEPS=string dynamol mpi_compat
+DEPS=string dynamol mpi_stub
 
 LOCALDEFS+=-D__BINDC
 

@@ -30,11 +30,12 @@ class GlobalMasterSMCV : public GlobalMaster {
  private:
   Bool initialized;
   void calculate();
+  void destroy();
   Molecule *molecule;
-  SubmitReduction *reduction;
+  SimParameters * params;
+//  SubmitReduction *reduction;
   long int iteration;
   __CFLOAT smcv_energy;
   __CINT *atomlist=NULL; // to maintain a list of atoms that are needed by plugin; memory managed by FORTRAN side
   __CFLOAT *r=NULL, *fr=NULL ; //positions and forces
-  __CFLOAT *x, *y, *z, *fx, *fy, *fz ;
 };

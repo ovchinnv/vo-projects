@@ -63,10 +63,8 @@ module smcv_namd
  else
   call smcv_done_from_namd()
   __MESSAGE(whoami, 'INITIALIZING SMCV PLUGIN WITH '//itoa(n)//' ATOMS');
-  allocate(r(n,3), rcomp(n,3), f(n,3), m(n), q(n)) ! note transposed dimensions relative to acemd plugin + dynamol
-  x =>r(:,1); y =>r(:,2); z =>r(:,3);
-  fx=>f(:,1); fy=>f(:,2); fz=>f(:,3);
-  xc =>rcomp(:,1); yc =>rcomp(:,2); zc =>rcomp(:,3);
+! maintaining coordinate compatibility with dynamol
+  allocate(r(3,n), rcomp(3,n), f(3,n), m(n), q(n)) ! note transposed dimensions relative to acemd plugin + dynamol
   minimal_system_natom=n
   m=mass
   q=charge
@@ -102,7 +100,7 @@ module smcv_namd
  endif ! n
 !
  iteration=-abs(__NAN)
- initialized=.true.
+ initialized=.false. ! need to execute context string_first
  _ME=0
 !
 end function _ME
@@ -115,8 +113,8 @@ end function _ME
  __DEP_PARSER
 !
  int(C_LONG), value, intent(in) :: iteration_
- real(__FCFLOAT), intent(in), dimension(minimal_system_natom, 3) :: r_namd
- real(C_FLOAT), intent(out), dimension(minimal_system_natom, 3) :: f_namd
+ real(__FCFLOAT), intent(in), dimension(3, minimal_system_natom) :: r_namd
+ real(__FCFLOAT), intent(out), dimension(3, minimal_system_natom) :: f_namd
  real(__FCFLOAT), intent(out) :: e
  int(__FCINT) :: _ME
  int :: i, ierr
@@ -126,14 +124,13 @@ end function _ME
  _ME=1 ! default return is failure
 !
  e=zero ; ! not computed yet
-! load coordinates
- r(atomlist(2:),:)=r_namd(atomlist(2:),:)
  iteration=iteration_
- f(atomlist(2:),:)=zero ! start from zero force
+! load coordinates
 !
  if (.not.initialized) then ! execute first-iteration stack, if present
 ! complete initialization
   if (.not.noexec(__STRING(__FIRSTCTX))) then
+   r=r_namd; ! will overwrite nans
    __MESSAGE(whoami, 'EXECUTING FIRST ITERATION STACK');
    call smcv_exec(__STRING(__FIRSTCTX))
    call parser_clear_context(__STRING(__FIRSTCTX))
@@ -142,12 +139,16 @@ end function _ME
   endif
   if (fatal_warning()) return
   initialized=.true.
+ else ! all subsequent steps
+  r(:,atomlist(2:))=r_namd(:,atomlist(2:))
  endif
+
 !
- call smcv_main( x, y, z, xc, yc, zc, m, fx, fy, fz, iteration)
+ f(:,atomlist(2:))=zero ! start from zero force
+ call smcv_main(__X, __Y, __Z, __XCOMP, __YCOMP, __ZCOMP, m, f(1,:), f(2,:), f(3,:), iteration)
 ! update namd forces
 ! note that per CHARMM convention, which the plugin code inherits, forces correspond to grad V, not -grad V !
- f_namd(atomlist(2:),:) = - f(atomlist(2:),:)
+ f_namd(:,atomlist(2:)) = - f(:,atomlist(2:))
 ! update energy
  _ME=0
 !
@@ -169,7 +170,6 @@ end function _ME
  __FREE(rcomp)
  __FREE(m)
  __FREE(q)
- nullify(x,y,z,xc,yc,zc,fx,fy,fz)
 !
  __DEALL(atomlist)
  initialized=.false.

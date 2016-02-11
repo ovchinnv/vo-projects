@@ -8,6 +8,7 @@
 #include "ProcessorPrivate.h"
 
 //#define DEBUGM
+
 #define MIN_DEBUG_LEVEL 1
 #include "Debug.h"
 
@@ -83,6 +84,7 @@
 #include "GlobalMasterIMD.h"
 #include "GlobalMasterTcl.h"
 #include "GlobalMasterSMD.h"
+#include "GlobalMasterSMCV.h" // VO SMCV Plugin
 #include "GlobalMasterTMD.h"
 #include "GlobalMasterSymmetry.h"
 #include "GlobalMasterEasy.h"
@@ -94,6 +96,7 @@
 
 ComputeMgr::ComputeMgr()
 {
+    DebugM(1,"ComputeMgr constructor called\n");
     CkpvAccess(BOCclass_group).computeMgr = thisgroup;
     computeGlobalObject = 0;
     computeGlobalResultsMsgSeq = -1;
@@ -120,7 +123,9 @@ ComputeMgr::ComputeMgr()
 
 ComputeMgr::~ComputeMgr(void)
 {
+    DebugM(1,"ComputeMgr destructor called\n");
     delete computeNonbondedWorkArrays;
+//    if (masterServerObject) delete masterServerObject; // make sure to call client destructors
 }
 
 void ComputeMgr::updateComputes(int ep, CkGroupID chareID)
@@ -850,6 +855,9 @@ ComputeMgr::createComputes(ComputeMap *map)
                                     simParams->firstTimestep, simParams->SMDFile,
                                     node->molecule->numAtoms)
             );
+// VO SMCV Plugin v
+        if (simParams->SMCVPluginActive) masterServerObject->addClient(new GlobalMasterSMCV());
+// VO SMCV Plugin ^
             
         if (simParams->symmetryOn && 
           (simParams->firstTimestep < simParams->symmetryLastStep || 
@@ -928,7 +936,7 @@ ComputeMgr::createComputes(ComputeMap *map)
         DebugM(1,"  node = " << map->computeData[i].node << '\n');
         DebugM(1,"  type = " << map->computeData[i].type << '\n');
         DebugM(1,"  numPids = " << map->computeData[i].numPids << '\n');
-        DebugM(1,"  numPidsAllocated = " << map->computeData[i].numPidsAllocated << '\n');
+//        DebugM(1,"  numPidsAllocated = " << map->computeData[i].numPidsAllocated << '\n');
         for (int j=0; j < map->computeData[i].numPids; j++)
         {
             //      DebugM(1,"  pid " << map->computeData[i].pids[j] << '\n');

@@ -53,7 +53,7 @@ if (read)
    phirad=phi/180*pi;
    psirad=psi/180*pi;
 %
-   fname=['FBWIN_',phis,'_',psis,'.dat'];
+   fname=['fbwin_',phis,'_',psis,'.dat'];
    d=load(fname) ;
 
    data=reshape(d,ncv,[])' ;

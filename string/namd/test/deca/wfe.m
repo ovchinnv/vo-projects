@@ -1,8 +1,15 @@
 % compute FE from double half-harmonic window simulations
 %
-addpath '~/scripts/matlab'; %for xave_
 
-fefile='wfe.mat' ;
+close all;
+
+if ~exist('styles')
+ styles={'r-','g-','b-','m-','c-','k-','r--','g--','b--','m--','c--','k--'};
+end
+lw=1;
+leg={};
+
+addpath '~/scripts/matlab'; %for xave_
 
 kboltz=1.987191d-3;        % boltzmann constant
 Temp=300;
@@ -17,43 +24,28 @@ end
 
 if (read)
 %%%%%%%%%% process windows
- ncv=2;
+ ncv=1;
 % set limits
- phi0=-180 ; phi1 = 180 ;
- psi0=-180 ; psi1 = 180 ;
+ d0=12 ; d1=32;
 
- fbw=[10, 10];
- fbwrad=fbw * pi / 180 ;
+ fbw=1;
 
-% fbwrad=[0.175 0.175];
+ nwin=32;
 
- nphi=20;
- npsi=20;
+ nbox =2 % number of statistical samples
 
- nbox =1; % number of statistical samples
+ df=zeros(nwin, ncv, nbox) ; %derivative matrix
 
- df=zeros(nphi, npsi, ncv, nbox) ; %derivative matrix
+ for j=1:nwin
+   dref = d0 + (j-1) / (nwin-1) * (d1-d0);
+   % round to 2 decimap pts
+   dref=0.01 * fix (dref*100);
 
- for j=1:nphi
-  phi = phi0 + (j-1) / nphi * (phi1-phi0);
-  for k=1:npsi
-   psi = psi0 + (k-1) / npsi * (psi1-psi0);
-%
-   if (phi~=0)
-    phis=sprintf('%.2f',phi);
-   else
-    phis='0';
-   end
-   if (psi~=0)
-    psis=sprintf('%.2f',psi);
-   else
-    psis='0';
-   end
+   ds(j)=dref ; % save for integration
 
-   phirad=phi/180*pi;
-   psirad=psi/180*pi;
-%
-   fname=['FBWIN_',phis,'_',psis,'.dat'];
+   drefs=sprintf('%.2f',dref);
+
+   fname=['fbwin_',drefs,'.dat'];
    d=load(fname) ;
 
    data=reshape(d,ncv,[])' ;
@@ -63,8 +55,7 @@ if (read)
    nsamp=data(2:2:end,:) ;
 %
    [niter,ncv]=size(cvs);
-% restraint centers for each replica
-   cvs0=[phirad psirad] ;
+%
 % sample limits and number of boxes
    ie   =niter;
    ib   =2; % skip 1st iter per equilibration
@@ -82,11 +73,9 @@ if (read)
      continue
     end
     nn=nsamp(inds,i);
-    dd=cvs(inds,i) - cvs0(i); % average displacement from restraint center
-% account for periodicity
-    dd=mod(dd, 2*pi) ; ind=find(dd>pi); dd(ind)=dd(ind)-pi-pi ;
+    dd=cvs(inds,i) - dref; % average displacement from restraint center
 
-    dbox = 0.5*fbwrad(i) ; % half-width
+    dbox = 0.5*fbw ; % half-width
     dd = (dd+dbox)/(2*dbox) ; % normalize data to the interval [0 1]
 %
 % check to make sure there are no outliers
@@ -115,56 +104,51 @@ if (read)
      ibeg=iend+1;
 % solve for FE slope
      f=@(x) xave_s(x)-ddcomb ;
-     g=fzero(f,0) ;
+     g=fzero(f,[-20 20]) ;
 % stop if a problem with gamma
      if(isnan(g)) ; error('Cannot find gamma: got NaN'); return ; end
 % compute df from gamma
-     df(j, k, i, ibox) = g * kboltz * Temp / fbwrad(i);
+     df(j, i, ibox) = g * kboltz * Temp / fbw;
     end % over ibox boxes
    end % over all cvs
 %
-  end % k -psi
- end % j -phi
+ end
  read=0;
 end;
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
-% integrate derivatives to get PMF
-% define grid
-x = ( phi0 + ( (1:nphi) - 1 ) / nphi * (phi1-phi0) ) * pi / 180 ;
-y = ( psi0 + ( (1:npsi) - 1 ) / npsi * (psi1-psi0) ) * pi / 180 ;
-dx = diff(x);
-dy = diff(y) ;
-%
-f = zeros( nphi, npsi );
-if ( length(size(df))==4 )
-% dfm=mean(df,4); % derivatives averaged over boxes
-else % otherwise the 4th dimensions may be absent, since it is trivial
- dfm=df ;
-end
-fx=dfm(:,:,1);
-fy=dfm(:,:,2);
 
-% corner
-f(1,1)=0 ;
-% boundaries
-for i = 2 : nphi
- f(i,1) = f(i-1,1) + 0.5 * ( fx(i-1,1) + fx(i,1) ) * dx (i-1) ;
+dfc=reshape(df(:,1,:), nwin, nbox)' ;
+
+% compute center derivative
+dfc = 0.5 * ( dfc(:,1:end-1) + dfc(:,2:end) );
+fe = [ zeros(nbox,1)  cumsum( dfc.*(ones(nbox,1)*diff(ds)), 2) ];
+
+%============= PLOT FE =============
+if ~nofig
+ close all;
+ figure('position',[200,200,450,350]); hold on; box on;
 end
 %
-for j = 2 : npsi
- f(1,j) = f(1,j-1) + 0.5 * ( fy(1,j-1) + fy(1,j) ) * dy (j-1) ;
+for i=1:nbox
+ plot(ds,fe(i,1:end),[char(styles(mod(i-1,length(styles))+1)),'x'], 'linewidth', lw)
 end
 %
-for i=2:nphi
- for j=2:npsi
-  f(i,j) = 0.5 * ( f(i-1,j) + f(i,j-1) ) + 0.25 * ( (fx(i-1,j) + fx(i,j))*dx(i-1) + (fy(i,j) + fy(i,j-1))*dy(j-1) ) ;
- end
-end
+fave=mean(fe,1);
+fstd=std(fe,1);
+%mean
+plot(ds,fave,'k--','linewidth',lw);
+%std
+%plot(alpha,fave+fstd,'k--','linewidth',1);
+%plot(alpha,fave-fstd,'k--','linewidth',1);
+leg=[leg {['Average']}];
 
-todeg=180/pi;
-pcolor(y*todeg,x*todeg,f'); shading interp ; colorbar
-
-
-%f4=[ f' f' ; f' f' ] ; % extend periodically
-%pcolor(f4) ; shading interp ; colorbar ;
+legend(leg,2);
+box on;
+ylabel('\it F(\alpha) (kcal/mol)', 'fontsize',14);
+xlabel('\it x', 'fontsize',14);
+%
+%xlim([0 1]);
+%ylim([0 9]);
+set(gcf, 'paperpositionmode', 'auto');
+print(gcf, '-dpsc', 'wfe.eps');
 

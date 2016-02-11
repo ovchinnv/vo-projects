@@ -3,9 +3,10 @@ ROOT=../..
 COMMON=..
 OBJS=smcv_namd.o
 HEADS=GlobalMasterSMCV.h
-DEPS=string dynamol mpi_compat
+DEPS=string dynamol mpi_stub
 
 LOCALDEFS+=-D__BINDC -D__CPLUSPLUS
+
 
 include $(ROOT)/Makefile.inc
 
@@ -20,4 +21,4 @@ include MakeNAMD.inc
 smcv_namd.o : $(COMMON)/sm_var.mod $(COMMON)/sm_config.mod
 
 clean::
-	rm -f $(OBJS) smcv.h
+	rm -f $(OBJS) $(HEADS)

@@ -80,7 +80,7 @@ if (read)
 %
 % check to make sure there are no outliers
     if ( find ( abs(dd - 0.5) > 0.5 , 1) )
-     error ['ERROR : one or more averages for replica ', num2str(i),' is outside the [0,1] interval. Aborting.'];
+     error(['ERROR : one or more averages for replica ', num2str(i),' is outside the [0,1] interval. Aborting.']);
     end
 % cumulative number of samples
     nnc=cumsum(nn);
@@ -92,7 +92,7 @@ if (read)
      iend=find(nnc>ibox,1)-1 ; % last index
      if (isempty(iend))
       if ibox < nbox
-       error ['End of sample reached in box ',num2str(ibox),' of ',num2str(nbox),' of replica ',num2str(m)];
+       error(['End of sample reached in box ',num2str(ibox),' of ',num2str(nbox),' of replica ',num2str(m)]);
        return
       else
       iend=length(nnc) ;%take the last sample
@@ -104,7 +104,7 @@ if (read)
      ibeg=iend+1;
 % solve for FE slope
      f=@(x) xave_s(x)-ddcomb ;
-     g=fzero(f,0) ;
+     g=fzero(f,[-20 20]) ;
 % stop if a problem with gamma
      if(isnan(g)) ; error('Cannot find gamma: got NaN'); return ; end
 % compute df from gamma

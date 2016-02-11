@@ -1531,7 +1531,7 @@ void SimParameters::config_parser_constraints(ParseOptions &opts) {
    
    //****** END SMD constraints changes 
    //****** VO: BEGIN SMCV plugin parameters
-   opts.optional("main", "SMCVPlugin", "Plugin to use restraints from String Method in Collective Variables", &SMCVPluginActive, FALSE);
+   opts.optionalB("main", "SMCVPlugin", "Plugin to use restraints from String Method in Collective Variables", &SMCVPluginActive, FALSE);
    opts.require("SMCVPlugin", "SMCVConfigFile","Configuration file for SMCV plugin", SMCVConfigFileName);
    opts.optional("SMCVPlugin", "SMCVLogFile","Log file for SMCV plugin", SMCVLogFileName);
    //****** VO: END SMCV plugin parameters
