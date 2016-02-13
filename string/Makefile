@@ -6,8 +6,8 @@ DEPS=multicom multidiag output mpi_stub
 DEPS+=$(addprefix $(NAME)/,$(SUBDIRS))
 CHARMM_DIR=stringm
 
-LOCALMACROS+=-include source.defs
-LOCALDEPS+=$(ROOT)/mpitype.def source.defs 
+LOCALMACROS=-include source.defs
+LOCALDEPS=$(ROOT)/mpitype.def source.defs 
 LOCALDEPS+=dmol_select_macro.def
 LOCALMACROS+=-include acemd.defs
 LOCALDEPS+=acemd.defs 
