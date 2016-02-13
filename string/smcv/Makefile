@@ -31,6 +31,7 @@ smcv_add.o : $(CVOBJ) cv_quaternion.o cv_types.o cv_common.o cv_frames.o cv_cvrm
 smcv_master.o : cv_common.o $(CVOBJ) cv_cvrms.o smcv_stats.o
 
 smcv.src : interface.ch
+smcv.F90 : interface.h
 
 clean::
 	for d in $(SUBDIRS); do (cd $$d; $(MAKE) clean); done
