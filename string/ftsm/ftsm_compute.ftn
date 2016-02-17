@@ -687,7 +687,7 @@ __MPI_ONLY     &         0, MPI_COMM_LOCAL, ierror)
       float, pointer, dimension(:,:) :: ffpar, ffprp, fopar, foprp
       float :: pre1, pre2, dw, ddm, ddp
       float :: fac, fac2, t, omt, wgt, dx, dy, dz, kbt=0.6d0 ! for now, hardwired at room temperature
-      float :: tw, omtw ! window average
+      float :: tw
       int, parameter :: right=1, left=-1, home=0
       int :: qwhere
 !
@@ -703,10 +703,10 @@ __MPI_ONLY     &         0, MPI_COMM_LOCAL, ierror)
 !
       if (addforce) then
        num_force_samples=num_force_samples+1
-       omt=1d0/num_force_samples
-       t=1d0-omt
+       omt=one/num_force_samples
+       t=one-omt
       else
-       t=1d0; omt=0d0
+       t=one; omt=zero
       endif
 !
       if (ftsm_scaledist) then
@@ -729,8 +729,9 @@ __MPI_ONLY     &         0, MPI_COMM_LOCAL, ierror)
       if (proj_on) then
 ! restraint force parallel to string
        if (window_on) then ! double half-harmonic window
-        dw=fac2 * dwin ; ! converted to local metric (2D for inner pts.)
-        ddp=dpar - dpar0 + (half*dw) ; ! add half-window size
+!    note : dwin is already pre-scaled by 2D, which is why below we multiply endpoint dwin by two ; division for compatibility with scaledist=.false.
+        dw = dwin / fac ; ! converted to local metric (2D for inner pts.)
+        ddp=dpar - dpar0 + half*dw ; ! add half-window size
         ddm=ddp - dw ;
         if (ddm.gt.zero) then ! system to the `right` of window
          pre1 = kpara * fac * fac * ddm
@@ -741,8 +742,9 @@ __MPI_ONLY     &         0, MPI_COMM_LOCAL, ierror)
         else ! update average position inside window (conditional on being inside the window)
          pre1=zero ;
          __INC(window_num_ave) ! increment (local) sample counter
-         omtw=one/window_num_ave ; tw=one-omtw;
-         window_ave_pos = tw * window_ave_pos + omtw * dpar ! note: logging dpar and not normalized quantities (e.g. (dpar-dpar0)/dw) )
+         tw=one/window_num_ave
+         __INCR(window_ave_pos, tw*(dpar - window_ave_pos) )
+!         window_ave_pos = tw * window_ave_pos + omtw * dpar ! note: logging dpar and not normalized quantities (e.g. (dpar-dpar0)/dwin) )
          qwhere = home
         endif ! ddm, ddp, etc
 ! update crossing log if needed ; note that if you call this routine twice at the same step, the code below is only executed once b/c qwhere=whereami
