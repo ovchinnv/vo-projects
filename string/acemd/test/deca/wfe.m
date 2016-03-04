@@ -45,7 +45,7 @@ if (read)
 
    drefs=sprintf('%.2f',dref);
 
-   fname=['FBWIN_',drefs,'.dat'];
+   fname=['fbwin_',drefs,'.dat'];
    d=load(fname) ;
 
    data=reshape(d,ncv,[])' ;

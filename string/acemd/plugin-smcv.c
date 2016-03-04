@@ -10,11 +10,19 @@
 #include "smcv.h"
 #include <stdlib.h>
 
+// structore for plugin private data :
+typedef struct {
+ __CINT *atomlist ; // to maintain a list of atoms that are needed by plugin; other coordinates to be omitted
+ __CFLOAT *r ; // coordinate array
+ float *fr ; // forces array
+} pdata ;
+
 aceplug_err_t aceplug_init(struct aceplug_sim_t *s, int argc, char **argkey, char **argval) {
  __CCHAR *inputfile = NULL, *logfile = NULL;
  __CINT ilen=0, llen=0, ierr=0;
- __CCHAR* deflogfile = "smcv.log" ;
- __CINT * atomlist = NULL ; // to maintain a list of atoms that are needed by plugin; other coordinates to be omitted
+ __CCHAR *deflogfile = "smcv.log" ;
+// for plugin private data :
+ pdata *private_data = malloc(sizeof(pdata)) ;
 //
  printf("# SMCV PLUGIN: Initializing ...\n");
 //
@@ -51,10 +59,13 @@ aceplug_err_t aceplug_init(struct aceplug_sim_t *s, int argc, char **argkey, cha
 
  natoms = s->natoms ;
 //
- s->privdata = NULL; // initialize private pointer
+ private_data->r  = (__CFLOAT *) calloc(3 * natoms, sizeof(__CFLOAT));
+ private_data->fr = (float *) calloc(3 * natoms, sizeof(float));
+ private_data->atomlist = NULL ; // NOTE that atomlist will be allocated in the FORTRAN code (which knows how to do it)
+ s->privdata = private_data; // initialize private data pointer
 //
- m = (__CFLOAT *) calloc(natoms, sizeof(__CFLOAT));
- q = (__CFLOAT *) calloc(natoms, sizeof(__CFLOAT));
+ m = (__CFLOAT *) malloc(natoms * sizeof(__CFLOAT));
+ q = (__CFLOAT *) malloc(natoms * sizeof(__CFLOAT));
  for (i=0; i<natoms; i++){
   m[i]=s->mass[i];
   q[i]=s->charge[i];
@@ -62,10 +73,7 @@ aceplug_err_t aceplug_init(struct aceplug_sim_t *s, int argc, char **argkey, cha
 //
  ilen=strlen(inputfile);
  llen=strlen(logfile);
- ierr=smcv_init_from_acemd(natoms, m, q, inputfile, ilen, logfile, llen, &atomlist) ;
- if (atomlist!=NULL) { // atom indices provided; store them as private data
-  s->privdata = atomlist ;
- }
+ ierr=smcv_init_from_acemd(natoms, m, q, inputfile, ilen, logfile, llen, &(private_data->atomlist));
  free(m);
  free(q);
 //
@@ -76,18 +84,23 @@ aceplug_err_t aceplug_calcforces(struct aceplug_sim_t *s) {
  int n = s->natoms ;
  int i, j;
  __CINT ierr;
- __CINT * atomlist = NULL, *m ; // list of atom indices required by plugin
- __CFLOAT *r = malloc( n * 3 * sizeof(__CFLOAT) ) ; //positions
- float *fr   = calloc( n * 3 , sizeof(float) ) ; //forces
+// for accessing the plugin private data :
+ pdata *private_data = s->privdata ;
+ __CINT *atomlist = private_data->atomlist ;
+ __CFLOAT *r = private_data->r ;
+ float *fr = private_data->fr ;
+//
+ __CINT *aptr ;
  __CFLOAT *rptr;
  float *fptr;
  __CFLOAT smcv_energy;
  long int iteration =s->step ;
 //
+//
  if ( s-> plugin_load_positions() ) {return ACEPLUG_ERR;}
  if ( s-> plugin_load_forces() ) {return ACEPLUG_ERR;}
 //
- if (s->privdata==NULL) { // provide all coords
+ if (atomlist==NULL) { // atomlist is not defined; therefore, provide all coords
   for (i=0, rptr=r ; i< s->natoms ; i++) {
    *(rptr++) = s -> pos[i].x;
    *(rptr++) = s -> pos[i].y;
@@ -95,11 +108,11 @@ aceplug_err_t aceplug_calcforces(struct aceplug_sim_t *s) {
   }
 // compute plugin forces
   ierr=smcv_dyna_from_acemd(iteration, r, fr, &smcv_energy, &atomlist); // might return valid atomlist
+  private_data->atomlist=atomlist ;
 // apply plugin forces
   if (atomlist!=NULL) { // atom indices provided; store them as private data and use for adding forces
-   s->privdata = atomlist++ ; // point to atomlist and go to first atom index
-   for (m=atomlist+atomlist[-1] ; atomlist<m ; atomlist++) { // iterate until atomlist points to the last index
-    j=*atomlist ;
+   for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
+    j=*aptr - 1; // for zero offset (e.g. first coordinate lives in r[0]
     fptr=fr + 3*j ;
     s -> frc[j].x+= *(fptr++);
     s -> frc[j].y+= *(fptr++);
@@ -112,31 +125,27 @@ aceplug_err_t aceplug_calcforces(struct aceplug_sim_t *s) {
     s -> frc[i].z+= *(fptr++);
    }
   } // atomlist
- } else { // privdata not null : loop over only the desired indices
-  atomlist = (__CINT*)s->privdata+1 ;// first entry skipped; it is the number of atoms (see line below)
-  for (m=atomlist + atomlist[-1]  ; atomlist<m ; atomlist++) { // iterate until atomlist points to the last index
-   j=*atomlist ;
+ } else { // atomlist not null : loop over only the desired indices
+  for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
+   j=*aptr - 1;
    rptr=r + 3*j ;
    *(rptr++) = s -> pos[j].x;
    *(rptr++) = s -> pos[j].y;
-   *(rptr++) = s -> pos[j].z;
+   *(rptr)   = s -> pos[j].z;
   }
 //
   ierr=smcv_dyna_from_acemd(iteration, r, fr, &smcv_energy, &atomlist); // atomlist should not be modified in this call
 //
-  atomlist = (__CINT*)s->privdata+1 ;// first entry skipped; it is the number of atoms (see line below)
-  for (m=atomlist+atomlist[-1] ; atomlist<m ; atomlist++) { // iterate until atomlist points to the last index
-   j=*atomlist ;
+  for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
+   j=*aptr - 1;
    fptr=fr + 3*j ;
    s -> frc[j].x+= *(fptr++);
    s -> frc[j].y+= *(fptr++);
    s -> frc[j].z+= *(fptr);
   }
-
- } // s-> privdata
 //
- free(r);
- free(fr);
+ } // atomlist == NULL
+//
  if ( s-> plugin_update_forces() ) { return ACEPLUG_ERR;}
  if ( s-> plugin_add_energy(ENERGY_EXTERNAL,smcv_energy) ) { return ACEPLUG_ERR;}
 //
@@ -148,8 +157,12 @@ aceplug_err_t aceplug_endstep(struct aceplug_sim_t *s) {
 }
 //==========================================================
 aceplug_err_t aceplug_terminate(struct aceplug_sim_t *s) {
+ pdata *private_data = s->privdata ;
  printf("# SMCV PLUGIN: Finalizing...\n");
  smcv_done_from_acemd();
+ free(private_data->r);
+ free(private_data->fr);
+ private_data->atomlist=NULL ; // this memory is managed by FORTRAN
+ free(private_data);
  return ACEPLUG_OK;
 }
-
