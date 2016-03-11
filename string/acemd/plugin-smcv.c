@@ -147,7 +147,9 @@ aceplug_err_t aceplug_calcforces(struct aceplug_sim_t *s) {
  } // atomlist == NULL
 //
  if ( s-> plugin_update_forces() ) { return ACEPLUG_ERR;}
- if ( s-> plugin_add_energy(ENERGY_EXTERNAL,smcv_energy) ) { return ACEPLUG_ERR;}
+ if ( s-> plugin_add_energy(ENERGY_EXTERNAL, smcv_energy) ) { return ACEPLUG_ERR;}
+// we know that energy is computed, but it does not seem to make into the ACEMD energy output
+//printf("%12.5f\n", smcv_energy);
 //
  return (ierr>0) ? ACEPLUG_ERR : ACEPLUG_OK ;
 }
