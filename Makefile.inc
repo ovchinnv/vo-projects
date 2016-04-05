@@ -33,13 +33,10 @@ MPI_HOME=/usr/lib/openmpi
 FORTRAN_COMPILER=$(notdir $(FC))
 DEFS+=-Dint=integer -Dfloat=real*8 -Dbool=logical -Dmpiint=MPI_INTEGER -Dmpifloat=MPI_REAL8 -Dmpichar=MPI_CHARACTER -Dmpiint4=MPI_INTEGER4\
      -Dmpibool=MPI_LOGICAL -Dint1="integer(kind=KIND('a'))" -D__RCOMP -D__DMOL -D__CHES -D__EDDIE -D__$(FORTRAN_COMPILER) \
-     -Dint4mpi=integer -D__TIMER  -D__PARALLEL -D__STRING_SERIAL -D__ACEMD -D__NAMD#-D__DEBUG -D__PATHSCALE #-Dint4mpi="integer(KIND=MPI_INTEGER_KIND)" 
+     -Dint4mpi=integer -D__TIMER  -D__PARALLEL #-D__DEBUG -D__PATHSCALE #-Dint4mpi="integer(KIND=MPI_INTEGER_KIND)" 
 
-# ! note: the VEC routines are probably slower
-
-# note : for single precision define
-#
-#DEFS=$(DEFS) -D DEBUG
+#STRING_FLAGS=-D__STRING_SERIAL #-D__ACEMD -D__NAMD
+DEFS+=$(STRING_FLAGS)
 #
 # preprocess with C++ style preprocessor
 # -C flag preserves comments
@@ -150,9 +147,9 @@ $(ROOT)/$(NAME).stamp:: $(OBJS) $(MODS) $(HEADS) $(DISTRIB)
 %.F90:%.ftn $(LOCALDEPS) $(GLOBALDEPS)
 	sed 's/\([^\#]\)\(\/\/\)/\1\^\^/g' $< | $(FPP) $(FPPFLAGS) $(DEFS) $(LOCALDEFS) -U__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(MSG) $(INCLUDES) -P | sed 's/\^\^/\/\//g' > $@
 %.src:%.ftn $(LOCALDEPS) $(GLOBALDEPS) $(ROOT)/charmm.msg
-	sed 's/\([^\#]\)\(\/\/\)/\1\^\^/g' $< | $(FPP) $(FPPFLAGS) -D__CHARMM -D__CHARMM_VER=$(CHARMM_MAJOR_VERSION) $(GLOBALMACROS) $(LOCALMACROS) $(CHMSG) -P | sed 's/\^\^/\/\//g' > $@
+	sed 's/\([^\#]\)\(\/\/\)/\1\^\^/g' $< | $(FPP) $(FPPFLAGS) $(STRING_FLAGS) -D__CHARMM -D__CHARMM_VER=$(CHARMM_MAJOR_VERSION) $(GLOBALMACROS) $(LOCALMACROS) $(CHMSG) -P | sed 's/\^\^/\/\//g' > $@
 %.ch:%.H $(LOCALDEPS) $(GLOBALDEPS)
-	$(FPP) $(FPPFLAGS) -D__CHARMM -D__CHARMM_VER=$(CHARMM_MAJOR_VERSION) $(CHMSG) $(GLOBALMACROS) $(LOCALMACROS) -P $< > $@
+	$(FPP) $(FPPFLAGS)  $(STRING_FLAGS) -D__CHARMM -D__CHARMM_VER=$(CHARMM_MAJOR_VERSION) $(CHMSG) $(GLOBALMACROS) $(LOCALMACROS) -P $< > $@
 ########################## TEST PROGRAM ######################
 test.F90:test.ftn $(LOCALDEPS) $(GLOBALDEPS) $(ROOT)/test.msg
 	$(FPP) $(FPPFLAGS) $(DEFS) -U__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(TESTMSG) $(DEBUG) -P $< > $@

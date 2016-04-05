@@ -76,6 +76,8 @@ __CHARMM_ONLY  int :: ivver, ivv2, iorig, ileap, error  ! for dynamics
      &           num_ave_samples, irep, i, a,                &
      &           ierror, me
       bool :: qflocal
+      bool :: qswapbc=.true. ! in some cases, desirable to disable automatic boundary conditions for string restraints
+!             ^ see macro in source.defs
       float :: t, omt
 !
 #ifdef __CHARMM
@@ -434,8 +436,11 @@ __MPI_ONLY &            1, mpibool, MPI_LAND, MPI_COMM_STRNG, ierror)
          if (qslave) then
           __BROADCAST_LOCAL(zval, 1, mpifloat)
          endif
+        else
+         zval = one ! work in units of ds ; this line is not needed ; included for clarity
+        endif ! ftsm_scaledist
 !
-         if (.not.ftsm_scaledist) then ! need to compute reference distance from string length
+        if (.not.ftsm_scaledist) then ! need to compute reference distance from string length
           if (mestring.eq.0) then ; dpar0=zero ; else ; dpar0 = zval ; endif ; dpar0i=dpar0 ! left endpoint uses one-sided tangent (see ftsm14 paper)
           if (qprint) then ; write(_MSGBUF,6713) whoami, ftoa(zval)
           __PRINT(_MSGBUF) ;
@@ -443,8 +448,8 @@ __MPI_ONLY &            1, mpibool, MPI_LAND, MPI_COMM_STRNG, ierror)
  6713 format(A,' AVERAGE COMPUTED ARCLENGTH INCREMENT IS ',A,' ANG.')
           ftsm_reset_dpar0f=.true.
 !
-         else ! options valid for scaled version
-          zval=two*zval ! gives 2L/(M-1) , i.e. || q-p ||
+        else ! options valid for scaled version with a lelgthscale specified in angstrom
+          zval=two*zval ! gives 2L/(M-1) , i.e. || q-p || (note : if no angstrom scalings are requested, zval will be unused)
 !
           if (qkpara_angstrom) then
            fname='PARALLEL FORCE CONSTANT (KPAR)' ; kpara = kpara * zval**2 ;
@@ -491,12 +496,11 @@ __MPI_ONLY &            1, mpibool, MPI_LAND, MPI_COMM_STRNG, ierror)
           else
            __SCALE(dwin,half) ! the scaling would be repeated is string is called again -- need to create and keep a separate copy of "default" variables !
           endif
-         endif ! .not. ftsm_scaledist
+        endif ! .not. ftsm_scaledist
 !
 ! NOTE that the scaling is actually by 2 x ds ; however, for the sake of simplicity of input
-! I omit this detail here
+! it is considered per ds, and converted here
  6712 format(A,' SCALING ',A,' BY INTER-REPLICA DS (',A,' ANG). NEW VALUE IS ',A)
-        endif ! ftsm_scaledist .or. ...
 !
        endif ! if restrained_on
 !
@@ -667,7 +671,15 @@ __MPI_ONLY &            1, mpibool, MPI_LAND, MPI_COMM_STRNG, ierror)
        endif ! qprint
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        call ftsm_save_com()       ! recompute COM in case weights changed
-       call ftsm_swap_bc(.true.)  ! update boundary replicas (with new COM-free structures)
+! check whether to swap bc
+       __QSWAPBC
+       if (qswapbc) then
+        call ftsm_swap_bc(.true.)  ! update boundary replicas (with new COM-free structures)
+       else ! just in case, update remove COMs of neighbor orientation atoms
+        call ftsm_save_com(left)
+        call ftsm_save_com(right)
+       endif
+!
 !      turn on string for dynamics
        ftsm_on=.true.
        ftsm_ini_iteration = -ione ! will be computed by ftsm_main
@@ -824,14 +836,23 @@ __MPI_ONLY   call MPI_ALLGATHER(ftsm_voronoi_whereami, 1, mpiint, ftsm_voronoi_m
 !
        qcomp=(__INDX_RM(comlyn, comlen, 'COMP').gt.0)
 !
+       __QSWAPBC ! check whether to swap bcs after fill (default behavior); sets qswapbc
+       if (qprint) then ! warn user
+        if (.not.qswapbc.and.nstring.gt.1) then
+         write(_MSGBUF(1),'(2A)') whoami, 'WILL NOT EXCHANGE NEIGHBOR REPLICAS (USED TO COMPUTE TANGENTS).'
+         write(_MSGBUF(2),'(2A)') whoami, 'YOU HAVE BEEN WARNED.'
+         __PRINT(_MSGBUF);
+        endif
+       endif
+!
        if (qcomp) then
         write(_MSGBUF,6657) whoami, c1
  6657 format(/A,' WILL CALCULATE FTSM COORDINATES IN COLUMN ',I3,' FROM COMPARISON COORDINATES.')
-        call ftsm_fill(__XCOMP,__YCOMP,__ZCOMP, c1)
+        call ftsm_fill(__XCOMP,__YCOMP,__ZCOMP, c1, qswapbc)
        else ! ~qcomp -- use main coordinates
         write(_MSGBUF,6660) whoami, c1
  6660 format(/A,' WILL CALCULATE FTSM COORDINATES IN COLUMN ',I3,' FROM MAIN COORDINATES.')
-        call ftsm_fill(__X,__Y,__Z, c1)
+        call ftsm_fill(__X,__Y,__Z, c1, qswapbc)
        endif ! qcomp
        if (qprint) then
         __PRINT(_MSGBUF)
@@ -847,14 +868,14 @@ __MPI_ONLY   call MPI_ALLGATHER(ftsm_voronoi_whereami, 1, mpiint, ftsm_voronoi_m
 !
        if (qcomp) then
         if (qprint) then ; write(_MSGBUF,6658) whoami, 'COMPARISON' ; __PRINT(_MSGBUF) ; endif
-        if (qorient.and.any(__XXCOMP(iatom_o(1:norient)).eq.__NAN)) then
-         __WRN(whoami,'COMPARISON ORIENTATION X-SET HAS UNDEFINED VALUES. NOTHING DONE.')
+        if (any(__XCOMP.eq.__NAN).or.any(__YCOMP.eq.__NAN).or.any(__ZCOMP.eq.__NAN)) then
+          __WRN(whoami,'COMPARISON ORIENTATION X-SET HAS UNDEFINED VALUES. NOTHING DONE.')
         else
          __FTSM_CALC(__XCOMP,__YCOMP,__ZCOMP,.false., t=one)
         endif
        else ! ~qcomp -- use main coordinates
         if (qprint) then ; write(_MSGBUF,6670) whoami, 'MAIN' ; __PRINT(_MSGBUF) ; endif
-        if (qorient.and.any(__XX(iatom_o(1:norient)).eq.__NAN)) then
+        if (any(__X.eq.__NAN).or.any(__Y.eq.__NAN).or.any(__Z.eq.__NAN)) then
          __WRN(whoami,'MAIN ORIENTATION X-SET HAS UNDEFINED VALUES. NOTHING DONE.')
         else
          __FTSM_CALC(__X,__Y,__Z, .false., t=one)
@@ -1147,6 +1168,16 @@ __CHARMM_ONLY iolev=1 ! open file on root (which may not be zero if rex is used)
         qcor=0; qdcd=1; qtxt=0; keyword='UNFORMATTED'
        endif
 !
+! check whether bc swap enabled
+       __QSWAPBC ! sets qbcswap
+       if (qprint) then ! warn user
+        if (.not.qswapbc.and.nstring.gt.1) then
+         write(_MSGBUF(1),'(2A)') whoami, 'WILL NOT EXCHANGE NEIGHBOR REPLICAS (USED TO COMPUTE TANGENTS).'
+         write(_MSGBUF(2),'(2A)') whoami, 'YOU HAVE BEEN WARNED.'
+         __PRINT(_MSGBUF);
+        endif
+       endif
+!
 !      prepare file
        ifile=__GET_RM_I(comlyn,comlen,'UNIT',-1)
        __GET_RM_A(COMLYN,COMLEN,'NAME',4,FNAME,80,FLEN)
@@ -1158,7 +1189,7 @@ __CHARMM_ONLY iolev=1 ! open file on root (which may not be zero if rex is used)
 #ifdef __CHARMM
         oldiol=iolev
 #endif
-        qflocal=qdcd.eq.0.and.(qtxt.eq.0) ! whether to open file locally on each root
+        qflocal=(qdcd.eq.0).and.(qtxt.eq.0) ! whether to open file locally on each root
 !
         if (qflocal) then
 #ifdef __CHARMM
@@ -1217,7 +1248,8 @@ __CHARMM_ONLY iolev=1 ! open file on root (which may not be zero if rex is used)
 !
 !     broadcast to slaves (although cread routine will send coords to slaves, too)
        if (c1.le.0) c1=center ! assume "default column"
-       if (c1.eq.center) then
+       call ftsm_save_com(c1) ! remove and save COM of orientation set
+       if (c1.eq.center .and. qswapbc) then
         call ftsm_swap_bc(.true.)
         r_f(:,:,left_old:right_old)=r_f(:,:,left:right)
         r_f(:,:,center_new)=r_f(:,:,center)
@@ -1383,7 +1415,7 @@ __CHARMM_ONLY iolev=1 ! open file on root (which may not be zero if rex is used)
             if (qprint) then ; write (_MSGBUF,'(2A)') whoami,                    &
      & ' WILL RESTRAIN SYSTEM TO PLANE PERPENDICULAR TO PATH.' ; __PRINT(_MSGBUF) ; endif
             if (nstring.eq.1) then 
-             __WRN(whoami, 'PROJECTION IS ILL-DEFINED BECAUSE ONLY ONE STRING IMAGE IS PRESENT.')
+             __WRN(whoami, 'PROJECTION MAY BE ILL-DEFINED BECAUSE ONLY ONE REPLICA IS PRESENT (YOU HAVE BEEN WARNED).')
             endif
            case('NO','OFF','FALSE','F','no','off','false','f')
             proj_on=.false.
@@ -1430,9 +1462,9 @@ __CHARMM_ONLY iolev=1 ! open file on root (which may not be zero if rex is used)
             if (mestring.eq.irep) dpar0=zval ! note: permitting any value
            endif ! irep
  6773 format(A,' REPLICA NUMBER INVALID OR UNSPECIFIED.',               &
-     &      /A,' WILL SET RERERENCE VALUE FOR PARALLEL RESTRAINT ',     &
+     &      /A,' WILL SET REFERENCE VALUE FOR PARALLEL RESTRAINT ',     &
      &         '  TO ',F7.3,' ON ALL REPLICAS.')
- 6774 format(A,' WILL SET RERERENCE VALUE FOR PARALLEL RESTRAINT ',     &
+ 6774 format(A,' WILL SET REFERENCE VALUE FOR PARALLEL RESTRAINT ',     &
      &   'ON REPLICA ',I5,' TO ',F7.3,'.')
           endif
 ! DPAR
