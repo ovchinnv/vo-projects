@@ -1,9 +1,9 @@
-#define __INITCTX SMCV_INIT
-#define __DONECTX SMCV_DONE
+#define __INITCTX FTSM_INIT
+#define __DONECTX FTSM_DONE
 !
 #define __CBIND use, intrinsic :: iso_c_binding
 !
-module smcv_acemd
+module ftsm_acemd
  use minimal_system
  __DEP_OUTPUT
  __DEP_CONST
@@ -18,26 +18,22 @@ module smcv_acemd
  int, save :: iteration
  int(__FCINT), save, allocatable, target :: atomlist(:)
 !
- interface
-  subroutine smcv_exec(ctx)
-  character(len=*) :: ctx
-  end subroutine smcv_exec
- end interface
-!
  contains
-! a collection of subroutines to call the SMCV code from ACEMD plugin interface
+! a collection of subroutines to call the FTSM code from ACEMD plugin interface
 ! module encapsulation allows storage
 !
 #define __CSUB(__NAME, ...) subroutine __NAME (__VA_ARGS__) bind(c, name=__STRING(__NAME))
 #define __CFUN(__NAME, ...) function __NAME (__VA_ARGS__) bind(c, name=__STRING(__NAME))
 !
-#define _ME smcv_init_from_acemd
+#define _ME ftsm_init_from_acemd
  __CFUN(_ME, n, mass, charge, inputname, il, outputname, ol, alist)
  __DEP_VECTORS
  __DEP_PARSER
  __DEP_FILES
  __DEP_MPI
- use cv_common, only : cv
+ use ftsm, only : ftsm_exec
+ use ftsm_var, only : iatom_a ! needed to compute atoms used by ftsm
+ use ftsm_util, only : ftsm_compute_atomlist
  int(__FCINT) :: _ME
  int( __FCINT), intent(in), value :: n, il, ol
  real(__FCFLOAT), intent(in), dimension(n) :: mass, charge
@@ -46,8 +42,8 @@ module smcv_acemd
 !
  character(len=il), pointer :: ifname
  character(len=ol), pointer :: ofname
-
- int :: i, fid, ierr
+!
+ int :: i, j, fid, ierr
  __IAM(_ME)
  _ME=1
 !
@@ -60,8 +56,8 @@ module smcv_acemd
   __WRN(whoami, 'NUMBER OF ATOMS MUST BE POSITIVE (RECEIVED '//itoa(n)//')')
   return
  else
-  call smcv_done_from_acemd()
-  __MESSAGE(whoami, 'INITIALIZING SMCV PLUGIN WITH '//itoa(n)//' ATOMS');
+  call ftsm_done_from_acemd()
+  __MESSAGE(whoami, 'INITIALIZING FTSM PLUGIN WITH '//itoa(n)//' ATOMS');
   allocate(r(3,n), rcomp(3,n), f(3,n), m(n), q(n))
   minimal_system_natom=n
   m=mass
@@ -85,17 +81,18 @@ module smcv_acemd
    if (noexec(__STRING(__INITCTX))) then
     call warning(whoami, 'CONTEXT "'//__STRING(__INITCTX)//'" DOES NOT CONTAIN EXECUTABLE STATEMENTS.', -1);
    else
-    call smcv_exec(__STRING(__INITCTX))
+    call ftsm_exec(__STRING(__INITCTX))
    endif
    if (fatal_warning()) return
    call parser_clear_context(__STRING(__INITCTX))
-! compute atomlist
-   i=cv%amap%last
+! compute unique atomlist
+   call ftsm_compute_atomlist()
+   i=iatom_a%last
    allocate(atomlist(i+1)) ; ! include number of elements as first entry
-   atomlist(1)=i ; atomlist(2:)=cv%amap%i(1:i)
+   atomlist(1)=i ; atomlist(2:)=iatom_a%i(1:i)
    call isort('i', i, atomlist(2), ierr) ! pass second element b/c 1st contains the list size
    alist=c_loc(atomlist)
-  endif ! defer
+  endif ! defer 
 !
   initialized=.not.defer_init_until_dyna
   _ME=0
@@ -105,10 +102,11 @@ module smcv_acemd
 end function _ME
 #undef _ME
 !===================================================================
-#define _ME smcv_dyna_from_acemd
+#define _ME ftsm_dyna_from_acemd
  __CFUN(_ME, iteration_, r_acemd, f_acemd, e, alist)
- use cv_common, only : cv
- use smcv_master, only : smcv_main
+ use ftsm, only : ftsm_main, ftsm_exec
+ use ftsm_var, only : iatom_a ! needed to compute atoms used by ftsm
+ use ftsm_util, only : ftsm_compute_atomlist
  __DEP_PARSER
 !
  int(C_LONG), value, intent(in) :: iteration_
@@ -139,7 +137,7 @@ end function _ME
    if (noexec(__STRING(__INITCTX))) then
     call warning(whoami, 'CONTEXT "'//__STRING(__INITCTX)//'" DOES NOT CONTAIN EXECUTABLE STATEMENTS.', -1);
    else
-    call smcv_exec(__STRING(__INITCTX))
+    call ftsm_exec(__STRING(__INITCTX))
     call parser_clear_context(__STRING(__INITCTX))
    endif
    if (fatal_warning()) return
@@ -147,15 +145,16 @@ end function _ME
    initialized=.true.
 ! now the atom list should be defined -- use it below for forces
 ! compute atomlist
-   i=cv%amap%last
+   call ftsm_compute_atomlist()
+   i=iatom_a%last
    allocate(atomlist(i+1)) ; ! include number of elements as first entry
-   atomlist(1)=i ; atomlist(2:)=cv%amap%i(1:i)
+   atomlist(1)=i ; atomlist(2:)=iatom_a%i(1:i)
    call isort('i', i, atomlist(2), ierr) ! pass second element b/c 1st contains the list size
    alist=c_loc(atomlist)
   endif ! not initialized
 !
   f(:,atomlist(2:))=zero ! start from zero force
-  call smcv_main(__X, __Y, __Z, __XCOMP, __YCOMP, __ZCOMP, m, f(1,:), f(2,:), f(3,:), iteration)
+  call ftsm_main(__X, __Y, __Z, __XCOMP, __YCOMP, __ZCOMP, f(1,:), f(2,:), f(3,:), m, iteration)
 ! update acemd forces
 ! note that per CHARMM convention, which the plugin code inherits, forces correspond to grad V, not -grad V !
   f_acemd(:,atomlist(2:)) = - f(:,atomlist(2:))
@@ -167,16 +166,16 @@ end function _ME
 end function _ME
 #undef _ME
 !===================================================================
-#define _ME smcv_done_from_acemd
+#define _ME ftsm_done_from_acemd
  __CSUB(_ME)
- use sm_var, only : smcv_initialized
+ use ftsm_var, only : ftsm_initialized
  __DEP_PARSER, only : parser_done, parser_clear_context
 !
- call smcv_exec(__STRING(__DONECTX))
+ call ftsm_exec(__STRING(__DONECTX))
  call parser_clear_context(__STRING(__DONECTX))
 !
  call parser_done()
- if (smcv_initialized) call smcv_done()
+ if (ftsm_initialized) call ftsm_done()
 !
  __FREE(r)
  __FREE(rcomp)
@@ -186,4 +185,4 @@ end function _ME
  __DEALL(atomlist)
  initialized=.false.
 end
-end module smcv_acemd
+end module ftsm_acemd

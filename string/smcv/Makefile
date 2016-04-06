@@ -32,6 +32,7 @@ smcv_master.o : cv_common.o $(CVOBJ) cv_cvrms.o smcv_stats.o
 
 smcv.src smcv_stats.src : smcv_interface.ch
 smcv.F90 smcv_stats.F90 : smcv_interface.h
+smcv.F90 : $(ROOT)/exec.def $(ROOT)/contexts.def 
 
 clean::
 	for d in $(SUBDIRS); do (cd $$d; $(MAKE) clean); done

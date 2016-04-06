@@ -26,7 +26,7 @@ ftsm_util.o: ftsm_compute.o ftsmv2_compute.o
 ftsm_interpolate: ftsm_io.o
 
 ftsm.src: ftsm_interface.ch
-ftsm.F90: ftsm_interface.h
+ftsm.F90: ftsm_interface.h $(ROOT)/exec.def $(ROOT)/contexts.def 
 
 clean::
 	rm -f interface.ch
