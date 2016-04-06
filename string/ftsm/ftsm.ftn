@@ -428,9 +428,15 @@ __MPI_ONLY &            1, mpibool, MPI_LAND, MPI_COMM_STRNG, ierror)
 !
 ! scale force constants and restraint reference values (if necessary)
         if (.not.ftsm_scaledist.or.  &
-&                                  qkpara_angstrom.or.qkperp_angstrom.or.qdperp_angstrom.or.qdperpf_angstrom.or.qdwin_angstrom) then
+&           qkpara_angstrom.or.qkperp_angstrom.or.qdperp_angstrom.or.qdperpf_angstrom.or.qdwin_angstrom) then
+! warn if user is attempting to run with 1 replica; in this case aollective string operations, 
+! such as computing arclength, curvature, repa, are not defined (okay, they are defined but have trivial meaning)
+         if (nstring.le.1) then
+          __WRN(whoami, ' SCALING IN ANGTROMS REQUIRES COMPUTING ARCLENGTH, WHICH IS UNDEFINED FOR 1-REPLICA STRING. (YOU SHOULD STOP HERE).')
+         endif
+!
          call ftsm_compute_arcl_curv(linear)
-!writE(0,*) 'DARCL : ', ds ! aa
+!write(0,*) 'DARCL : ', ds ! aa
          zval = sum(ds) / ( max( nstring-1 , 1 ) ) * sqrt3 ; ! sqrt(3) makes the arclength correspond to the RMSD in 3D
 ! broadcast zval to slaves
          if (qslave) then
@@ -441,60 +447,59 @@ __MPI_ONLY &            1, mpibool, MPI_LAND, MPI_COMM_STRNG, ierror)
         endif ! ftsm_scaledist
 !
         if (.not.ftsm_scaledist) then ! need to compute reference distance from string length
-          if (mestring.eq.0) then ; dpar0=zero ; else ; dpar0 = zval ; endif ; dpar0i=dpar0 ! left endpoint uses one-sided tangent (see ftsm14 paper)
-          if (qprint) then ; write(_MSGBUF,6713) whoami, ftoa(zval)
-          __PRINT(_MSGBUF) ;
-          endif
+          if (nstring.gt.1) then
+           if (mestring.eq.0) then ; dpar0=zero ; else ; dpar0 = zval ; endif ; dpar0i=dpar0 ! left endpoint uses one-sided tangent (see ftsm14 paper)
+           if (qprint) then ; write(_MSGBUF,6713) whoami, ftoa(zval)
+           __PRINT(_MSGBUF) ;
+           endif
  6713 format(A,' AVERAGE COMPUTED ARCLENGTH INCREMENT IS ',A,' ANG.')
-          ftsm_reset_dpar0f=.true.
+           ftsm_reset_dpar0f=.true.
+          else
+           __WRN(whoami, ' SCALING DPAR TO ANGTROMS REQUIRES ARCLENGTH, WHICH IS UNDEFINED FOR 1-REPLICA STRING. NO SCALING APPLIED.')
+          endif ! nstring
 !
-        else ! options valid for scaled version with a lelgthscale specified in angstrom
+        else ! options valid for scaled version with a lengthscale specified in angstrom
           zval=two*zval ! gives 2L/(M-1) , i.e. || q-p || (note : if no angstrom scalings are requested, zval will be unused)
 !
           if (qkpara_angstrom) then
-           fname='PARALLEL FORCE CONSTANT (KPAR)' ; kpara = kpara * zval**2 ;
+           fname='PARALLEL FORCE CONSTANT (KPAR)' ; kpara = kpara_ * zval**2 ;
            if (qprint) then ; write(_MSGBUF,6712) whoami, trim(fname), ftoa(zval), ftoa(kpara)
            __PRINT(_MSGBUF) ;
            endif
-           qkpara_angstrom=.false. ! make sure no additional scaling will occur if there are multiple runs per initialization
           else ! scale length to 2DS from (1DS at input)
-           __SCALE(kpara,four)
+           kpara=kpara_*four
           endif
           if (qkperp_angstrom) then
-           fname='PERPENDICULAR FORCE CONSTANT (KPRP)' ; kperp = kperp * zval**2 ;
+           fname='PERPENDICULAR FORCE CONSTANT (KPRP)' ; kperp = kperp_ * zval**2 ;
            if (qprint) then ; write(_MSGBUF,6712) whoami, trim(fname), ftoa(zval), ftoa(kperp)
            __PRINT(_MSGBUF)
            endif
-           qkperp_angstrom=.false.
           else
-           __SCALE(kperp,four)
+           kperp=kperp_*four
           endif
           if (qdperp_angstrom) then
-           fname='REFERENCE TUBE WIDTH (DPRP)' ; dperp0 = dperp0 / zval ; dperp0i = dperp0i / zval ;
+           fname='REFERENCE TUBE WIDTH (DPRP)' ; dperp0 = dperp0_ / zval ; dperp0i = dperp0i_ / zval ;
            if (qprint) then ; write(_MSGBUF,6712) whoami, trim(fname), ftoa(zval), ftoa(dperp0)
            __PRINT(_MSGBUF)
            endif
-           qdperp_angstrom=.false.
           else
-           __SCALE(dperp0,half); __SCALE(dperp0i,half)
+           dperp0=dperp0_*half; dperp0i=dperp0i_*half
           endif
           if (qdperpf_angstrom) then
-           fname='FINAL REFERENCE TUBE WIDTH (DPRPF)' ; dperp0f = dperp0f / zval ;
+           fname='FINAL REFERENCE TUBE WIDTH (DPRPF)' ; dperp0f = dperp0f_ / zval ;
            if (qprint) then ; write(_MSGBUF,6712) whoami, trim(fname), ftoa(zval), ftoa(dperp0f)
            __PRINT(_MSGBUF)
            endif
-           qdperpf_angstrom=.false.
           else
-           __SCALE(dperp0f,half)
+           dperp0f=dperp0f_*half
           endif
           if (qdwin_angstrom) then
-           fname='WIDTH OF HALF-HARMONIC WINDOW POTENTIAL (DWIN)' ; dwin = dwin / zval ;
+           fname='WIDTH OF HALF-HARMONIC WINDOW POTENTIAL (DWIN)' ; dwin = dwin_ / zval ;
            if (qprint) then ; write(_MSGBUF,6712) whoami, trim(fname), ftoa(zval), ftoa(dwin)
            __PRINT(_MSGBUF)
            endif
-           qdwin_angstrom=.false.
           else
-           __SCALE(dwin,half) ! the scaling would be repeated is string is called again -- need to create and keep a separate copy of "default" variables !
+           dwin=dwin_*half
           endif
         endif ! .not. ftsm_scaledist
 !
@@ -1319,14 +1324,14 @@ __CHARMM_ONLY iolev=1 ! open file on root (which may not be zero if rex is used)
 !==============================================================
 !      set k parallel to path (for off-path dynamics)
         elseif (__INDX(comlyn,comlen,'KPAR',4).gt.0) then
-          k=__GET_RM_F(comlyn,comlen,'KPAR',-1d0)
+          k=__GET_RM_F(comlyn,comlen,'KPAR',-one)
 ! check for distance scaling option: if set the force constant is specified as u[k] =  kcal/ mol /A^2
 ! otherwise, distance is dimensionless (scaled by twice the interimage distance in the default method), so u[k] = kcal/mol
 ! note that distance scaling only makes sense with ftsm_scaledist=.false., i.e. scaled version of the code
           if (ftsm_scaledist) qkpara_angstrom = __INDX_RM(comlyn, comlen, 'ANG').gt.0
 !
-          if (k.ge.0d0) then
-           kpara=k
+          if (k.ge.zero) then
+           kpara_=k
            if (qprint) then
             write(_MSGBUF,6756) whoami, k ; __PRINT(_MSGBUF)
             if (ftsm_scaledist) then
@@ -1345,7 +1350,7 @@ __CHARMM_ONLY iolev=1 ! open file on root (which may not be zero if rex is used)
           if (ftsm_scaledist) qkperp_angstrom = __INDX_RM(comlyn, comlen, 'ANG').gt.0
 !
           if (k.ge.0d0) then
-           kperp=k
+           kperp_=k
            if (qprint) then
             write(_MSGBUF,6746) whoami, k ; __PRINT(_MSGBUF)
             if (ftsm_scaledist) then 
@@ -1384,7 +1389,7 @@ __CHARMM_ONLY iolev=1 ! open file on root (which may not be zero if rex is used)
             call ftsm_set_weights(__MASS, natom) ! send masses
            case('NO','OFF','FALSE','F','no','off','false','f')
             if (qprint) then ; write(_MSGBUF,8001) whoami, 'WILL BE UNIFORM'      ; __PRINT(_MSGBUF) ; endif
-            call ftsm_set_weights( (/ (1d0, i=1,natom) /), natom) ! uniform
+            call ftsm_set_weights( (/ (one, i=1,natom) /), natom) ! uniform
 #ifdef __CHARMM
            case('WMAIN', 'wmain')
             if (qprint) then ; write(_MSGBUF,8001) whoami, 'SET FROM WMAIN ARRAY' ; __PRINT(_MSGBUF) ; endif
@@ -1448,10 +1453,10 @@ __CHARMM_ONLY iolev=1 ! open file on root (which may not be zero if rex is used)
           zval=__GET_RM_F(comlyn, comlen, 'DPAR', -1.0d0)
 ! this parameter curently can only be set 
           if (.not.ftsm_scaledist) then
-           __WRN(whoami, 'FTSM IN UNSCALED COORDINATES DOES NOT SUPPORT SETTING DPAR');
+           __WRN(whoami, 'FTSM IN UNSCALED COORDINATES DOES NOT SUPPORT SETTING DPAR.');
           else 
-           __WRN(whoami, 'SETTING DPAR SHOULD NOT NORMALLY BE NEEDED. YOU HAVE BEEN WARNED');
-           __WRN(whoami, 'DPAR IS EXPRESSED IN UNITS OF 2 x INTER-REPLICA DISTANCE');
+           __WRN(whoami, 'SETTING DPAR SHOULD NOT NORMALLY BE NEEDED. YOU HAVE BEEN WARNED.');
+           __WRN(whoami, 'DPAR IS EXPRESSED IN UNITS OF 2 x INTER-REPLICA DISTANCE.');
 !    check replica spec
            irep=__GET_RM_I(comlyn, comlen, 'REP', -1)
            if (irep.lt.0.or.irep.ge.nstring) then
@@ -1467,7 +1472,6 @@ __CHARMM_ONLY iolev=1 ! open file on root (which may not be zero if rex is used)
  6774 format(A,' WILL SET REFERENCE VALUE FOR PARALLEL RESTRAINT ',     &
      &   'ON REPLICA ',I5,' TO ',F7.3,'.')
           endif
-! DPAR
 !==============================================================
         elseif (__INDX(comlyn,comlen,'DPRPF',5).gt.0) then ! final perpendicular distance at which the replicas are restrained
           qangstrom=.false.
@@ -1481,20 +1485,20 @@ __CHARMM_ONLY iolev=1 ! open file on root (which may not be zero if rex is used)
            irep=__GET_RM_I(comlyn, comlen, 'REP', -1)
            if (irep.lt.0.or.irep.ge.nstring) then
             qdperpf_angstrom=qangstrom
-            if (qprint) then 
+            if (qprint) then
              write(_MSGBUF, 67761) whoami, whoami, zval ; __PRINT(_MSGBUF) 
              if (ftsm_scaledist) then 
               if (qangstrom) __IS_DISTANCE_SCALED
              endif
             endif
-            dperp0f=zval
+            dperp0f_=zval
            else
             if (qprint) then ; write(_MSGBUF,67762) whoami, irep, zval ; __PRINT(_MSGBUF) ; 
              if (ftsm_scaledist) then
               if (qangstrom) __IS_DISTANCE_SCALED
              endif
             endif
-            if (mestring.eq.irep) then ; dperp0f=zval ; qdperpf_angstrom=qangstrom ; endif ! note: permitting any value
+            if (mestring.eq.irep) then ; dperp0f_=zval ; qdperpf_angstrom=qangstrom ; endif ! note: permitting any value
            endif ! irep
 67761 format(A,' REPLICA NUMBER INVALID OR UNSPECIFIED.',               &
      &      /A,' WILL SET FINAL OFFSET DISTANCE FOR PERPENDICULAR RESTRAINT', &
@@ -1543,14 +1547,14 @@ __CHARMM_ONLY iolev=1 ! open file on root (which may not be zero if rex is used)
               if (qdperp_angstrom) __IS_DISTANCE_SCALED
              endif
             endif
-            dperp0=zval ; dperp0i=dperp0
+            dperp0_=zval ; dperp0i_=dperp0_
            else
             if (qprint) then ; write(_MSGBUF,67766) whoami, irep, zval ; __PRINT(_MSGBUF)
              if (ftsm_scaledist) then
               if(qangstrom) __IS_DISTANCE_SCALED
              endif
             endif
-            if (mestring.eq.irep) then  ; dperp0=zval ; dperp0i=dperp0 ; qdperp_angstrom=qangstrom ; endif ! note: permitting any value
+            if (mestring.eq.irep) then  ; dperp0_=zval ; dperp0i_=dperp0_ ; qdperp_angstrom=qangstrom ; endif ! note: permitting any value
            endif ! irep
 67765 format(A,' REPLICA NUMBER INVALID OR UNSPECIFIED.',               &
      &      /A,' WILL SET OFFSET DISTANCE FOR PERPENDICULAR RESTRAINT', &
@@ -1619,13 +1623,13 @@ __CHARMM_ONLY iolev=1 ! open file on root (which may not be zero if rex is used)
            if (ftsm_scaledist) then 
             if (qdwin_angstrom) __IS_DISTANCE_SCALED
            endif
-           dwin=zval;
+           dwin_=zval;
           else
            if (qprint) then ; write(_MSGBUF, 6783) whoami, irep, zval ; __PRINT(_MSGBUF) ; endif
            if (ftsm_scaledist) then
             if(qangstrom) __IS_DISTANCE_SCALED
            endif
-           if (mestring.eq.irep) then ; dwin=zval ; qdwin_angstrom=qangstrom ; endif
+           if (mestring.eq.irep) then ; dwin_=zval ; qdwin_angstrom=qangstrom ; endif
           endif ! irep
  6782 format(A,' REPLICA NUMBER INVALID OR UNSPECIFIED.',/A,' WILL SET WINDOW WIDTH FOR PROJECTION DYNAMICS ', &
      & '  TO ',F7.3,' ON ALL REPLICAS.')
@@ -1829,7 +1833,7 @@ __CHARMM_ONLY iolev=1 ! open file on root (which may not be zero if rex is used)
 !       call real_vlist_init(wgts_f)
       endif
 !
-      fe=0d0; feav=0d0; avforce=0d0; ds=0d0; curv=0d0; window_ave_pos=__NAN
+      fe=zero; feav=zero; avforce=zero; ds=zero; curv=zero; window_ave_pos=__NAN
 !    ftsm window log : curently, there is no special module to contain window logging, even though this may be an uncomon use
 !    however, the functionality is simple, and so, for now I am putting it in with the general code
       call int_vector_init(ftsm_window_log)
@@ -1856,8 +1860,8 @@ __CHARMM_ONLY iolev=1 ! open file on root (which may not be zero if rex is used)
 !
       dpar0i=dpar0 ; dpar0f=__NAN ;
 !
-      dperp0=one ; dperp0i=dperp0 ; dperp0f=__NAN ; dperp_adjust_iter=0
-      drms0=zero ; dwin=half ; ftsm_window_whereami=INT(__NAN)
+      dperp0_=one ; dperp0i_=dperp0_ ; dperp0f_=__NAN ; dperp_adjust_iter=0
+      drms0=zero ; dwin_=half ; ftsm_window_whereami=INT(__NAN)
 !
       qorient=.false.
       qdiffrot=.false.
