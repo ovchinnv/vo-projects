@@ -1,11 +1,60 @@
-LIB=libsmcv_acemd.so
+LIB=libstruna_acemd.so
 LIBS+=$(LIB)
-LINKOBJS=constants.o output.o parser.o cmd.o prm.o ivector.o ivector_list.o parselist.o files.o lu.o multidiag.o isort.o bestfit.o\
-         sm_var.o sm_config.o ftsm_var.o smcv.o smcv_add.o smcv_master.o sm_util.o smcv_stats.o\
-         cv_types.o cv_common.o cv_frames.o cv_quaternion.o \
-         cv_angle_com.o cv_anglvec.o cv_posi_com.o cv_dihe_com.o cv_dist_com.o cv_drmsd.o cv_rmsd.o cv_proj.o cv_cvrms.o\
-         cv_qcomp.o minimal_system.o splines.o rng.o clcg.o mpi_compat_stub.o plugin-smcv.o smcv_acemd.o
+LINKOBJS=\
+ constants.o\
+ output.o \
+ parser.o \
+ cmd.o prm.o \
+ ivector.o \
+ ivector_list.o \
+ parselist.o \
+ files.o \
+ lu.o \
+ multidiag.o \
+ isort.o \
+ bestfit.o \
+ sm_var.o \
+ sm_config.o \
+ smcv.o \
+ smcv_add.o \
+ smcv_master.o \
+ sm_util.o \
+ smcv_stats.o \
+ cv_types.o \
+ cv_common.o \
+ cv_frames.o \
+ cv_quaternion.o \
+ cv_qcomp.o \
+ cv_angle_com.o \
+ cv_anglvec.o \
+ cv_posi_com.o \
+ cv_dihe_com.o \
+ cv_dist_com.o \
+ cv_drmsd.o \
+ cv_rmsd.o \
+ cv_proj.o \
+ cv_cvrms.o \
+ ftsm_var.o ftsm.o \
+ ftsm_addatoms.o \
+ ftsm_compute.o \
+ ftsm_connect.o \
+ ftsm_interpolate.o \
+ ftsm_io.o \
+ ftsm_min.o \
+ ftsm_rep.o \
+ ftsm_rex.o \
+ ftsm_stats.o \
+ ftsm_util.o \
+ ftsmv2_compute.o \
+ ftsm_voronoi.o \
+ minimal_system.o \
+ splines.o \
+ rng.o clcg.o \
+ mpi_compat_stub.o \
+ sm_plugin_acemd.o \
+ sm_acemd.o
 
 default : acemd
 acemd : $(LIB)
 $(LIB) : $(LOBJS) MakeACEMD.inc
+

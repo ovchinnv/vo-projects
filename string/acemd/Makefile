@@ -1,8 +1,8 @@
 NAME=string/acemd
 ROOT=../..
 COMMON=..
-OBJS=plugin-smcv.o smcv_acemd.o plugin-ftsm.o ftsm_acemd.o
-HEADS=smcv.h ftsm.h
+OBJS=sm_plugin_acemd.o sm_acemd.o
+HEADS=sm.h
 DEPS=string dynamol mpi_stub
 
 LOCALDEFS+=-D__BINDC
@@ -17,13 +17,10 @@ LOCALDEPS+=$(COMMON)/source.defs
 include $(COMMON)/Makefile.inc
 include MakeACEMD.inc
 
-smcv_acemd.o ftsm_acemd.o : $(COMMON)/sm_var.mod $(COMMON)/sm_config.mod
+sm_acemd.o : $(COMMON)/sm_var.mod $(COMMON)/sm_config.mod atomlist.def
 
-plugin-smcv.o : plugin-smcv.c aceplug.h smcv.h $(LOCALDEPS)
-	$(CC) $(CFLAGS) $(LOCALDEFS) $(LOCALMACROS) $< -o $@
-
-plugin-ftsm.o : plugin-ftsm.c aceplug.h ftsm.h $(LOCALDEPS)
+sm_plugin_acemd.o : sm_plugin_acemd.c aceplug.h sm.h $(LOCALDEPS)
 	$(CC) $(CFLAGS) $(LOCALDEFS) $(LOCALMACROS) $< -o $@
 
 clean::
-	rm -f $(OBJS) smcv.h ftsm.h
+	rm -f $(OBJS) sm.h
