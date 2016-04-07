@@ -7,6 +7,8 @@ LINKOBJS=\
  cmd.o prm.o \
  ivector.o \
  ivector_list.o \
+ rvector.o \
+ rvector_list.o \
  parselist.o \
  files.o \
  lu.o \

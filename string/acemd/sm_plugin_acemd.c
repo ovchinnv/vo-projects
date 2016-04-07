@@ -65,7 +65,7 @@ aceplug_err_t aceplug_init(struct aceplug_sim_t *s, int argc, char **argkey, cha
   printf(smtype);
   printf("'\n");
  } else {
-  printf("# STRUNA PLUGIN: log file is '"); 
+  printf("# STRUNA PLUGIN: method is '"); 
   printf(smtype);
   printf("'\n");
  }
@@ -89,6 +89,7 @@ aceplug_err_t aceplug_init(struct aceplug_sim_t *s, int argc, char **argkey, cha
 //
  ilen=strlen(inputfile);
  llen=strlen(logfile);
+ smlen=strlen(smtype);
  ierr=sm_init_from_acemd(natoms, m, q, inputfile, ilen, logfile, llen, &(private_data->atomlist), smtype, smlen);
  free(m);
  free(q);
