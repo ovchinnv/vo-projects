@@ -28,8 +28,12 @@ __CHARMM_ONLY##IF STRINGM
       use cv_drmsd ! RMSD difference of selected atom coordinates from two target structures
       use cv_proj ! projection onto vector between two reference strutures
       use ivector
+      __DEP_NUMBER
 !
       __IMPNONE
+!
+      float, private :: smcv_restraint_energy = zero ! may be moved to a different location
+!
 !     listing of subroutines:
 !
       public smcv_main     ! driver subroutine
@@ -49,12 +53,11 @@ __CHARMM_ONLY##IF STRINGM
       contains
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine smcv_main(x,y,z,xcomp,ycomp,zcomp,                     &
-     &                     mass,fx,fy,fz,iteration)
+     &                     mass,fx,fy,fz,iteration,restraint_energy)
 !     called from dynamics
       __DEP_OUTPUT
       __DEP_MULTICOM
       __DEP_MPI
-      __DEP_NUMBER
       use smcv_stats, only : smcv_stat
  __DECLARE_MSGBUF
 #include "mpitype.def"
@@ -68,10 +71,13 @@ __CHARMM_ONLY##IF STRINGM
       float :: s
       bool :: qgrp
       int :: ierror
+      float, optional, intent(out) :: restraint_energy ! provide total restraint energy is requested
       __IAM(SMCV_MAIN)
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       qgrp=(MPI_COMM_LOCAL.ne.MPI_COMM_NULL)                            &
      & .and.(SIZE_LOCAL.gt.1)
+!
+      if (present(restraint_energy)) restraint_energy=zero ! initialize
 !
       if (.not.cv_common_grad_initialized) call cv_common_grad_init() ! allocate cv%grad array (for derivatives)
       if (frames_initialized) call frames_reset_calculate(.true.) ! make sure that frames recalculate their axes + derivatives
@@ -114,6 +120,7 @@ __CHARMM_ONLY##IF STRINGM
 !
         if (restrained_eq_steps.gt.0) then ; s=min(one*(iteration-restrained_eq0)/restrained_eq_steps,one) ; else ; s=one ; endif !restrained equilibration
         call smcv_addforce(x,y,z,mass,fx,fy,fz,s)
+        if (present(restraint_energy)) restraint_energy=smcv_restraint_energy ! set by addforce routine only if restraints forces are on
 !
        endif ! not unrestrained_on
       endif ! restrained_on
@@ -227,7 +234,6 @@ __MPI_ONLY     &          mpifloat, MPI_SUM, MPI_COMM_LOCAL, ierror)
       __DEP_OUTPUT
       __DEP_MULTICOM
       __DEP_CONST
-      __DEP_NUMBER
       __DEP_MPI
 !
       float :: x(:), y(:), z(:), mass(:),                              & ! mass(size(x,1)) ,
@@ -254,6 +260,8 @@ __MPI_ONLY     &          mpifloat, MPI_SUM, MPI_COMM_LOCAL, ierror)
       else
        s=one
       endif
+!
+      smcv_restraint_energy=zero
 !
       calctheta=.true. ; deriv=.true. ; addforce2=.true.
 !
@@ -378,7 +386,7 @@ __MPI_ONLY     &          mpifloat, MPI_SUM, MPI_COMM_LOCAL, ierror)
        end select
 #undef __ARGS
 !     update force prefactor (planar sampling)
-       fpre=fpre+cv%r(i,forces2)*cv%r(i,dz)/cv%weight(i) ! for planar force; incorrect for inactive cv or cvrms; also obsolete
+       if (planar_on) fpre=fpre+cv%r(i,forces2)*cv%r(i,dz)/cv%weight(i) ! for planar force; incorrect for inactive cv or cvrms; also obsolete
       enddo ! over all cv
 !
 !     communicate cv values + gradients using custom types
@@ -419,7 +427,7 @@ __MPI_ONLY      endif
          f=fpara+fperp
         else ! qgrp -- just use the force computed above
          f=cv%r(i,forces2)
-        endif
+        endif ! planar
 !
         addforce=addforce2.and.cv%active(i)
 !
@@ -440,7 +448,13 @@ __MPI_ONLY      endif
         end select
 #undef __ARGS
        enddo ! over all cv
-      endif ! planar_on
+      endif ! planar .or. qgrp
+! total restraint energy :
+      if (planar_on) then
+! not yet implemented -- need significant updates
+      else
+       smcv_restraint_energy=sum(cv%r(1:cv%num_cv,energy),cv%active(1:cv%num_cv))
+      endif
 !
       end subroutine smcv_addforce
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -450,7 +464,6 @@ __MPI_ONLY      endif
       __DEP_OUTPUT
       __DEP_MULTICOM
       __DEP_CONST
-      __DEP_NUMBER
       __DEP_MPI
       use sm_var, only : hist_calc_M
       use cv_common, only : histcol
@@ -774,7 +787,6 @@ __MPI_ONLY     &    MPI_GRAD_TYPE, MPI_COMM_LOCAL, ierror)
       __DEP_OUTPUT
       __DEP_MULTICOM
       __DEP_CONST 
-      __DEP_NUMBER
 !      __DEP_FILES ! in the case of CHARMM, should use a 'clean' way to open files (future?)
       __DEP_PARSER 
       __DEP_MPI 
@@ -1219,7 +1231,6 @@ __MPI_ONLY     &       nodelist, 1, mpiint, MPI_COMM_STRNG, ierror)
       function smcv_test_grad_fd(x,y,z,mass,h)
       __DEP_OUTPUT
       __DEP_CONST
-      __DEP_NUMBER
       float :: x(:), y(:), z(:), mass(:) ! mass(size(x,1))
       float :: h
       float, pointer :: error(:,:), smcv_test_grad_fd(:,:)
@@ -1448,7 +1459,6 @@ __MPI_ONLY     &       nodelist, 1, mpiint, MPI_COMM_STRNG, ierror)
       __DEP_OUTPUT
       __DEP_MULTICOM
       __DEP_MPI
-      __DEP_NUMBER
       __DEP_RANDOM
 !
 #include "mpitype.def"
