@@ -26,7 +26,6 @@ __CHARMM_ONLY##IF STRINGM
       public ftsm_parse
       public ftsm_main
       private ftsm_init
-      private ftsm_done
       private ftsm_list_atoms
       private ftsm_test_grad_fd
       private ftsm_test_parallel
@@ -34,6 +33,9 @@ __CHARMM_ONLY##IF STRINGM
       private ftsm_repl_exchange
 #if (defined(__ACEMD) || defined(__NAMD))
       public ftsm_exec
+      public ftsm_done
+#else
+      private ftsm_done
 #endif
 !
       contains
@@ -1337,7 +1339,7 @@ __CHARMM_ONLY iolev=1 ! open file on root (which may not be zero if rex is used)
 ! scaling output macro
 #define __IS_DISTANCE_SCALED then;write(_MSGBUF,6758)whoami;else;write(_MSGBUF,6759)whoami;endif;__PRINT(_MSGBUF);
  6758 format(A,'( LENGTH SCALE ASSUMED TO BE IN ANGSTROMS AND WILL BE SCALED INTERNALLY.)')
- 6759 format(A,'( LENGTH SCALE ASSUMED TO BE SCALED BY THE INTER-REPLICA DISTANCE.)')
+ 6759 format(A,'( LENGTH SCALE ASSUMED TO BE IN UNITS OF THE INTER-REPLICA DISTANCE.)')
 ! note: for historical reasons (because the paper was written that way, all lengths except dwin
 ! are represented per 2D in the code, so I will accept them as per D, then divide by 2 to
 ! change to per 2D (force constants get multiplied by four)
@@ -1400,14 +1402,14 @@ __CHARMM_ONLY iolev=1 ! open file on root (which may not be zero if rex is used)
           endif
 !==============================================================
         elseif (__INDX_RM(comlyn,comlen,'MASS').gt.0) then ! mass-weighting
+#ifndef __CHARMM
+ natom=__NATOM
+#endif
           __FTSM_ALLOC
 !
           keyword=__NEXTA(comlyn, comlen)
           klen=len(keyword)
           __TRIMA(keyword,klen)
-#ifndef __CHARMM
- natom=__NATOM
-#endif
           select case(keyword(1:klen))
            case('YES','ON','TRUE','T','yes','on','true','t')
             if (qprint) then ; write(_MSGBUF,8001) whoami, 'SET FROM ATOM MASSES' ; __PRINT(_MSGBUF) ; endif
@@ -1445,7 +1447,7 @@ __CHARMM_ONLY iolev=1 ! open file on root (which may not be zero if rex is used)
             if (qprint) then ; write (_MSGBUF,'(2A)') whoami,                    &
      & ' WILL RESTRAIN SYSTEM TO PLANE PERPENDICULAR TO PATH.' ; __PRINT(_MSGBUF) ; endif
             if (nstring.eq.1) then 
-             __WRN(whoami, 'PROJECTION MAY BE ILL-DEFINED BECAUSE ONLY ONE REPLICA IS PRESENT (YOU HAVE BEEN WARNED).')
+             __WRN3(whoami, 'PROJECTION MAY BE ILL-DEFINED BECAUSE ONLY ONE REPLICA IS PRESENT (YOU HAVE BEEN WARNED).',0)
             endif
            case('NO','OFF','FALSE','F','no','off','false','f')
             proj_on=.false.
@@ -1480,8 +1482,8 @@ __CHARMM_ONLY iolev=1 ! open file on root (which may not be zero if rex is used)
           if (.not.ftsm_scaledist) then
            __WRN(whoami, 'FTSM IN UNSCALED COORDINATES DOES NOT SUPPORT SETTING DPAR.');
           else 
-           __WRN(whoami, 'SETTING DPAR SHOULD NOT NORMALLY BE NEEDED. YOU HAVE BEEN WARNED.');
-           __WRN(whoami, 'DPAR IS EXPRESSED IN UNITS OF 2 x INTER-REPLICA DISTANCE.');
+           __WRN3(whoami, 'SETTING DPAR SHOULD NOT NORMALLY BE NEEDED. YOU HAVE BEEN WARNED.',0);
+           __WRN3(whoami, 'DPAR IS EXPRESSED IN UNITS OF 2 x INTER-REPLICA DISTANCE.',0);
 !    check replica spec
            irep=__GET_RM_I(comlyn, comlen, 'REP', -1)
            if (irep.lt.0.or.irep.ge.nstring) then
@@ -1757,6 +1759,9 @@ __CHARMM_ONLY iolev=1 ! open file on root (which may not be zero if rex is used)
        endif
  6762 format(/A,' WILL LIST REPLICA ATOMS.')
  6763 format(/A,' WILL LIST REPLICA ATOM GROUPS.')
+#ifndef __CHARMM
+       natom=__NATOM ! needed by __FTSM_ALLOC
+#endif
        __FTSM_ALLOC ! qorient is set in this routine; we need it to know whether groups are identical or different
        call ftsm_list_atoms()
 !=====================================================================================
@@ -2016,9 +2021,13 @@ __CHARMM_ONLY iolev=1 ! open file on root (which may not be zero if rex is used)
 !
       if (ftsm_compute_qdiffrot) call ftsm_qdiffrot()
 !
+#if ( defined(__ACEMD) || defined(__NAMD))
+      __MESSAGE(whoami, 'MINIMAL SYSTEM DOES NOT REPORT TOPOLOGY.');
+#endif
+!
       if (ME_STRNG.eq.0) then
 !
-        if (norient.gt.0) then ; write(_MSGBUF,'(A)') tab//'ORIENTATION ATOMS:'
+        if (norient.gt.0) then ; write(_MSGBUF,'(A)') _TAB//'ORIENTATION ATOMS:'
         __PRINT(_MSGBUF); endif
         do j=1, norient;
          if (ftsm_com_on) then
@@ -2026,31 +2035,31 @@ __CHARMM_ONLY iolev=1 ! open file on root (which may not be zero if rex is used)
  666  format(A,' COM GROUP # ',I8,':')
           do  i=1, iatoms_o%v(j)%last
            __ATOMID(iatoms_o%v(j)%i(i), sid, rid, ren, ac)
-           write(_MSGBUF,667) tab,j, iatoms_o%v(j)%i(i), sid, rid, ren, ac; __PRINT(_MSGBUF)
+           write(_MSGBUF,667) _TAB,j, iatoms_o%v(j)%i(i), sid, rid, ren, ac; __PRINT(_MSGBUF)
           enddo ! i
          else ! ftsm_com_on
           __ATOMID(iatom_o(j), sid, rid, ren, ac)
-           write(_MSGBUF,667) tab, j, iatom_o(j), sid, rid, ren, ac; __PRINT(_MSGBUF)
+           write(_MSGBUF,667) _TAB, j, iatom_o(j), sid, rid, ren, ac; __PRINT(_MSGBUF)
          endif
         enddo ! j
 !
         if (qdiffrot) then
-         if (nforced.gt.0) then ; write(_MSGBUF,'(A)') tab//'FORCING ATOMS:'; 
+         if (nforced.gt.0) then ; write(_MSGBUF,'(A)') _TAB//'FORCING ATOMS:'; 
          __PRINT(_MSGBUF); endif
          do j=1, nforced;
           if (ftsm_com_on) then
            write(_MSGBUF,666) whoami, j ; __PRINT(_MSGBUF)
            do  i=1, iatoms_f%v(j)%last
             __ATOMID(iatoms_f%v(j)%i(i), sid, rid, ren, ac)
-            write(_MSGBUF,667) tab, j, iatoms_f%v(j)%i(i), sid, rid, ren, ac; __PRINT(_MSGBUF)
+            write(_MSGBUF,667) _TAB, j, iatoms_f%v(j)%i(i), sid, rid, ren, ac; __PRINT(_MSGBUF)
            enddo
           else ! ftsm_com_on
            __ATOMID(iatom_f(j), sid, rid, ren, ac)
-           write(_MSGBUF,667) tab, j, iatom_f(j), sid, rid, ren, ac; __PRINT(_MSGBUF)
+           write(_MSGBUF,667) _TAB, j, iatom_f(j), sid, rid, ren, ac; __PRINT(_MSGBUF)
           endif ! ftsm_com_on
          enddo ! j
         else
-         write(_MSGBUF,'(A)') tab//'FORCING AND ORIENTATION ATOMS ARE THE SAME' 
+         write(_MSGBUF,'(A)') _TAB//'FORCING AND ORIENTATION ATOMS ARE THE SAME' 
          __PRINT(_MSGBUF)
         endif ! qdiffrot
       endif ! ME_STRING

@@ -1,0 +1,162 @@
+* serial string test case
+* finite temperature sampling of AD
+*
+
+if @?nrun eq 0 set nrun 1
+if @?restart eq 0 set restart 0
+! path details
+if @?irep eq 0 set irep 0 ! this replica
+if @?brep eq 0 set brep 0 ! first replica in the path
+if @?erep eq 0 set erep 15 ! last replica in the path
+
+calc nprev = @nrun - 1
+set outputdir cor@nrun
+set outputprev cor@nprev
+set datadir data
+!
+!random oldrandom
+!
+!**********************************************************
+! need to initialize multicom if compiled in parallel
+if ?PARALLEL eq 1 mcom string ?numnode by 1
+string ftsm init
+!**************************** replica variables ***********
+set ncpu ?nstring ! should be 1
+set me ?mestring ! should be 0
+!**********************************************************
+set version 22
+set psffile ../sm0k/diala22
+set toppar ../../../
+!
+set string
+stream readpsf.str
+!
+!===== define FTS atoms
+! old (compatibility) syntax : 1 atom per COM group
+string ftsm set orient sele .not. hydrogen end ! atoms using which string coordinates will be overlaid
+string ftsm set rmsd sele .not. hydrogen end ! atoms based on which all distances are computed
+string ftsm list
+! make sure mass weighting is on before fill since it changes calculation weights
+string ftsm set mass on ! turn on mass weighting in RMSD computation and orientation
+!
+!===== load string coordinates
+! if starting from zts, read the appropriate replica and use ftsm fill
+
+if @nrun .eq. 1 then
+! read center replica
+ string open card unit 1 name ../sm0k/data/diala22_zts_@irep.cor
+ read coor card unit 1
+ string close unit 1
+ string ftsm fill col center nobc ! read from main set into center column ; do not apply bc
+! read left replica
+ calc ileft = @irep - 1
+ if @ileft lt @brep set ileft @brep
+ string open card unit 1 name ../sm0k/data/diala22_zts_@ileft.cor
+ read coor card unit 1 comp
+ string close unit 1
+ coor orie rms mass comp ! align with center replica (should not be needed if taken from zts)
+ string ftsm fill comp col left nobc ! read from comp set into left column ; do not apply bc
+! read right replica
+ calc iright = @irep + 1
+ if @iright gt @erep set iright @erep
+ string open card unit 1 name ../sm0k/data/diala22_zts_@iright.cor
+ read coor card unit 1 comp
+ string close unit 1
+ coor orie rms mass comp ! align with center replica (should not be needed if taken from zts)
+ string ftsm fill comp col right nobc ! read from comp set into right column ; do not apply bc
+else
+! nothing yet
+endif
+!
+!
+!===== define some fts parameters
+! adding "angstrom" sets the length scale to Ang for input; the values are renormalized before MD
+!set ang angstrom ! scaling not supported because we cannot compute ds
+set ang
+string ftsm set kpar 50 @ang ! force constant for hyperplanes restraints
+! set dpar to account for endpoints
+string ftsm set dpar 0.5 ! default for inner replicas
+if @brep eq @irep string ftsm set dpar 0
+if @erep eq @irep string ftsm set dpar 1
+!
+string ftsm set kprp 50 @ang
+string ftsm set dprp 2.0 @ang ! default is 1 (unscaled)
+!
+string ftsm set proj on ! forces restrain distance to hyperplane, but not position in the hyperplane (this is needed to compute 1D FE)
+!
+! write out string coords
+if @nrun eq 1 string ftsm write cor name string@irep.cor col center
+!if @nrun eq 1 string ftsm write cor name string@ileft.cor col left
+!if @nrun eq 1 string ftsm write cor name string@iright.cor col right
+!
+string ftsm copy 2 8 ! save center as reference coords (8 is the reference cor column)
+!
+!string ftsm test grad step 0.0001 ! test gradients (if fails, first check for singularities, then complain)
+!
+string ftsm stat -
+-!                  free fenm @datadir/fe.dat fcurv  -   ! compute free energy (will be zero fo r1-rep string)
+                  forc fcnm @datadir/force@{irep}.dat - ! output forces
+                  dist dnam @datadir/proj@{irep}.dat ! projection variables
+
+! test proj calculation
+!string ftsm calc
+!string ftsm stat
+!stop
+
+!set fbeta for langevin
+scalar fbeta set 10 select all end
+set tstep 0.001
+set Temp 300
+
+if @restart .eq. 1 then
+ string open write card unit 67 name @outputprev/diala@nprev_@{irep}.rst
+ set start restrt
+ set iunrea 67
+else
+ set start strt
+ set iunrea -1
+endif
+! set up dcd
+string open write file unit 68 name @outputdir/diala@nrun_@{irep}.dcd
+! set up restart output
+string open write card unit 69 name @outputdir/diala@nrun_@{irep}.rst
+!
+!!!!!!!!!!!!!!!!!!! string options
+set nsteps 500000
+!set nsteps 2000
+set freq 1000
+set dcdfreq @freq
+!
+!debug
+!set nsteps 1 
+!set freq 1    ! 
+!set evof 1      ! frequency of string evolution
+!
+! run dynamics
+string ftsm dyna -
+ rstr - ! restrained dynamics 
+ stat staf @freq -   ! statistics output
+- ! regulr dynamics options follow (must use integrator in dynamc.src)
+lang tbath @Temp ilbfrq 0 rbuffer 0 -
+@start -
+nstep @nsteps -
+timestep @tstep -
+iprfrq 1000 -
+ihtfrq 0 -
+ieqfrq 0 -
+ntrfrq 0 -
+iunrea 67 iunwri 69 iuncrd 68 iunvel -1 kunit -1 -
+nprint 1000 -
+nsavc @dcdfreq -
+isvfrq @dcdfreq - ! frequency for writing a restart file
+nsavv 0 -
+inbfrq -1 -                        ! frequency of nb list gneration
+iasors 1 - ! velocity scaling option at ihtfrq & iefrq freq. ; 0 -- scaling; ne 0 ==> assign (iasvel); not used in assignmnt
+iasvel 1 - ! velocity assgn during heating/equil +  initial; >0 : Gaussian, <0 uniform, 0 from COMP set
+iscvel 0 - ! velocity scaling: 0 -- same factor for all atoms; >0 different factor for each atom based on KE.
+iseed 1 2 3 4 ! 
+
+! final coordinates
+string open card write unit 1 name @outputdir/diala@nrun_@irep.cor
+write coor card unit 1
+string close unit 1

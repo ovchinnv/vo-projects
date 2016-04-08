@@ -1,0 +1,101 @@
+* Ensemble/string test case; alanine dipeptide
+* zero - temperature
+*
+
+
+! read parameter and topology files
+set toppar  .
+
+open unit 1 read form name "@TOPPAR/top_all22_prot.inp"
+read rtf card unit 1
+close unit 1
+
+open unit 1 read form name "@TOPPAR/par_all22_prot.inp"
+read param card unit 1
+close unit 1
+
+!!!!!!!!! generate alanine dipeptide
+read sequence card
+*
+1
+ALAD
+
+generate dial setup warn
+write psf card name diala22.psf
+write psf card name diala22-x.psf xplor
+
+!**********************************************************
+mcom string 1 by ?numnode
+string zero init
+!**************************** replica variables ***********
+set ncpu ?nstring
+set me ?mestring
+!**********************************************************
+! to split outputs :
+!calc outu 60
+!string open write card unit @outu name rep@me
+!outu @outu
+!prnlev 5 node 0
+!
+! set dihedral angles for this replica
+!
+! define range of angles
+calc phis -90.
+calc psis 90.0
+calc phie @phis+180.0
+calc psie @psis-180.0
+
+if @ncpu .gt. 1 then 
+ calc mypsi = @psis + ( @psie - @psis ) * @me / ( @ncpu - 1 )
+ calc myphi = @phis + ( @phie - @phis ) * @me / ( @ncpu - 1 )
+else
+ calc mypsi = @psis
+ calc myphi = @phis
+endif 
+!
+ic edit
+dihe  dial 1 clp   dial 1 nl   dial 1 ca   dial 1 crp @myphi
+dihe  dial 1 nl   dial 1 ca   dial 1 crp   dial 1 nr @mypsi
+end
+!
+! generate coordinates
+IC PARA
+IC SEED 1 CLP 1 NL 1 CA
+IC BUILD
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!! define orientation coordinates !!!!!!!!!!!!!!!
+!define left select type CL .or. type OL .or. type NL end
+
+!!!!!!!!!!!!!!!!!!!!! setup string !!!!!!!!!!!!!!!!!!!!!!
+!
+coor copy comp ! for rmsd output
+
+set outdir data
+
+! set up string statistics
+string zero stat ener ener bonds angles dihe impr vdw elec enam @outdir/string end -
+                rmsd rname @outdir/rmsd.dat dels dname @outdir/dsdt.dat arcl aname @outdir/arc.dat curv cvnm @outdir/curv.dat
+!
+update cutnb 100.0
+
+! set up reparameterization output
+!string zero repa iter 1 defi 1.021 bspli orie select .not. hydrogen end ! takes linear, bspline, spline
+string zero repa iter 1 defi 1.021 linear orie select .not. hydrogen end move select .not. hydrogen end ! takes linear, bspline, spline
+!string zero repa lin2 orie select .not. hydrogen end move select .not. hydrogen end ! takes linear, bspline, spline
+!string zero repa iter 1 defi 1.021 bspli orie select left end ! takes linear, bspline, spline
+
+!string zero repa
+!string zero stat
+! run string
+!nobomb
+string zero mini nstep 10019 -
+ repf 20 - ! reparametrization frequency
+ staf 10   ! statistics output frequency (will output once in staf*repf iterations)
+!
+! minimize with a finer step if desired
+!string zero mini repf 20 staf 10 nstep 6019 step 0.001
+!
+string open card write unit 1 name @outdir/diala22_zts_@me.pdb
+write coor pdb unit 1
+stop
+!
