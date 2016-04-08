@@ -7,13 +7,14 @@ LINKOBJS=\
  cmd.o prm.o \
  ivector.o \
  ivector_list.o \
+ isort.o \
  rvector.o \
  rvector_list.o \
+ rsort.o \
  parselist.o \
  files.o \
  lu.o \
  multidiag.o \
- isort.o \
  bestfit.o \
  sm_var.o \
  sm_config.o \
@@ -40,6 +41,7 @@ LINKOBJS=\
  ftsm_addatoms.o \
  ftsm_compute.o \
  ftsm_connect.o \
+ tsp.o \
  ftsm_interpolate.o \
  ftsm_io.o \
  ftsm_min.o \

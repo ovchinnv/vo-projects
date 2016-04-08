@@ -18,11 +18,13 @@ __CHARMM_ONLY##IF STRINGM
 !
       contains
 !======================================================================
-      subroutine ftsm_read_txt(ifile, col)
+      subroutine ftsm_read_txt(ifile, c_, from_)
+! note: this routine is expected to be called only by roots (see ftsm.ftn ca l.1200)
 !
 #define __MYCTX __STRING(ftsm)
 !
       __DEP_MULTICOM       __CHARMM_ONLY !##MULTICOM
+      __DEP_OUTPUT
       use ivector
       use ftsm_util
       use parser
@@ -32,10 +34,12 @@ __CHARMM_ONLY##IF STRINGM
 __DECL_MSGBUF
 !
       int, intent(in) :: ifile
-      int, optional, intent(in) :: col
 !
       bool :: qroot
-      int :: c, i, j, k, l, me, ierror, stat(MPI_STATUS_SIZE)
+      int :: i, j, k, l, me, ierror, stat(MPI_STATUS_SIZE)
+      __OPAR(c,int)
+      __OPAR(from,int)
+      int :: from_all(0:SIZE_STRNG-1) ! array of all source columns to be computed on root; bounds conform to ranks
 ! vars for test
       int :: norient_, nforced_, nboth_, nstring_, ierr
       bool :: qorient_, qdiffrot_, qerror
@@ -49,7 +53,9 @@ __DECL_MSGBUF
       qroot=MPI_COMM_STRNG.ne.MPI_COMM_NULL
 !
       if (.not. ftsm_check(qorient)) return
-      if (present(col)) then ; c=col; else; c=center; endif
+      __PRESENT(c,center)
+      __PRESENT(from,mestring)
+!
       if (c.lt.1.or.c.gt.num_sets) then
        __WRN( whoami, 'INVALID COLUMN. ABORT.')
        return
@@ -59,6 +65,13 @@ __DECL_MSGBUF
 if (__NEG(__WHAT __HOW __CONCAT(__WHAT,_)))then;__WARN(whoami,'MISMATCH IN FTSM PARAMETER "',__STRING(__WHAT),'":',__WHAT,'(PROGRAM) vs.',__CONCAT(__WHAT,_),'(FILE)');qerror=.true.;endif
 !
       if (qroot) then ! string roots get coordinates first
+! collect source columns on root
+       if (SIZE_STRNG.gt.1) then
+__MPI_ONLY call mpi_gather(from, mpiint, 1, from_all, mpiint, 1, 0, MPI_COMM_STRNG, ierror)
+       else
+        from_all=from
+       endif
+!
        me=ME_STRNG ;
        if (me.eq.0) then ! string root parses file and builds coordinate array
 ! parse file
@@ -89,7 +102,7 @@ if (__NEG(__WHAT __HOW __CONCAT(__WHAT,_)))then;__WARN(whoami,'MISMATCH IN FTSM 
           iatom_both=reshape( atoiv(line,2*nboth), (/2,nboth/) )
          endif
 ! now compare indices
-!        if (
+!
         else ! ioverlap
          nboth_=0
         endif ! ioverlap
@@ -100,7 +113,7 @@ if (__NEG(__WHAT __HOW __CONCAT(__WHAT,_)))then;__WARN(whoami,'MISMATCH IN FTSM 
         endif
 !=====================================================
 ! read actual coordinates
-        keyword='rf'//trim(itoa(me))//'_' ; l=len_trim(keyword);
+        keyword='rf'//trim(itoa(from_all(me)))//'_' ; l=len_trim(keyword);
         do j=1, nforced
          line=getval_nocase(keyword(1:l)//trim(itoa(j)),__MYCTX)
 !         r_f(j,:,c)=atofv(line,3)
@@ -114,7 +127,7 @@ if (__NEG(__WHAT __HOW __CONCAT(__WHAT,_)))then;__WARN(whoami,'MISMATCH IN FTSM 
         enddo ! forced atoms
         if (qorient.and.qdiffrot) then
 ! create indices for unique orientation coordinates
-         keyword='ro'//trim(itoa(me))//'_' ; l=len_trim(keyword);
+         keyword='ro'//trim(itoa(from_all(me)))//'_' ; l=len_trim(keyword);
          do j=1, norient
           if ( nboth.eq.0 .or. all(j.ne.iatom_both(2,:)) ) then
            k=int_vector_add(iorient,j)
@@ -126,27 +139,27 @@ if (__NEG(__WHAT __HOW __CONCAT(__WHAT,_)))then;__WARN(whoami,'MISMATCH IN FTSM 
         endif ! qo
 ! now, read data for other replicas and send
         do me=1, nstring-1
-         keyword='rf'//trim(itoa(me))//'_' ; l=len_trim(keyword);
+         keyword='rf'//trim(itoa(from_all(me)))//'_' ; l=len_trim(keyword);
 ! read coordinates
          do j=1, nforced
           line=getval_nocase(keyword(1:l)//trim(itoa(j)),__MYCTX)
 !         r_f(j,:,dummy)=atofv(line,3)
           read(line,*) r_f(j,:,dummy)
          enddo ! forced atoms
-__MPI_ONLY   call MPI_SEND(r_f(:,:,dummy),3*nforced,mpifloat,me,me, MPI_COMM_STRNG, ierror)
+__MPI_ONLY   call MPI_SEND(r_f(:,:,dummy), 3*nforced, mpifloat, me, me, MPI_COMM_STRNG, ierror)
          if (qorient.and.qdiffrot) then
-          keyword='ro'//trim(itoa(me))//'_' ; l=len_trim(keyword);
+          keyword='ro'//trim(itoa(from_all(me)))//'_' ; l=len_trim(keyword);
           do i=1,iorient%last
            j=iorient%i(i)
            line=getval_nocase(keyword(1:l)//trim(itoa(j)),__MYCTX)
 !           r_o(j,:,dummy)=atofv(line,3)
            read(line,*) r_o(j,:,dummy)
           enddo
-__MPI_ONLY   call MPI_SEND(r_o(:,:,dummy),3*norient,mpifloat,me,me, MPI_COMM_STRNG, ierror)
+__MPI_ONLY   call MPI_SEND(r_o(:,:,dummy), 3*norient, mpifloat, me, me, MPI_COMM_STRNG, ierror)
          endif ! qo
         enddo ! me over all reps
        if (iorient%initialized) call int_vector_done(iorient)
-       call parser_done()
+       call parser_clear_context(__MYCTX)
 !
        else ! other roots receive cooridnates
 __MPI_ONLY call MPI_RECV(r_f(:,:,c),3*nforced,mpifloat,0,me,MPI_COMM_STRNG,stat,ierror)
@@ -165,6 +178,7 @@ __MPI_ONLY call MPI_RECV(r_o(:,:,c),3*norient,mpifloat,0,me,MPI_COMM_STRNG,stat,
       subroutine ftsm_write_txt(ifile, col)
 
       __DEP_MULTICOM       __CHARMM_ONLY !##MULTICOM
+      __DEP_OUTPUT
       use ftsm_util
       use parser, only : itoa
 
@@ -208,9 +222,8 @@ __MPI_ONLY call MPI_RECV(r_o(:,:,c),3*norient,mpifloat,0,me,MPI_COMM_STRNG,stat,
         endif
 !     now write the actual coordinates
         _W '# rfx_y : forcing coordinate triple #y for replica #x'
-        keyword='f'//trim(itoa(me))//'_' ; l=len_trim(keyword)
         do j=1, nforced
-         _W 'rf'//keyword(1:l)//trim(itoa(j)),'=(',r_f(j,:,c),')'
+         _W 'rf'//trim(itoa(me))//'_'//trim(itoa(j)),'=(',r_f(j,:,c),')'
         enddo ! forced atoms
 ! orientation atoms
         if (qorient.and.qdiffrot) then
@@ -750,6 +763,8 @@ __MPI_ONLY   call MPI_RECV(r3,3*natom,rtype,0,ME_STRNG,MPI_COMM_STRNG,stat,ierro
      &              nres,natom,stringatoms,modew,0,0,.false.)
 #elif defined (__DMOL)
       ok=ch_coor_write(ifile, r3, MASK=stringatoms)
+#else
+      __WRN(whoami, 'CHARMM COORDINATE WRITER NOT IMPLEMENTED FOR THIS COMPILATION.')
 #endif
 !
       __FREE(stringatoms)
@@ -841,6 +856,8 @@ __MPI_ONLY   call MPI_RECV(r3,3*natom,rtype,0,ME_STRNG,MPI_COMM_STRNG,stat,ierro
 !
 #elif defined(__DMOL)
       call ch_coor_read(ifile, r3, MASK=stringatoms)
+#else
+      __WRN(whoami, 'CHARMM COORDINATE READER NOT IMPLEMENTED FOR THIS COMPILATION.')
 #endif
 !
       do j=1, nforced
