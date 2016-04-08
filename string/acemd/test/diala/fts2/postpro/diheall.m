@@ -22,7 +22,7 @@ name='dihe_dcd16_1.dat';
 d=load(name);
 %
 skip=5000; % number of data-points in a single trajectory
-skip=500;
+skip=49;
 %
 % reorganize data into a matrix
 id=d(:,1);
@@ -54,8 +54,8 @@ end
 end % traj
 
 % overlay string
-name='../string.dihe';
-%name='../data/path.dihe';
+name='../data/diala22_zts_.dihe'
+
 d=load(name);
 id=d(:,1);
 phi=d(:,2);
