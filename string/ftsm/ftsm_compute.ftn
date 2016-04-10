@@ -685,7 +685,7 @@ __MPI_ONLY     &         0, MPI_COMM_LOCAL, ierror)
       int :: itime
 ! locals
       float, pointer, dimension(:,:) :: ffpar, ffprp, fopar, foprp
-      float :: pre1, pre2, dw, ddm, ddp
+      float :: pre1, pre2, dw, ddm, ddp, ftsm_flim_coef1, ftsm_flim_coef2
       float :: fac, fac2, t, omt, wgt, dx, dy, dz, kbt=0.6d0 ! for now, hardwired at room temperature
       float :: tw
       int, parameter :: right=1, left=-1, home=0
@@ -735,17 +735,21 @@ __MPI_ONLY     &         0, MPI_COMM_LOCAL, ierror)
 ! restraint force parallel to string
        if (window_on) then ! double half-harmonic window
 !    note : dwin is already pre-scaled by 2D, which is why below we multiply endpoint dwin by two ; division for compatibility with scaledist=.false.
-        dw = dwin / fac ; ! converted to local metric (2D for inner pts.)
+        dw = dwin / fac ; ! converted to local metric (1D for endpoints; untouched [2D] for inner pts.)
         ddp=dpar - dpar0 + half*dw ; ! add half-window size
         ddm=ddp - dw ;
         if (ddm.gt.zero) then ! system to the `right` of window
          pre1 = kpara * fac * fac * ddm
+         ftsm_restraint_energy(1) = half*pre1*ddm ! energy of parallel restraint
          qwhere = right
         elseif (ddp.lt.zero) then ! system to the `left` of window
+         ddm=ddp                  ! will reuse ddm as the `parallel` displacement
          pre1 = kpara * fac * fac * ddp
+         ftsm_restraint_energy(1) = half*pre1*ddp ! energy of parallel restraint
          qwhere = left
         else ! update average position inside window (conditional on being inside the window)
-         pre1=zero ;
+         pre1=zero
+         ftsm_restraint_energy(1)=zero            ! energy of parallel restraint
          __INC(window_num_ave) ! increment (local) sample counter
          tw=one/window_num_ave
          __INCR(window_ave_pos, tw*(dpar - window_ave_pos) )
@@ -762,14 +766,31 @@ __MPI_ONLY     &         0, MPI_COMM_LOCAL, ierror)
         endif
 !
        else ! regular harmonic window
-        pre1 = kpara * fac * fac * ( dpar-dpar0 )                ! scale down the force constant of endpoints (one for d, one for gradients)
+        ddm = dpar-dpar0 ! reuse ddm as `parallel` displacement
+        pre1 = kpara * fac * fac *  ddm                ! scale down the force constant of endpoints (one for d, one for gradients)
+        ftsm_restraint_energy(1) = half * pre1 * ddm   ! energy of parallel restraint
        endif ! window_on
-       pre2 = kperp * fac * max   ( fac * dperp - dperp0, zero ) ! ignore negative values; dperp0 criterion in inner-replica d-metric
+       ddp = max   ( fac * dperp - dperp0, zero )      ! reuse ddp as `perpendicular` displacement
+       pre2 = kperp * fac * ddp                        ! ignore negative values; dperp0 criterion in inner-replica d-metric (ok, checked 4.16)
+       ftsm_restraint_energy(2) = kperp * fac * ddp**2 ! energy of perpendicular restraint
 ! force limiting
-! computed from the condition : kpre/2 x (d-d0)^2 <= kT x flim ; i.e. limit excursions to some multiple of available thermal energy
+! computed from the condition : k/2 x (d-d0)^2 <= kT x flim ; i.e. limit excursions to some multiple of available thermal energy
+! however, note that I em limiting the force, not the energy; this means that, beyond some ADHOC threshold, the force is constant
+! which would correspond to a LINEAR potential, i.e. the restraint energy can still increase without bound
+! this trick is thus basically to stabilize the MD integrator by limiting forces in the cases of possible very bad geometries
+! as such, it is an experimental feature, and should not generally be needed
        if (ftsm_flim_coeff.gt.zero) then
-        pre1=sign( min(abs(pre1),sqrt(two*fac*kbt*kpara*ftsm_flim_coeff)),pre1) ! limit pre1 magnitude taking care of sign
-        pre2=min(pre2,sqrt(two*fac*kbt*kperp*ftsm_flim_coeff)) ! pre2 > 0
+        ftsm_flim_coef1=sqrt(two*fac*kbt*kpara*ftsm_flim_coeff)
+        ftsm_flim_coef2=sqrt(two*fac*kbt*kperp*ftsm_flim_coeff)
+        pre1=sign( min(abs(pre1),ftsm_flim_coef1),pre1) ! limit pre1 magnitude taking preserving sign
+        pre2=min(pre2,ftsm_flim_coef2) ! note that pre2 is always > 0
+! modify restraint energies:
+! (1) constant force implies a linear potential, starting at the crossover point, which leads to the energy
+! (2) (d-d0) * sqrt (2*k*flim/beta) - flim/beta
+! (3) therefore, the energy will not be greater than the above -- use max function
+        ftsm_restraint_energy(1) = max(ftsm_restraint_energy(1), ddm*ftsm_flim_coef1 - ftsm_flim_coeff*kbt)
+        ftsm_restraint_energy(2) = max(ftsm_restraint_energy(2), ddp*ftsm_flim_coef2 - ftsm_flim_coeff*kbt)
+!
        endif
 ! update force: for inner points, multiply force by 0.5; for boundary use 1d0; the FE is then simply the sum of the forces along the string
        avforce(1) = t * avforce(1) + omt * pre1 * fac2 ! force acting on dpar0 is pre1 (integrate negative to get f.e.)
@@ -777,11 +798,16 @@ __MPI_ONLY     &         0, MPI_COMM_LOCAL, ierror)
        avforce(3) = t * avforce(3) + omt * pre2 * fac2 ! force acting on dperp0 is pre2 ( NOTE: this is not a true force along the path)
 !
       else ! .not.  proj_on
-       pre1 = krms * ( drms-drms0 )
-       if (qrms_upper_bound) pre1=max(pre1,zero) ! apply if force exceeds threshold
+       ddm = drms-drms0
+       if (qrms_upper_bound) ddm=max(ddm,zero) ! if distance exceeds threshold
+       pre1 = krms * ddm
+       ftsm_restraint_energy(1) = pre1 * half * ddm
+       ftsm_restraint_energy(2) = zero         ! there is no such thing as a perpendicular restraint in this case
 ! force limiting
        if (ftsm_flim_coeff.gt.zero) then 
-        pre1=sign( min(abs(pre1),sqrt(two*fac*kbt*krms*ftsm_flim_coeff)),pre1) ! limit pre1 magnitude taking care of sign
+        ftsm_flim_coef1=sqrt(two*fac*kbt*krms*ftsm_flim_coeff)
+        pre1=sign( min(abs(pre1),ftsm_flim_coef1),pre1) ! limit pre1 magnitude taking care of sign
+        ftsm_restraint_energy(1) = max(ftsm_restraint_energy(1), ddm*ftsm_flim_coef1 - ftsm_flim_coeff*kbt)
        endif
        pre2=zero
 ! update force (which will not likely be used)

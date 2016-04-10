@@ -50,6 +50,9 @@ __CHARMM_ONLY int :: oldiol, error
  639  format(A,' SETTING ITERATION COUNTER TO ',I7)
       endif
 !
+      restraint_energy_fname=''
+      output_restraint_energy=.false.
+!
       forces_fname=''
       output_forces=.false.
 !
@@ -203,7 +206,33 @@ __CHARMM_ONLY int :: oldiol, error
  6523 format(A,' WILL WRITE DISTANCE TO STRING TO STDOUT.')
 !
       endif ! DISTANCE TO STRING
-!!!!!!!!!!!!!! FREE ENERGY
+!======================================= RESTRAINT ENERGY
+      if (__INDX_RM(comlyn,comlen,'RENE').gt.0) then
+        output_restraint_energy=.true.
+        __GET_RM_A(COMLYN,COMLEN,'RENM',4,restraint_energy_fname,80,restraint_energy_flen)
+        if (restraint_energy_flen.eq.0) then
+         __WRN(whoami,'RESTRAINT ENERGY FILE NAME NOT SPECIFIED. WILL WRITE TO STDOUT.')
+         restraint_energy_funit=__OSTREAM
+        else
+         if (__INDX_RM(comlyn,comlen,'REAP').gt.0) then
+           restraint_eform='APPEND'
+         else
+           restraint_eform='WRITE'
+         endif
+        endif
+!ccccccccccc print summary
+        if (qprint) then
+         if (restraint_energy_flen.gt.0) then
+          write(_MSGBUF,6524) whoami, restraint_energy_fname(1:restraint_energy_flen) ; __PRINT(_MSGBUF)
+         else
+          write(_MSGBUF,6525) whoami ; __PRINT(_MSGBUF)
+         endif
+        endif
+ 6524 format(A,' WILL WRITE RESTRAINT ENERGY TO FILE ',A)
+ 6525 format(A,' WILL WRITE RESTRAINT ENERGY TO STDOUT.')
+!
+      endif ! DISTANCE TO STRING
+!======================================= FREE ENERGY
       if (__INDX_RM(comlyn,comlen,'FREE').gt.0) then
         output_fe=.true.
         __GET_RM_A(COMLYN,COMLEN,'FENM',4,fe_fname,80,fe_flen)
@@ -769,6 +798,41 @@ __MPI       &                 MPI_COMM_STRNG, ierror)
        endif ! qroot
 !
       endif ! output_dist
+!===========================================================================
+      if (output_restraint_energy) then
+!    gather on root processor
+       if (qroot) then
+!    reuse fc_all
+        if (nstring.gt.1) then
+__MPI         call mpi_gather(ftsm_restraint_energy,2,mpifloat,      & ! heads communicate
+__MPI       &                 winave_all,2,mpifloat,0,               &
+__MPI       &                 MPI_COMM_STRNG, ierror)
+        else
+         winave_all(:,1)=ftsm_restraint_energy ! reuse winave var.
+        endif
+!
+        fmt='('//fmt_real(1:fmt_len)//real_format//')'
+        if (qprint) then
+         if (restraint_energy_funit.eq.__OSTREAM) then
+          write(restraint_energy_funit,'("RESTRAINT ENERGY> ",I8)') stat_iteration_counter
+         else
+          restraint_energy_funit=-1
+          __OPEN_FILE(restraint_energy_funit, restraint_energy_fname,'FORMATTED',restraint_eform)
+          write(restraint_energy_funit,'("% ",I8)') stat_iteration_counter ! % is a MATLAB comment
+         endif
+!
+!    print
+         write(restraint_energy_funit, fmt) winave_all(1,:)              ! parallel restraint energy (or RMSD energy)
+         if (proj_on) write(restraint_energy_funit, fmt) winave_all(2,:) ! perpendicular restraint energy
+!
+!     flush unit: close and reopen later
+         if (restraint_energy_funit.ne.__OSTREAM)                                      &
+     &     __CLOSE_FILE(restraint_energy_funit, 'KEEP', ierror)
+        endif ! qprint
+        restraint_eform='APPEND'
+       endif ! qroot
+!
+      endif ! output_restraint_energy
 !===========================================================================
       if (output_fe) then
 !    compute free energy
