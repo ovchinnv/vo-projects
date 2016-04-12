@@ -1,0 +1,110 @@
+#!/bin/bash
+
+# preliminaries
+vmd -dispdev text < alist.vmd >/dev/null #generate ftsm atom indices
+# data directory
+datadir=ftsdata
+mkdir -p $datadir 
+#==============================================================================
+# will use charmm to read the coordinate files and apply Metropolis criterion
+# for replica exchange
+#
+charmm=charmm_repo
+mpirun=mpirun
+cores=8
+#==============================================================================
+#
+
+# string replicas
+irep=0
+brep=0
+erep=15
+
+# replica exchange frequency
+frex=1000 ; # also the number of short-run steps
+numrex=100 ; # number of exchange attempts (also the number of runs)
+
+#outer loop over jnumber of runs
+for irex in `seq 1 $numrex`; do 
+
+# to delete later
+ d=$((RANDOM%2)) ; #returns either 0 or 1 
+ $mpirun -np $cores $charmm brep=$brep erep=$erep which=$d -i rex.inp #-o rex.out
+
+exit
+
+# run each replica for $frex steps
+ for irep in `seq $brep $erep`; do
+# prepare input file from template
+  config=${irep}.in
+  output=${irep}.out
+  pluginfile=diala.fts${irep}
+  pluginout=${pluginfile}.out
+
+# boundary replicas :
+  ileft=$((irep-1))
+  iright=$((irep+1))
+#
+  if [ $irep -eq $brep ] ; then
+   dpar=0
+   ileft=$irep
+  elif [ $erep -eq $irep ] ; then
+   dpar=1
+   iright=$irep
+  else
+   dpar=0.5
+  fi
+
+# prepare string method config file
+# note that we ouput restraint energy
+# which is to be used in rex
+  cat template.sm | \
+  sed "s/@{orient.*}/atomid `cat orient.dat`/g" | \
+  sed "s/@{forc.*}/atomid `cat forced.dat`/g" | \
+  sed "s/@{dpar}/$dpar/g" | \
+  sed "s/@{ileft}/$ileft/g" | \
+  sed "s/@{irep}/$irep/g" | \
+  sed "s/@{iright}/$iright/g" | \
+  sed "s/@{datadir}/$datadir/g" | \
+  cat > $pluginfile
+# make sure that string output files (to which we will be appending) exist
+  touch $datadir/force$irep.dat
+  touch $datadir/proj$irep.dat
+  touch $datadir/ftse$irep.dat
+
+# prepare acemd config
+  outputname=diala.fts${irep}
+  if [ $irex -gt 1 ]; then
+   echo "bincoordinates $datadir/$outputname.coor" > $config
+   echo "binvelocities  $datadir/$outputname.vel" >> $config
+  else # simply erase
+   echo -n > $config
+  fi
+
+  cat template |\
+   sed "s/@{coordinates}/sm0k\/diala22_zts_$irep.pdb/g" | \
+   sed "s/@{input}/$pluginfile/g" | \
+   sed "s/@{log}/$pluginout/g" | \
+   sed "s/@{irep}/$irep/g" | \
+   sed "s/@{nsteps}/$frex/g" | \
+   sed "s/@{freq}/$frex/g" | \
+   sed "s/@{outputname}/$datadir\/$outputname/g" | \
+   cat >> $config
+
+  echo " ===> Running replica #$irep ..."
+  acemd $config > $output
+  if [ -f output.dcd ]; then 
+   mv output.dcd $datadir/$outputname.dcd # perhaps should use catdcd to join all dcds
+  fi
+ done
+#
+# perform replica exchange :
+# (1) decide which way to try exchange:
+ d=$((RANDOM%2)) ; #returns either 0 or 1 
+ $mpirun -np $cores $charmm which=$d -i rex.inp -o rex.out
+
+
+exit
+
+done
+

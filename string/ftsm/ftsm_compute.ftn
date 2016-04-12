@@ -217,11 +217,6 @@ __CHARMM_ONLY##IF STRINGM
        endif ! (not proj) / curvature
       endif ! qcombine
 !
-!!                write(600+me_global,*) matmul(ow,rol) ! correct (0)
-!!                write(600+me_global,*) matmul(ow,roc)
-!!                write(600+me_global,*) matmul(ow,ror)
-!!                write(600+me_global,*) matmul(ow,roi)
-!
       if (qorient) then
 !     compute rotation matrices (and gradients, if needed)
 !
@@ -675,7 +670,7 @@ __MPI_ONLY     &         0, MPI_COMM_LOCAL, ierror)
       end subroutine ftsmv1_calc
 !
 !===========================================================================
-      subroutine ftsm_addforce(fx,fy,fz,addforce,itime)
+      subroutine ftsm_addforce(fx,fy,fz,addforce,itime,qapplyforce_)
       __DEP_NUMBER
       __DEP_MULTICOM ! for ME_STRNG
 !    note: boundary points require special treatment: x0.25 force constant and x2 dperp0
@@ -683,6 +678,7 @@ __MPI_ONLY     &         0, MPI_COMM_LOCAL, ierror)
       float :: fx(:), fy(:), fz(:)
       bool :: addforce  ! whether to add forces to running force average
       int :: itime
+      __OPAR(qapplyforce, bool) ! whether to add forces to the atomic force arrays
 ! locals
       float, pointer, dimension(:,:) :: ffpar, ffprp, fopar, foprp
       float :: pre1, pre2, dw, ddm, ddp, ftsm_flim_coef1, ftsm_flim_coef2
@@ -695,6 +691,8 @@ __MPI_ONLY     &         0, MPI_COMM_LOCAL, ierror)
       float, pointer :: wgts(:)
       int :: i, j, ind
       bool :: qendpoint
+!
+      __PRESENT(qapplyforce,.true.) ! true by default
 !
       if (nstring.eq.1) then ! special hack for 1-replica strings for running in serial mode
 !     assume that dpar0=0/1 can only be assigned to the left/right endpoint
@@ -815,9 +813,11 @@ __MPI_ONLY     &         0, MPI_COMM_LOCAL, ierror)
        avforce(2:3)=zero ! set to zero in case user runs rmsd dynamics after proj dynamics
       endif ! proj_on
 !                                                      ! even if I am treating it here as such; it is an orthogonal `correction`
-      if (pre2 .gt. zero) then
-       if (ftsm_com_on) then
-        do i=1, nforced
+      if (qapplyforce) then ! apply forces to coordinate force arrays
+!
+       if (pre2 .gt. zero) then
+        if (ftsm_com_on) then
+         do i=1, nforced
           dx=pre1 * ffpar(i,1) + pre2 * ffprp(i,1)
           dy=pre1 * ffpar(i,2) + pre2 * ffprp(i,2)
           dz=pre1 * ffpar(i,3) + pre2 * ffprp(i,3)
@@ -830,19 +830,19 @@ __MPI_ONLY     &         0, MPI_COMM_LOCAL, ierror)
            __INCR(fy(ind),wgt*dy)
            __INCR(fz(ind),wgt*dz)
           enddo ! j
-        enddo ! i
-       else ! ftsm_com_on
-        do i=1, nforced
+         enddo ! i
+        else ! ftsm_com_on
+         do i=1, nforced
           ind=iatom_f(i)
           fx(ind) = fx(ind) + pre1 * ffpar(i,1) + pre2 * ffprp(i,1)
           fy(ind) = fy(ind) + pre1 * ffpar(i,2) + pre2 * ffprp(i,2)
           fz(ind) = fz(ind) + pre1 * ffpar(i,3) + pre2 * ffprp(i,3)
-        enddo
-       endif ! ftsm_com_on
+         enddo
+        endif ! ftsm_com_on
 !
-       if (qorient.and.qdiffrot) then
-        if (ftsm_com_on) then
-         do i=1, norient
+        if (qorient.and.qdiffrot) then
+         if (ftsm_com_on) then
+          do i=1, norient
            dx=pre1 * fopar(i,1) + pre2 * foprp(i,1)
            dy=pre1 * fopar(i,2) + pre2 * foprp(i,2)
            dz=pre1 * fopar(i,3) + pre2 * foprp(i,3)
@@ -855,20 +855,20 @@ __MPI_ONLY     &         0, MPI_COMM_LOCAL, ierror)
             __INCR(fy(ind),wgt*dy)
             __INCR(fz(ind),wgt*dz)
            enddo ! j
-         enddo ! i
-        else ! ftsm_com_on
-         do i=1, norient
+          enddo ! i
+         else ! ftsm_com_on
+          do i=1, norient
            ind=iatom_o(i)
            fx(ind) = fx(ind) + pre1 * fopar(i,1) + pre2 * foprp(i,1)
            fy(ind) = fy(ind) + pre1 * fopar(i,2) + pre2 * foprp(i,2)
            fz(ind) = fz(ind) + pre1 * fopar(i,3) + pre2 * foprp(i,3)
-         enddo
-        endif ! ftsm_com_on
-       endif ! qorient && qdiffrot
+          enddo
+         endif ! ftsm_com_on
+        endif ! qorient && qdiffrot
 !
-      else ! parallel force only
-       if (ftsm_com_on) then
-        do i=1, nforced
+       else ! parallel force only
+        if (ftsm_com_on) then
+         do i=1, nforced
           dx=pre1 * ffpar(i,1)
           dy=pre1 * ffpar(i,2)
           dz=pre1 * ffpar(i,3)
@@ -881,19 +881,19 @@ __MPI_ONLY     &         0, MPI_COMM_LOCAL, ierror)
            __INCR(fy(ind),wgt*dy)
            __INCR(fz(ind),wgt*dz)
           enddo ! j
-        enddo ! i
-       else ! ftsm_com_on
-        do i=1, nforced
+         enddo ! i
+        else ! ftsm_com_on
+         do i=1, nforced
           ind=iatom_f(i)
           fx(ind) = fx(ind) + pre1 * ffpar(i,1)
           fy(ind) = fy(ind) + pre1 * ffpar(i,2)
           fz(ind) = fz(ind) + pre1 * ffpar(i,3)
-        enddo
-       endif ! ftsm_com_on
+         enddo
+        endif ! ftsm_com_on
 !
-       if (qorient.and.qdiffrot) then
-        if (ftsm_com_on) then
-         do i=1, norient
+        if (qorient.and.qdiffrot) then
+         if (ftsm_com_on) then
+          do i=1, norient
            dx=pre1 * fopar(i,1)
            dy=pre1 * fopar(i,2)
            dz=pre1 * fopar(i,3)
@@ -906,17 +906,18 @@ __MPI_ONLY     &         0, MPI_COMM_LOCAL, ierror)
             __INCR(fy(ind),wgt*dy)
             __INCR(fz(ind),wgt*dz)
            enddo ! j
-         enddo ! i
-        else ! ftsm_com_on
-         do i=1, norient
+          enddo ! i
+         else ! ftsm_com_on
+          do i=1, norient
            ind=iatom_o(i)
            fx(ind) = fx(ind) + pre1 * fopar(i,1)
            fy(ind) = fy(ind) + pre1 * fopar(i,2)
            fz(ind) = fz(ind) + pre1 * fopar(i,3)
-         enddo
-        endif ! ftsm_com_on
-       endif ! qorient
-      endif ! pre2>0
+          enddo
+         endif ! ftsm_com_on
+        endif ! qorient
+       endif ! pre2>0
+      endif ! qapplyforce (to coordinate force arrays)
 !
       end subroutine ftsm_addforce
 !============================================================================

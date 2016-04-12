@@ -27,9 +27,6 @@ __CHARMM_ONLY##IF STRINGM
       public ftsm_parse
       public ftsm_main
       private ftsm_init
-      private ftsm_list_atoms
-      private ftsm_test_grad_fd
-      private ftsm_test_parallel
       private ftsm_evolve
       private ftsm_repl_exchange
 #if (defined(__ACEMD) || defined(__NAMD))
@@ -453,85 +450,7 @@ __MPI_ONLY &            1, mpibool, MPI_LAND, MPI_COMM_STRNG, ierror)
         restrained_eq0=0
 !
 ! scale force constants and restraint reference values (if necessary)
-        if (.not.ftsm_scaledist.or.  &
-&           qkpara_angstrom.or.qkperp_angstrom.or.qdperp_angstrom.or.qdperpf_angstrom.or.qdwin_angstrom) then
-! warn if user is attempting to run with 1 replica; in this case aollective string operations, 
-! such as computing arclength, curvature, repa, are not defined (okay, they are defined but have trivial meaning)
-         if (nstring.le.1) then
-          __WRN(whoami, ' SCALING IN ANGTROMS REQUIRES COMPUTING ARCLENGTH, WHICH IS UNDEFINED FOR 1-REPLICA STRING. (YOU SHOULD STOP HERE).')
-         endif
-!
-         call ftsm_compute_arcl_curv(linear)
-!write(0,*) 'DARCL : ', ds ! aa
-         zval = sum(ds) / ( max( nstring-1 , 1 ) ) * sqrt3 ; ! sqrt(3) makes the arclength correspond to the RMSD in 3D
-! broadcast zval to slaves
-         if (qslave) then
-          __BROADCAST_LOCAL(zval, 1, mpifloat)
-         endif
-        else
-         zval = one ! work in units of ds ; this line is not needed ; included for clarity
-        endif ! ftsm_scaledist
-!
-        if (.not.ftsm_scaledist) then ! need to compute reference distance from string length
-          if (nstring.gt.1) then
-           if (mestring.eq.0) then ; dpar0=zero ; else ; dpar0 = zval ; endif ; dpar0i=dpar0 ! left endpoint uses one-sided tangent (see ftsm14 paper)
-           if (qprint) then ; write(_MSGBUF,6713) whoami, ftoa(zval)
-           __PRINT(_MSGBUF) ;
-           endif
- 6713 format(A,' AVERAGE COMPUTED ARCLENGTH INCREMENT IS ',A,' ANG.')
-           ftsm_reset_dpar0f=.true.
-          else
-           __WRN(whoami, ' SCALING DPAR TO ANGTROMS REQUIRES ARCLENGTH, WHICH IS UNDEFINED FOR 1-REPLICA STRING. NO SCALING APPLIED.')
-          endif ! nstring
-!
-        else ! options valid for scaled version with a lengthscale specified in angstrom
-          zval=two*zval ! gives 2L/(M-1) , i.e. || q-p || (note : if no angstrom scalings are requested, zval will be unused)
-!
-          if (qkpara_angstrom) then
-           fname='PARALLEL FORCE CONSTANT (KPAR)' ; kpara = kpara_ * zval**2 ;
-           if (qprint) then ; write(_MSGBUF,6712) whoami, trim(fname), ftoa(zval), ftoa(kpara)
-           __PRINT(_MSGBUF) ;
-           endif
-          else ! scale length to 2DS from (1DS at input)
-           kpara=kpara_*four
-          endif
-          if (qkperp_angstrom) then
-           fname='PERPENDICULAR FORCE CONSTANT (KPRP)' ; kperp = kperp_ * zval**2 ;
-           if (qprint) then ; write(_MSGBUF,6712) whoami, trim(fname), ftoa(zval), ftoa(kperp)
-           __PRINT(_MSGBUF)
-           endif
-          else
-           kperp=kperp_*four
-          endif
-          if (qdperp_angstrom) then
-           fname='REFERENCE TUBE WIDTH (DPRP)' ; dperp0 = dperp0_ / zval ; dperp0i = dperp0i_ / zval ;
-           if (qprint) then ; write(_MSGBUF,6712) whoami, trim(fname), ftoa(zval), ftoa(dperp0)
-           __PRINT(_MSGBUF)
-           endif
-          else
-           dperp0=dperp0_*half; dperp0i=dperp0i_*half
-          endif
-          if (qdperpf_angstrom) then
-           fname='FINAL REFERENCE TUBE WIDTH (DPRPF)' ; dperp0f = dperp0f_ / zval ;
-           if (qprint) then ; write(_MSGBUF,6712) whoami, trim(fname), ftoa(zval), ftoa(dperp0f)
-           __PRINT(_MSGBUF)
-           endif
-          else
-           dperp0f=dperp0f_*half
-          endif
-          if (qdwin_angstrom) then
-           fname='WIDTH OF HALF-HARMONIC WINDOW POTENTIAL (DWIN)' ; dwin = dwin_ / zval ;
-           if (qprint) then ; write(_MSGBUF,6712) whoami, trim(fname), ftoa(zval), ftoa(dwin)
-           __PRINT(_MSGBUF)
-           endif
-          else
-           dwin=dwin_*half
-          endif
-        endif ! .not. ftsm_scaledist
-!
-! NOTE that the scaling is actually by 2 x ds ; however, for the sake of simplicity of input
-! it is considered per ds, and converted here
- 6712 format(A,' SCALING ',A,' BY INTER-REPLICA DS (',A,' ANG). NEW VALUE IS ',A)
+        call ftsm_scale_parameters()
 !
        endif ! if restrained_on
 !
@@ -914,7 +833,13 @@ __MPI_ONLY   call MPI_ALLGATHER(ftsm_voronoi_whereami, 1, mpiint, ftsm_voronoi_m
          __FTSM_CALC(__X,__Y,__Z, .false., t=one)
         endif
        endif ! qcomp
- 6670 format(/A,' WILL COMPUTE DISTANCE FROM STRING IMAGE USING ',A,' COORDINATES.')
+! compute energies and forces, but do not apply them to the atomic force arrays
+! for the latter reason, there is no need to compute derivatives in calc
+! however, need to make sure that force & length parameters are correctly scaled
+       call ftsm_scale_parameters()
+       call ftsm_addforce(__X,__Y,__Z,.true., -ione, .false.) ! coordinates passed in place of fc arrays, but they are not modified
+!
+ 6670 format(/A,' WILL COMPUTE DISTANCES FROM STRING IMAGE USING ',A,' COORDINATES.')
 !=======================================================================================
 !     the option below will be useful to perform usual charmm operations on the STRING (if desired)
       elseif (__STRNCMP(keyword,'LIFT',4)) then ! force string into current coordinates
@@ -2037,65 +1962,6 @@ __CHARMM_ONLY iolev=1 ! open file on root (which may not be zero if rex is used)
       ftsm_initialized=.false.
 !
       end subroutine ftsm_done
-!=========================================================================
-      subroutine ftsm_list_atoms()
-      __DEP_OUTPUT
-      __DEP_PARSER
-      __DEP_MULTICOM       __CHARMM_ONLY !##MULTICOM
-      __DEP_ATOMID
-!
-      int :: i, j
-      character(len=8) :: sid, rid, ren, ac
-      __IAM(FTSM_LIST_ATOMS)
-!
-      if (ftsm_compute_qdiffrot) call ftsm_qdiffrot()
-!
-#if ( defined(__ACEMD) || defined(__NAMD))
-      __MESSAGE(whoami, 'MINIMAL SYSTEM DOES NOT REPORT TOPOLOGY.');
-#endif
-!
-      if (ME_STRNG.eq.0) then
-!
-        if (norient.gt.0) then ; write(_MSGBUF,'(A)') _TAB//'ORIENTATION ATOMS:'
-        __PRINT(_MSGBUF); endif
-        do j=1, norient;
-         if (ftsm_com_on) then
-          write(_MSGBUF,666) whoami, j ; __PRINT(_MSGBUF)
- 666  format(A,' COM GROUP # ',I8,':')
-          do  i=1, iatoms_o%v(j)%last
-           __ATOMID(iatoms_o%v(j)%i(i), sid, rid, ren, ac)
-           write(_MSGBUF,667) _TAB,j, iatoms_o%v(j)%i(i), sid, rid, ren, ac; __PRINT(_MSGBUF)
-          enddo ! i
-         else ! ftsm_com_on
-          __ATOMID(iatom_o(j), sid, rid, ren, ac)
-           write(_MSGBUF,667) _TAB, j, iatom_o(j), sid, rid, ren, ac; __PRINT(_MSGBUF)
-         endif
-        enddo ! j
-!
-        if (qdiffrot) then
-         if (nforced.gt.0) then ; write(_MSGBUF,'(A)') _TAB//'FORCING ATOMS:'; 
-         __PRINT(_MSGBUF); endif
-         do j=1, nforced;
-          if (ftsm_com_on) then
-           write(_MSGBUF,666) whoami, j ; __PRINT(_MSGBUF)
-           do  i=1, iatoms_f%v(j)%last
-            __ATOMID(iatoms_f%v(j)%i(i), sid, rid, ren, ac)
-            write(_MSGBUF,667) _TAB, j, iatoms_f%v(j)%i(i), sid, rid, ren, ac; __PRINT(_MSGBUF)
-           enddo
-          else ! ftsm_com_on
-           __ATOMID(iatom_f(j), sid, rid, ren, ac)
-           write(_MSGBUF,667) _TAB, j, iatom_f(j), sid, rid, ren, ac; __PRINT(_MSGBUF)
-          endif ! ftsm_com_on
-         enddo ! j
-        else
-         write(_MSGBUF,'(A)') _TAB//'FORCING AND ORIENTATION ATOMS ARE THE SAME' 
-         __PRINT(_MSGBUF)
-        endif ! qdiffrot
-      endif ! ME_STRING
-!
- 667  format(A,2I8,' ',4A)
-!
-      end subroutine ftsm_list_atoms
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 ! VO 1/2013 modifying function call to include string minimization option
       subroutine ftsm_main(x,y,z,xcomp,ycomp,zcomp,fx,fy,fz,mass,iteration           & ! include comparison set for voronoi calculations
@@ -3006,6 +2872,107 @@ __MPI_ONLY call mpi_type_get_extent(rex_string_data_mpi, lb, extent, ierror)
       endif ! success
 !
       end subroutine ftsm_repl_exchange
+!==========================================================================================
+      subroutine ftsm_scale_parameters()
+! scale force constants and restraint reference values (if necessary)
+! 4.16 : moved code into independent subroutine because it needs to be called
+! from multiple places ; previously, parameters were scaled only prior to dynamics
+! however, I want to be able to calculate restraint energies from command line
+! (i.e. outside of dynamics) ; for this to work, the correct constants (dprp_ ,  kprp_, etc)
+! need to be set
+!
+        __DEP_PARSER
+        __DEP_MULTICOM
+        __DEP_MPI
+        float :: zval
+        bool :: qprint, qslave, qroot
+        character(len=80) :: fname
+        __IAM(FTSM_SCALE_PARAMETERS)
+!
+        qroot=MPI_COMM_STRNG.ne.MPI_COMM_NULL
+        qslave=((MPI_COMM_LOCAL.ne.MPI_COMM_NULL).and.SIZE_LOCAL.gt.1)
+        qprint=qroot.and.ME_STRNG.eq.0
+!
+        if (.not.ftsm_scaledist.or.  &
+&           qkpara_angstrom.or.qkperp_angstrom.or.qdperp_angstrom.or.qdperpf_angstrom.or.qdwin_angstrom) then
+! warn if user is attempting to run with 1 replica; in this case aollective string operations, 
+! such as computing arclength, curvature, repa, are not defined (okay, they are defined but have trivial meaning)
+         if (nstring.le.1) then
+          __WRN(whoami, ' SCALING IN ANGTROMS REQUIRES COMPUTING ARCLENGTH, WHICH IS UNDEFINED FOR 1-REPLICA STRING. (YOU SHOULD STOP HERE).')
+         endif
+!
+         call ftsm_compute_arcl_curv(linear)
+!write(0,*) 'DARCL : ', ds ! aa
+         zval = sum(ds) / ( max( nstring-1 , 1 ) ) * sqrt3 ; ! sqrt(3) makes the arclength correspond to the RMSD in 3D
+! broadcast zval to slaves
+         if (qslave) then
+          __BROADCAST_LOCAL(zval, 1, mpifloat)
+         endif
+        else
+         zval = one ! work in units of ds ; this line is not needed ; included for clarity
+        endif ! ftsm_scaledist
+!
+        if (.not.ftsm_scaledist) then ! need to compute reference distance from string length
+          if (nstring.gt.1) then
+           if (mestring.eq.0) then ; dpar0=zero ; else ; dpar0 = zval ; endif ; dpar0i=dpar0 ! left endpoint uses one-sided tangent (see ftsm14 paper)
+           if (qprint) then ; write(_MSGBUF,6713) whoami, ftoa(zval)
+           __PRINT(_MSGBUF) ;
+           endif
+ 6713 format(A,' AVERAGE COMPUTED ARCLENGTH INCREMENT IS ',A,' ANG.')
+           ftsm_reset_dpar0f=.true.
+          else
+           __WRN(whoami, ' SCALING DPAR TO ANGTROMS REQUIRES ARCLENGTH, WHICH IS UNDEFINED FOR 1-REPLICA STRING. NO SCALING APPLIED.')
+          endif ! nstring
+!
+        else ! options valid for scaled version with a lengthscale specified in angstrom
+          zval=two*zval ! gives 2L/(M-1) , i.e. || q-p || (note : if no angstrom scalings are requested, zval will be unused)
+!
+          if (qkpara_angstrom) then
+           fname='PARALLEL FORCE CONSTANT (KPAR)' ; kpara = kpara_ * zval**2 ;
+           if (qprint) then ; write(_MSGBUF,6712) whoami, trim(fname), ftoa(zval), ftoa(kpara)
+           __PRINT(_MSGBUF) ;
+           endif
+          else ! scale length to 2DS from (1DS at input)
+           kpara=kpara_*four
+          endif
+          if (qkperp_angstrom) then
+           fname='PERPENDICULAR FORCE CONSTANT (KPRP)' ; kperp = kperp_ * zval**2 ;
+           if (qprint) then ; write(_MSGBUF,6712) whoami, trim(fname), ftoa(zval), ftoa(kperp)
+           __PRINT(_MSGBUF)
+           endif
+          else
+           kperp=kperp_*four
+          endif
+          if (qdperp_angstrom) then
+           fname='REFERENCE TUBE WIDTH (DPRP)' ; dperp0 = dperp0_ / zval ; dperp0i = dperp0i_ / zval ;
+           if (qprint) then ; write(_MSGBUF,6712) whoami, trim(fname), ftoa(zval), ftoa(dperp0)
+           __PRINT(_MSGBUF)
+           endif
+          else
+           dperp0=dperp0_*half; dperp0i=dperp0i_*half
+          endif
+          if (qdperpf_angstrom) then
+           fname='FINAL REFERENCE TUBE WIDTH (DPRPF)' ; dperp0f = dperp0f_ / zval ;
+           if (qprint) then ; write(_MSGBUF,6712) whoami, trim(fname), ftoa(zval), ftoa(dperp0f)
+           __PRINT(_MSGBUF)
+           endif
+          else
+           dperp0f=dperp0f_*half
+          endif
+          if (qdwin_angstrom) then
+           fname='WIDTH OF HALF-HARMONIC WINDOW POTENTIAL (DWIN)' ; dwin = dwin_ / zval ;
+           if (qprint) then ; write(_MSGBUF,6712) whoami, trim(fname), ftoa(zval), ftoa(dwin)
+           __PRINT(_MSGBUF)
+           endif
+          else
+           dwin=dwin_*half
+          endif
+        endif ! .not. ftsm_scaledist
+!
+! NOTE that the scaling is actually by 2 x ds ; however, for the sake of simplicity of input
+! it is considered per ds, and converted here
+ 6712 format(A,' SCALING ',A,' BY INTER-REPLICA DS (',A,' ANG). NEW VALUE IS ',A)
+      end subroutine ftsm_scale_parameters
 !==========================================================================================
 __CHARMM_ONLY##ENDIF
       end module ftsm
