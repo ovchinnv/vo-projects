@@ -1,0 +1,159 @@
+#!/bin/bash
+
+# source utility functions :
+source ftsm.sh
+
+# preliminaries
+vmd -dispdev text < alist.vmd >/dev/null #generate ftsm atom indices
+# data directory
+datadir=ftsdata
+mkdir -p $datadir 
+outputbase=diala.fts
+
+# string replicas
+brep=0  # first replica index
+erep=15 # last replica index
+
+# replica exchange
+qrex=1 # whether replica exchange is on
+nsteps=1000 ; # also, replica exchange frequency ( if on )
+freq=1000 ; # output frequency
+numrun=500 ; # also, number of exchange attempts ( if on )
+temprex=300 ; # replica exchange temperature (should be the same as the simulation temperature, unless you cheat)
+rexlog=${outputbase}.rex.log ;
+#
+#==============================================================================
+#==============================================================================
+# erase replica exchange log
+if [ $qrex -eq 1 ]; then
+ if [ -f $rexlog ]; then
+  mv $rexlog ${rexlog}.old
+ fi
+fi
+#
+#outer loop over number of runs
+for irun in `seq 1 $numrun`; do 
+ echo " ===> Run $irun of $numrun"
+ echo " ========================="
+#if [ 0 -eq 1 ]; then
+ for irep in `seq $brep $erep`; do
+# run each string replica
+# prepare input file from template
+  config=${irep}.in
+  output=${irep}.out
+  pluginfile=diala.fts${irep}
+  pluginout=${pluginfile}.out
+
+# replica parameters
+  dpar=`dpar     $irep $brep $erep`
+  ileft=`ileft   $irep $brep $erep`
+  iright=`iright $irep $brep $erep`
+
+# additional pars for replica exchange
+# left exchange:
+  dleft=`dpar   $ileft $brep $erep`
+  illeft=`ileft $ileft $brep $erep`
+# right exchange
+  dright=`dpar    $iright $brep $erep`
+  irright=`iright $iright $brep $erep`
+
+# prepare string method config file
+  cp -f template.sm $pluginfile
+
+  update $pluginfile orient  "atomid `cat orient.dat`"
+  update $pluginfile forcing "atomid `cat forced.dat`"
+
+  update $pluginfile datadir
+
+  update $pluginfile dpar
+  update $pluginfile ileft
+  update $pluginfile irep
+  update $pluginfile iright
+  update $pluginfile dleft
+  update $pluginfile illeft
+  update $pluginfile dright
+  update $pluginfile irright
+
+  touch $datadir/force$irep.dat
+  touch $datadir/proj$irep.dat
+  touch $datadir/ftse$irep.dat
+
+# prepare acemd config
+  outputname=${outputbase}${irep}
+  if [ $irun -gt 1 ]; then
+   echo "bincoordinates $datadir/$outputname.coor" > $config
+   echo "binvelocities  $datadir/$outputname.vel" >> $config
+  else # simply erase
+   echo -n > $config
+  fi
+
+  cat template >> $config
+  update $config coordinates "sm0k\/diala22_zts_$irep.pdb"
+  update $config input $pluginfile
+  update $config log $pluginout
+  update $config irep
+  update $config nsteps $nsteps
+  update $config freq $freq
+  update $config outputname "$datadir\/$outputname"
+
+# run calculation
+  echo "  ===> Running replica #$irep ..."
+
+  acemd $config > $output
+  if [ -f output.dcd ]; then 
+   mv output.dcd $datadir/$outputname.dcd # perhaps should use catdcd to join all dcds
+  fi
+ done
+#fi
+#
+ if [ $qrex -eq 1 ] ; then
+# perform replica exchange :
+# (1) decide which way to try exchange:
+  xdir=`ftsm_rex_dir`
+# loop over all exchange pairs
+  ibeg=$((brep + xdir))
+  iend=$((erep - 1))
+  for ifirst in `seq $ibeg 2 $iend` ; do
+   isecond=$((ifirst+1))
+   echo -n "  ===> Attempting replica exchange : $ifirst <==> $isecond :"
+#=================================== read energy file for first replica
+   efile=$datadir/ftse${ifirst}.dat
+   edata=(`cat $efile`);
+# extract energies
+   efirst_par_old=${edata[2]}
+   efirst_prp_old=${edata[3]}
+# (right shift)
+   efirst_par_new=${edata[10]}
+   efirst_prp_new=${edata[11]}
+
+#=================================== read energy file for second replica
+   efile=$datadir/ftse${isecond}.dat
+   edata=(`cat $efile`);
+# extract energies
+   esecond_par_old=${edata[2]}
+   esecond_prp_old=${edata[3]}
+# (left shift)
+   esecond_par_new=${edata[6]}
+   esecond_prp_new=${edata[7]}
+# total energy change :
+   esum="$efirst_par_new + $efirst_prp_new - $efirst_par_old - $efirst_prp_old + $esecond_par_new + $esecond_prp_new - $esecond_par_old - $esecond_prp_old "
+   de=`echo print $esum | python2` # energy difference in kcal/mol
+   echo -n " dE = $de, ";
+# apply metropolis
+   success=`metropolis $de $temprex`
+   echo " accept ? : $success"
+# if move is accepted, replicas exchange simulation restrart files
+   if [ $success -eq 1 ] ; then
+    for ext in coor vel idx xsc ; do
+     mv -f $datadir/${outputbase}${ifirst}.${ext} _tmp_ && \
+     mv -f $datadir/${outputbase}${isecond}.${ext} $datadir/${outputbase}${ifirst}.${ext} && 
+     mv -f _tmp_ $datadir/${outputbase}${isecond}.${ext}
+    done
+# update exchange log
+    echo -e "$ifirst \t $isecond \t $((irun*nsteps))" >> $rexlog
+   fi # success
+  done # over all exchange pairs
+ fi # rex on
+
+done # over all runs
+

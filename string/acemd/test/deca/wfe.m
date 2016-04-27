@@ -32,7 +32,7 @@ if (read)
 
  nwin=32;
 
- nbox =2 % number of statistical samples
+ nbox =1 % number of statistical samples
 
  df=zeros(nwin, ncv, nbox) ; %derivative matrix
 
