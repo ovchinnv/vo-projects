@@ -69,9 +69,9 @@
 #  random=`echo " scale=10 ; $RANDOM/32767" |bc -l`;
   random=`echo "import random; print random.random() " | python2`
   cmd="if ( $dE < 0 ) { print 1 } else { if ( $random <= e(-($dE)/($kboltz*$temp)) ) { print 1 } else { print 0 } }"
-  echo $cmd >> rex.dbg
+#  echo $cmd >> rex.dbg
   success=`echo $cmd | bc -l`
-  echo $success >> rex.dbg
+#  echo $success >> rex.dbg
   echo $success
  }
  
