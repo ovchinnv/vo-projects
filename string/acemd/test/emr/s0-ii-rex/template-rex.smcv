@@ -1,0 +1,57 @@
+!/charmm
+output {
+ minwarnlev=-1 ! more permissive warnings
+}
+
+smcv_init {
+ defer_init_dyna=yes
+ : init maxcv=7 ! 4-component quaternion and three position components
+ : add frame select atomid @{frame1} end
+ : add frame select atomid @{frame2} end
+ : frames read name cv@{pos}.ini.frame ! read initial frame vectors (since they are sticky)
+ : frames fill
+ : frames list
+! orientation quaternion
+ : add quaternion frame1 1 frame2 2 wgt 1 force 10000
+! : set weight 1 all
+! : set force 10000 all
+! position variables : put second diala relative to first
+ : add posi_com frame 1 vector @{vec1} sele atomid @{frame2} end force @{kpos} wgt 1 fbwidth @{fbw1} ! this is the RC
+ : add posi_com frame 1 vector @{vec2} sele atomid @{frame2} end force @{kpos} wgt 1 fbwidth @{fbw2}
+ : add posi_com frame 1 vector @{vec3} sele atomid @{frame2} end force @{kpos} wgt 1 fbwidth @{fbw3}
+ : list
+! : test grad step 0.01
+! read CV coordinates
+ : read name cv@{pos}-@{irestart}.dat col dyna ! cv for restarting (if needed)
+ : read name cv@{pos}-@{irep}.dat     col main ! target cv
+! stats
+ : stat hist hnam @{datadir}/hist@{pos}-@{irep}.dat @{histappend}  - ! cv time series
+        wiav winm @{datadir}/fbwin@{pos}-@{irep} @{windowappend}     ! window averages of cv over FB regions
+
+! dynamics
+ : dyna -
+    rstr reeq 100000 -  ! restrained dynamics 
+    smd -               ! do not reset dyna/old set in the beginning
+    hisf 100 -          ! time slices
+    stat staf @{freq}   ! frequency of statistics output during dynamics
+}
+
+smcv_done {
+! will use this context to compute energies for replica exchange at the end of simulation
+! at this stage, the calculations use the last set coordinates obtained from the plugin
+! re-initialize stats
+ : stat rene renm @{datadir}/sm_ene@{pos}-@{irep}.dat -   ! ftsm restraint energy
+!        hist hnam @{datadir}/smcv_energy@{pos}-1.dat hcol ener
+!===========================
+ : hist add ! will compute current energy via call to calc
+ : stat     ! output energy via statistics call
+!===========================  now change ftsm restraints
+! read the left replica
+ : read name cv@{pos}-@{ileft}.dat col curr ! load into current col to compute energies correctly
+ : hist add
+ : stat
+! read the right replica
+ : read name cv@{pos}-@{iright}.dat col curr ! load into current col to compute energies correctly
+ : hist add
+ : stat
+}
