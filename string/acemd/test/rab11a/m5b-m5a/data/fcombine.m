@@ -4,7 +4,7 @@
 brep=0;
 erep=31;
 
-nsamples=124 ; % number of force samples to take from file (useful if files do not have an equal number of samples)
+nsamples=150 ; % number of force samples to take from file (useful if files do not have an equal number of samples)
 
 basename='force';
 ext='.dat';
