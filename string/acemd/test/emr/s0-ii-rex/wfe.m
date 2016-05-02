@@ -12,7 +12,7 @@ leg={};
 addpath '~/scripts/matlab'; %for xave_
 
 kboltz=1.987191d-3;        % boltzmann constant
-Temp=300;
+Temp=298;
 
 if ~exist('nofig')
  nofig=0;
@@ -24,10 +24,12 @@ end
 
 if (read)
 %%%%%%%%%% process windows
- spos=0 ; %staple position
+ spos=89 ; %staple position
  fbw=0.5; % only applies to the first position component
  nwin=15;
- nbox=3; % number of statistical samples
+% nsamples=4;
+ [status, result]=system('grep "will quit" pmf.log | tail -n1 | awk ''{print $3}'''); nsamples=str2num(result)-1 ;
+ nbox=1; % number of statistical samples
  rcind=5 ; %cv index corresponding to the reaction coordinate
 
  clear df ;
@@ -35,9 +37,15 @@ if (read)
  for j=1:nwin
 
    ncv=7; % quaternion plus position ; only one position component is the RC -- to be singled out later
-%   fname=['fbwin',num2str(spos),'-',num2str(j),'.dat'];
-   fname=['fbwin',num2str(spos),'-',num2str(j),'-1.dat'];
-   d=load(fname) ;
+   fname=['data/fbwin',num2str(spos),'-',num2str(j),'.dat'];
+%   fname=['fbwin',num2str(spos),'-',num2str(j),'-1.dat'];
+   dnew=load(fname) ;
+   if exist('nsamples')
+    d=dnew(1:2*ncv*nsamples,:); % i.e. 2*ncv lines per samples
+   else
+    d=dnew;
+   end
+%
    data=reshape(d,ncv,[])' ;
 %
 % extract the only relevant CV
@@ -56,7 +64,7 @@ if (read)
    end
 % loop over all cvs, and compute PMF derivative
 % first, need the reference position -- open cv.dat file :
-   cvs0 = load(['cv',num2str(spos),'-',num2str(j),'.dat']);
+   cvs0 = load(['us/cv',num2str(spos),'-',num2str(j),'.dat']);
    cvs0 = cvs0(rcind);
    rc(j) = cvs0;
 %
@@ -100,7 +108,7 @@ if (read)
      ibeg=iend+1;
 % solve for FE slope
      f=@(x) xave_s(x)-ddcomb ;
-     g=fzero(f,[-20 20]) ;
+     g=fzero(f,[-50 50]) ;
 % stop if a problem with gamma
      if(isnan(g)) ; error('Cannot find gamma: got NaN'); return ; end
 % compute df from gamma
