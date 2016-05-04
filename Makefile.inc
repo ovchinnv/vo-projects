@@ -69,7 +69,7 @@ TESTMSG=-include $(ROOT)/test.msg
 GLOBALDEPS=$(ROOT)/source.defs $(ROOT)/source.msg 
 GLOBALDEPS+=$(ROOT)/contexts.def $(ROOT)/setcomm.def  $(ROOT)/exec.def
 
-MPI_INCLUDE=-I $(MPI_HOME) # -I $(MPI_HOME)/include -I $(MPI_HOME)/lib
+MPI_INCLUDE=-I $(MPI_HOME) -I $(MPI_HOME)/include -I $(MPI_HOME)/lib
 MPI_LIBS=-L $(MPI_HOME) -L $(MPI_HOME)/lib -lpthread -lmpich -lmpichf90 -lmpl # -lmpi -lmpi_f90 -lmpi_f77 # mpich
 MPI_LIBS=-L $(MPI_HOME) -L $(MPI_HOME)/lib -lpthread -lmpi -lmpi_f90 -lmpi_f77 # older openmpi
 MPI_LIBS=-L $(MPI_HOME) -lmpi -lmpi_mpifh -lmpi_usempif08  # newer openmpi w/ F08
@@ -140,7 +140,7 @@ $(ROOT)/$(NAME).stamp:: $(OBJS) $(MODS) $(HEADS) $(DISTRIB)
 	touch $@
 ####################### GENERIC STAMP RESULTS IN DIFFERENT BEHAVIOR : ####################################
 %.stamp::
-	DIR=$@ ; DIR=$(ROOT)/$${DIR%.*} ; echo $$DIR ; if [ -d $$DIR ] ; then cd $$DIR; $(MAKE) ; fi
+	DIR=$@ ; DIR=$(ROOT)/$${DIR%.*} ; echo $$DIR ; if [ -d $$DIR ] ; then $(MAKE) -C $$DIR ; fi
 ########################## SOURCE CODE #######################
 %.h:%.H $(LOCALDEPS) $(GLOBALDEPS)
 	$(FPP) $(FPPFLAGS) $(DEFS) $(LOCALDEFS) $(GLOBALMACROS) $(LOCALMACROS) -P $< > $@
