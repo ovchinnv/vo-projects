@@ -19,6 +19,8 @@ FC=gfortran
 FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno
 #MPI_HOME=/usr/local/mpich2-gnu
 MPI_HOME=/usr/lib/openmpi
+OMP=-D__OMP -fopenmp
+LOMP=-lgomp
 #---PATHSCALE
 #FC=pathf95
 #FFLAGS=-Ofast -fno-math-errno -extend-source -INLINE -c -ipa
@@ -35,7 +37,7 @@ DEFS+=-Dint=integer -Dfloat=real*8 -Dbool=logical -Dmpiint=MPI_INTEGER -Dmpifloa
      -Dmpibool=MPI_LOGICAL -Dint1="integer(kind=KIND('a'))" -D__RCOMP -D__DMOL -D__CHES -D__EDDIE -D__$(FORTRAN_COMPILER) \
      -Dint4mpi=integer -D__TIMER  -D__PARALLEL #-D__DEBUG -D__PATHSCALE #-Dint4mpi="integer(KIND=MPI_INTEGER_KIND)" 
 
-STRING_FLAGS=-D__STRING_SERIAL -D__ACEMD -D__NAMD
+STRING_FLAGS=-D__STRING_SERIAL -D__ACEMD -D__NAMD $(OMP)
 DEFS+=$(STRING_FLAGS)
 #
 # preprocess with C++ style preprocessor
@@ -47,7 +49,7 @@ AFLAGS=rvcs
 LD=$(FC)
 #LDFLAGS=-no-ipo -static -Bstatic #-ipo
 #LDFLAGS=-static -Bstatic -ipo
-LDFLAGS=-dynamic -Bdynamic #-Wl,-z,defs # to list unresolved symbols during linking
+LDFLAGS=-dynamic -Bdynamic $(LOMP) #-Wl,-z,defs # to list unresolved symbols during linking
 #LDFLAGS=-static -ipa
 
 #EXTRA_LIBS+=-lgfortran
@@ -69,7 +71,7 @@ TESTMSG=-include $(ROOT)/test.msg
 GLOBALDEPS=$(ROOT)/source.defs $(ROOT)/source.msg 
 GLOBALDEPS+=$(ROOT)/contexts.def $(ROOT)/setcomm.def  $(ROOT)/exec.def
 
-MPI_INCLUDE=-I $(MPI_HOME) # -I $(MPI_HOME)/include -I $(MPI_HOME)/lib
+MPI_INCLUDE=-I $(MPI_HOME) -I $(MPI_HOME)/include -I $(MPI_HOME)/lib
 MPI_LIBS=-L $(MPI_HOME) -L $(MPI_HOME)/lib -lpthread -lmpich -lmpichf90 -lmpl # -lmpi -lmpi_f90 -lmpi_f77 # mpich
 MPI_LIBS=-L $(MPI_HOME) -L $(MPI_HOME)/lib -lpthread -lmpi -lmpi_f90 -lmpi_f77 # older openmpi
 MPI_LIBS=-L $(MPI_HOME) -lmpi -lmpi_mpifh -lmpi_usempif08  # newer openmpi w/ F08
@@ -140,7 +142,7 @@ $(ROOT)/$(NAME).stamp:: $(OBJS) $(MODS) $(HEADS) $(DISTRIB)
 	touch $@
 ####################### GENERIC STAMP RESULTS IN DIFFERENT BEHAVIOR : ####################################
 %.stamp::
-	DIR=$@ ; DIR=$(ROOT)/$${DIR%.*} ; echo $$DIR ; if [ -d $$DIR ] ; then cd $$DIR; $(MAKE) ; fi
+	DIR=$@ ; DIR=$(ROOT)/$${DIR%.*} ; echo $$DIR ; if [ -d $$DIR ] ; then $(MAKE) -C $$DIR ; fi
 ########################## SOURCE CODE #######################
 %.h:%.H $(LOCALDEPS) $(GLOBALDEPS)
 	$(FPP) $(FPPFLAGS) $(DEFS) $(LOCALDEFS) $(GLOBALMACROS) $(LOCALMACROS) -P $< > $@

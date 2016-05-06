@@ -1,0 +1,74 @@
+! charmm
+! input file for Struna Plugin via ACEMD
+!
+output {
+ minwarnlev=-1
+}
+
+ftsm_init {
+ defer_init_dyna=yes ! runs initialization stack at first step of dynamics, when coordinates are available
+!=======================
+ : init
+!======================= atom selection :
+! includes are intended to be processed by the c preprocessor (cpp)
+#include "ftsm_rab_select"
+!========================
+ : list                      ! list atoms
+!========================
+ : set mass on      ! turn on mass weighting in RMSD computation and orientation
+ : set kpar 1.63    ! force constant for hyperplanes restraints (low to match charmm calc)
+ : set dpar @{dpar} ! location of hyperplane (different for internal vs. endpoints)
+ : set kprp 1.63    ! default is 0 (no perpendicular restraint) ; set to match charmm calc)
+ : set dprp 7       ! default is 1 (unscaled) ; set to match charmm calc
+ : set proj on      ! forces restrain distance to hyperplane, but not position in the hyperplane (this is needed to compute 1D FE)
+! read string coords
+ : read txt name @{stringfile} from @{ileft}  col left
+ : read txt name @{stringfile} from @{irep}   col center
+ : read txt name @{stringfile} from @{iright} col right
+
+ : test grad ! step 0.01
+! write string coords if needed (e.g. if they are changing)
+! : write txt name fts@{irep}.txt col center
+! : write txt name fts@{ileft}.txt col left
+! : write txt name fts@{iright}.txt col right
+
+! statistics output
+ : stat forc fcnm @{datadir}/force@{irep}.dat @{forceappend}  ! output forces
+!        dist dnam @{datadir}/proj@{irep}.dat @{distappend}    ! projection variables
+
+ : dyna -
+    rstr -            ! restrained dynamics 
+    stat staf 10000   ! statistics output
+
+}
+
+ftsm_done {
+! will use this context to compute energies for replica exchange at the end of simulation
+! at this stage, the calculations use the last set coordinates obtained from the plugin
+! re-initialize stats
+ : stat rene renm @{datadir}/ftse@{irep}.dat    ! ftsm restraint energy
+!===========================
+ : calc ! compute ftsm variables
+ : stat ! output energy via statistics call
+!===========================  now change ftsm restraints
+! move to the left
+ : copy center right ! center becomes the right replica
+ : copy left center  ! left becomes the center replica
+! read the left replica
+ : read txt name @{stringfile} from @{illeft} col left
+ : set dpar @{dleft} ! recall that dpar is different for boundary vs inner points
+ : calc
+ : stat
+! move to the right (two positions)
+ : copy right left
+! read the remaining replicas
+ : read txt name @{stringfile} from @{irep}    col left
+ : read txt name @{stringfile} from @{irright} col right
+ : set dpar @{dright}
+ : calc
+ : stat
+!
+! NOTES : if we are natively at the  left endpoint, then a move to the  left will result in dpar=0 and dprp=0
+!       : if we are natively at the right endpoint, then a move to the right will result in dpar=0 and dprp=0
+}
+
