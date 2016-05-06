@@ -50,13 +50,13 @@
 # print assignment
 #  echo ": $p <= $v"
 # build sed command
-  scmd="s/@{$p}/$v/g"
+  scmd="s|@{$p}|$v|g"
 #  echo $scmd
 # execute substitution command
   eval 'sed -i "$scmd" $f'
  }
 #======================================================================================================================
- function ftsm_rex_dir() { # generates randomly dir=0 or 1 for replica exchange direction (i.e. replica n+dir exchanges with replica n+dir+1 ; n=n+2)
+ function sm_rex_dir() { # generates randomly dir=0 or 1 for replica exchange direction (i.e. replica n+dir exchanges with replica n+dir+1 ; n=n+2)
   xdir=$((RANDOM%2)) ; #returns either 0 or 1 
   echo $xdir
  }
@@ -76,20 +76,17 @@
  }
 #======================================================================================================================
  function run_acemd() { #implement as a function to detect crashes
+  config=$1
+  output=$2
   qok=0;
   while [ 1 ] ; do
-   acemd $config > $output
-   if [ $? -ne 0 ];  then
-    echo " ===> ACEMD execution interrupted due to errors during run. Abort."
-    exit
+   acemd $config >& $output
+   qunstable=`tail $output | grep -i unstable | wc -m`
+   if [ "$qunstable" -gt "0" ]; then
+    echo Simulation became unstable. Repeating this run.
+    mv $output ${output}.crash
    else
-    qunstable=`tail $output | grep -i unstable | wc -m`
-    if [ "$qunstable" -gt "0" ]; then
-     echo Simulation became unstable. Repeating this run.
-     mv $output ${output}.crash
-    else
-     return
-    fi
+    return
    fi
   done
  }
