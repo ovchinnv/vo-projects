@@ -29,6 +29,7 @@ __CHARMM_ONLY##IF STRINGM
       private ftsm_init
       private ftsm_evolve
       private ftsm_repl_exchange
+      private ftsm_scale_parameters
 #if (defined(__ACEMD) || defined(__NAMD))
       public ftsm_exec
       public ftsm_done
@@ -2604,28 +2605,28 @@ __MPI_ONLY     &                    MPI_COMM_STRNG, stat, ierror)
          if (qendpoint) then ; fac=half ; else ; fac=one  ; endif
 ! compare energies (NOTE: in this version of REX, I am sending reference values, NOT coordinates)
          if (window_on) then ! NOTE: REX will of course destroy the kinetics, which is probably why you are using windowed restraints in the first place
-          dw=rex_string_data_new%dwin*(1.5d0-fac)                            ! half dwin for inner points b/c dwin in units of d
-          ddp=dpar-rex_string_data_new%dpar0 + 0.5*dw
+          dw=rex_string_data_new%dwin/fac                       ! converted to local metric (1D for endpoints; untouched [2D] for inner pts.)
+          ddp=dpar-rex_string_data_new%dpar0 + half*dw
           ddm=ddp-dw
           dE_me = rex_string_data_new%kpara * fac * fac * ( max(ddm,zero) + min(ddp,zero) )**2
          else
 !    new energy
           dE_me = rex_string_data_new%kpara * fac * fac * ( dpar-rex_string_data_new%dpar0 )**2 ! scale down the force constant of endpoints (one for d, one for gradients)
          endif ! window_on
-         dE_me = dE_me + rex_string_data_new%kperp * fac * max ( fac * dperp - rex_string_data_new%dperp0, zero )**2 ! ignore negative values; dperp0 criterion in inner-replica d-metric
+         dE_me = dE_me + rex_string_data_new%kperp * max ( fac * dperp - rex_string_data_new%dperp0, zero )**2 ! ignore negative values; dperp0 criterion in inner-replica d-metric
 !    old energy
          qendpoint=(mestring.eq.0.or.mestring.eq.nstring-1)
          if (qendpoint) then ; fac=half ; else ; fac=one  ; endif
 !
          if (window_on) then
-          dw=dwin*(1.5d0-fac)                            ! half dwin for inner points b/c dwin in units of d
+          dw=dwin/fac                                           ! converted to local metric (1D for endpoints; untouched [2D] for inner pts.)
           ddp=dpar_ori-dpar0 + 0.5*dw
           ddm=ddp-dw
           dE_me = dE_me - kpara * fac * fac * ( max(ddm,zero) + min(ddp,zero) )**2
          else
           dE_me = dE_me - kpara * fac * fac * ( dpar_ori-dpar0 )**2
          endif ! window on
-         dE_me = dE_me - kperp * fac * max   ( fac * dperp_ori - dperp0, zero )**2
+         dE_me = dE_me - kperp * max ( fac * dperp_ori - dperp0, zero )**2 ! 5/16 removed "fac" from kperp multiplier -- looks like an old bug (above, also)
 
         else ! .not.  proj_on
          dE_me = zero ; 
