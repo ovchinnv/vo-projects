@@ -1,7 +1,7 @@
 % 4.09: caculate work from the cv.dat and force.dat files
 % The results show that the two methods of computing work agree (i.e. this, external, and the one in CHARMM, internal)
 
-run fcombine.m
+run fcombine;
 
 if ~exist('nofig')
  nofig=0;
@@ -15,12 +15,12 @@ end
 % for serial string, first combine force files from individual replicas
 %run fcombine;
 
-fnames={'force.dat'}
+fnames={'force.dat'};
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 if (~exist('read'))
  read=1;
 end
-read=1
+%read=1;
 if (read==1)
 %
 clear data;
@@ -88,7 +88,7 @@ workp(:,:)=workp(:,:)-ones(m,1)*workp(1,:); % reset to zero
 ie   =niter;
 ib   =1;
 %ib=round(niter * 0.5);
-nbox =4;
+nbox =1;
 bsize=ceil( (ie-ib+1)/nbox);
 
 lw=1.;
@@ -135,7 +135,7 @@ xlim([0 1]);
 %ylim([0 9]);
 set(gcf, 'paperpositionmode', 'auto');
 %print(gcf, '-dpsc', 'fe_contrib.eps');
-print(gcf, '-dpsc', 'fe.eps');
+%print(gcf, '-dpsc', 'fe.eps');
 %
 %
 return
