@@ -1,0 +1,81 @@
+* protein solvation component
+*
+
+stream readpsf36.str
+
+! have to hardwire name b/c capitalization
+read namd file "restart/fip2r0_@IREP.coor"
+
+! delete certain things
+delete atom sele segid FIP* .or. segid ION* end
+rename segid OWAT sele segid WAT end
+
+set buf 11.5  ! solvation radius
+
+define solute select segid RAB .or. segid MG* .or. segid GTP .or. segid FIP* end !  exclude crystal waters from box dimensioning
+coor orie select solute end ! align 
+coor stat select solute end ! select the active site region
+
+! compute center of water box
+calc xmin = ?xmin
+calc ymin = ?ymin 
+calc zmin = ?zmin 
+calc xmax = ?xmax
+calc ymax = ?ymax 
+calc zmax = ?zmax 
+
+!include existing water in solvation
+define solute select segid RAB .or. segid GTP .or. segid MG* .or. segid FIP* .or. segid *WAT end
+
+nobomb
+set overlap 2.5
+!stream wbox.str
+stream wcube.str
+rename segid wat select segid w* end ! rename all waters
+join renu owat wat ! mrege old and new water segments
+
+!goto write ! skip minimization
+update atom cutnb 15 ctonnb 10 ctofnb 12 vdw vshift fshift cdie
+! in case solute definition changes: redefine
+define solute select segid RAB .or. segid GTP .or. segid MG* .or. segid FIP* .or. segid *WAT end
+
+cons harm force 30 select solute .and. .not. hydrogen end
+mini abnr nstep 10
+cons harm force 20 select solute .and. .not. hydrogen end
+mini abnr nstep 10
+cons harm force 10 select solute .and. .not. hydrogen end
+mini abnr nstep 10
+cons harm force 1 select solute .and. .not. hydrogen end
+mini abnr nstep 10
+
+label skipmini
+energy
+
+label write
+
+write psf card name @{opsffile}.psf
+write coord card name @{ocorfile}.cor
+write coor pdb name @{ocorfile}.pdb
+* solvated in a box of dimension
+* xmin=@xmi ymin=@ymi zmin=@zmi 
+* xmax=@xma ymax=@yma zmax=@zma 
+*
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+if @?boxname eq 0 set boxname boxsize.str
+
+open write card unit 66 name @boxname
+write title unit 66
+** solvated in an orthorhombic box of the following dimensions
+* set a  @xl
+* set b  @yl
+* set c  @zl
+close unit 66
+
+!!!! STOP HERE !!!!!!!!!!!
+
+goto kill
+
+!!!!!!!!! FINISHED !!!!!!!!!!!!
+
+label kill
+stop

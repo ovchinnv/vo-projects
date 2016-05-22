@@ -6,7 +6,7 @@ erep=31;
 
 %nsamples=268 ; % number of force samples to take from file (useful if files do not have an equal number of samples)
 [status, result]=system('grep "will quit" ../fts.log | tail -n1 | awk ''{print $3}''') ; nsamples=str2num(result)-1 ; % hack to get automatically
-
+nsamples=15
 
 basename='force';
 ext='.dat';

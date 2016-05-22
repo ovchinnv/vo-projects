@@ -1,0 +1,222 @@
+#!/bin/bash
+#
+# openmp thread parameters
+export OMP_NUM_THREADS=1
+export OMP_SCHEDULE=static
+export OMP_NESTED=false
+# load utility functions :
+source struna.sh
+#
+# preliminaries
+# check that the necessary programs exist
+assert_exists "acemd"
+assert_exists "calc"
+assert_exists "catdcd"
+assert_exists "bc"
+assert_exists "python2"
+
+# output directories
+datadir=data
+dcddir=scratch
+#
+mkdir -p $datadir
+mkdir -p $dcddir
+#
+count=1 # run number
+#================ MD configuration parameters :
+psffile=struc/rab11w-x.psf
+pdbfile=set_later # this is needed by ACEMD
+cutoff=9
+switchdist=7.5
+pmefreq=2
+hmass=4     # scaling of H mass for faster integration
+dt=later
+shake=all
+restraints=off     # harmonic positional restraints
+restraintfile=none # harmonic reference positions file
+thermostat=on
+friction=1
+temperature=298
+barostat=on
+sizex=71 # default cell size
+sizey=71
+sizez=71
+stringfile=fip2rw-o_ftsm.txt # ftsm restart file
+#
+#================== string replica parameters
+#
+brep=0  # first replica index
+erep=31 # last replica index
+outputbase=rab_
+
+# replica exchange parameters :
+qrex=1 # whether replica exchange is on
+nsteps=10000 ; # also, replica exchange frequency ( if on )
+freq=10000 ; # output frequency
+firstrun=2 ; # index of run ; facilitates restarting
+numrun=499 ; # also, number of exchange attempts ( if on )
+# for anealing in replica exchange temp
+temprex0=995 ;
+#temprex0=$temperature ; #initial rex temp
+temprex1=$temperature ; # final rex temp
+dtemprex=5 ; # temp increment/decrement
+rexlog=${outputbase}${count}.rex.log
+#
+#==============================================================================
+# erase replica exchange log
+if [ $qrex -eq 1 ]; then
+ if [ -f $rexlog ]; then
+  mv $rexlog ${rexlog}.old
+ fi
+ temprex=$temprex0 ;# initialize replica exchange annealing
+fi
+#
+#outer loop over number of runs
+lastrun=$((firstrun+numrun-1))
+for irun in `seq $firstrun $lastrun`; do 
+ echo " ===> Run $irun (will quit after $lastrun) "
+ echo " ========================="
+#if [ 0 -eq 1 ]; then
+# for irep in `seq $brep $erep`; do
+ for irep in `seq 0 $erep`; do
+# run each string replica
+# prepare input file from template
+  config=${irep}.in
+  output=${irep}.out
+  pluginfile=rab11.fts${irep}
+  pluginout=${pluginfile}.out
+
+# replica parameters
+  dpar=`dpar     $irep $brep $erep`
+  ileft=`ileft   $irep $brep $erep`
+  iright=`iright $irep $brep $erep`
+
+# additional pars for replica exchange
+# left exchange:
+  dleft=`dpar   $ileft $brep $erep`
+  illeft=`ileft $ileft $brep $erep`
+# right exchange
+  dright=`dpar    $iright $brep $erep`
+  irright=`iright $iright $brep $erep`
+
+# prepare acemd config files
+# different behavior on first run :
+  outputname=${outputbase}${count}_${irep}
+#
+  echo -n > $config
+  if [ $irun -gt 1 ]; then
+   dt=4
+   outputprev=${outputname} # use the same coordinate files
+   echo "bincoordinates $dcddir/$outputprev.coor">> $config
+   echo "binvelocities  $dcddir/$outputprev.vel" >> $config
+   echo "extendedsystem $dcddir/$outputprev.xsc" >> $config
+   ministeps=0
+   forceappend=fcap # append to stat files
+   distappend=dapp
+  else
+   dt=4
+#   sizex=`grep -i "set a" struc/temp/box${irep}.str | awk '{print $3 + 0}'`
+#   sizey=`grep -i "set b" struc/temp/box${irep}.str | awk '{print $3 + 0}'`
+#   sizez=`grep -i "set c" struc/temp/box${irep}.str | awk '{print $3 + 0}'`
+#   outputprev=${outputbase}$((count-1))_${irep} # restart from prevous batch
+#   echo "bincoordinates $dcddir/$outputprev.coor" > $config
+#   echo "binvelocities  $dcddir/$outputprev.vel" >> $config
+#   echo "extendedsystem $dcddir/$outputprev.xsc" >> $config
+   ministeps=20 # optional mini
+   forceappend="" # do not append to statistics files
+   distappend=""
+  fi
+
+# for string method config file
+  cpp -P template.sm > $pluginfile # use cpp to process includes
+  for var in datadir stringfile dpar ipar ileft irep iright dleft illeft dright irright forceappend distappend freq; do
+    update $pluginfile $var
+  done
+
+# for md config file
+  pdbfile=struc/temp/rab11w-o_${irep}ndm.pdb # this is also the starting coordinate file
+#
+  cat template >> $config
+  update $config ftsinput $pluginfile
+  update $config ftslog $pluginout
+  for var in psffile pdbfile dt hmass shake temperature cutoff switchdist pmefreq thermostat barostat friction restraints restraintfile sizex sizey sizez ministeps \
+             irep nsteps freq ; do
+   update $config $var
+  done
+
+  update $config outputname "$dcddir\/$outputname"
+####### run calculation
+  echo "  ===> Running replica #$irep ..."
+#
+  run_acemd $config $output # implement this as a function so that crashes can be detected
+####### save dcd file
+  if [ -f output.dcd ]; then 
+   dcdfile=$dcddir/$outputname.dcd
+# overwrite dcd to save space
+#  mv output.dcd $dcddir/$outputname.dcd 
+# append to running dcd
+   if [ ! -f $dcdfile ] || [ $irun -eq 1 ]; then
+    mv -f output.dcd $dcdfile
+   else
+    catdcd -o temp.dcd $dcdfile output.dcd >/dev/null
+    mv -f temp.dcd $dcdfile
+    rm -f output.dcd
+   fi
+  fi
+# save dcd
+#exit
+ done
+#fi
+#
+ if [ $qrex -eq 1 ] ; then
+# perform replica exchange :
+# (1) decide which way to try exchange:
+  xdir=`sm_rex_dir`
+# loop over all exchange pairs
+  ibeg=$((brep + xdir))
+  iend=$((erep - 1))
+  for ifirst in `seq $ibeg 2 $iend` ; do
+   isecond=$((ifirst+1))
+   echo -n "  ===> Attempting replica exchange : $ifirst <==> $isecond :"
+#=================================== read energy file for first replica
+   efile=$datadir/ftse${ifirst}.dat
+   edata=(`cat $efile`);
+# extract energies
+   efirst_par_old=${edata[2]}
+   efirst_prp_old=${edata[3]}
+# (right shift)
+   efirst_par_new=${edata[10]}
+   efirst_prp_new=${edata[11]}
+
+#=================================== read energy file for second replica
+   efile=$datadir/ftse${isecond}.dat
+   edata=(`cat $efile`);
+# extract energies
+   esecond_par_old=${edata[2]}
+   esecond_prp_old=${edata[3]}
+# (left shift)
+   esecond_par_new=${edata[6]}
+   esecond_prp_new=${edata[7]}
+# total energy change :
+   esum="$efirst_par_new + $efirst_prp_new - $efirst_par_old - $efirst_prp_old + $esecond_par_new + $esecond_prp_new - $esecond_par_old - $esecond_prp_old "
+   de=`echo print $esum | python2` # energy difference in kcal/mol
+   echo -n " dE = $de, ";
+# apply metropolis
+   success=`metropolis $de $temprex`
+   echo " T=$temprex,  accept ? : $success"
+# if move is accepted, replicas exchange simulation restart files
+   if [ $success -eq 1 ] ; then
+    for ext in coor vel idx xsc ; do
+     mv -f $dcddir/${outputbase}${count}_${ifirst}.${ext} _tmp_
+     mv -f $dcddir/${outputbase}${count}_${isecond}.${ext} $dcddir/${outputbase}${count}_${ifirst}.${ext}
+     mv -f _tmp_ $dcddir/${outputbase}${count}_${isecond}.${ext}
+    done
+# update exchange log
+    echo -e "$ifirst \t $isecond \t $((irun*nsteps))" >> $rexlog
+   fi # success
+  done # over all exchange pairs
+# update rex temperature
+  temprex=`calc "if ($temprex1 > $temprex0) { t = min($temprex1, $temprex + abs($dtemprex)) } else { t = max($temprex1, $temprex - abs($dtemprex)) } ; print t"`
+ fi # rex on
+
+done # over all runs
