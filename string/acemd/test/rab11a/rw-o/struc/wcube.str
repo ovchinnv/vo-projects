@@ -1,0 +1,138 @@
+* script to create a water box of prescribed dimensions; i.e. to solvate a protein
+*
+! NAMES WAT* must not be taken
+!
+!
+if @?toppar .ne. 0 goto skiptop ! skip topology reading
+
+if @?toppar  eq 0 set toppar ~/charmm/c33b1/toppar
+!open unit 1 read form name @toppar/top_all27_prot_na.rtf        ! topology 
+!open unit 3 read form name @toppar/par_all27_prot_na.prm        ! parameter
+!read rtf card unit 1
+!read param card unit 3
+stream @toppar/water_and_ions.str
+label skiptop
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+if @?buf eq 0 set buf 10 ! buffer region on each side
+if @?overlap eq 0 set overlap 2.8
+if @?xmin eq 0 set xmin -10
+if @?ymin eq 0 set ymin -10
+if @?zmin eq 0 set zmin -10
+if @?xmax eq 0 set xmax  10
+if @?ymax eq 0 set ymax  10
+if @?zmax eq 0 set zmax  10
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+! read initial water box (216 molecules)
+read sequ tip3 216
+generate wat0 noangle nodihe
+stream read-watbox.str ! this script written by nilssen
+rename segid w0 select segid wat0 end
+set box 18.856  ! size of cubic water box
+
+calc xmi = @xmin - @buf 
+calc xma = @xmax + @buf 
+calc ymi = @ymin - @buf 
+calc yma = @ymax + @buf 
+calc zmi = @zmin - @buf 
+calc zma = @zmax + @buf 
+!
+calc xl = ( @xma - @xmi ) ! diameter
+calc yl = ( @yma - @ymi ) ! diameter
+calc zl = ( @zma - @zmi ) ! diameter
+!
+!************ make into a cube
+set l @xl
+if  @yl .gt. @l  set l @yl 
+if  @zl .gt. @l  set l @zl 
+calc xmi = @xmi - 0.5 * ( @l - @xl )
+calc xma = @xma + 0.5 * ( @l - @xl )
+calc ymi = @ymi - 0.5 * ( @l - @yl )
+calc yma = @yma + 0.5 * ( @l - @yl )
+calc zmi = @zmi - 0.5 * ( @l - @zl )
+calc zma = @zma + 0.5 * ( @l - @zl )
+set xl @l
+set yl @l
+set zl @l
+!****************** CUBE ******************
+!
+calc nx = int (@xl/@box + 1 )
+calc ny = int (@yl/@box + 1 )
+calc nz = int (@zl/@box + 1 )
+
+calc nbox = @nx*@ny*@nz - 1
+replicate w nrep @nbox select segid w0 end ! duplicate waters
+! move boxes around
+
+! goto mama
+set index 0
+set i 0
+label mx
+ set j 0
+ set k 0
+ label my
+  set k 0
+  label mz
+
+   calc xdisp = ( @i * @box + @xmi + @box/2 ) ! move 
+   calc ydisp = ( @j * @box + @ymi + @box/2 ) ! move 
+   calc zdisp = ( @k * @box + @zmi + @box/2 ) ! move 
+
+   scalar X add @xdisp select segid w@index end
+   scalar Y add @ydisp select segid w@index end
+   scalar Z add @zdisp select segid w@index end
+  
+   incr index by 1
+   
+   incr k by 1
+   if @k lt @nz -
+  goto mz
+  incr j by 1
+  if @j lt @ny -
+ goto my
+ incr i by 1
+ if @i lt @nx -
+goto mx
+!
+replica reset
+!goto return
+label mama
+
+! delete molecules overlapping with solute
+delete atom select .byres. (segid w* .and. resname TIP3 .and. type OH2 .and. -
+                           ( (solute .and. .not. (hydrogen .or. lone) ) .around. @overlap ) ) end
+
+delete atom select .byres. (segid *w* .and. resname TIP3 .and. type OH2 .and. - ! two stars delete xwat also
+(  property x .lt. @xmi .or. property x .gt. @xma .or. -
+   property y .lt. @ymi .or. property y .gt. @yma .or. -
+   property z .lt. @zmi .or. property z .gt. @zma ) ) end
+
+!goto return
+
+!renumber segments: the tricks below are necessary in case there are segments that have been deleted completely
+bomblev -2
+calc ind1 @nbox + 1
+label renu1
+ decr ind1 by 1
+ if @ind1 lt 1 goto done
+
+ define seg1 select segid w@ind1 end
+ if ?nsel .eq. 0 goto renu1
+ set ind2 @ind1
+ label renu2
+  decr ind2 by 1
+  if @ind2 lt 0 goto done
+  define seg2 select segid w@ind2 end
+  if ?nsel .eq. 0 goto renu2
+  join w@ind2 w@ind1 renumber
+  set ind1 @ind2
+ goto renu2 
+label done 
+
+
+!write psf card name watbox.psf
+!write coor card name watbox.crd
+
+label return

@@ -1,0 +1,85 @@
+* minimize rab11 solvated structure
+*
+
+set resid ! make sure to use resid in pdb read below
+set nucl  ! make sure have gtp params
+stream readpsf36.str
+!goto pdb
+stream temp/box@{irep}.str
+! increase box size if desired
+set dx 1
+calc A = @A + @dx
+calc B = @B + @dx
+calc C = @C + @dx
+!
+! define crystal
+!
+crystal define cubic @A @B @C 90 90 90
+crystal build cutoff 12 noper 0
+
+image byseg xcen 0.0 ycen 0.0 zcen 0.0 select segid RAB end
+image byres xcen 0.0 ycen 0.0 zcen 0.0 select segid WAT .or. segid XWAT .or. segid ION1 .or. segig ION2 .or. segid MG* .or. segid GTP .or. segid FIP* end
+
+! set up parameters (these roughly match what I had defined for NAMD calculations)
+!set nbparam cutnb 12 ctofnb 10.5 ctonnb 9 cutim 12 vswitch inbfrq -1 -
+!       ewald kappa 0.34 pmewald fftx 64 ffty 64 fftz 64 order 4 cdie eps 1 -
+! these are less accurate but give faster speed
+set nbparam cutnb 11 ctofnb 9 ctonnb 7.5 cutim 11 vswitch inbfrq -1 -
+       ewald kappa 0.32 pmewald fftx 64 ffty 64 fftz 64 order 4 cdie eps 1 -
+
+set temp 298
+
+set prparam pcons pref 1.0 pmass 500 pgamma 20 ! tbath @temp
+!set tparam tcons hoover tmass 1000 reft @temp ! I am having problems with this thermostat crashing at the beginning (probably a more delicate thermostat)
+set tparam lang tbath @temp ilbfrq 0 rbuffer 0 ! langevin dynamics
+
+energy @nbparam
+fast on
+!
+!minimize system
+mini sd nstep 10 @nbparam
+mini conj nstep 10 @nbparam
+mini abnr nstep 10 @nbparam
+goto pdb
+!energy @nbparam domdec dlb on
+
+! set up shake
+if @?shake eq 1 then
+ shake fast bonh tol 1.0e-8 para
+ set dt 0.002
+else
+ set dt 0.001
+endif
+
+! harmonic restraints
+cons harm sele prop wmain gt 0 end force 10
+!
+
+set start strt
+if @?nsteps eq 0 set nsteps 5000
+set nsteps @nsteps
+
+prnlev 3 node 0
+
+! set up restart output
+open write card unit 69 name @{ocorfile}.rst
+
+scalar fbeta set 1 sele all end ! for langevin dynamics
+
+! dynamics
+dyna cpt @start - 
+ @nbparam -
+ @prparam -
+ @tparam -
+ nprint 100 -
+ iunwri 69 - ! restart file
+ time @dt -
+ ntrfrq 100 - ! frequency for stopping rotation (why needed w/ PME ?)
+ echeck 1000 -
+ nsteps @nsteps -
+ firstt @temp -
+ finalt @temp
+
+label pdb
+write coor pdb name @{ocorfile}.pdb
+

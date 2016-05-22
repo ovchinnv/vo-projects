@@ -1,0 +1,91 @@
+#!/bin/bash
+
+charmm=charmm
+
+mpirun=mpirun
+echo localhost >NODES
+np=4
+########################################################################
+mkdir -p temp
+ipsf=./fip2rw-o_0nd
+opsf=temp/rab11w-o_
+ocorbase=temp/rab11w-o_
+nrep=32
+########################################################################
+if [ 1 -eq 0 ]; then
+########## solvate  each structure independently ###########
+j=0
+for i in `seq 0 $(($nrep-1))`; do
+ icor=${icorbase}${i}
+ ocor=${ocorbase}${i}
+ opsffile=${opsf}${i}
+ echo -n " * Adding solvation box to  ${icor} ... "
+# $mpirun -np $np -machinefile NODES \
+ j=$((j+1))
+ if [ $j -eq 4 ]; then
+  j=0
+  $charmm \
+  nucl=1 irep=$i psffile=$ipsf ocorfile=$ocor opsffile=$opsffile boxname=temp/box${i}.str -i boxsolv.inp >& solvate_$i.out
+ else
+  $charmm \
+  nucl=1 irep=$i psffile=$ipsf ocorfile=$ocor opsffile=$opsffile boxname=temp/box${i}.str -i boxsolv.inp >& solvate_$i.out & 
+ fi
+
+ if [ $? -ne 0 ];  then
+   echo "Execution interrupted due to error"
+   exit
+ fi
+ echo "done"
+done
+fi
+#exit
+if [ 0 -eq 1 ];then
+######### neutralize by replacing waters with ions ###############
+j=0
+for i in `seq 0 $(($nrep-1))`; do
+ icor=${ocorbase}${i}
+ ocor=${ocorbase}${i}n
+ ipsffile=${opsf}${i}
+ opsffile=${opsf}${i}n
+ echo -n " * Adding ions to ${icor} ... "
+# $mpirun -np $np -machinefile NODES \
+ j=$((j+1))
+ if [ $j -eq 4 ]; then
+  j=0
+  $charmm \
+  nucl=1 psffile=$ipsffile corfile=$icor ocorfile=$ocor opsffile=$opsffile -i ionize.inp >& ionize_$i.out
+ else
+  $charmm \
+  nucl=1 psffile=$ipsffile corfile=$icor ocorfile=$ocor opsffile=$opsffile -i ionize.inp >& ionize_$i.out &
+ fi
+#exit
+ if [ $? -ne 0 ];  then
+   echo "Execution interrupted due to error"
+   exit
+ fi
+ echo "done"
+done
+fi
+#exit
+# after this step I run reduce.inp to bring all atom counts in all of the files to the same value
+#
+######### minimize in a periodic box with PME #####
+np=4
+#charmm=charmm332dom
+#charmm=charmm39a2devdom # requires old psf
+
+for i in `seq 20 $(($nrep-1))`; do
+ icor=${ocorbase}${i}nd
+ ocor=${ocorbase}${i}ndm
+ ipsffile=${opsf}${i}nd
+ echo -n " * Minimizing and equilibrating ${icor} ... "
+ $mpirun -np $np -machinefile NODES \
+ $charmm \
+ nucl=1 irep=$i psffile=$ipsffile corfile=$icor ocorfile=$ocor -i mini.inp >& mini_$i.out
+ if [ $? -ne 0 ];  then
+   echo Execution interrupted due to errors
+   exit
+ fi
+ echo "done"
+done
+
