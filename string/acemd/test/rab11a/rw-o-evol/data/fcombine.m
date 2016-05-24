@@ -11,7 +11,7 @@ nskip=1;
 %end
 
 nsamples=2 ; % number of force samples to take from file (useful if files do not have an equal number of samples)
-%[status, result]=system('grep "will quit" ../fts.log | tail -n1 | awk ''{print $3}''') ; nsamples=str2num(result)-1-nskip+1 ; % hack to get automatically
+[status, result]=system('grep "will quit" ../fts.log | tail -n1 | awk ''{print $3}''') ; nsamples=str2num(result)-1-nskip+1 ; % hack to get automatically
 
 % note : when including curvature contrbutions; use 3*nsamples below (from 2*nsamples)
 
