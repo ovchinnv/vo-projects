@@ -230,6 +230,7 @@ __CHARMM_ONLY##IF STRINGM
        subroutine quat_calc(i,x,y,z,mass,deriv)
        __DEP_OUTPUT
        __DEP_CONST
+       __DEP_PARSER
        use sm_var
 !
        int :: i ! which quaternion to calculate
@@ -281,6 +282,7 @@ __CHARMM_ONLY##IF STRINGM
         A=transpose(frames%r(:,:,f1))
        else
         A=Id3
+        A(1,1)=-one ! ensure left-handed frame for backward compatibility with cv_frames; to be removed
        endif
 !
        if (qframe2) then
@@ -288,6 +290,7 @@ __CHARMM_ONLY##IF STRINGM
         B=frames%r(:,:,f2)
        else
         B=Id3
+        B(1,1)=-one ! ensure left-handed frame for backward compatibility with cv_frames
        endif
        R=matmul(A,B);
        RRm32=R(3,2)-R(2,3)
@@ -320,33 +323,33 @@ __CHARMM_ONLY##IF STRINGM
         s=half/sqrt(tr)
 !    note: the notation is: 1-w, 2-x, 3-y, 4-z; where w is cos(theta) and x=sin(theta)*r_x, etc.
         qq(1)=s*tr
-        qq(2)=s*(R(3,2)-R(2,3));
-        qq(3)=s*(R(1,3)-R(3,1));
-        qq(4)=s*(R(2,1)-R(1,2));
+        qq(2)=s*RRm32
+        qq(3)=s*RRm13
+        qq(4)=s*RRm21
 !       elseif ( .false.) then
 !       elseif ( .true.) then
        elseif ( (R(1,1).gt.R(2,2)) .and. (R(1,1).gt.R(3,3)) ) then
         tr=one + R(1,1) - R(2,2) - R(3,3) ! not the trace anymore, but reuse tr
         s=half/sqrt(tr)
-        qq(1)=s*(R(3,2)-R(2,3));
+        qq(1)=s*RRm32;
         qq(2)=s*tr
-        qq(3)=s*(R(1,2)+R(2,1));
-        qq(4)=s*(R(1,3)+R(3,1));
+        qq(3)=s*RRp12
+        qq(4)=s*RRp13
 !       elseif ( .true.) then
 !       elseif ( .false.) then
        elseif ( R(2,2) .gt. R(3,3) ) then
         tr=one + R(2,2) - R(1,1) - R(3,3)
         s=half/sqrt(tr)
-        qq(1)=s*(R(1,3)-R(3,1));
-        qq(2)=s*(R(1,2)+R(2,1));
+        qq(1)=s*RRm13
+        qq(2)=s*RRp12
         qq(3)=s*tr
-        qq(4)=s*(R(2,3)+R(3,2));
+        qq(4)=s*RRp23
        else
         tr=one + R(3,3) - R(1,1) - R(2,2)
         s=half/sqrt(tr)
-        qq(1)=s*(R(2,1)-R(1,2));
-        qq(2)=s*(R(1,3)+R(3,1));
-        qq(3)=s*(R(2,3)+R(3,2));
+        qq(1)=s*RRm21
+        qq(2)=s*RRp13
+        qq(3)=s*RRp23
         qq(4)=s*tr
        endif
 !      endif ! skip
@@ -361,7 +364,12 @@ __CHARMM_ONLY##IF STRINGM
        else
         quat%q(:,i)=qq
        endif
-!    the quaternion should be normalized; check: OK
+!    the quaternion should be normalized; check:
+       tr = qq(1)**2 + qq(2)**2 + qq(3)**2 + qq(4)**2 ! compute squared norm
+       if ( abs(tr-one) .gt. __ERRTOL) then
+        __WRN(whoami, ' COMPUTED QUATERNION HAS NON-UNIT MAGNITUDE '//ftoa(sqrt(tr))//' (INVALID ROTATION?)');
+       endif
+!
        quat%recalculate(i)=.false.
 !
 !cccccccccccccccccc now compute derivatives cccccccccccccccccccc
