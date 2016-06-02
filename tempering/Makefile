@@ -1,7 +1,8 @@
 NAME=tempering
 ROOT=../
 HEADS=tempering.h
-OBJS=tempering_plugin_acemd.o
+OBJS=tempering_plugin_acemd.o tempering_acemd.o tempering.o
+DEPS=files output parser
 
 LOCALDEFS+=-D__BINDC
 

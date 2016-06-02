@@ -1,0 +1,71 @@
+#define __CBIND use, intrinsic :: iso_c_binding
+!
+module tempering_acemd
+ __DEP_OUTPUT
+ __DEP_CONST
+ __CBIND
+! use tempering
+
+ __IMPNONE
+
+ private
+!
+ bool, save :: initialized=.false.
+ int, save :: iteration
+ float, save :: temperature=zero
+!
+ contains
+! a collection of subroutines to call the SMCV code from ACEMD plugin interface
+! module encapsulation allows storage
+!
+#define __CSUB(__NAME, ...) subroutine __NAME (__VA_ARGS__) bind(c, name=__STRING(__NAME))
+#define __CFUN(__NAME, ...) function __NAME (__VA_ARGS__) bind(c, name=__STRING(__NAME))
+!
+#define _ME tempering_init_from_acemd
+ __CFUN(_ME, inputname, il, outputname, ol);
+ __DEP_PARSER
+ __DEP_FILES
+#ifdef __PARALLEL
+ __DEP_MPI
+#endif
+!
+ int(__FCINT) :: _ME
+ int( __FCINT), intent(in), value :: il, ol
+ type(c_ptr), value, intent(in) :: inputname, outputname
+!
+ character(len=il), pointer :: ifname
+ character(len=ol), pointer :: ofname
+
+ int :: i, fid, ierr
+ __IAM(_ME)
+ _ME=1
+!
+ call c_f_pointer(outputname, ofname)
+!
+ call output_init(ofname)
+! make sure that the string method flavor is valid
+ __MESSAGE(whoami, 'INITIALIZING TEMPERING PLUGIN');
+! open input file
+ call c_f_pointer(inputname, ifname)
+ fid=-1
+ call files_open(fid, ifname, 'FORMATTED', 'READ')
+! parse input file
+ call parse_file(fid, &
+#ifdef __PARALLEL
+ & MPI_COMM_NULL, &
+#endif
+ & quiet_=.false.)
+ call files_close(fid)
+!
+ call tempering_initialize()
+!
+ if (fatal_warning()) return
+!
+ initialized=.true.
+ _ME=0
+!
+end function _ME
+#undef _ME
+!===================================================================
+
+end module tempering_acemd

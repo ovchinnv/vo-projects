@@ -64,9 +64,8 @@ aceplug_err_t aceplug_endstep(struct aceplug_sim_t *s) {
  if ( s-> plugin_get_temperature(&current_temperature) ) {return ACEPLUG_ERR;}
 // get energies
  if ( s-> plugin_get_energy_temp(edata) ) {return ACEPLUG_ERR;}
-  
+// obtain new temperature from tempering routine
  ierr=tempering_dyna_from_acemd(iteration, current_temperature, pe, &new_temperature);
-
 // rescale velocities
  velocity_scale = sqrt(new_temperature/current_temperature) ;
  s->plugin_scale_velocities(velocity_scale);
@@ -75,7 +74,6 @@ aceplug_err_t aceplug_endstep(struct aceplug_sim_t *s) {
 
  return (ierr>0) ? ACEPLUG_ERR : ACEPLUG_OK ;
 }
-
 //==========================================================
 aceplug_err_t aceplug_terminate(struct aceplug_sim_t *s) {
  printf("# TEMPERING PLUGIN: Finalizing...\n");

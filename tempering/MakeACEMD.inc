@@ -1,7 +1,16 @@
 LIB=libtemp_acemd.so
 LIBS+=$(LIB)
 LINKOBJS=\
- tempering_plugin_acemd.o
+ constants.o\
+ output.o \
+ parser.o \
+ cmd.o prm.o \
+ files.o \
+ rng.o clcg.o \
+ mpi_compat_stub.o \
+ tempering_plugin_acemd.o \
+ tempering_acemd.o \
+ tempering.o 
 
 default : acemd
 acemd : $(LIB)
