@@ -10,7 +10,7 @@
 #include "sm.h"
 #include <stdlib.h>
 
-// structore for plugin private data :
+// structure for plugin private data :
 typedef struct {
  __CINT *atomlist ; // to maintain a list of atoms that are needed by plugin; other coordinates to be omitted
  __CFLOAT *r ; // coordinate array

@@ -90,10 +90,10 @@ workp(:,:)=workp(:,:)-ones(m,1)*workp(1,:); % reset to zero
 %
 ie   =niter;
 ib   =1;
-%ib=40;
+%ib=ie-2; % to show the last
+ib=round(niter * 0.5);
+nbox=2;
 %
-%ib=round(niter * 0.5);
-nbox =2;
 bsize=ceil( (ie-ib+1)/nbox);
 
 lw=1.;

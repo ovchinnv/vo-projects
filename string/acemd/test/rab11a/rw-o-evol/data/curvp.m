@@ -26,7 +26,7 @@ end
 [nstring,niter]=size(crv);
 %
 %
-nbox =3;
+nbox =2;
 ib   =1;
 %ib   =300;
 %ib   =3000;

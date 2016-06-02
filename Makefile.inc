@@ -104,8 +104,8 @@ default: $(ROOT)/$(NAME).stamp
 ########################### OBJECTS ##########################
 %.o:%.f $(LIBDEPS)
 	$(FC) $(FFLAGS) $(DEFS) $(PIC) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $< -o $@
-%.o:%.c $(CLIBDEPS)
-	$(CC) $(LOCALDEFS) $(CFLAGS) $(PIC) $< -o $@
+%.o:%.c $(CLIBDEPS) $(HEADS)
+	$(CC) $(LOCALDEFS) $(CFLAGS) $(PIC) $(LOCALMACROS) $< -o $@
 %.o:%.F90 $(LIBDEPS)
 	$(FC) $(FFLAGS) $(DEFS) $(PIC) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $< -o $@
 %.mod:%.F90 $(LIBDEPS)
