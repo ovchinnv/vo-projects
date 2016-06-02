@@ -1,4 +1,5 @@
 #define __CTX __TEMPERINGCTX
+#define __RESTARTCTX __CONCAT(__TEMPERINGCTX,_RESTART)
 #ifdef __ACEMD
 #define __INITCTX TEMPERING_INIT
 #define __DONECTX TEMPERING_DONE
@@ -10,6 +11,7 @@ module tempering
  __DEP_CONST
  __DEP_FILES
  __DEP_RANDOM
+ __DEP_MPI
 
  __IMPNONE
 
@@ -37,12 +39,16 @@ module tempering
 !
  __PAR(restart_file, character(len=vartaglen), 'NONE') ! restart file
  __PAR(output_file, character(len=vartaglen), 'tempering.restart.txt') ! output file
+
+ int :: qdist ! temperature distribution type flag
+ int, parameter :: constant=1, powerlaw=2
  
+ int :: fid
 !
  contains
 !====================================================================================
  subroutine tempering_initialize()
- character(len=vartaglen) :: keyword
+ character(len=vartaglen) :: keyword, context
  int :: l
  __IAM(TEMPERING_INITIALIZE)
 !
@@ -52,77 +58,116 @@ module tempering
 #define __CONTEXT __STRING(__CTX)
 #endif
 !
+ context=__CONTEXT ;
+! first, check for restart file
+! if present, read it and skip initialization options
+! read restart file
 #define __CHAR
-#define __WARNIFMISSING
-#define __DEFAULT
-!
-#define __VAR	inverse_dist
-#define __TAG	inverse_temperature_distribution
-#define __NAME	inverse temperature distribution
-#include "parser/parser_macro1.src"
-!
-#define __VAR	output_file
-#define __TAG	output_file
-#define __NAME	tempering output file
-#include "parser/parser_macro1.src"
-!
-#undef __WARNIFMISSING
 #define __VAR	restart_file
 #define __TAG	restart_file
 #define __NAME	restart file
-#include "parser/parser_macro1.src"
-!
+#include "parser/parser_macro2.src"
 #undef __CHAR
-#define __INT
-#define __LEZEROERR
-#define __VAR	gridsize
-#define __TAG	inverse_temperature_gridsize
-#define __NAME	size of inverse temperature grid
-#include "parser/parser_macro1.src"
 !
-! grid resolution parameters
+ if (existtag_nocase('restart_file', context)) then
+  __MESSAGE(whoami,' READING RESTART FILE. COMMAND FILE TEMPERATURE AND GRID SIZE PARAMETERS ARE IGNORED. ')
+! read and parse restart file
+  fid=-1
+  call files_open(fid, restart_file, 'FORMATTED', 'READ')
+  call parse_file(fid, &
+#ifdef __PARALLEL
+ &  MPI_COMM_NULL, &
+#endif
+ &  quiet_=.false.)
+  call files_close(fid)
+! now comes a trick : change context name temporarily to process the restart file using the same calls
+  context= __STRING(__RESTARTCTX)
+ else ! only read if no restart file provided
+
 #define __LEZEROERR
-#define __VAR	energy_interp_freq
-#define __TAG	energy_interp_freq
-#define __NAME	frequency of recomputing energy distribution
-#include "parser/parser_macro1.src"
-!
-#undef __INT
-#define __FLOAT
 #define __VAR	dgrid
 #define __TAG	inverse_temperature_spacing
 #define __NAME	resolution of inverse temperature grid
-#include "parser/parser_macro1.src"
-! check here for invalid grid options
-!
+#include "parser/parser_macro2.src"
+
+ endif ! existtag
+! ==== read data that might be in the restart file
 ! temperature parameters
+!
 #define __VAR	temp
 #define __TAG	temperature
 #define __NAME	starting temperature
-#include "parser/parser_macro1.src"
+#include "parser/parser_macro2.src"
 !
 #define __WARNIFMISSING
 #define __VAR	mintemp
 #define __TAG	minimum_temperature
 #define __NAME	minimum temperature
-#include "parser/parser_macro1.src"
+#include "parser/parser_macro2.src"
 !
 #define __VAR	maxtemp
 #define __TAG	maximum_temperature
 #define __NAME	maximum temperature
-#include "parser/parser_macro1.src"
+#include "parser/parser_macro2.src"
 !
-! timestep
+#define __INT
+#define __VAR	gridsize
+#define __TAG	inverse_temperature_gridsize
+#define __NAME	size of inverse temperature grid
+#include "parser/parser_macro2.src"
+! finally: read the average energy distribution
+
+! ====== done with (possible) restart file data
+ context=__CONTEXT ! reset context if changed
 !
-#define __VAR	timestep
-#define __TAG	timestep
-#define __NAME	integration step
-#include "parser/parser_macro1.src"
+! read other parameters
+! distribution parameters
+#undef __INT
+#define __CHAR
+#define __VAR	inverse_dist
+#define __TAG	inverse_temperature_distribution
+#define __NAME	inverse temperature distribution
+#include "parser/parser_macro2.src"
 !
+ call toupper(inverse_dist)
+ select case(inverse_dist)
+  case('CONSTANT', 'CONST','UNIFORM', 'UNIF') ; qdist=constant; 
+  case('PLAW','POWER','POWERLAW') ; qdist=powerlaw;
+  case default;
+   __WRN(whoami, ' UNKNOWN DISTRIBUTION SPECIFIED ('//trim(inverse_dist)//')')
+ end select
+!
+!
+#undef __CHAR
 #define __VAR	inverse_dist_exp
 #define __TAG	inverse_temperature_distribution_exponent
 #define __NAME	exponent for inverse temperature distribution
-#include "parser/parser_macro1.src"
+#include "parser/parser_macro2.src"
+!
+! output
+#define __CHAR
+#define __VAR	output_file
+#define __TAG	output_file
+#define __NAME	tempering output file
+#include "parser/parser_macro2.src"
+
+! energy interpolation parameters
+#undef __CHAR
+#define __INT
+#define __VAR	energy_interp_freq
+#define __TAG	energy_interp_freq
+#define __NAME	frequency of recomputing energy distribution
+#include "parser/parser_macro2.src"
+!
+! timestep
+!
+#undef __INT
+#define __VAR	timestep
+#define __TAG	timestep
+#define __NAME	integration step
+#include "parser/parser_macro2.src"
+!======================================
+! now check for conflicting (or undefined) options and proceed with initializetion
 
 !======================================
  end subroutine tempering_initialize
