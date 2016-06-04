@@ -30,17 +30,18 @@ module tempering
  __PAR(maxtemp,float,500d0)
  __PAR(temp,float,-one)       ! current temperature
  __PAR(timestep,float,1.0d-4) ! integration step
- __PAR(gridsize,int,1000)     ! size for temperature grid
- __PAR(dgrid,float,(default_maxtemp-default_mintemp)/(default_gridsize-1)) ! resolution for temperature grid
-
+ __PAR(gridsize,int,1000)     ! size for (inverse) temperature grid (note that this is the number of temp. points ; number of bins would be gridsize-1 )
+ __PAR(dgrid,float,(one/default_mintemp-one/default_mintemp)/(kboltz*(default_gridsize-1))) ! resolution for (inverse) temperature grid 
+!                                                                                           ! ( note that it is easier to set the gridsize )
+!
  __PAR(inverse_dist, character(len=vartaglen), 'POWERLAW') ! prescribed distribution of inverse temperature
  __PAR(inverse_dist_exp, float, -one) ! coefficent in the distribution of inverse temperature
- __PAR(energy_interp_freq,int, 10)
+ __PAR(energy_interp_width,int, 10)   ! number of bins over which the linear fit of average energy is made
 !
  __PAR(restart_file, character(len=vartaglen), 'NONE') ! restart file
  __PAR(output_file, character(len=vartaglen), 'tempering.restart.txt') ! output file
 
- int :: qdist ! temperature distribution type flag
+ int :: betadist ! temperature distribution type flag
  int, parameter :: constant=1, powerlaw=2
  
  int :: fid
@@ -90,6 +91,11 @@ module tempering
 #define __NAME	resolution of inverse temperature grid
 #include "parser/parser_macro2.src"
 
+! warn if both dgrid and gridsize provided
+  if (existtag_nocase('inverse_temperature_spacing', context).and.existtag_nocase('inverse_temperature_gridsize', context)) then
+   __WRN(whoami, ' GRID SIZE AND GRID SPACING CANNOT BOTH BE SPECIFIED.')
+  endif
+!
  endif ! existtag
 ! ==== read data that might be in the restart file
 ! temperature parameters
@@ -131,8 +137,8 @@ module tempering
 !
  call toupper(inverse_dist)
  select case(inverse_dist)
-  case('CONSTANT', 'CONST','UNIFORM', 'UNIF') ; qdist=constant; 
-  case('PLAW','POWER','POWERLAW') ; qdist=powerlaw;
+  case('CONSTANT', 'CONST','UNIFORM', 'UNIF') ; betadist=constant; 
+  case('PLAW','POWER','POWERLAW') ; betadist=powerlaw;
   case default;
    __WRN(whoami, ' UNKNOWN DISTRIBUTION SPECIFIED ('//trim(inverse_dist)//')')
  end select
@@ -144,19 +150,28 @@ module tempering
 #define __NAME	exponent for inverse temperature distribution
 #include "parser/parser_macro2.src"
 !
+ if (betadist.eq.constant) then
+  if (existtag_nocase('inverse_temperature_distribution_exponent', context)) then
+   __WRN(whoami, ' FOR UNIFORM 1/T DISTRIBUTION EXPONENT IS SET TO ZERO.')
+   inverse_dist_exp=zero
+  endif
+ endif
+!
 ! output
+!
 #define __CHAR
 #define __VAR	output_file
 #define __TAG	output_file
 #define __NAME	tempering output file
 #include "parser/parser_macro2.src"
-
+!
 ! energy interpolation parameters
+!
 #undef __CHAR
 #define __INT
-#define __VAR	energy_interp_freq
-#define __TAG	energy_interp_freq
-#define __NAME	frequency of recomputing energy distribution
+#define __VAR	energy_interp_width
+#define __TAG	energy_interp_width
+#define __NAME	number of bins for energy fitting
 #include "parser/parser_macro2.src"
 !
 ! timestep
@@ -167,7 +182,8 @@ module tempering
 #define __NAME	integration step
 #include "parser/parser_macro2.src"
 !======================================
-! now check for conflicting (or undefined) options and proceed with initializetion
+
+
 
 !======================================
  end subroutine tempering_initialize

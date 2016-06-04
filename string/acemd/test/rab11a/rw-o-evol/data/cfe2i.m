@@ -89,10 +89,10 @@ workp(:,:)=workp(:,:)-ones(m,1)*workp(1,:); % reset to zero
 % code taken from cfe.m
 %
 ie   =niter;
-ib   =1;
+ib   =2; % first data set appears strange -- perhaps due to bugs in the first run of averaging
 %ib=ie-2; % to show the last
-ib=round(niter * 0.5);
-nbox=2;
+%ib=round(niter * 0.5);
+nbox=1;
 %
 bsize=ceil( (ie-ib+1)/nbox);
 

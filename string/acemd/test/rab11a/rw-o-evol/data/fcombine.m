@@ -5,13 +5,14 @@ brep=0;
 erep=31;
 
 % ad hoc : skip first nskip entries
-nskip=1;
+nskip=500;
 %for i=brep:erep 
 % system(['l=`grep -n "%" force',num2str(i),'.dat | head -n ',num2str(nskip),' |tail -n1`;l=${l%:*}; tail -n +$l force',num2str(i),'.dat > force_',num2str(i),'.dat']);
 %end
 
 nsamples=2 ; % number of force samples to take from file (useful if files do not have an equal number of samples)
-[status, result]=system('grep "will quit" ../fts.log | tail -n1 | awk ''{print $3}''') ; nsamples=str2num(result)-1-nskip+1 ; % hack to get automatically
+%[status, result]=system('grep "will quit" ../fts.log | tail -n1 | awk ''{print $3}''') ; nsamples=str2num(result)-1-nskip+1 ; % hack to get automatically
+[status, result]=system('grep "will quit" ../fts2.log | tail -n1 | awk ''{print $3}''') ; nsamples=str2num(result)-1-nskip ; % hack to get automatically
 
 % note : when including curvature contrbutions; use 3*nsamples below (from 2*nsamples)
 

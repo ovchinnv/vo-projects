@@ -9,6 +9,7 @@ LINKOBJS=\
  rng.o clcg.o \
  mpi_compat_stub.o \
  tempering_plugin_acemd.o \
+ energy_grid.o \
  tempering_acemd.o \
  tempering.o 
 

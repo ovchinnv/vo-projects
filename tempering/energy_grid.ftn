@@ -1,0 +1,120 @@
+#define _N energy_grid
+
+module _N
+
+ __DEP_OUTPUT
+ __DEP_CONSTANTS
+ use griddata
+
+ __IMPNONE
+ private
+
+ type(grid) :: energy
+ bool :: initialized = .false.
+ float, pointer, dimension(:) :: beta, eavg, eeavg, nsamp ! inverse temp, average energy, average square energy, number if samples
+ float :: binscale=-one ; ! a precomputed constant for determining bin size
+
+ contains 
+!=====================================================
+  __SUB(init) (mintemp, maxtemp, gridsize, ini_data)
+   __IAM(__NM(init))
+   float, intent(in) :: mintemp, maxtemp
+   int, intent(in) :: gridsize
+   float, optional, dimension(4*gridsize), intent(in), target :: ini_data
+   float, pointer :: data(:)
+   float :: minbeta, maxbeta, dbeta
+   int :: i
+!
+   __ASSERT(gridsize,>,1)
+!
+   if (present(ini_data)) then
+! attempt to initialize from provided initial data
+    __MESSAGE(whoami, ' INITIALIZING FROM PROVIDED GRID AND IGNORING MIN/MAX TEMPERATURES')
+! some checks:
+! size
+    __ASSERT(size(ini_data),>,4*gridsize)
+! positive temps
+    beta=>ini_data(1:gridsize)
+    __ASSERT(minval(beta),>,zero)
+! monotone increasing
+    __ASSERT(minval(beta(2:)-beta(1:gridsize-1)),>,zero)
+! nonnegative sample numbers
+     nsamp=>ini_data(3*gridsize+1:4*gridsize)
+    __ASSERT(minval(nsamp),>=,zero)
+
+    allocate(data(4*gridsize)); data=ini_data
+
+   else
+    __ASSERT(maxtemp,>,zero)
+    __ASSERT(mintemp,>,zero)
+    __ASSERT(maxtemp,>,mintemp)
+!
+    allocate(data(4*gridsize))
+    data=zero ;
+! generate grid
+    beta=>data(1:gridsize)
+    minbeta=one/(kboltz*maxtemp)
+    maxbeta=one/(kboltz*mintemp)
+    dbeta=(maxbeta-minbeta)/(gridsize-1)
+    beta(1)=minbeta
+!
+    do i=2, gridsize
+     beta(i)=beta(i-1)+dbeta
+    enddo
+!
+   endif
+!
+   call griddata_init(energy, gridsize, 4, data)
+
+   binscale = (gridsize-1) / (beta(2)-beta(1))
+
+   deallocate(data)
+!
+
+   beta=>energy%data(1:gridsize)
+   eavg=>energy%data(gridsize+1  :2*gridsize)
+   eeavg=>energy%data(2*gridsize+1:3*gridsize)
+   nsamp=>energy%data(3*gridsize+1:)
+!
+   initialized=.true.
+!
+  end __SUB(init)
+!================================================
+  __SUB(_done)
+  call energy_done(energy)
+  nullify(beta, eavg, eeavg, nsamp)
+  initialized=.false.
+  end __SUB(_done)
+!================================================
+  __SUB(_update_average_energy) (temperature, e)
+  __IAM(__NM(_update_average_energy))
+  float, intent(in) :: e, temperature
+  int :: ibin, t
+  float :: b
+! unclear how and when to scale the sample a la Zhang & Ma
+
+! get inverse temperature
+  __ASSERT(temperature,>,zero);
+  b=one/(kboltz*temperature)
+! find bin, assuming uniform grid
+  ibin = INT(binscale*(b-beta(1)))+1
+!
+  __ASSERT(ibin,>,0)
+  __ASSERT(ibin,<,energy%size)
+
+! update averages in bin #ibin
+  nsamp(ibin)=nsamp(ibin) + 1
+  t=one/nsamp(ibin)
+  eavg(ibin)=eavg(ibin) +  t*(e-eavg(ibin))
+  eeavg(ibin)=eeavg(ibin) + t*(e*e-eeavg(ibin))
+!
+  end __SUB(_update_average_energy)
+
+
+
+
+end module _N
+
+
+
+

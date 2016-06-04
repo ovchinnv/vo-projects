@@ -1,7 +1,7 @@
 NAME=tempering
 ROOT=../
 HEADS=tempering.h
-OBJS=tempering_plugin_acemd.o tempering_acemd.o tempering.o
+OBJS=tempering_plugin_acemd.o tempering_acemd.o tempering.o griddata.o energy_grid.o
 DEPS=files output parser
 
 LOCALDEFS+=-D__BINDC
@@ -14,6 +14,8 @@ LOCALDEPS+=source.defs
 include MakeACEMD.inc
 
 tempering_plugin_acemd.o : tempering_plugin_acemd.c aceplug.h $(LOCALDEPS)
+
+tempering.F90 : parser/parser_macro2.src
 
 #	$(CC) $(CFLAGS) $(LOCALDEFS) $(LOCALMACROS) $< -o $@
 

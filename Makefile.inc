@@ -146,7 +146,7 @@ $(ROOT)/$(NAME).stamp:: $(OBJS) $(MODS) $(HEADS) $(DISTRIB)
 ########################## SOURCE CODE #######################
 %.h:%.H $(LOCALDEPS) $(GLOBALDEPS)
 	$(FPP) $(FPPFLAGS) $(DEFS) $(LOCALDEFS) $(GLOBALMACROS) $(LOCALMACROS) -P $< > $@
-%.F90:%.ftn $(LOCALDEPS) $(GLOBALDEPS)
+%.F90:%.ftn $(LOCALDEPS) $(GLOBALDEPS) $(HEADS)
 	sed 's/\([^\#]\)\(\/\/\)/\1\^\^/g' $< | $(FPP) $(FPPFLAGS) $(DEFS) $(LOCALDEFS) -U__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(MSG) $(INCLUDES) -P | sed 's/\^\^/\/\//g' > $@
 %.src:%.ftn $(LOCALDEPS) $(GLOBALDEPS) $(ROOT)/charmm.msg
 	sed 's/\([^\#]\)\(\/\/\)/\1\^\^/g' $< | $(FPP) $(FPPFLAGS) $(STRING_FLAGS) -D__CHARMM -D__CHARMM_VER=$(CHARMM_MAJOR_VERSION) $(GLOBALMACROS) $(LOCALMACROS) $(CHMSG) -P | sed 's/\^\^/\/\//g' > $@
