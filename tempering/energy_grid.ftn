@@ -11,16 +11,29 @@ module _N
 
  type(grid) :: energy
  bool :: initialized = .false.
- float, pointer, dimension(:) :: beta, eavg, eeavg, nsamp ! inverse temp, average energy, average square energy, number if samples
+ float, pointer, dimension(:) :: beta, esum, e2sum, eavg, e2avg, wgt, nsamp ! inverse temp, energy sum, squared energy sum, averages, weighted nsamp, actual nsamp
  float :: binscale=-one ; ! a precomputed constant for determining bin size
+ float :: Cg=zero
+ int :: interp_width=5 ! number of bins over which to fit an interpolating curve
+! storage for interpolation
+ float, pointer, dimension(:,:) :: interp_data
+!
+ int, private, parameter :: ndim=7
+
+ public __NM(init)
+ public __NM(done)
+ public __NM(update_averages)
+ public __NM(lookup_average_energy)
 
  contains 
 !=====================================================
-  __SUB(init) (mintemp, maxtemp, gridsize, ini_data)
+  __SUB(init) (mintemp, maxtemp, gridsize, damping_constant, interp_bin_width, ini_data)
    __IAM(__NM(init))
    float, intent(in) :: mintemp, maxtemp
    int, intent(in) :: gridsize
-   float, optional, dimension(4*gridsize), intent(in), target :: ini_data
+   int, intent(in), optional :: interp_bin_width ! number of bins on either side of central bin that form the support for interpolation
+   float, optional, intent(in) :: damping_constant
+   float, optional, dimension(ndim*gridsize), intent(in), target :: ini_data
    float, pointer :: data(:)
    float :: minbeta, maxbeta, dbeta
    int :: i
@@ -29,27 +42,29 @@ module _N
 !
    if (present(ini_data)) then
 ! attempt to initialize from provided initial data
-    __MESSAGE(whoami, ' INITIALIZING FROM PROVIDED GRID AND IGNORING MIN/MAX TEMPERATURES')
+    __MESSAGE(whoami, ' INITIALIZING FROM RESTART DATA AND IGNORING MIN/MAX TEMPERATURES')
 ! some checks:
 ! size
-    __ASSERT(size(ini_data),>,4*gridsize)
+    __ASSERT(size(ini_data),>,ndim*gridsize)
 ! positive temps
     beta=>ini_data(1:gridsize)
     __ASSERT(minval(beta),>,zero)
 ! monotone increasing
     __ASSERT(minval(beta(2:)-beta(1:gridsize-1)),>,zero)
 ! nonnegative sample numbers
-     nsamp=>ini_data(3*gridsize+1:4*gridsize)
+     wgt  =>ini_data(5*gridsize+1:6*gridsize)
+    __ASSERT(minval(wgt),>=,zero)
+     nsamp=>ini_data(6*gridsize+1:7*gridsize)
     __ASSERT(minval(nsamp),>=,zero)
 
-    allocate(data(4*gridsize)); data=ini_data
+    allocate(data(ndim*gridsize)); data=ini_data
 
    else
     __ASSERT(maxtemp,>,zero)
     __ASSERT(mintemp,>,zero)
     __ASSERT(maxtemp,>,mintemp)
 !
-    allocate(data(4*gridsize))
+    allocate(data(ndim*gridsize))
     data=zero ;
 ! generate grid
     beta=>data(1:gridsize)
@@ -64,35 +79,54 @@ module _N
 !
    endif
 !
-   call griddata_init(energy, gridsize, 4, data)
+!   set damping constant
+   if (present(damping_constant)) then
+    __ASSERT(damping_constant,>=,zero)
+    __ASSERT(damping_constant,<=,one)
+    Cg=damping_constant
+   endif
+!   set interpolation bin width
+!   note that the bin width could be larger than the gridsize -- there is no check -- in which case, we are fitting _all_ data to a line
+   if (present(interp_bin_width)) then
+    __ASSERT(interp_bin_width,>=,zero)
+    interp_width=interp_bin_width
+   endif
+!
+!
+   call griddata_init(energy, gridsize, ndim, data)
 
    binscale = (gridsize-1) / (beta(2)-beta(1))
 
    deallocate(data)
 !
-
-   beta=>energy%data(1:gridsize)
-   eavg=>energy%data(gridsize+1  :2*gridsize)
-   eeavg=>energy%data(2*gridsize+1:3*gridsize)
-   nsamp=>energy%data(3*gridsize+1:)
+   beta  => energy%data(           1:  gridsize)
+   esum  => energy%data(  gridsize+1:2*gridsize)
+   e2sum => energy%data(2*gridsize+1:3*gridsize)
+   eavg  => energy%data(3*gridsize+1:4*gridsize)
+   e2avg => energy%data(4*gridsize+1:5*gridsize)
+   wgt   => energy%data(5*gridsize+1:6*gridsize)
+   nsamp => energy%data(6*gridsize+1:          )
+!
+!  storage for interpolation
+   allocate(interp_data( min(energy%size-1,2*interp_width+1), 3 )) ;
 !
    initialized=.true.
 !
   end __SUB(init)
 !================================================
-  __SUB(_done)
+  __SUB(done)
   call energy_done(energy)
-  nullify(beta, eavg, eeavg, nsamp)
+  __FREE(interp_data)
+  nullify(beta, esum, e2sum, eavg, e2avg, wgt, nsamp)
   initialized=.false.
-  end __SUB(_done)
+  end __SUB(done)
 !================================================
-  __SUB(_update_average_energy) (temperature, e)
-  __IAM(__NM(_update_average_energy))
+  __SUB(update_averages) (temperature, e)
+  __IAM(__NM(update_averages))
   float, intent(in) :: e, temperature
-  int :: ibin, t
-  float :: b
-! unclear how and when to scale the sample a la Zhang & Ma
-
+  float :: b, omg, t
+  int :: ibin
+!
 ! get inverse temperature
   __ASSERT(temperature,>,zero);
   b=one/(kboltz*temperature)
@@ -102,19 +136,82 @@ module _N
   __ASSERT(ibin,>,0)
   __ASSERT(ibin,<,energy%size)
 
-! update averages in bin #ibin
-  nsamp(ibin)=nsamp(ibin) + 1
-  t=one/nsamp(ibin)
-  eavg(ibin)=eavg(ibin) +  t*(e-eavg(ibin))
-  eeavg(ibin)=eeavg(ibin) + t*(e*e-eeavg(ibin))
+! update sums in bin #ibin
+! procedure of Zhang/Ma 2010
+! Note that the procedure accumulates very large sums, and may overflow;
+! a less naive implementation may be needed
 !
-  end __SUB(_update_average_energy)
+  __INC (nsamp(ibin))
+  omg=Cg/nsamp(ibin)
+  __INCR(esum(ibin),  e   - omg* esum(ibin)) ! same as : esum = g*esum + a 
+  __INCR(e2sum(ibin), e*e - omg*e2sum(ibin))
+  __INCR(wgt(ibin),   one - omg*  wgt(ibin))
+! update averages
+  __ASSERT(wgt(ibin),>,__ERRTOL)
+  t=one/wgt(ibin)
+  eavg(ibin)=t*esum(ibin)
+  e2avg(ibin)=t*e2sum(ibin)
+!
+  end __SUB(update_averages)
+!================================================
+  __FUN(lookup_average_energy) (temperature) result (e)
+! use the grid data to find the average energy corresponding to the provided temperature by interpolation/fitting
+! note that we are using the inverse temperature, so that the first step is to compute beta=1/(kBT)
+  __IAM(__NM(lookup_average_energy))
+  float, intent(in) :: temperature
+  float :: e
+  float :: bet
+  int :: ibin, bin, ebin, nbin, i
+!
+! using fit to linear model y=a+bx
+!
+ float, pointer, dimension(:) :: w, &! weights
+ &                               x, &!
+ &                               y
+ float :: a, b, det, ws, xs, ys, x2s, xy, wx
 
+! get inverse temperature
+  __ASSERT(temperature,>,zero);
+  bet=one/(kboltz*temperature)
+! find bin that containt the desired temperature, assuming uniform grid
+  bin = INT(binscale*(bet-beta(1)))+1
+!
+  __ASSERT(bin,>,0)
+  __ASSERT(bin,<,energy%size)
+!
+! compute bin range
+  ibin=min(bin-interp_width,1);
+  ebin=max(bin+interp_width,energy%size-1);
+  nbin=ebin-ibin+1
+!
+  e=eavg(bin) ! failsafe (no interpolation)
+!
+  if (nbin.gt.1) then
+   w =>interp_data(:,1)
+   x =>interp_data(:,2)
+   y =>interp_data(:,3)
 
+   w= wgt(ibin:ebin)
+   x=beta(ibin:ebin) + half*(beta(2)-beta(1)) ! use bin centers (for clarity; it is also possible to [equivalently] shift the provided temperature)
+   y=eavg(ibin:ebin)
+!
+   ws=zero; xs=zero; x2s=zero; xy=zero; ys=zero
+!
+   do i=1,nbin
+    __INCR(ws,w(i))
+    wx=w(i)*x(i)
+    __INCR(xs,wx)
+    __INCR(x2s,wx*x(i))
+    __INCR(xy,wx*y(i))
+    __INCR(ys,w(i)*y(i))
+   enddo
+   det=ws*x2s-xs*xs ! inverse determinant
+   a = x2s*ys-xs*xy
+   b = ws*xy-xy*ys
+   __ASSERT(det,>,__ERRTOL)
+   e = ( a + b * bet ) / det ! evaluate linear fit
+  endif
 
+  end __FUN(lookup_average_energy)
 
 end module _N
-
-
-
-

@@ -4,22 +4,25 @@
 #define __INITCTX TEMPERING_INIT
 #define __DONECTX TEMPERING_DONE
 #endif
+#define _N TEMPERING
 
-module tempering
+module _N
+
  __DEP_PARSER
  __DEP_OUTPUT
  __DEP_CONST
  __DEP_FILES
  __DEP_RANDOM
  __DEP_MPI
+ use energy_grid
 
  __IMPNONE
 
  private
 
- public tempering_initialize
-! public tempering_done
-! public tempering_compute
+ public __NM(initialize)
+! public __NM(done)
+ public __NM(compute)
 
  bool, save :: tempering_initialized=.false.
 !
@@ -33,25 +36,38 @@ module tempering
  __PAR(gridsize,int,1000)     ! size for (inverse) temperature grid (note that this is the number of temp. points ; number of bins would be gridsize-1 )
  __PAR(dgrid,float,(one/default_mintemp-one/default_mintemp)/(kboltz*(default_gridsize-1))) ! resolution for (inverse) temperature grid 
 !                                                                                           ! ( note that it is easier to set the gridsize )
+ __PAR(damping_average,float,one/ten) ! damping constant for computing averages (C_\gamma in Zhang & Ma)
 !
  __PAR(inverse_dist, character(len=vartaglen), 'POWERLAW') ! prescribed distribution of inverse temperature
  __PAR(inverse_dist_exp, float, -one) ! coefficent in the distribution of inverse temperature
- __PAR(energy_interp_width,int, 10)   ! number of bins over which the linear fit of average energy is made
+ __PAR(energy_interp_width, int, 10)  ! number of bins over which the linear fit of average energy is made
+ __PAR(average_update_freq, int, 1)   ! frequency of updating average energy
+ __PAR(temperature_update_freq, int, 1)   ! frequency of updating average energy
 !
  __PAR(restart_file, character(len=vartaglen), 'NONE') ! restart file
  __PAR(output_file, character(len=vartaglen), 'tempering.restart.txt') ! output file
-
+!
+ __PAR(random_seeds(4), float, (/one, two, three, four/))
+!
  int :: betadist ! temperature distribution type flag
  int, parameter :: constant=1, powerlaw=2
- 
+!
  int :: fid
+!
+! for storing random numbers
+ int, parameter :: nrandmax = 10000 ! maximum random number array size (many number precomputed for speed)
+ int :: numrand = 0 !actual size of random number array size
+ int :: irand=0 ! pointer into random number array eta
+ float :: eta(0:nrandmax-1)
+ float, parameter :: ookb=one/kboltzmann
+ float :: sqrt2dt  = sqrt(two * default_timestep) ! precomputed sqrt(2 x dt) for BD integrator
 !
  contains
 !====================================================================================
- subroutine tempering_initialize()
+ __SUB(initialize) ()
  character(len=vartaglen) :: keyword, context
  int :: l
- __IAM(TEMPERING_INITIALIZE)
+ __IAM(__NM(INITIALIZE))
 !
 #ifdef __ACEMD
 #define __CONTEXT __STRING(__INITCTX)
@@ -83,7 +99,13 @@ module tempering
   call files_close(fid)
 ! now comes a trick : change context name temporarily to process the restart file using the same calls
   context= __STRING(__RESTARTCTX)
- else ! only read if no restart file provided
+ else ! only read below if no restart file provided
+
+#undef __LEZEROERR
+#define __VAR	damping_average
+#define __TAG	average_damping_constant
+#define __NAME	damping constant for weighted average
+#include "parser/parser_macro2.src"
 
 #define __LEZEROERR
 #define __VAR	dgrid
@@ -91,15 +113,32 @@ module tempering
 #define __NAME	resolution of inverse temperature grid
 #include "parser/parser_macro2.src"
 
+#define __INT
+#define __VAR	average_update_freq
+#define __TAG	__VAR
+#define __NAME	frequency for updating averages
+#include "parser/parser_macro2.src"
+
+#define __VAR	temperature_update_freq
+#define __TAG	__VAR
+#define __NAME	frequency for updating temperature
+#include "parser/parser_macro2.src"
+
 ! warn if both dgrid and gridsize provided
   if (existtag_nocase('inverse_temperature_spacing', context).and.existtag_nocase('inverse_temperature_gridsize', context)) then
    __WRN(whoami, ' GRID SIZE AND GRID SPACING CANNOT BOTH BE SPECIFIED.')
   endif
 !
+
+! check for random seeds
+
+
+!
  endif ! existtag
 ! ==== read data that might be in the restart file
 ! temperature parameters
 !
+#undef __INT
 #define __VAR	temp
 #define __TAG	temperature
 #define __NAME	starting temperature
@@ -182,10 +221,58 @@ module tempering
 #define __NAME	integration step
 #include "parser/parser_macro2.src"
 !======================================
+! call lower-level initialization
 
-
+! initialize RNG
 
 !======================================
- end subroutine tempering_initialize
+ end __SUB(initialize)
 
-end module tempering
+!======================================
+ __FUN(compute) (iteration,energy,temperature) result(new_temperature)
+ int, intent(in) :: iteration
+ float, intent(in) :: energy, temperature
+ float :: new_temperature
+ __IAM(__NM(compute))
+
+! check that iteration consistent
+
+! check that temperature is consistent
+
+! update averages
+ if ( (mod(iteration, average_update_freq) .eq. ione) .or. average_update_freq.eq.1) call energy_grid_update_averages(temperature,energy)
+
+! compute new temperature
+ if ( (mod(iteration, temperature_update_freq) .eq. ione) .or. temperature_update_freq.eq.1) then
+! compute average energy
+! NOTE : the Langevin equation to solve is :
+! dT/dt = ( E-Eavg )/kB - \alpha T + T sqrt[2] x \eta(t), where \alpha is the inverse temp distribution exponent ; \eta is Wiener process derivative
+! the corresponding FPE is
+! dp/dt = (T^2 V(T)'p)' + (T^2 p)'' ; where V(T)=V(\beta (T))=V(1/(kBT));
+! we only need V(beta)' to solve the Langevin, which is E-Eavg(beta)-[ln(w(beta))]' = E-Eavg - kBT\alpha; for w(beta) ~ beta^\alpha
+! to solve the Langevin we use the regular Brownian Dynamics integrator :
+! T(n+1) = T(n) + [ (E - Eavg)/kB - \alpha T(n) ] + T sqrt[2dt]\eta(n) ; where \eta is a normal deviate
+
+   new_temperature = temp &
+ &    + timestep*((energy - energy_grid_lookup_average_energy(temp))*ookb - inverse_dist_exp*temp ) & ! drift
+ &    + temp*sqrt2dt*eta( irand )
+!
+  if (temp.gt.maxtemp) then
+   temp = maxtemp
+  elseif (temp.lt.mintemp) then
+   temp = mintemp
+  endif
+
+  new_temperature=temp
+
+ endif
+
+ end __FUN(compute)
+!======================================
+
+
+
+end module _N
+
+
+

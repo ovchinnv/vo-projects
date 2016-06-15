@@ -8,7 +8,7 @@ if ~exist('nofig')
 end
 
 if ~exist('styles')
- styles={'r-v','g-o','b--.','m-x','c-s','k-','r--','g--','b--','m--','c--','k--'};
+ styles={'r-o','g-s','b-','m-x','c-s','k-','r--','g--','b--','m--','c--','k--'};
 end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%5
 %%%%%%%%%% can load multiple force files here %%%%%%%%%%%%
@@ -68,7 +68,10 @@ dr=r(ind,2:end,:)-r(ind,1:end-1,:);
 fc=0.5*(f(ind,1:end-1,:)+f(ind,2:end,:)); 
 
 dw=-squeeze(sum(dr.*fc,1));
-%dw=dw(:) ;
+
+if niter==1
+ dw=dw(:) ;
+end
 
 work=zeros(m,niter);
 for i=2:m
@@ -89,10 +92,10 @@ workp(:,:)=workp(:,:)-ones(m,1)*workp(1,:); % reset to zero
 % code taken from cfe.m
 %
 ie   =niter;
-ib   =2; % first data set appears strange -- perhaps due to bugs in the first run of averaging
+ib   =1; % first data set appears strange -- perhaps due to bugs in the first run of averaging
 %ib=ie-2; % to show the last
-%ib=round(niter * 0.5);
-nbox=1;
+ib=round(niter * 0.5);
+nbox=2;
 %
 bsize=ceil( (ie-ib+1)/nbox);
 
