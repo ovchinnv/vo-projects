@@ -14,6 +14,10 @@ LOCALDEPS+=source.defs
 include MakeACEMD.inc
 
 tempering_plugin_acemd.o : tempering_plugin_acemd.c aceplug.h $(LOCALDEPS)
+tempering_acemd.o : tempering.o
+tempering.o : energy_grid.o
+energy_grid.o : griddata.o
+
 
 tempering.F90 : parser/parser_macro2.src
 
