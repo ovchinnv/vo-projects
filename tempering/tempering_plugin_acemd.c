@@ -65,7 +65,7 @@ aceplug_err_t aceplug_endstep(struct aceplug_sim_t *s) {
 // get energies
  if ( s-> plugin_get_energy_temp(edata) ) {return ACEPLUG_ERR;}
 // obtain new temperature from tempering routine
- ierr=tempering_dyna_from_acemd(iteration, current_temperature, pe, &new_temperature);
+ ierr=tempering_dyna_from_acemd(iteration, pe, current_temperature, &new_temperature);
 // rescale velocities
  velocity_scale = sqrt(new_temperature/current_temperature) ;
  s->plugin_scale_velocities(velocity_scale);

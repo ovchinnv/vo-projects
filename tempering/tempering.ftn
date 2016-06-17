@@ -21,8 +21,8 @@ module _N
  private
 
  public __NM(initialize)
-! public __NM(done)
- public __NM(compute)
+ public __NM(done)
+ public __NM(main)
 
  bool, save :: tempering_initialized=.false.
 !
@@ -35,7 +35,7 @@ module _N
  __PAR(timestep,float,1.0d-4) ! integration step
  __PAR(iteration,int,izero)   ! iteration
  __PAR(gridsize,int,1000)     ! size for (inverse) temperature grid (note that this is the number of temp. points ; number of bins would be gridsize-1 )
- __PAR(dgrid,float,(one/default_mintemp-one/default_mintemp)/(kboltz*(default_gridsize-1))) ! resolution for (inverse) temperature grid 
+ __PAR(dgrid,float,(one/default_mintemp-one/default_maxtemp)/(kboltz*(default_gridsize-1))) ! resolution for (inverse) temperature grid 
 !                                                                                           ! ( note that it is easier to set the gridsize )
  __PAR(damping_average,float,one/ten) ! damping constant for computing averages (C_\gamma in Zhang & Ma)
 !
@@ -50,6 +50,9 @@ module _N
  __PAR(output_file, character(len=vartaglen), 'tempering.restart.txt') ! output file
 !
  __PAR(random_seeds(4), int, (/ione, itwo, ithree, ifour/))
+! grid data array:
+ float, pointer, dimension(:) :: restart_grid_data ! energy grid data for reading/writing restart/output files
+
 !
  int :: betadist ! temperature distribution type flag
  int, parameter :: constant=1, powerlaw=2
@@ -63,6 +66,17 @@ module _N
  float :: eta(0:nrandmax-1)
  float, parameter :: ookb=one/kboltzmann
  float :: sqrt2dt  = sqrt(two * default_timestep) ! precomputed sqrt(2 x dt) for BD integrator
+!
+! for time series (history) output
+ int, parameter :: maxhist = 100000 ! size of history array ; this is the largest size that can be stored between outputs 
+ int, parameter :: numvar  = 3      ! for now, thermostat temperature and instantaneous energy
+ float :: hist(numvar,0:maxhist-1)
+ int, parameter :: istep=1, itemp=2, iene=3  ! indices into hist
+ int :: bhist=0, ehist=-1 ! beginning and final indices into history array
+ __PAR(stat_add_freq, int, 10)     ! frequency of storing time series
+ __PAR(stat_output_freq, int, 1000)   ! frequency of time series output
+ __PAR(stat_output_file, character(len=vartaglen), 'tempering.series.txt') ! time series file
+ character(len=7) :: stat_acc='UNKNOWN' ! access mode for series file
 !
 _DECL_MSGBUF
 !
@@ -91,7 +105,7 @@ _DECL_MSGBUF
 #undef __CHAR
 !
  if (existtag_nocase('restart_file', context)) then
-  __MESSAGE(whoami,' READING RESTART FILE. COMMAND FILE TEMPERATURE AND GRID SIZE PARAMETERS ARE IGNORED. ')
+  __MESSAGE(whoami,' READING RESTART FILE. COMMAND FILE TEMPERATURE AND GRID SIZE PARAMETERS ARE IGNORED.')
 ! read and parse restart file
   fid=-1
   call files_open(fid, restart_file, 'FORMATTED', 'READ')
@@ -115,6 +129,7 @@ _DECL_MSGBUF
 #define __VAR	dgrid
 #define __TAG	inverse_temperature_spacing
 #define __NAME	resolution of inverse temperature grid
+#define __DOIFOK
 #include "parser/parser_macro2.src"
 
 ! warn if both dgrid and gridsize provided
@@ -138,20 +153,8 @@ _DECL_MSGBUF
 #define __NAME	starting iteration
 #include "parser/parser_macro2.src"
 
-#define __MINUSERR
-#define __INT
-#define __VAR	average_update_freq
-#define __TAG	__VAR
-#define __NAME	frequency for updating averages
-#include "parser/parser_macro2.src"
 !
-#define __VAR	temperature_update_freq
-#define __TAG	__VAR
-#define __NAME	frequency for updating temperature
-#include "parser/parser_macro2.src"
-#undef __MINUSERR
-!
-! temperature parameters (note that the temperature cannot be zero; otherwise beta=\infty
+! temperature parameters (note that the temperature cannot be zero; otherwise beta=\infty)
 !
 #undef __INT
 #define __VAR	temp
@@ -174,13 +177,66 @@ _DECL_MSGBUF
 #define __VAR	gridsize
 #define __TAG	inverse_temperature_gridsize
 #define __NAME	size of inverse temperature grid
+#define __DOIFOK dgrid=(one/mintemp-one/maxtemp)/(kboltz*(gridsize-1))
 #include "parser/parser_macro2.src"
 ! now read the average energy distribution
 
 ! ====== done with (possible) restart file data
  context=__CONTEXT ! reset context if changed
 !
-! read other parameters
+! other parameters
+#define __MINUSERR
+#define __INT
+#define __VAR	average_update_freq
+#define __TAG	__VAR
+#define __NAME	frequency of updating averages
+#define __DOIFOK if (__VAR.eq.izero) __MESSAGE(whoami, ' UPDATE OF AVERAGE ENERGY IS OFF.')
+#include "parser/parser_macro2.src"
+!
+#define __VAR	temperature_update_freq
+#define __TAG	__VAR
+#define __NAME	frequency of updating temperature
+#define __DOIFOK if (__VAR.eq.izero) __MESSAGE(whoami, ' TEMPERATURE UPDATE IS OFF.')
+#include "parser/parser_macro2.src"
+!
+#define __VAR	stat_add_freq
+#define __TAG	__VAR
+#define __NAME	frequency of saving temperature/energy time series
+#define __DOIFOK if (__VAR.eq.izero) __WRN(whoami, ' WILL NOT SAVE TIME SERIES.')
+#include "parser/parser_macro2.src"
+!
+#define __VAR	stat_output_freq
+#define __TAG	__VAR
+#define __NAME	frequency of writing temperature/energy time series file
+#define __DOIFOK if (__VAR.eq.izero) then ; stat_add_freq=izero ; __MESSAGE(whoami, ' WILL NOT WRITE TIME SERIES.') ; endif
+#include "parser/parser_macro2.src"
+!
+! output
+#undef __INT
+#define __CHAR
+#define __VAR	output_file
+#define __TAG	output_file
+#define __NAME	tempering output file
+#include "parser/parser_macro2.src"
+!
+#undef __CHAR
+#define __INT
+#define __VAR	output_file_freq
+#define __TAG	__VAR
+#define __NAME	frequency for writing tempering output/restart file
+#include "parser/parser_macro2.src"
+!
+ if (output_file_freq.le.zero) then
+  __WRN(whoami, ' TEMPERING RESTART FILE WILL BE WRITTEN AT THE END ONLY')
+  nrand=nrandmax ;
+ else
+  nrand=output_file_freq ! this is to ensure that the random deviates are a continuous sequence
+ endif
+
+
+#undef __MINUSERR
+
+
 ! distribution parameters
 #undef __INT
 #define __CHAR
@@ -211,33 +267,11 @@ _DECL_MSGBUF
   endif
  endif
 !
-! output
-#define __CHAR
-#define __VAR	output_file
-#define __TAG	output_file
-#define __NAME	tempering output file
-#include "parser/parser_macro2.src"
-!
-#undef __CHAR
-#define __INT
-#define __MINUSERR
-#define __VAR	output_file_freq
-#define __TAG	__VAR
-#define __NAME	frequency for writing tempering output/restart file
-#include "parser/parser_macro2.src"
-!
- if (output_file_freq.le.zero) then
-  __WRN(whoami, ' TEMPERING RESTART FILE WILL BE WRITTEN AT THE END ONLY')
-  nrand=nrandmax ;
- else
-  nrand=output_file_freq ! this is to ensure that the random deviates are a continuous sequence
- endif
-
 
 ! energy interpolation parameters
 #define __VAR	energy_interp_width
 #define __TAG	energy_interp_width
-#define __NAME	number of bins for energy fitting
+#define __NAME	number of bins for energy interpolation
 #include "parser/parser_macro2.src"
 !
 ! timestep
@@ -246,6 +280,7 @@ _DECL_MSGBUF
 #define __VAR	timestep
 #define __TAG	timestep
 #define __NAME	integration step
+#define __DOIFOK  sqrt2dt=sqrt(two*timestep) ! precompute sqrt(2dt)
 #include "parser/parser_macro2.src"
 !======================================
 ! call lower-level initialization
@@ -253,15 +288,34 @@ _DECL_MSGBUF
 ! initialize RNG
  call random_init(seeds=random_seeds)
  irand=0 ! make sure that we are pointing to the beginning of random number array
-!======================================
+! make sure nrand=0 is not allowed
+ __ASSERT(nrand,>,0)
+ if (fatal_warning()) return
+! initialize grid data
+
+ if (existtag_nocase('restart_file', context)) then
+  call energy_grid_init(mintemp, maxtemp, gridsize, damping_average, energy_interp_width, restart_grid_data)
+ else
+  call energy_grid_init(mintemp, maxtemp, gridsize, damping_average, energy_interp_width) ! no restart data
+ endif
+
+! statistics
+! for now, make sure history array does not overflow during dynamics
+ __ASSERT(stat_add_freq*stat_output_freq,<=,maxhist)
+ bhist=0
+ ehist=-1
+!
+ tempering_initialized=.true.
+!
  end __SUB(initialize)
 
 !======================================
- __FUN(compute) (iteration,energy,temperature) result(new_temperature)
- int, intent(in) :: iteration
- float, intent(in) :: energy, temperature
- float :: new_temperature
+ __SUB(main) (energy,temperature)
+ float, intent(in) :: energy
+ float, intent(inout) :: temperature ! new temperature (if requested) will be returned in the same variable
  __IAM(__NM(COMPUTE))
+ int::i
+ character(len=vartaglen) :: fmt
 
 ! check initialization :
  if (.not. tempering_initialized) then
@@ -269,15 +323,19 @@ _DECL_MSGBUF
   return
  endif
 !
-! check that iteration consistent
-
+ __INC(iteration)
 ! check that temperature is consistent
-
-! update averages
- if ( (mod(iteration, average_update_freq) .eq. ione) .or. average_update_freq.eq.ione) call energy_grid_update_averages(temperature,energy)
-
-! compute new temperature
- if ( (mod(iteration, temperature_update_freq) .eq. ione) .or. temperature_update_freq.eq.ione) then
+ if ( abs(temperature-temp) .gt. __FERRTOL ) then
+  __WRN(whoami, ' TEMPERATURE MISMATCH: '//ftoa(temperature)//'(SIMULATION THERMOSTAT) vs.'//ftoa(temp)//'(THIS MODULE)')
+ endif
+!
+!========================================== update averages
+ if (average_update_freq.gt.izero) then
+  if ( (mod(iteration, average_update_freq) .eq. ione) .or. average_update_freq.eq.ione) call energy_grid_update_averages(temperature,energy)
+ endif
+!========================================== compute new temperature
+ if (temperature_update_freq.gt.izero) then
+  if ( (mod(iteration, temperature_update_freq) .eq. ione) .or. temperature_update_freq.eq.ione) then
 ! compute average energy
 ! NOTE : the Langevin equation to solve is :
 ! dT/dt = ( E-Eavg )/kB - \alpha T + T sqrt[2] x \eta(t), where \alpha is the inverse temp distribution exponent ; \eta is Wiener process derivative
@@ -288,26 +346,67 @@ _DECL_MSGBUF
 ! T(n+1) = T(n) + [ (E - Eavg)/kB - \alpha T(n) ] + T sqrt[2dt]\eta(n) ; where \eta is a normal deviate
 
 ! determine whether we need to generate random numbers:
-  if (irand.eq.0) call randomg_vector(eta, nrand) ! draw nrand normal deviates
+   if (irand.eq.0) call randomg_vector(eta, nrand) ! draw nrand normal deviates
 ! compute new temperature
-  new_temperature = temp &
-  &    + timestep*((energy - energy_grid_lookup_average_energy(temp))*ookb - inverse_dist_exp*temp ) & ! drift
-  &    + temp*sqrt2dt*eta(irand)
+   temp = temp &
+   &    + timestep*((energy - energy_grid_lookup_average_energy(temp))*ookb - inverse_dist_exp*temp ) & ! drift
+   &    + temp*sqrt2dt*eta(irand)
 !
 ! increment random number pointer
-  irand=mod(irand+1,nrand)
+   irand=mod(irand+1,nrand)
 !
-  if (temp.gt.maxtemp) then
-   temp = maxtemp
-  elseif (temp.lt.mintemp) then
-   temp = mintemp
+   if (temp.gt.maxtemp) then
+    temp = maxtemp
+   elseif (temp.lt.mintemp) then
+    temp = mintemp
+   endif
+!
+! update temperature for output
+   temperature=temp
   endif
+ endif
 !
-  temp=new_temperature
+!============================================= save temperature time series
+ if (stat_add_freq.gt.izero) then
+  if ( (mod(iteration, stat_add_freq) .eq. ione) .or. stat_add_freq.eq.ione) then
+   ehist=mod(ehist+1,maxhist) ! increment and wrap
+   hist(istep,ehist) = iteration
+   hist(itemp,ehist) = temp
+   hist(iene, ehist) = energy
+!  if the history array is full (i.e. of length maxhist) ehist now is the same as bhist (i.e. we overwrite the oldest element) ; thus, increment bhist as well
+   if (ehist.eq.bhist) bhist=mod(bhist+1,maxhist)
+  endif
+ endif
 !
+!============================================= output temperature time series
+ if (stat_output_freq.gt.izero) then
+  if ( (mod(iteration, stat_output_freq) .eq. ione) .or. stat_output_freq.eq.ione) then
+!
+   fid=-1
+   call files_open(fid, stat_output_file, 'FORMATTED', stat_acc)
+   i=bhist
+   fmt='('//itoa(size(hist,2))//realfmt//')'
+   do while (i.ne.ehist)
+    write(fid,fmt)  hist(:,i)
+    __INC(i); if(i.eq.maxhist) i=0
+   enddo
+!
+   call files_close(fid)
+   stat_acc='APPEND' ! make sure that we append to existing file on future output
+!
+  endif
+ endif
+!
+!============================================= output restart file
+ if (output_file_freq.gt.izero) then
+  if ( (mod(iteration, output_file_freq) .eq. ione) .or. output_file_freq.eq.ione) then
+!
+   call tempering_write_restart_file()
+!
+  endif
  endif
 
- end __FUN(compute)
+ end __SUB(main)
 !======================================
  __SUB(done)
 ! a possible future modification is to process content in __DONECTX
@@ -319,6 +418,11 @@ _DECL_MSGBUF
  tempering_initialized=.false.
 !
  end __SUB(done)
+!======================================
+ __SUB(write_restart_file) ()
+ __IAM(__NM(WRITE_RESTART_FILE))
+
+ end __SUB(write_restart_file)
 !======================================
 end module _N
 
