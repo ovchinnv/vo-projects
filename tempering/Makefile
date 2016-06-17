@@ -2,7 +2,7 @@ NAME=tempering
 ROOT=../
 HEADS=tempering.h
 OBJS=tempering_plugin_acemd.o tempering_acemd.o tempering.o griddata.o energy_grid.o
-DEPS=files output parser
+DEPS=files output parser random
 
 LOCALDEFS+=-D__BINDC
 

@@ -51,13 +51,13 @@ module _N
 !
  __PAR(random_seeds(4), int, (/ione, itwo, ithree, ifour/))
 ! grid data array:
- float, pointer, dimension(:) :: restart_grid_data ! energy grid data for reading/writing restart/output files
+ float, pointer, dimension(:) :: restart_grid_data=>NULL() ! energy grid data for reading/writing restart/output files
 
 !
  int :: betadist ! temperature distribution type flag
  int, parameter :: constant=1, powerlaw=2
 !
- int :: fid
+ int :: fid, i, ierr
 !
 ! for storing random numbers
  int, parameter :: nrandmax = 10000 ! maximum random number array size (many number precomputed for speed)
@@ -77,6 +77,7 @@ module _N
  __PAR(stat_output_freq, int, 1000)   ! frequency of time series output
  __PAR(stat_output_file, character(len=vartaglen), 'tempering.series.txt') ! time series file
  character(len=7) :: stat_acc='UNKNOWN' ! access mode for series file
+ character(len=vartaglen) :: line ! for reading grid data from restart file
 !
 _DECL_MSGBUF
 !
@@ -129,7 +130,7 @@ _DECL_MSGBUF
 #define __VAR	dgrid
 #define __TAG	inverse_temperature_spacing
 #define __NAME	resolution of inverse temperature grid
-#define __DOIFOK
+#define __DOIFOK gridsize = one + (one/mintemp-one/maxtemp)/(kboltz*dgrid)
 #include "parser/parser_macro2.src"
 
 ! warn if both dgrid and gridsize provided
@@ -152,7 +153,6 @@ _DECL_MSGBUF
 #define __TAG	__VAR
 #define __NAME	starting iteration
 #include "parser/parser_macro2.src"
-
 !
 ! temperature parameters (note that the temperature cannot be zero; otherwise beta=\infty)
 !
@@ -179,8 +179,22 @@ _DECL_MSGBUF
 #define __NAME	size of inverse temperature grid
 #define __DOIFOK dgrid=(one/mintemp-one/maxtemp)/(kboltz*(gridsize-1))
 #include "parser/parser_macro2.src"
-! now read the average energy distribution
-
+! read grid data (ndim is public in energy_grid)
+ allocate(restart_grid_data(ndim*gridsize))
+ do i=1, gridsize-1
+  line=getval_nocase('gdata_'//trim(itoa(i)),context)
+  if (len_trim(line).gt.0) then
+   read(line,*,iostat=ierr) restart_grid_data(i::gridsize)
+   if (ierr.ne.0) then
+    __WRN(whoami, 'ERROR READING GRID DATA FROM LINE "'//trim(line)//'"')
+    cycle
+   endif
+  else
+   __WRN(whoami, 'ERROR READING GRID DATA FROM LINE "'//trim(line)//'"')
+  endif ! line
+ enddo ! grid size
+!
+ if (fatal_warning()) return
 ! ====== done with (possible) restart file data
  context=__CONTEXT ! reset context if changed
 !
@@ -233,9 +247,7 @@ _DECL_MSGBUF
   nrand=output_file_freq ! this is to ensure that the random deviates are a continuous sequence
  endif
 
-
 #undef __MINUSERR
-
 
 ! distribution parameters
 #undef __INT
@@ -353,7 +365,7 @@ _DECL_MSGBUF
    &    + temp*sqrt2dt*eta(irand)
 !
 ! increment random number pointer
-   irand=mod(irand+1,nrand)
+   __INC(irand); if (irand.eq.nrandmax) irand=izero
 !
    if (temp.gt.maxtemp) then
     temp = maxtemp
@@ -382,13 +394,14 @@ _DECL_MSGBUF
  if (stat_output_freq.gt.izero) then
   if ( (mod(iteration, stat_output_freq) .eq. ione) .or. stat_output_freq.eq.ione) then
 !
+  __MESSAGE(whoami, ' WRITING TIME SERIES TO FILE ("'//trim(stat_output_file)//'")')
    fid=-1
    call files_open(fid, stat_output_file, 'FORMATTED', stat_acc)
    i=bhist
    fmt='('//itoa(size(hist,2))//realfmt//')'
    do while (i.ne.ehist)
     write(fid,fmt)  hist(:,i)
-    __INC(i); if(i.eq.maxhist) i=0
+    __INC(i); if(i.eq.maxhist) i=izero
    enddo
 !
    call files_close(fid)
@@ -401,6 +414,7 @@ _DECL_MSGBUF
  if (output_file_freq.gt.izero) then
   if ( (mod(iteration, output_file_freq) .eq. ione) .or. output_file_freq.eq.ione) then
 !
+   __MESSAGE(whoami, ' WRITING OUTPUT/RESTART FILE TO ("'//trim(output_file)//'")')
    call tempering_write_restart_file()
 !
   endif
@@ -409,20 +423,50 @@ _DECL_MSGBUF
  end __SUB(main)
 !======================================
  __SUB(done)
+ __IAM(__NM(DONE))
 ! a possible future modification is to process content in __DONECTX
 !
-! write restart file here
+! write restart file
+ __MESSAGE(whoami, ' WRITING OUTPUT FILE')
+ call tempering_write_restart_file()
 !
  call energy_grid_done()
  call parser_done()
+ __FREE(restart_grid_data)
  tempering_initialized=.false.
 !
  end __SUB(done)
 !======================================
  __SUB(write_restart_file) ()
  __IAM(__NM(WRITE_RESTART_FILE))
-
+ int :: ifile, j
+ call files_open(ifile, output_file, 'FORMATTED','UNKNOWN')
+!
+#define _W write(ifile,*)
+ _W '#TEMPERING RESTART FILE'
+ _W __STRING(__RESTARTCTX)//' {'
+ _W 'iteration=',iteration
+ _W 'temperature=',temp,' # starting thermostat temperature'
+ _W 'minimum_temperature=',mintemp
+ _W 'maximum_temperature=',maxtemp
+ _W 'inverse_temperature_distribution=',trim(inverse_dist)
+ _W 'inverse_temperature_distribution_exponent=',inverse_dist_exp, ' # exponent for power-law distribution'
+ _W 'inverse_temperature_gridsize=',gridsize,' # number of points used for inverse temperature grid discretization'
+ _W 'average_damping_constant=',damping_average,' # constant used in adaptive aeraging (Cg)'
+ _W 'energy_interp_width=',energy_interp_width,' # number of bins on either side of current bin for interpolation'
+ _W 'random_seeds=(',random_get_seeds(),') # current seeds from RNG for seamless restart'
+!
+! retrieve energy grid :
+ restart_grid_data=energy_grid_griddata_ptr()
+! write the energy grid :
+ _W '# gdata_i (i=1, gridsize-1) ; for ith bin write : \beta(i), SUM E(i), SUM E(i)^2, AVG E(i), AVG E(i)^2, WGT(i), NUM_SAMPLES(i) '
+ do j=1, gridsize
+  _W 'gdata_'//trim(itoa(j)),'=(',restart_grid_data(j::gridsize),')'
+ enddo ! forced atoms
+ _W '}'
+! cloase file
+ call files_close(ifile)
+!
  end __SUB(write_restart_file)
 !======================================
 end module _N
-
