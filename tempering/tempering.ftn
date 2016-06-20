@@ -58,6 +58,7 @@ module _N
  int, parameter :: constant=1, powerlaw=2
 !
  int :: fid, i, ierr
+ bool :: qrestart=.false. ! whetner we are restarting from a restart file
 !
 ! for storing random numbers
  int, parameter :: nrandmax = 10000 ! maximum random number array size (many number precomputed for speed)
@@ -105,7 +106,8 @@ _DECL_MSGBUF
 #include "parser/parser_macro2.src"
 #undef __CHAR
 !
- if (existtag_nocase('restart_file', context)) then
+ qrestart=existtag_nocase('restart_file', context)
+ if (qrestart) then
   __MESSAGE(whoami,' READING RESTART FILE. COMMAND FILE TEMPERATURE AND GRID SIZE PARAMETERS ARE IGNORED.')
 ! read and parse restart file
   fid=-1
@@ -148,7 +150,9 @@ _DECL_MSGBUF
   random_seeds=default_random_seeds
  endif
 !
+#define __DEFAULT
 #define __WARNIFMISSING
+#define __INT
 #define __VAR	iteration
 #define __TAG	__VAR
 #define __NAME	starting iteration
@@ -181,18 +185,21 @@ _DECL_MSGBUF
 #include "parser/parser_macro2.src"
 ! read grid data (ndim is public in energy_grid)
  allocate(restart_grid_data(ndim*gridsize))
- do i=1, gridsize-1
-  line=getval_nocase('gdata_'//trim(itoa(i)),context)
-  if (len_trim(line).gt.0) then
-   read(line,*,iostat=ierr) restart_grid_data(i::gridsize)
-   if (ierr.ne.0) then
+! check for grid data if restart_file present
+ if (qrestart) then
+  do i=1, gridsize-1
+   line=getval_nocase('gdata_'//trim(itoa(i)),context)
+   if (len_trim(line).gt.0) then
+    read(line,*,iostat=ierr) restart_grid_data(i::gridsize)
+    if (ierr.ne.0) then
+     __WRN(whoami, 'ERROR READING GRID DATA FROM LINE "'//trim(line)//'"')
+     cycle
+    endif
+   else
     __WRN(whoami, 'ERROR READING GRID DATA FROM LINE "'//trim(line)//'"')
-    cycle
-   endif
-  else
-   __WRN(whoami, 'ERROR READING GRID DATA FROM LINE "'//trim(line)//'"')
-  endif ! line
- enddo ! grid size
+   endif ! line
+  enddo ! grid size
+ endif ! restart_file
 !
  if (fatal_warning()) return
 ! ====== done with (possible) restart file data
@@ -280,7 +287,7 @@ _DECL_MSGBUF
  endif
 !
 
-! energy interpolation parameters
+#define __INT
 #define __VAR	energy_interp_width
 #define __TAG	energy_interp_width
 #define __NAME	number of bins for energy interpolation
@@ -305,7 +312,7 @@ _DECL_MSGBUF
  if (fatal_warning()) return
 ! initialize grid data
 
- if (existtag_nocase('restart_file', context)) then
+ if (qrestart) then
   call energy_grid_init(mintemp, maxtemp, gridsize, damping_average, energy_interp_width, restart_grid_data)
  else
   call energy_grid_init(mintemp, maxtemp, gridsize, damping_average, energy_interp_width) ! no restart data
@@ -336,6 +343,7 @@ _DECL_MSGBUF
  endif
 !
  __INC(iteration)
+ __DBGOUT('iteration = ', iteration)
 ! check that temperature is consistent
  if ( abs(temperature-temp) .gt. __FERRTOL ) then
   __WRN(whoami, ' TEMPERATURE MISMATCH: '//ftoa(temperature)//'(SIMULATION THERMOSTAT) vs.'//ftoa(temp)//'(THIS MODULE)')
@@ -427,8 +435,10 @@ _DECL_MSGBUF
 ! a possible future modification is to process content in __DONECTX
 !
 ! write restart file
- __MESSAGE(whoami, ' WRITING OUTPUT FILE')
- call tempering_write_restart_file()
+ if (tempering_initialized) then
+  __MESSAGE(whoami, ' WRITING OUTPUT FILE')
+  call tempering_write_restart_file()
+ endif
 !
  call energy_grid_done()
  call parser_done()

@@ -62,10 +62,24 @@ aceplug_err_t aceplug_endstep(struct aceplug_sim_t *s) {
  __CINT ierr ; // error code returned from FORTRAN side
 // get thermostat temp
  if ( s-> plugin_get_temperature(&current_temperature) ) {return ACEPLUG_ERR;}
-// get energies
+#ifdef __DEBUG
+ printf("# TEMPERING PLUGIN: got thermostat temperature :"); 
+ printf("%12.5f\n", current_temperature);
+#endif
+
+// get energy
  if ( s-> plugin_get_energy_temp(edata) ) {return ACEPLUG_ERR;}
+#ifdef __DEBUG
+ printf("# TEMPERING PLUGIN: got energy :"); 
+ printf("%12.5f\n", *pe);
+#endif
+
 // obtain new temperature from tempering routine
  ierr=tempering_dyna_from_acemd(iteration, pe, current_temperature, &new_temperature);
+#ifdef __DEBUG
+ printf("# TEMPERING PLUGIN: got new temperature :"); 
+ printf("%12.5f\n", new_temperature);
+#endif
 // rescale velocities
  velocity_scale = sqrt(new_temperature/current_temperature) ;
  s->plugin_scale_velocities(velocity_scale);

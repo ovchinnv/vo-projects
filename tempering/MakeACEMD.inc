@@ -8,6 +8,7 @@ LINKOBJS=\
  files.o \
  rng.o clcg.o \
  mpi_compat_stub.o \
+ ivector.o \
  tempering_plugin_acemd.o \
  tempering_acemd.o \
  tempering.o \
