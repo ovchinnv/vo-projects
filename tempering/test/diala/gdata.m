@@ -17,20 +17,3 @@ nsampl=d(:,7);
 
 kb=1.98e-3 ;
 temp=1./(kb*bet);
-
-figure; hold on;
-
-
-%plot(temp, eavg)
-%plot(bet, eavg)
-%plot(temp, bet.^2 .* ( eeavg-eavg.^2) ) ; % heat capacity
-%return
-
-
-
-plot(bet, nsampl);
-
-plot(bet,100*bet.^(-1),'ko');
-
-set(gca,'xscale','log')
-set(gca,'yscale','log')

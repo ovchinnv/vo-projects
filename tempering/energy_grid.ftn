@@ -12,7 +12,8 @@ module _N
  type(grid) :: energy
  bool :: initialized = .false.
  float, pointer, dimension(:) :: beta, esum, e2sum, eavg, e2avg, wgt, nsamp ! inverse temp, energy sum, squared energy sum, averages, weighted nsamp, actual nsamp
- float :: binscale=-one ; ! a precomputed constant for determining bin size
+ float :: dbeta=-one ;
+ float :: oodbeta=-one ; ! a precomputed constant for determining bin size
  float :: Cg=zero
  int :: interp_width=5 ! number of bins over which to fit an interpolating curve
 ! storage for interpolation
@@ -37,7 +38,7 @@ module _N
    float, optional, intent(in) :: damping_constant
    float, optional, dimension(ndim*gridsize), intent(in), target :: ini_data
    float, pointer :: data(:)
-   float :: minbeta, maxbeta, dbeta
+   float :: minbeta, maxbeta
    int :: i
 !
    __ASSERT(gridsize,>,1)
@@ -99,7 +100,8 @@ module _N
 !
    call griddata_init(energy, gridsize, ndim, data)
 
-   binscale = one / (beta(2)-beta(1))
+   dbeta = beta(2)-beta(1)
+   oodbeta = one / dbeta
 
    deallocate(data)
 !
@@ -122,6 +124,9 @@ module _N
   call griddata_done(energy)
   __FREE(interp_data)
   nullify(beta, esum, e2sum, eavg, e2avg, wgt, nsamp)
+  dbeta=-one
+  oodbeta=-one
+  Cg=zero
   initialized=.false.
   end __SUB(done)
 !================================================
@@ -135,9 +140,9 @@ module _N
   __ASSERT(temperature,>,zero);
   b=one/(kboltz*temperature)
 ! find bin, assuming uniform grid
-  ibin = INT(binscale*(b-beta(1)))+1
+  ibin = INT(oodbeta*(b-beta(1)))+1
 !
-__DBGOUT('binscale=',one/binscale)
+__DBGOUT('oodbeta=',one/oodbeta)
 __DBGOUT('temperature=',temperature)
 __DBGOUT('beta=',b)
 __DBGOUT('betagrid(1)=',beta(1))
@@ -192,7 +197,7 @@ __DBGOUT('betagrid(end)=',beta(energy%size))
   __ASSERT(temperature,>,zero);
   bet=one/(kboltz*temperature)
 ! find bin that containt the desired temperature, assuming uniform grid
-  bin = INT(binscale*(bet-beta(1)))+1
+  bin = INT(oodbeta*(bet-beta(1)))+1
 !
   __ASSERT(bin,>,0)
   __ASSERT(bin,<=,energy%size)
@@ -255,15 +260,17 @@ __DBGOUT('betagrid(end)=',beta(energy%size))
   float, intent(inout) :: temperature
   float :: b
   b=one/(kboltz*temperature)
-! errtol is to ensure that we always stay below the boundary for numerical stability
+!
  __DBGOUT(' minimum beta = ', beta(1))
  __DBGOUT(' maximum beta = ', beta(energy%size)+(beta(2)-beta(1)))
 !
-  if (b.lt.beta(2)) then
-   b=max(b,beta(1)+__ERRTOL)
+  if (b.le.beta(1)) then
+!   b = beta(1) + (beta(1) - b) ! reflect from b(1) boundary
+   b=2*beta(1)-b
    temperature=one/(kboltz*b)
-  elseif (b.gt.beta(energy%size)) then
-   b=min(b,beta(energy%size)+(beta(2)-beta(1))-__ERRTOL)
+  elseif (b.ge.beta(energy%size)+dbeta ) then
+!   b=beta(energy%size)+dbeta - (b - (beta(energy%size)+dbeta)) ! reflect from b(size)+db boundary
+   b=2*(beta(energy%size)+dbeta)-b
    temperature=one/(kboltz*b)
   endif
 ! otherwise no need to update temp
