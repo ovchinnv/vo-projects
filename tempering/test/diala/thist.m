@@ -28,6 +28,7 @@ figure ; hold on; grid on
 plot(bint, pdft,'k.-')
 % superpose powerlaw
 plot(bint,4*bint.^-1,'r')
+%plot(bint,1500*bint.^-2,'r')
 
 set(gca, 'xscale','log')
 set(gca, 'yscale','log')
