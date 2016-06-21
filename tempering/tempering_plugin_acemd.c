@@ -81,10 +81,16 @@ aceplug_err_t aceplug_endstep(struct aceplug_sim_t *s) {
  printf("%12.5f\n", new_temperature);
 #endif
 // rescale velocities
- velocity_scale = sqrt(new_temperature/current_temperature) ;
- s->plugin_scale_velocities(velocity_scale);
+// NOTE : the configuration allows temperature averages to be updated
+// more frequently that temperature evolution;
+// therefore, it is possible that the new temperature will be the same, 
+// in wich case, we do not need to update it in the MD code
+ if ( fabs ( new_temperature - current_temperature ) > __CERRTOL ) {
+  velocity_scale = sqrt(new_temperature/current_temperature) ;
+  s->plugin_scale_velocities(velocity_scale);
 // set new thermostat temperature
- if ( s-> plugin_set_temperature(new_temperature) ) { return ACEPLUG_ERR;}
+  if ( s-> plugin_set_temperature(new_temperature) ) { return ACEPLUG_ERR;}
+ }
 
  return (ierr>0) ? ACEPLUG_ERR : ACEPLUG_OK ;
 }

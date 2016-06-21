@@ -25,6 +25,7 @@ module _N
  public __NM(update_averages)
  public __NM(lookup_average_energy)
  public __NM(griddata_ptr)         ! return pointer to grid data
+ public __NM(apply_bc)
 
  contains 
 !=====================================================
@@ -46,7 +47,7 @@ module _N
     __MESSAGE(whoami, ' INITIALIZING FROM RESTART DATA AND IGNORING MIN/MAX TEMPERATURES')
 ! some checks:
 ! size
-    __ASSERT(size(ini_data),>,ndim*gridsize)
+    __ASSERT(size(ini_data),>=,ndim*gridsize)
 ! positive temps
     beta=>ini_data(1:gridsize)
     __ASSERT(minval(beta),>,zero)
@@ -94,9 +95,11 @@ module _N
    endif
 !
 !
+   __DBGOUT('calling griddata_init with ', ndim, ' variables and ', gridsize,' grid points')
+!
    call griddata_init(energy, gridsize, ndim, data)
 
-   binscale = (gridsize-1) / (beta(2)-beta(1))
+   binscale = one / (beta(2)-beta(1))
 
    deallocate(data)
 !
@@ -109,7 +112,7 @@ module _N
    nsamp => energy%data(6*gridsize+1:          )
 !
 !  storage for interpolation
-   allocate(interp_data( min(energy%size-1,2*interp_width+1), 3 )) ;
+   allocate(interp_data( min(energy%size,2*interp_width+1), 3 )) ;
 !
    initialized=.true.
 !
@@ -134,8 +137,16 @@ module _N
 ! find bin, assuming uniform grid
   ibin = INT(binscale*(b-beta(1)))+1
 !
+__DBGOUT('binscale=',one/binscale)
+__DBGOUT('temperature=',temperature)
+__DBGOUT('beta=',b)
+__DBGOUT('betagrid(1)=',beta(1))
+__DBGOUT('betagrid(end)=',beta(energy%size))
+!
   __ASSERT(ibin,>,0)
-  __ASSERT(ibin,<,energy%size)
+  __ASSERT(ibin,<=,energy%size)
+
+ __DBGOUT('updating averages in bin ',ibin)
 
 ! update sums in bin #ibin
 ! procedure of Zhang/Ma 2010
@@ -152,6 +163,12 @@ module _N
   t=one/wgt(ibin)
   eavg(ibin)=t*esum(ibin)
   e2avg(ibin)=t*e2sum(ibin)
+!
+ __DBGOUT('esum = ',esum(ibin))
+ __DBGOUT('eavg = ',eavg(ibin))
+ __DBGOUT('wgt = ', wgt(ibin))
+ __DBGOUT('nsamp = ', nsamp(ibin))
+
 !
   end __SUB(update_averages)
 !================================================
@@ -178,23 +195,36 @@ module _N
   bin = INT(binscale*(bet-beta(1)))+1
 !
   __ASSERT(bin,>,0)
-  __ASSERT(bin,<,energy%size)
+  __ASSERT(bin,<=,energy%size)
 !
 ! compute bin range
-  ibin=min(bin-interp_width,1);
-  ebin=max(bin+interp_width,energy%size-1);
+  ibin=max(bin-interp_width,1);
+  ebin=min(bin+interp_width,energy%size);
   nbin=ebin-ibin+1
+!
+ __DBGOUT('this bin =',bin)
+ __DBGOUT('first bin=',ibin)
+ __DBGOUT('last bin =',ebin)
+ __DBGOUT('size of interp_data=',size(interp_data))
 !
   e=eavg(bin) ! failsafe (no interpolation)
 !
-  if (nbin.gt.1) then
+ __DBGOUT('failsafe energy = ', e)
+!
+! count the number of bins for which the weights are positive ; bail out if this number is less than 2 (not enough samples for interpolation)
+  if ( (nbin.gt.1) .and. (count(wgt(ibin:ebin).gt.zero).gt.1 )) then
    w =>interp_data(:,1)
    x =>interp_data(:,2)
    y =>interp_data(:,3)
+!
+   w(1:nbin)= wgt(ibin:ebin)
+   x(1:nbin)=beta(ibin:ebin) + half*(beta(2)-beta(1)) ! use bin centers (for clarity; it is also possible to [equivalently] shift the provided temperature)
+   y(1:nbin)=eavg(ibin:ebin)
 
-   w= wgt(ibin:ebin)
-   x=beta(ibin:ebin) + half*(beta(2)-beta(1)) ! use bin centers (for clarity; it is also possible to [equivalently] shift the provided temperature)
-   y=eavg(ibin:ebin)
+ __DBGOUT(' interp beta grid :',x)
+ __DBGOUT(' interp energies  :',y)
+ __DBGOUT(' interp weights   :',w)
+
 !
    ws=zero; xs=zero; x2s=zero; xy=zero; ys=zero
 !
@@ -208,11 +238,11 @@ module _N
    enddo
    det=ws*x2s-xs*xs ! inverse determinant
    a = x2s*ys-xs*xy
-   b = ws*xy-xy*ys
+   b = ws*xy-xs*ys
    __ASSERT(det,>,__ERRTOL)
    e = ( a + b * bet ) / det ! evaluate linear fit
   endif
-
+ __DBGOUT(' returning energy ', e)
   end __FUN(lookup_average_energy)
 !================================================
   __FUN(griddata_ptr) () result(ptr)
@@ -220,5 +250,25 @@ module _N
   ptr=>energy%data
   end __FUN(griddata_ptr)
 !================================================
-
+  __SUB(apply_bc)(temperature)
+  __IAM(__NM(APPLY_BC))
+  float, intent(inout) :: temperature
+  float :: b
+  b=one/(kboltz*temperature)
+! errtol is to ensure that we always stay below the boundary for numerical stability
+ __DBGOUT(' minimum beta = ', beta(1))
+ __DBGOUT(' maximum beta = ', beta(energy%size)+(beta(2)-beta(1)))
+!
+  if (b.lt.beta(2)) then
+   b=max(b,beta(1)+__ERRTOL)
+   temperature=one/(kboltz*b)
+  elseif (b.gt.beta(energy%size)) then
+   b=min(b,beta(energy%size)+(beta(2)-beta(1))-__ERRTOL)
+   temperature=one/(kboltz*b)
+  endif
+! otherwise no need to update temp
+!
+!
+  end __SUB(apply_bc)
+!================================================
 end module _N
