@@ -1,0 +1,199 @@
+#!/bin/bash
+
+###################################################################
+if test -z "$1"
+then 
+ echo "USAGE: acetemp input_file output_file"
+ exit 1
+else
+ input=$1
+fi
+############# job output file ####################################
+if test -z "$2"
+then 
+ echo "USAGE: acetemp input_file output_file"
+ exit 1
+else
+ output=$2
+fi
+###################################################################
+mde=acemd ;# md engine
+name=wzip ;
+
+psffile=struc/${name}_snx.psf
+pdbfile=struc/${name}_msn.pdb
+
+resfile=${pdbfile}
+
+mkdir -p scratch
+outputName=scratch/${name}
+
+hmass=4; # hydrogen mass
+freq=10000;
+#freq=500; #
+
+count=10;
+cres=$((count-1)); # restart number
+numrun=25;
+cfin=$((count+$numrun-1));
+
+nsteps=10000000; # 20ns each at 2fs ; 40 at 4fs
+#nsteps=5000000; # 10ns each at 2fs ; 20 at 4fs
+
+flag="nvt";
+############### adaptive tempering options ################
+qtemp=1 # whether tempering is on
+#------------------------------- plugin options
+Tini=300          ;# temperature that will be used for initialization if restart_file=MONE, or if qtemp=0
+source struna.sh  ;# need function "update" for updating input parameters
+template=temp.in  ;# template file for tempering
+restart_file=NONE ;# name of restart file
+tempfreq=10       ;# how frequently to call the plugin
+friction=1        ;# langevin friction 1/ps
+
+############## remaining parameters ######################
+restartName=scratch/${name}${cres}${flag};
+restartName=scratch/${name}9eq;
+
+if [ "$count" -eq "0" ]; then
+ restart=0;
+else
+ restart=1;
+fi
+
+while [ $count -le $cfin ]
+ do
+# check if the job already completed successfully
+  if [ -f $output$count$flag ] ; then
+   ok=`grep "dx.doi.org/doi:10.1021/ct9000685" $output$count$flag` ;# paper doi shown after successful runs
+   if [ ! -z "$ok" ]; then
+    restart=1
+    restartName=$outputName$count$flag
+    cres=$count
+    count=$((count+1 ))
+#======================== for tempering
+    if [ $qtemp -eq 1 ] ; then
+     if [ "x$restart_file" == "xNONE" ] ; then
+      restart_file="" ; # erase so that it will be computed belo
+     fi
+    fi
+#=========================^ for tempering
+    continue ;# skip this run
+   fi
+  fi
+# end of check
+  script=__md$count$flag
+
+  echo '#!/bin/vmd' > $script
+  echo set psffile  $psffile >>$script
+  echo set pdbfile  $pdbfile >>$script
+  echo set resfile  $resfile >>$script
+
+
+  if [ "$restart" -eq "0" ]; then
+   grep -i SET ${name}.str |\
+     awk '{print tolower($1)" "tolower($2)" "$3+2}' >>$script 
+   echo 'temperature       $temperature' >>$script
+   dt=1.0 ; #timestep
+   echo set hydrogenmass 1                    >> $script
+   shake=none ;
+  else
+   tail -n1 $restartName.xsc | awk '{print "set a "$2}' >>$script 
+   tail -n1 $restartName.xsc | awk '{print "set b "$6}' >>$script 
+   tail -n1 $restartName.xsc | awk '{print "set c "$10}' >>$script 
+   if [ "$hmass" -eq "4" ]; then
+    dt=4.0
+   else
+    dt=2.0
+   fi
+   shake=all
+   echo bincoordinates     $restartName.coor  >>$script
+   echo binvelocities      $restartName.vel   >>$script
+   echo set hydrogenmass   $hmass             >> $script
+  fi
+
+  echo set shake $shake                    >> $script
+  echo set dt $dt                          >> $script
+  echo set parameters param/protein-water-ions36.prm      >> $script ;# note that these are c36 params
+
+  echo set cswitch off                     >> $script
+  if [ "$cswitch" == "on" ]; then
+   echo constraintscaling `echo 90-$count*10 |bc` >> $script ;
+  fi
+  echo set nsteps $nsteps                  >> $script
+  echo set freq $freq                      >> $script  ;# frequency for restart files
+
+  echo set outputName $outputName$count$flag >> $script
+#
+  echo set lang on                         >> $script
+  echo set lfriction $friction             >> $script
+#
+  echo set baro off                        >> $script
+  echo set ministeps 0                     >> $script
+  echo wrap all                            >> $script
+#
+# tempering :
+  if [ $qtemp -eq 1 ]; then
+   pluginfile=$name.temp${count}
+   output_file=$pluginfile.txt
+   history_file=$pluginfile.series.txt
+#========== update simulation file ======================
+   echo "### tempering plugin ###"             >> $script
+   echo pluginload temp libtemp_acemd.so       >> $script
+   echo pluginarg  temp input $pluginfile.in   >> $script
+   echo pluginarg  temp output $pluginfile.out >> $script
+   echo pluginfreq $tempfreq                   >> $script
+# also set energy compute frequency = pluginfreq :
+   echo set efreq $tempfreq                    >> $script
+# determine restart temperature
+   if [ "x$restart_file" == "xNONE" ]; then
+    T=$Tini
+   else
+    restart_file=$name.temp${cres}.txt
+    T=`grep '^.temperature=' $restart_file | awk '{print $2}'` ;# extract temperature from restart file
+   fi
+#========== write tempering config ======================
+   cat $template > $pluginfile.in
+   for var in restart_file output_file history_file ; do
+    update $pluginfile.in $var
+   done
+#
+  else
+# parameters with qtemp=0
+   echo set efreq $freq                        >> $script
+  fi
+# remaining params
+  echo set temperature $T                      >> $script
+
+  cat $input                             >> $script
+###############################################################
+#exit
+time $mde $script >& $output$count$flag
+sleep 5;
+###############################################################
+ if [ $? -ne 0 ]; then
+   echo Execution interrupted due to errors during run $count.
+   exit
+ else
+   qunstable=`tail $output$count$flag | grep -i unstable | wc -m`
+   if [ "$qunstable" -gt "0" ]; then
+    echo Will repeat previous run.
+    mv $output$count$flag ${output}${count}${flag}.crash
+    mv output.dcd $outputName$count$flag.crash.dcd
+   else
+# all ok : increment run count
+    restart=1 ; #ensure restart in future calculations
+    restartName=$outputName$count$flag
+    mv output.dcd ${restartName}.dcd
+    cres=$count
+    count=$(($count+1 ))
+#======================== for tempering
+    if [ $qtemp -eq 1 ]; then
+     if [ "x$restart_file" == "xNONE" ]; then
+      restart_file=""; # erase so that it will be computed belo
+     fi
+    fi
+#=========================^ for tempering
+   fi
+ fi
+done

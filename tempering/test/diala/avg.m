@@ -5,7 +5,7 @@ close all;
 
 % interpolate average using the method of Zhang&Ma10:
 n=length(bet) ;
-db=100; % number of interpolation bins on either side of central bin
+db=50; % number of interpolation bins on either side of central bin
 for i=1:n
  ib=max(1, i-db);
  ie=min(i+db,n);
@@ -37,7 +37,8 @@ xlabel('\it \beta(kcal/mol)^{-1}', 'fontsize',14);
 
 %set(gca,'xscale','log')
 %set(gca,'yscale','log')
-
+set(gcf, 'paperpositionmode','auto') ;
+print(gcf, '-depsc2', 'energy');
 
 % heat capacity
 figure ; hold on; box on;
@@ -53,6 +54,11 @@ legend(['from smoothed average (',num2str(2*db+1),' bins)'],'from variance');
 ylabel('\it C_V(kcal/mol/K)', 'fontsize',14);
 xlabel('\it \beta(kcal/mol)^{-1}', 'fontsize',14);
 
+set(gcf, 'paperpositionmode','auto') ;
+print(gcf, '-depsc2', 'CV');
+
+
+format long;
 mean(cvv)
 mean(cvm)
 
@@ -60,7 +66,7 @@ mean(cvm)
 
 figure ; hold on ; box on ; grid on;
 plot(bet, nsampl);
-plot(bet,1000*bet.^(-1),'k-');
+plot(bet,13000*bet.^(-1),'k-');
 
 set(gca,'xscale','log')
 set(gca,'yscale','log')
