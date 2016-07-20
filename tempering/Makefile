@@ -13,7 +13,7 @@ LOCALDEPS+=source.defs
 
 include MakeACEMD.inc
 
-$(SRC) : $(LOCALDEPS)
+$(SOURCES) : $(LOCALDEPS)
 
 tempering_plugin_acemd.o : tempering_plugin_acemd.c aceplug.h
 tempering_acemd.o : tempering.o
