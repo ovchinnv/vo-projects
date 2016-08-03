@@ -8,7 +8,7 @@ if ~exist('nofig')
 end
 
 if ~exist('styles')
- styles={'r-v','g-o','b--.','m-x','c-s','k-','r--','g--','b--','m--','c--','k--'};
+ styles={'r-o','g-s','b--.','m-x','c-s','k-','r--','g--','b--','m--','c--','k--'};
 end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%5
 %%%%%%%%%% can load multiple force files here %%%%%%%%%%%%
@@ -93,7 +93,8 @@ ib   =1;
 %ib=40;
 %
 ib=round(niter * 0.5);
-nbox =1;
+%ib=niter-2
+nbox =3;
 bsize=ceil( (ie-ib+1)/nbox);
 
 lw=1.;
@@ -103,6 +104,7 @@ nsample=floor((ie-ib+1)/bsize)+sign(mod(ie-ib+1,bsize));
 fe=zeros(nsample,m);
 j=1;
 for i=ib:bsize:ie
+ i
  fe(j,:)=mean(work(:, i : i+min(bsize-1,ie-i) ),2);
  j=j+1;
 % leg=[leg {['iteration ',num2str(i-1)]}];
