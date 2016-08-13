@@ -52,6 +52,7 @@ __CHARMM_ONLY##IF STRINGM
       float :: kperp ! force constant for forces perpendicular to string ; same for all CV
       float, dimension(:), pointer   :: gamma
       float, dimension(:), pointer   :: weight
+      float, dimension(:), pointer   :: temp ! temperature for BD evolution of this CV
       float :: wrss ! one over root-sum-square of the weight array
 ! 2016 : for flat-bottom potential
       float, dimension(:), pointer :: fbwidth ! HALF-width of flat-bottom (fb) region of harmonic potential
@@ -125,6 +126,7 @@ __CHARMM_ONLY##IF STRINGM
       public cv_common_set_w  ! set weight
       public cv_common_set_active  ! set active flag
       public cv_common_set_g  ! set gamma
+      public cv_common_set_temp  ! set BD evolution temperature
       public cv_common_set_fbwidth  ! set width of the flat-bottom region of potential
       public cv_common_set_dt  ! set default timestep
       public cv_common_set_r  ! set collective variable value
@@ -269,6 +271,7 @@ __CHARMM_ONLY##IF STRINGM
         allocate(cv%active(max_cv_common))
         allocate(cv%k(max_cv_common))
         allocate(cv%gamma(max_cv_common))
+        allocate(cv%temp(max_cv_common))
         allocate(cv%fbwidth(max_cv_common))
         allocate(cv%num_fb_ave(max_cv_common))
         allocate(cv%weight(max_cv_common))
@@ -288,6 +291,7 @@ __CHARMM_ONLY##IF STRINGM
         cv%kpara=zero
         cv%kperp=zero
         cv%gamma=zero
+        cv%temp=zero
         cv%fbwidth=zero
         cv%weight=zero ! need to be initialized by user
         cv%ds=zero
@@ -338,6 +342,7 @@ __CHARMM_ONLY##IF STRINGM
         deallocate(cv%active)
         deallocate(cv%k)
         deallocate(cv%gamma)
+        deallocate(cv%temp)
         deallocate(cv%weight)
         deallocate(cv%fbwidth)
         deallocate(cv%num_fb_ave)
@@ -358,10 +363,15 @@ __CHARMM_ONLY##IF STRINGM
        endif
        end subroutine cv_common_done
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       function cv_common_add(type,k,gamma,weight,fbwidth)
+       function cv_common_add(type,k,gamma,weight,fbwidth,temp)
 !
        int :: type
-       float, optional :: k, gamma, weight, fbwidth
+       float, optional :: k, gamma, weight, fbwidth, temp
+! k: 		force constant
+! gamma:	friction for evolution
+! weight:	weight factor for reparametrization
+! fbwidth:	width of flat-bottom potential (0 recovers harmonic potential)
+! temp:		temperature for BD evolution (0 means steepest descent; higher temp for TAMD)
 !      locals
        int j
        int cv_common_add ! returns index into cv array
@@ -407,13 +417,27 @@ __CHARMM_ONLY##IF STRINGM
         else
          cv%fbwidth(j)=zero;
         endif
+! BD evolution temperature
+        if (present(temp)) then
+         if (temp.ge.zero) then
+          cv%temp(j)=temp
+         else
+          __WRN(whoami,'NEGATIVE BD EVOLUTION TEMPERATURE SPECIFIED. WILL SET TO ZERO.')
+          cv%temp(j)=zero;
+         endif
+        else
+         cv%temp(j)=zero;
+        endif
 !
-        cv%weight(j)=zero
         if (present(weight)) then
          if (weight.gt.zero) then  ! negative weights are ignored
           cv%weight(j)=weight
          endif
+        else
+          __WRN(whoami,'NEGATIVE CV WEIGHT SPECIFIED. WILL SET TO ZERO.')
+         cv%weight(j)=zero
         endif
+!
         cv%type(j)=type
         cv_common_add=j
 !
@@ -1003,7 +1027,7 @@ __CHARMM_ONLY##ENDIF
        float :: dummy
        int :: i
        float :: delt
-       __IAM(CV_COMMON_EVOLVE_BD)
+       __IAM(CV_COMMON_EVOLVE_SD)
 !      do work
        cv%r(:,comp)=cv%r(:,main) ! save current as "old" coordinates in column 2
        if (present(dt)) then; delt=dt; else ; delt=cv%dt; endif
@@ -2159,16 +2183,22 @@ __CHARMM_ONLY##ENDIF
        end subroutine cv_common_set_fbwidth
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_set_g(i,gamma)
-!
        int :: i
        float :: gamma
 !
        if (i.gt.0.and.i.le.cv%num_cv.and.gamma.gt.zero)                  & ! disallow neagtive or zero values
      &      cv%gamma(i)=one/gamma
        end subroutine cv_common_set_g
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       subroutine cv_common_set_temp(i,temp)
+       int :: i
+       float :: temp
+!
+       if (i.gt.0.and.i.le.cv%num_cv.and.temp.gt.zero)                  & ! disallow neagtive or zero values
+     &      cv%temp(i)=temp
+       end subroutine cv_common_set_temp
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_set_w(i,weight)
-       
        int :: i
        float :: weight
 !
@@ -2181,7 +2211,6 @@ __CHARMM_ONLY##ENDIF
        end subroutine cv_common_set_w
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_set_r(i,z,col1)
-       
 !
        int :: i
        int, optional :: col1
@@ -2203,7 +2232,6 @@ __CHARMM_ONLY##ENDIF
        end subroutine cv_common_set_r
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_set_dt(dt)
-!
        float :: dt
 ! no error checking: can set to anything you want!
 !      locals
@@ -2211,7 +2239,6 @@ __CHARMM_ONLY##ENDIF
        end subroutine cv_common_set_dt
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_copy(c1, c2)
-!
        int :: c1, c2
 !      local
        __IAM(CV_COMMON_COPY)
@@ -2227,7 +2254,6 @@ __CHARMM_ONLY##ENDIF
        end subroutine cv_common_copy
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_swap(col1, col2)
-       
        int, optional :: col1, col2
        __IAM(CV_COMMON_SWAP)
        int :: c1, c2
@@ -2249,9 +2275,7 @@ __CHARMM_ONLY##ENDIF
        end subroutine cv_common_swap
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        function cv_common_rmsd(col1, col2)
-       
        __DEP_CONST 
-       
        int, optional :: col1, col2
        int :: c1, c2
 !      local
@@ -2318,7 +2342,6 @@ __CHARMM_ONLY##ENDIF
        end subroutine cv_common_update_ave
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_update_fe_ave()
-       
 !      local
        float :: t
 !      begin
@@ -2328,7 +2351,6 @@ __CHARMM_ONLY##ENDIF
        end subroutine cv_common_update_fe_ave
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_set_ave_samples(n)
-       
        int :: n
        if (n.ge.0) cv%num_average_samples=n
        end subroutine cv_common_set_ave_samples
@@ -2365,7 +2387,6 @@ __CHARMM_ONLY##ENDIF
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_rex_set_temp(temp)
        __DEP_CONST 
-       
        float, optional :: temp
        float :: t
 !
@@ -2377,7 +2398,6 @@ __CHARMM_ONLY##ENDIF
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_rex_print_map(iunit,fmt)
        use sm_var, only: nstring
-       
 !
 !      only root process should call
        int :: iunit
@@ -2403,7 +2423,6 @@ __CHARMM_ONLY##ENDIF
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_rex_read_map(iunit)
        use sm_var, only: nstring
-       
        __DEP_MULTICOM
        __DEP_MPI 
 !
@@ -2441,11 +2460,9 @@ __CHARMM_ONLY##ENDIF
        subroutine cv_common_rex_print_log(iunit, fmt)
 !      assume that unit is prepared
 !      NOTE that this is a global print!
-      
       __DEP_MULTICOM
       __DEP_MPI
 !
-       
        int iunit
        character(len=*), optional :: fmt
 !      local
@@ -2561,7 +2578,6 @@ __MPI_ONLY     &                  MPI_COMM_STRNG,ierror)
 !===================================================================================================
        subroutine cv_common_print_voro_map(iunit,fmt)
        use sm_var, only: nstring
-       
        __DEP_MULTICOM
        __DEP_MPI 
 !
@@ -2595,7 +2611,6 @@ __MPI_ONLY     &                  MPI_COMM_STRNG,ierror)
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_read_voro_map(iunit)
        use sm_var, only: nstring
-       
        __DEP_MULTICOM
        __DEP_MPI 
 !
@@ -2635,7 +2650,6 @@ __MPI_ONLY     &                  MPI_COMM_STRNG,ierror)
        use sm_var, only: nstring, mestring, smcv_initialized
        __DEP_MULTICOM
        __DEP_MPI 
-       
 #include "mpitype.def"
 !
 !      locals
@@ -2726,7 +2740,6 @@ __CHARMM_ONLY##ENDIF
        subroutine cv_common_voronoi_smart_update(rnew, rold, m_iter)
        use sm_var, only: nstring, mestring, smcv_initialized
        use cv_types
-       
 !      cv%rall(:,:) is expected to have values from previous update that
 !      are consistent with rtemp; if this is not true, the routine
 !      just does a regular update and exits

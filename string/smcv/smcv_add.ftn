@@ -1,7 +1,18 @@
-!
 ! THIS FILE CONTAINS ROUTINES FOR ADDING NEW CV
 ! THERE IS A SEPARATE ROUTINE FOR EACH CV TYPE
 !
+#define __SETQROOT qroot=MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.ME_STRNG.eq.0
+!
+#define __IFMTW 664
+#define __IFMTNOW 665
+#define __FMTW    "(A,' WILL ADD ',A,' CV WITH K =',F10.3,' WEIGHT =',F7.3,' AND GAMMA =',F7.3)"
+#define __FMTNOW  "(A,' WILL ADD ',A,' CV WITH K =',F10.3,' AND GAMMA =',F7.3)"
+#define __FMTWT   "(A,' WILL ADD ',A,' CV WITH K =',F10.3,' WEIGHT =',F7.3,' GAMMA =',F7.3,' AND TEMPERATURE =',F7.3)"
+#define __FMTNOWT "(A,' WILL ADD ',A,' CV WITH K =',F10.3,' GAMMA =',F7.3,' AND TEMPERATURE =',F7.3)"
+!
+#define __GET(_V, _NM, _TYPE, _DEF) if (__INDX(comlyn, comlen, __STRING(_NM), len(__STRING(_NM))).gt.0) then;\
+                                     _V=__CONCAT(__GET_RM_,_TYPE)(comlyn,comlen,__STRING(_NM),_DEF);
+!====================================
       module smcv_add
 !
 __CHARMM_ONLY##IF STRINGM
@@ -27,21 +38,11 @@ __CHARMM_ONLY##IF STRINGM
       public smcv_frame_add
 !
       bool, save :: qroot
-      float :: k, w, gam
-!
-#define __SETQROOT qroot=MPI_COMM_STRNG.ne.MPI_COMM_NULL.and.ME_STRNG.eq.0
-!
-#define __IFMTW 664
-#define __IFMTNOW 665
-#define __FMTW __IFMTW format(A,' WILL ADD ',A,' CV WITH K =',F10.3,' WEIGHT =',F7.3,' AND GAMMA =',F7.3)
-#define __FMTNOW __IFMTNOW format(A,' WILL ADD ',A,' CV WITH K =',F10.3,' AND GAMMA =',F7.3,'.')
-!
-#define __GET(_V, _NM, _TYPE, _DEF) if (__INDX(comlyn, comlen, __STRING(_NM), len(__STRING(_NM))).gt.0) then;\
-                                     _V=__CONCAT(__GET_RM_,_TYPE)(comlyn,comlen,__STRING(_NM),_DEF);
+      float :: k, w, gam, temp
 !
       contains
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccc
-      subroutine smcv_add_kwg(comlyn,comlen)
+      subroutine smcv_add_kwgt(comlyn,comlen)
       character(len=*) :: comlyn
       int :: comlen
       k=zero;__GET(k,FORC,F,zero) ! force k
@@ -53,7 +54,11 @@ __CHARMM_ONLY##IF STRINGM
       gam=one;__GET(gam,GAM,F,one) ! friction
       else    __GET(gam,GM, F,one)
       endif
-      end subroutine smcv_add_kwg
+      gam=one;__GET(gam,TEMP,F,zero) ! BD temperature
+      else    __GET(gam,TEMPERATURE, F,zero)
+      else    __GET(gam,T, F,zero)
+      endif
+      end subroutine smcv_add_kwgt
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine smcv_add_cv(comlyn,comlen)
       use cv_quaternion, only: quat_initialized, quat, quat_init
@@ -76,7 +81,7 @@ __SETQROOT
 ! preprocessor tricks to simplify code
       qfbwidth=.true. ! whether to ckeck for flat-bottom width specification after default add
       if (.false.) then ! note that the statements below _WILL_ be executed
-#define __TRY(__WHAT) elseif (__STRNCMP(keyword,__STRING(__WHAT),len(__STRING(__WHAT)))) then; call smcv_add_kwg(comlyn,comlen); ind=__CONCAT3(smcv_,__WHAT,_add)(__ADD_ARGS)
+#define __TRY(__WHAT) elseif (__STRNCMP(keyword,__STRING(__WHAT),len(__STRING(__WHAT)))) then; call smcv_add_kwgt(comlyn,comlen); ind=__CONCAT3(smcv_,__WHAT,_add)(__ADD_ARGS)
 #define __ADD_ARGS comlyn, comlen /* note that these two arguments are considered a single argument by CPP */
 #define smcv_POSI_COM_X_add(__1,...) smcv_posi_com_add(__1, (/one, zero, zero/))
 #define smcv_POSI_COM_Y_add(__1,...) smcv_posi_com_add(__1, (/zero, one, zero/))
@@ -238,9 +243,17 @@ __SETQROOT
 !     print short summary
       if (qroot) then
        if (w.lt.zero) then
-        write(_MSGBUF, __IFMTNOW) whoami,cv_name,k,gam
+        if (temp.le.zero) then
+         write(_MSGBUF, __FMTNOW) whoami,cv_name,k,gam
+        else
+         write(_MSGBUF, __FMTNOWT) whoami,cv_name,k,gam,temp
+        endif
        else
-        write(_MSGBUF, __IFMTW) whoami,cv_name,k,w,gam
+        if (temp.le.zero) then
+         write(_MSGBUF, __FMTW) whoami,cv_name,k,w,gam
+        else
+         write(_MSGBUF, __FMTNOWT) whoami,cv_name,k,w,gam,temp
+        endif
        endif
 !
        if (frame.ge.1) then
@@ -255,8 +268,6 @@ __SETQROOT
        __PRINT(_MSGBUF) ! qroot
       endif
 !
-__FMTW
-__FMTNOW
 !       now attempt to add CV
       ind=cv_posi_com_add(posi_com,posi_com_list,k,gam,w,max(frame,0),vec) ! no mass weighting; disallow negative frame indices
       if (ind.le.0) then
@@ -344,15 +355,12 @@ __SETQROOT
 !     print short summary
       if (qroot) then
        if (w.lt.zero) then
-        write(_MSGBUF, __IFMTNOW) whoami,cv_name,k,gam
+        write(_MSGBUF, __FMTNOW) whoami,cv_name,k,gam
        else
-        write(_MSGBUF, __IFMTW) whoami,cv_name,k,w,gam
+        write(_MSGBUF, __FMTW) whoami,cv_name,k,w,gam
        endif
        __PRINT(_MSGBUF)
       endif
-!
-__FMTW
-__FMTNOW
 !
 !       now attempt to add CV
       ind=cv_dihe_com_add(dihe_com_list,k,gam,w) ! no mass weighting
@@ -438,15 +446,13 @@ __SETQROOT
 !     print short summary
       if (qroot) then
        if (w.lt.zero) then
-        write(_MSGBUF, __IFMTNOW) whoami,cv_name,k,gam
+        write(_MSGBUF, __FMTNOW) whoami,cv_name,k,gam
        else
-        write(_MSGBUF, __IFMTW) whoami,cv_name,k,w,gam
+        write(_MSGBUF, __FMTW) whoami,cv_name,k,w,gam
        endif
        __PRINT(_MSGBUF)
       endif
 !
-__FMTW
-__FMTNOW
 !       now attempt to add CV
       ind=cv_angle_com_add(angle_com_list,k,gam,w) ! no mass weighting
       if (ind.le.0) then
@@ -534,16 +540,13 @@ __SETQROOT
 !     print short summary
       if (qroot) then
        if (w.lt.zero) then
-        write(_MSGBUF, __IFMTNOW) whoami,cv_name,k,gam
+        write(_MSGBUF, __FMTNOW) whoami,cv_name,k,gam
        else
-        write(_MSGBUF, __IFMTW) whoami,cv_name,k,w,gam
+        write(_MSGBUF, __FMTW) whoami,cv_name,k,w,gam
        endif
        __PRINT(_MSGBUF)
       endif
 !
-__FMTW
-__FMTNOW
-!       now attempt to add CV
       ind=cv_dist_com_add(dist_com_list,k,gam,w) ! no mass weighting
       if (ind.le.0) then
        __WRN(whoami,'COULD NOT ADD CV')
@@ -670,15 +673,13 @@ __SETQROOT
 !     print short summary
       if (qroot) then
        if (w.lt.zero) then
-        write(_MSGBUF, __IFMTNOW) whoami,cv_name,k,gam
+        write(_MSGBUF, __FMTNOW) whoami,cv_name,k,gam
        else
-        write(_MSGBUF, __IFMTW) whoami,cv_name,k,w,gam
+        write(_MSGBUF, __FMTW) whoami,cv_name,k,w,gam
        endif
        __PRINT(_MSGBUF)
       endif
 !
-__FMTW
-__FMTNOW
 !       now attempt to add CV
       ind=cv_anglvec_add(atom_list,p,f1,f2,k,gam,w) ! no mass weighting
       if (ind.le.0) then
@@ -803,13 +804,10 @@ __SETQROOT
       if (qroot) then
 !
        if (w.lt.zero) then
-        write(_MSGBUF, __IFMTNOW) whoami,cv_name,k,gam
+        write(_MSGBUF, __FMTNOW) whoami,cv_name,k,gam
        else
-        write(_MSGBUF, __IFMTW) whoami,cv_name,k,w,gam
+        write(_MSGBUF, __FMTW) whoami,cv_name,k,w,gam
        endif
-!
-__FMTW
-__FMTNOW
 !
        if (f1.ge.1) then
         write(_MSGBUF(2),'(A,I3)') whoami//' FRAME1: LOCAL FRAME #',f1
@@ -864,15 +862,13 @@ __SETQROOT
 !     print short summary
       if (qroot) then
        if (w.lt.zero) then
-        write(_MSGBUF, __IFMTNOW) whoami,cv_name,k,gam
+        write(_MSGBUF, __FMTNOW) whoami,cv_name,k,gam
        else
-        write(_MSGBUF, __IFMTW) whoami,cv_name,k,w,gam
+        write(_MSGBUF, __FMTW) whoami,cv_name,k,w,gam
        endif
        __PRINT(_MSGBUF)
       endif
 !
-__FMTW
-__FMTNOW
 !       now attempt to add CV
       ind=cv_cvrms_add(cv_list,k,gam,w) ! no mass weighting
       if (ind.le.0) then
@@ -1225,13 +1221,10 @@ __SETQROOT
       if (qroot) then
 !
        if (w.lt.zero) then
-        write(_MSGBUF, __IFMTNOW) whoami,cv_name,k,gam
+        write(_MSGBUF, __FMTNOW) whoami,cv_name,k,gam
        else
-        write(_MSGBUF, __IFMTW) whoami,cv_name,k,w,gam
+        write(_MSGBUF, __FMTW) whoami,cv_name,k,w,gam
        endif
-!
-__FMTW
-__FMTNOW
 !
        i=1;
        __INC(i);write(_MSGBUF(i),103) whoami, nforced
