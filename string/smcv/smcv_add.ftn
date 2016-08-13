@@ -7,8 +7,6 @@
 #define __IFMTNOW 665
 #define __FMTW    "(A,' WILL ADD ',A,' CV WITH K =',F10.3,' WEIGHT =',F7.3,' AND GAMMA =',F7.3)"
 #define __FMTNOW  "(A,' WILL ADD ',A,' CV WITH K =',F10.3,' AND GAMMA =',F7.3)"
-#define __FMTWT   "(A,' WILL ADD ',A,' CV WITH K =',F10.3,' WEIGHT =',F7.3,' GAMMA =',F7.3,' AND TEMPERATURE =',F7.3)"
-#define __FMTNOWT "(A,' WILL ADD ',A,' CV WITH K =',F10.3,' GAMMA =',F7.3,' AND TEMPERATURE =',F7.3)"
 !
 #define __GET(_V, _NM, _TYPE, _DEF) if (__INDX(comlyn, comlen, __STRING(_NM), len(__STRING(_NM))).gt.0) then;\
                                      _V=__CONCAT(__GET_RM_,_TYPE)(comlyn,comlen,__STRING(_NM),_DEF);
@@ -42,7 +40,7 @@ __CHARMM_ONLY##IF STRINGM
 !
       contains
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccc
-      subroutine smcv_add_kwgt(comlyn,comlen)
+      subroutine smcv_add_kwg(comlyn,comlen)
       character(len=*) :: comlyn
       int :: comlen
       k=zero;__GET(k,FORC,F,zero) ! force k
@@ -54,11 +52,7 @@ __CHARMM_ONLY##IF STRINGM
       gam=one;__GET(gam,GAM,F,one) ! friction
       else    __GET(gam,GM, F,one)
       endif
-      gam=one;__GET(gam,TEMP,F,zero) ! BD temperature
-      else    __GET(gam,TEMPERATURE, F,zero)
-      else    __GET(gam,T, F,zero)
-      endif
-      end subroutine smcv_add_kwgt
+      end subroutine smcv_add_kwg
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccc
       subroutine smcv_add_cv(comlyn,comlen)
       use cv_quaternion, only: quat_initialized, quat, quat_init
@@ -69,7 +63,7 @@ __CHARMM_ONLY##IF STRINGM
       int :: COMLEN
 !    local
       int :: i, j, k, ind
-      bool :: qfbwidth
+      bool :: qfbwidth, qtemp
       float :: fbwidth
       character(len=20) :: keyword
       __IAM(SMCV_ADD)
@@ -79,9 +73,10 @@ __SETQROOT
 !
       ind=0
 ! preprocessor tricks to simplify code
-      qfbwidth=.true. ! whether to ckeck for flat-bottom width specification after default add
+      qfbwidth=.true. ! whether to check for flat-bottom width specification after default add
+      qtemp=.true. ! whether to check for BD evolution temperature specification after default add
       if (.false.) then ! note that the statements below _WILL_ be executed
-#define __TRY(__WHAT) elseif (__STRNCMP(keyword,__STRING(__WHAT),len(__STRING(__WHAT)))) then; call smcv_add_kwgt(comlyn,comlen); ind=__CONCAT3(smcv_,__WHAT,_add)(__ADD_ARGS)
+#define __TRY(__WHAT) elseif (__STRNCMP(keyword,__STRING(__WHAT),len(__STRING(__WHAT)))) then; call smcv_add_kwg(comlyn,comlen); ind=__CONCAT3(smcv_,__WHAT,_add)(__ADD_ARGS)
 #define __ADD_ARGS comlyn, comlen /* note that these two arguments are considered a single argument by CPP */
 #define smcv_POSI_COM_X_add(__1,...) smcv_posi_com_add(__1, (/one, zero, zero/))
 #define smcv_POSI_COM_Y_add(__1,...) smcv_posi_com_add(__1, (/zero, one, zero/))
@@ -97,8 +92,8 @@ __SETQROOT
       __TRY(ANGLE_COM)
       __TRY(ANGLVEC)
       __TRY(DIST_COM)
-      __TRY(FRAME)      ; qfbwidth=.false.
-      __TRY(QUATERNION) ; qfbwidth=.false. ; ! this need not be in principle, but I struggle to envision a physical scenario in which it is useful; maybe later
+      __TRY(FRAME)      ; qfbwidth=.false.; qtemp=.false.
+      __TRY(QUATERNION) ; qfbwidth=.false.; ! this need not be in principle, but I struggle to envision a physical scenario in which it is useful; maybe later
 ! more quaternion-related code :
 !     (re)compute quaternion index limits (for parallelization) after each addition
 !
@@ -128,9 +123,10 @@ __SETQROOT
       endif
 !
       if (ind.gt.0) then
-       if (__INDX(comlyn, comlen, 'FBWIDTH',6).gt.0) then
+       if (__INDX(comlyn, comlen, 'FBWIDTH',4).gt.0) then
+! fbwidth
         if (qfbwidth) then
-         fbwidth=__GET_RM_F(comlyn, comlen, 'FBWIDTH', zero)   ! can specify force constant manually
+         fbwidth=__GET_RM_F(comlyn, comlen, 'FBWIDTH', zero)
          call cv_common_set_fbwidth(ind,fbwidth)
          if (qroot) then ; write(_MSGBUF,6769) whoami,fbwidth ; __PRINT(_MSGBUF) ; endif
  6769 format(A,' WILL SET WIDTH OF FLAT-BOTTOM REGION OF POTENTIAL TO ',F7.3,'.')
@@ -138,6 +134,17 @@ __SETQROOT
         __WRN(whoami, 'FLAT-BOTTOM POTENTIALS ARE NOT SUPPORTED FOR CV "'//trim(cv_type_names(cv%type(ind)))//'". NOTHING DONE')
         endif ! qfbwidth
        endif ! FBWIDTH present
+! temp
+       if (__INDX(comlyn, comlen, 'TEMP',4).gt.0) then
+        if (qtemp) then
+         temp=__GET_RM_F(comlyn, comlen, 'TEMP', zero)
+         call cv_common_set_temp(ind,temp)
+         if (qroot) then ; write(_MSGBUF,6770) whoami, temp ; __PRINT(_MSGBUF) ; endif
+ 6770 format(A,' WILL SET TEMPERATURE FOR BROWNIAN CV EVOLUTION TO ',F7.3,'.')
+        else
+        __WRN(whoami, 'EVOLUTION TEMPERATURE IS NOT SUPPORTED FOR CV "'//trim(cv_type_names(cv%type(ind)))//'". NOTHING DONE')
+        endif ! qtemp
+       endif ! TEMP present
       endif ! valid index
 !
 #undef __TRY
@@ -243,17 +250,9 @@ __SETQROOT
 !     print short summary
       if (qroot) then
        if (w.lt.zero) then
-        if (temp.le.zero) then
-         write(_MSGBUF, __FMTNOW) whoami,cv_name,k,gam
-        else
-         write(_MSGBUF, __FMTNOWT) whoami,cv_name,k,gam,temp
-        endif
+        write(_MSGBUF, __FMTNOW) whoami,cv_name,k,gam
        else
-        if (temp.le.zero) then
-         write(_MSGBUF, __FMTW) whoami,cv_name,k,w,gam
-        else
-         write(_MSGBUF, __FMTNOWT) whoami,cv_name,k,w,gam,temp
-        endif
+        write(_MSGBUF, __FMTW) whoami,cv_name,k,w,gam
        endif
 !
        if (frame.ge.1) then
