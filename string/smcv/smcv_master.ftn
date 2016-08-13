@@ -343,7 +343,7 @@ __MPI_ONLY     &          mpifloat, MPI_SUM, MPI_COMM_LOCAL, ierror)
 !
 ! END OF EXPERIMENTAL ^
 !====================================================================
-!
+! recall : sign(a,b) returns |a| with the sign of b (zero counts as a positive sign)
        case(dihe_com)
 !    compute average accounting for periodicity (i.e. choosing the smallest angular displacement)
          r = cv%r(i,comp) - cv%r(i,main) ; r=modulo(r,TWOPI); if (r.gt.PI) __INCR(r,-TWOPI)
@@ -516,26 +516,12 @@ __MPI_ONLY      endif
        do i=1, cv%num_cv ! loop over all CV
         cv%r(i,j)=cv%r(i,histcol) ! history output; histcol typically, but not necessarily, instant
         v=cv%r(i,instant)
-!     VO 3.24.09: correct for angle average
-!     VO : note that even with num_run_ave=0 we do not "forget" the offset: this is not great (so is runave is initialized with,e.g., -10^n, this order persists)
-        u=cv%r(i,runave)
-        select case(cv%type(i));
-         case(dihe_com);
-          v=u-v;         v=modulo(v,TWOPI); if (v.gt.PI) v=v-TWOPI
-         case(angle_com, anglvec);
-          v=u-sign(v,u); v=modulo(v,TWOPI); if (v.gt.PI) v=v-TWOPI
-         case default;
-          v=u-v
-        end select
-!
-        cv%r(i,runave)=u-t*v
+!     VO 3.24.09: correct for angle averages
+!     VO : 8/2016 : removing running average "runave" ; replacing it with frunave : running average of the displacement used in force calculation
+!                   the problem with runave is that it cannot be used to compute the average forces unless a quadratic potential is used (e.g. flat bottom)
 !====================================================================
-! also deal with flat-bottom potential averages here.
-! Note that this average is used for statistics purposes
-! it is reset after every stats output
 ! (1) compute absolute distance between sample and restraint center
-        if (cv%fbwidth(i).gt.zero) then
-         select case(cv%type(i));
+        select case(cv%type(i));
           case(dihe_com)
            v=cv%r(i,zcur)-cv%r(i,instant)
            v=modulo(v,TWOPI); if (v.gt.PI) __INCR(v,-TWOPI)
@@ -546,8 +532,17 @@ __MPI_ONLY      endif
 !=============
           case default ;
            v=cv%r(i,zcur)-cv%r(i,instant)
-         end select
-! (2) if sample within flat bottom window, add to average
+        end select
+!        FB modification (other potentials possible here in the future ) :
+        u=max(zero, v - cv%fbwidth(i)) + min(zero, v + cv%fbwidth(i))
+        __INCR(cv%r(i,frunave), t * ( u - cv%r(i,frunave) ) ) ! add inst. displacement to frunave index
+!
+! NOTE that I preserved v computed above
+! also deal with flat-bottom potential averages here.
+! Note that this average is used for statistics purposes
+! it is reset after every stats output
+! if sample within flat bottom window, add to flat-bottom average
+        if (cv%fbwidth(i).gt.zero) then
          if (abs(v).le.cv%fbwidth(i)) then ! update average
           select case(cv%type(i));
            case(dihe_com)
@@ -562,8 +557,8 @@ __MPI_ONLY      endif
             v=cv%r(i,fbave)-cv%r(i,instant)
           end select
 !
-          __INC(cv%num_fb_ave(i))
-          __INCR(cv%r(i,fbave), -v/cv%num_fb_ave(i))
+          __INC(cv%num_fb_ave(i))                    ! update counter
+          __INCR(cv%r(i,fbave), -v/cv%num_fb_ave(i)) ! update average
          endif ! abs(v)
         endif ! fbwidth
 !
@@ -608,27 +603,10 @@ __MPI_ONLY      endif
 !    add history
         cv%r(i,j)=cv%r(i,histcol)
         v=cv%r(i,instant)
-!    VO 3.24.09: correct for angle average
-!
-        u=cv%r(i,runave)
-        select case(cv%type(i));
-         case(dihe_com);
-          v=u-v;         v=modulo(v,TWOPI); if (v.gt.PI) v=v-TWOPI
-         case(angle_com, anglvec);
-          v=u-sign(v,u); v=modulo(v,TWOPI); if (v.gt.PI) v=v-TWOPI
-         case default;
-          v=u-v
-        end select
-!
-        cv%r(i,runave)=u-t*v
 !====================================================================
-! also deal with flat-bottom potential averages here
-! see notes above;
-! Also note that in this case, the averages are local, and are
-! to be combined at output (there is no reason to communicate more often than that)
+! see notes above
 ! (1) compute absolute distance between sample and restraint center
-        if (cv%fbwidth(i).gt.zero) then
-         select case(cv%type(i));
+        select case(cv%type(i));
           case(dihe_com)
            v=cv%r(i,zcur)-cv%r(i,instant)
            v=modulo(v,TWOPI); if (v.gt.PI) __INCR(v,-TWOPI)
@@ -639,8 +617,16 @@ __MPI_ONLY      endif
 !=============
           case default ;
            v=cv%r(i,zcur)-cv%r(i,instant)
-         end select
-! (2) if sample within flat bottom window, add to average
+        end select
+!        FB modification (other potentials possible here in the future ) :
+        u=max(zero, v - cv%fbwidth(i)) + min(zero, v + cv%fbwidth(i))
+        __INCR(cv%r(i,frunave), t * ( u - cv%r(i,frunave) ) ) ! add inst. displacement to frunave index
+! NOTE that I preserved v computed above
+! also deal with flat-bottom potential averages here.
+! Note that this average is used for statistics purposes
+! it is reset after every stats output
+! if sample within flat bottom window, add to flat-bottom average
+        if (cv%fbwidth(i).gt.zero) then
          if (abs(v).le.cv%fbwidth(i)) then ! update average
           select case(cv%type(i));
            case(dihe_com)
@@ -655,17 +641,18 @@ __MPI_ONLY      endif
             v=cv%r(i,fbave)-cv%r(i,instant)
           end select
 !
-          __INC(cv%num_fb_ave(i))
-          __INCR(cv%r(i,fbave), -v/cv%num_fb_ave(i))
+          __INC(cv%num_fb_ave(i))                    ! update counter
+          __INCR(cv%r(i,fbave), -v/cv%num_fb_ave(i)) ! update average
          endif ! abs(v)
         endif ! fbwidth
 !
        enddo ! loop over cv
 !
        if (qgrp1) then
-! note : MPI_CV_TYPE3I sends runave, instant and forces2
-! runave is obsolescent, however, because for FB potentials the force is not a linear function of r
+! note : MPI_CV_TYPE3I sends frunave, instant and forces2
+! runave was obsolescent, because for FB potentials the force is not a linear function of r
 ! so that the average force cannot be computed by multiplying runave minus r_ref by the force constant
+! it is replaced with frunave -- index that stores running average of the force
 __MPI_ONLY!     communicate cv values + gradients using custom types
 __MPI_ONLY        call mpi_allgatherv(cv%r(ibeg,1),cv_send_count(ME_LOCAL+1),     &
 __MPI_ONLY     &    MPI_CV_TYPE3I,                                                &
@@ -682,12 +669,11 @@ __MPI_ONLY     &    MPI_GRAD_TYPE, MPI_COMM_LOCAL, ierror)
         do i=1, cv%num_cv
          if (cv%type(i).eq.cvrms) then
           call cv_cvrms_calc(__ARGS)
-!    update running average
+!    update force running average
           cv%r(i,j)=cv%r(i,histcol) ! if histcol is instant then it is changed above for cvrms
-          v=cv%r(i,instant)
-          u=cv%r(i,runave)
-          v=u-v
-          cv%r(i,runave)=u-t*v
+          v=cv%r(i,zcur) - cv%r(i,instant)
+          v=max(zero, v - cv%fbwidth(i)) + min(zero, v + cv%fbwidth(i))
+          __INCR(cv%r(i,frunave), t * ( v - cv%r(i,frunave) ) ) ! add inst. displacement to frunave index
          endif
         enddo
 #undef __ARGS
