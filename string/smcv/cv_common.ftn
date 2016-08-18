@@ -50,7 +50,7 @@ __CHARMM_ONLY##IF STRINGM
       float, dimension(:), pointer   :: k ! force constant
       float :: kpara ! force constant for forces parallel to string ; same for all CV (required for off-path sim.)
       float :: kperp ! force constant for forces perpendicular to string ; same for all CV
-      float, dimension(:), pointer   :: gamma
+      float, dimension(:), pointer   :: gamma ! NOTE that this is ONE/GAMMA where GAMMA is the friction (U[GAMMA]=1/time in SMCV evol; =mass/time in BD evol)
       float, dimension(:), pointer   :: weight
       float, dimension(:), pointer   :: temp ! temperature for BD evolution of this CV
       float :: wrss ! one over root-sum-square of the weight array
@@ -1007,6 +1007,7 @@ __CHARMM_ONLY##ENDIF
 !    (we are assuming that M has been computed)
 !    explicit Euler advancement (any reason to use more accuracy, e.g. A-B ?)
 !
+!    NOTE : below, consistent units require that cv%gamma have units of time (recall that cv%gamma is actually 1/friction[time])
        do i=1, cv%num_cv
         cv%r(i,main)=cv%r(i,main)-delt*cv%gamma(i)*                     &
      &               dot_product(cv%M(i,1:cv%num_cv,2),cv%r(1:cv%num_cv,forces))
@@ -1020,13 +1021,15 @@ __CHARMM_ONLY##ENDIF
        subroutine cv_common_evolve_sd(dt) ! steepest descent evolution (no M) with temp; compare with cv_common_evolve_smcv
 !                                         temperature not added yet
       __DEP_CONST
+      __DEP_RANDOM
 !
 !      the timestep can be specified optionally
 !      nskip ( the number of history elements to skip when computing the average) is also optional
        float, optional :: dt
        float :: dummy
        int :: i
-       float :: delt
+       float :: delt, normal_deviate(1)
+!
        __IAM(CV_COMMON_EVOLVE_SD)
 !      do work
        cv%r(:,comp)=cv%r(:,main) ! save current as "old" coordinates in column 2
@@ -1043,10 +1046,22 @@ __CHARMM_ONLY##ENDIF
 !    add fe to the fe running average
        call cv_common_update_fe_ave()
 !    now evolve string -- take the negative of the FE gradient
+!    NOTE : here, consistent units require that D=kT/gamma, where D is the diffusion coefficient; which means that gamma nas units mass/time
+!    cv%gamma is 1/gamma (i.e. 1/friction), which means that cv%gamma has implicit units time/mass
 !
        do i=1, cv%num_cv
-        cv%r(i,main)=cv%r(i,main)-delt*cv%gamma(i)*                     &
-     &                                        cv%r(i,forces) ! + temperature (coming soon)
+        cv%r(i,main)=cv%r(i,main) - delt * cv%gamma(i) * cv%r(i,forces)                             ! drift
+!
+        if (cv%temp(i).gt.zero) then
+#ifdef __CHARMM
+         normal_deviate=bmgauss(one,__SEED)
+#else
+         call randomg_vector(normal_deviate,1)
+#endif
+!
+         __INCR(cv%r(i,main),      sqrt ( two*cv%gamma(i)*cv%temp(i)*kboltz*delt ) * normal_deviate(1)) ! diffusion if T>0
+        endif ! temperature > 0
+!
         if (cv%type(i).eq.angle_com.or.cv%type(i).eq.anglvec) cv%r(i,main)=abs(cv%r(i,main))
        enddo
 !    now reset history (number of slices in the running average)
