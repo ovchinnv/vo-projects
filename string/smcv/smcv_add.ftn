@@ -22,7 +22,7 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_OUTPUT
       __DEP_SIZE
       __DEP_COORDINATES
-      __DEP_PARSER 
+      __DEP_PARSER
       __DEP_MPI
       __DEP_SELECT
       __DEP_NUMBER
@@ -57,13 +57,14 @@ __CHARMM_ONLY##IF STRINGM
       subroutine smcv_add_cv(comlyn,comlen)
       use cv_quaternion, only: quat_initialized, quat, quat_init
       use sm_config, only: qt_send_displ, qt_send_count, imap_displ, imap_count
+      use smcv_check_set
       __DEP_CONST
 !
       character(len=*) :: COMLYN
       int :: COMLEN
 !    local
       int :: i, j, k, ind
-      bool :: qfbwidth, qtemp
+      bool :: qfbwidth, qtemp, qbc
       float :: fbwidth
       character(len=20) :: keyword
       __IAM(SMCV_ADD)
@@ -75,6 +76,7 @@ __SETQROOT
 ! preprocessor tricks to simplify code
       qfbwidth=.true. ! whether to check for flat-bottom width specification after default add
       qtemp=.true. ! whether to check for BD evolution temperature specification after default add
+      qbc=.true. ! whether to check for CV boundary (min/max) values
       if (.false.) then ! note that the statements below _WILL_ be executed
 #define __TRY(__WHAT) elseif (__STRNCMP(keyword,__STRING(__WHAT),len(__STRING(__WHAT)))) then; call smcv_add_kwg(comlyn,comlen); ind=__CONCAT3(smcv_,__WHAT,_add)(__ADD_ARGS)
 #define __ADD_ARGS comlyn, comlen /* note that these two arguments are considered a single argument by CPP */
@@ -92,8 +94,8 @@ __SETQROOT
       __TRY(ANGLE_COM)
       __TRY(ANGLVEC)
       __TRY(DIST_COM)
-      __TRY(FRAME)      ; qfbwidth=.false.; qtemp=.false.
-      __TRY(QUATERNION) ; qfbwidth=.false.; ! this need not be in principle, but I struggle to envision a physical scenario in which it is useful; maybe later
+      __TRY(FRAME)      ; qfbwidth=.false.; qtemp=.false.; qbc=.false.
+      __TRY(QUATERNION) ; qfbwidth=.false.; qbc=.false. ; ! this need not be in principle, but I struggle to envision a physical scenario in which it is useful; maybe later
 ! more quaternion-related code :
 !     (re)compute quaternion index limits (for parallelization) after each addition
 !
@@ -123,28 +125,12 @@ __SETQROOT
       endif
 !
       if (ind.gt.0) then
-       if (__INDX(comlyn, comlen, 'FBWIDTH',4).gt.0) then
-! fbwidth
-        if (qfbwidth) then
-         fbwidth=__GET_RM_F(comlyn, comlen, 'FBWIDTH', zero)
-         call cv_common_set_fbwidth(ind,fbwidth)
-         if (qroot) then ; write(_MSGBUF,6769) whoami,fbwidth ; __PRINT(_MSGBUF) ; endif
- 6769 format(A,' WILL SET WIDTH OF FLAT-BOTTOM REGION OF POTENTIAL TO ',F7.3,'.')
-        else
-        __WRN(whoami, 'FLAT-BOTTOM POTENTIALS ARE NOT SUPPORTED FOR CV "'//trim(cv_type_names(cv%type(ind)))//'". NOTHING DONE')
-        endif ! qfbwidth
-       endif ! FBWIDTH present
-! temp
-       if (__INDX(comlyn, comlen, 'TEMP',4).gt.0) then
-        if (qtemp) then
-         temp=__GET_RM_F(comlyn, comlen, 'TEMP', zero)
-         call cv_common_set_temp(ind,temp)
-         if (qroot) then ; write(_MSGBUF,6770) whoami, temp ; __PRINT(_MSGBUF) ; endif
- 6770 format(A,' WILL SET TEMPERATURE FOR BROWNIAN CV EVOLUTION TO ',F7.3,'.')
-        else
-        __WRN(whoami, 'EVOLUTION TEMPERATURE IS NOT SUPPORTED FOR CV "'//trim(cv_type_names(cv%type(ind)))//'". NOTHING DONE')
-        endif ! qtemp
-       endif ! TEMP present
+       if (qfbwidth) call smcv_check_set_fbwidth(comlyn,comlen,ind,ind,zero)
+       if (qtemp) call smcv_check_set_temp(comlyn,comlen,ind,ind,zero)
+       if (qbc) then ! minimum / maximum cv values
+        call smcv_check_set_minval(comlyn,comlen,ind,ind,-__INF)
+        call smcv_check_set_maxval(comlyn,comlen,ind,ind,__INF)
+       endif
       endif ! valid index
 !
 #undef __TRY
