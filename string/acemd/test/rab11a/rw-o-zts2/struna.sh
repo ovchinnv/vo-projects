@@ -1,0 +1,1 @@
+/home/surgeon/projects/string/acemd/test/rab11a/fip2w-o-norex/struna.sh

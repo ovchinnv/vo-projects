@@ -50,8 +50,10 @@ __CHARMM_ONLY##IF STRINGM
       float, dimension(:), pointer   :: k ! force constant
       float :: kpara ! force constant for forces parallel to string ; same for all CV (required for off-path sim.)
       float :: kperp ! force constant for forces perpendicular to string ; same for all CV
-      float, dimension(:), pointer   :: gamma
+      float, dimension(:), pointer   :: gamma ! NOTE that this is ONE/GAMMA where GAMMA is the friction (U[GAMMA]=1/time in SMCV evol; =mass/time in BD evol)
       float, dimension(:), pointer   :: weight
+      float, dimension(:), pointer   :: temperature ! temperature for BD evolution of this CV
+      float, dimension(:), pointer   :: minval, maxval
       float :: wrss ! one over root-sum-square of the weight array
 ! 2016 : for flat-bottom potential
       float, dimension(:), pointer :: fbwidth ! HALF-width of flat-bottom (fb) region of harmonic potential
@@ -110,14 +112,15 @@ __CHARMM_ONLY##IF STRINGM
       public cv_common_clear_hist ! clear history
       public cv_common_smooth_hist ! filter history & place in comp-set r(:,:,2)
       public cv_common_evolve_expo ! evolution using exponential averaging of history
+      public cv_common_evolve_smcv ! evolve string using average force a la SMCV - DEFAULT
+      public cv_common_evolve_sd ! evolve string using average force (SD+THERMOSTAT = BD)
+      public cv_common_apply_bc ! apply (reflective) boundary conditions to CV
       public cv_common_swap   ! swap main-set and comp_set, i.e. r(:,:,1) and r(:,:,2)
       public cv_common_copy   ! swap main-set and comp_set, i.e. r(:,:,1) and r(:,:,2)
       public cv_common_read_global  ! read cv values from separate files
       public cv_common_read_local   ! read cv values from separate files
       public cv_common_read_local_from_global   ! read cv values from a particular column in a global file
       public cv_common_unwrap_angles ! make sure that along the string the angle does not change by more than 180 degrees
-      public cv_common_evolve_smcv ! evolve string using average force a la SMCV
-      public cv_common_evolve_sd ! evolve string using average force (simple SD)
       public cv_common_rmsd   ! compute rmsd between two sets of CV
       public cv_common_set_kpara  ! set parallel force constant k
       public cv_common_set_kperp  ! set perpendicular force constant k
@@ -125,6 +128,9 @@ __CHARMM_ONLY##IF STRINGM
       public cv_common_set_w  ! set weight
       public cv_common_set_active  ! set active flag
       public cv_common_set_g  ! set gamma
+      public cv_common_set_temp ! set BD evolution temperature
+      public cv_common_set_minval ! set lower boundary limit on CV
+      public cv_common_set_maxval ! set upper boundary limit on CV
       public cv_common_set_fbwidth  ! set width of the flat-bottom region of potential
       public cv_common_set_dt  ! set default timestep
       public cv_common_set_r  ! set collective variable value
@@ -202,8 +208,8 @@ __CHARMM_ONLY##IF STRINGM
      &                              ref2=4,                             & ! reference z (average)
      &                              zcur=5,                             & ! z at current MD iteration (combination of main and comp)
      &                              zold=6,                             & ! z at previous MD iterations (combination of main and comp); currently not used
-     &                              dz=7,                               &   ! vector tangent to the path
-     &                              runave=8,                           & ! running average between string steps
+     &                              dz=7,                               & ! vector tangent to the path
+     &                              frunave=8,                          & ! running average between string steps
      &                              instant=9,                          & ! (instantaneous) theta(x)
      &                              previnst=10,                        & ! previous value of (instantaneous) theta(x)
      &                              forces=11,                          & ! average forces on z (dF/dz) for evolution
@@ -241,6 +247,7 @@ __CHARMM_ONLY##IF STRINGM
         cv%num_cv=0
         call cv_common_clear_hist()
 !
+!======================================= ALLOCATIONS
         allocate(cv%r(max_cv_common, max_hist_base+main_offset))
 !
         if (cv_common_fixed_0_bc.eq.1) then
@@ -269,6 +276,9 @@ __CHARMM_ONLY##IF STRINGM
         allocate(cv%active(max_cv_common))
         allocate(cv%k(max_cv_common))
         allocate(cv%gamma(max_cv_common))
+        allocate(cv%temperature(max_cv_common))
+        allocate(cv%minval(max_cv_common))
+        allocate(cv%maxval(max_cv_common))
         allocate(cv%fbwidth(max_cv_common))
         allocate(cv%num_fb_ave(max_cv_common))
         allocate(cv%weight(max_cv_common))
@@ -276,9 +286,10 @@ __CHARMM_ONLY##IF STRINGM
         allocate(cv%curvature(nrep-2))
         allocate(cv%fe(nrep))
         allocate(cv%feav(nrep))
+!=============================================== INITIALIZATION
         cv_common_initialized=.true.
         cv%r=__NAN
-        cv%r(:,runave)=zero    ! needed because CVs may include angles which need to be averaged
+        cv%r(:,frunave)=zero    ! 8/2016 : displacement for force running average (formerly CV running average)
         cv%r(:,previnst)=zero  !
         cv%r(:,fbave)=zero  !
         cv%M=__NAN
@@ -288,6 +299,9 @@ __CHARMM_ONLY##IF STRINGM
         cv%kpara=zero
         cv%kperp=zero
         cv%gamma=zero
+        cv%temperature=zero
+        cv%minval=-__INF
+        cv%maxval= __INF
         cv%fbwidth=zero
         cv%weight=zero ! need to be initialized by user
         cv%ds=zero
@@ -338,6 +352,9 @@ __CHARMM_ONLY##IF STRINGM
         deallocate(cv%active)
         deallocate(cv%k)
         deallocate(cv%gamma)
+        deallocate(cv%temperature)
+        deallocate(cv%maxval)
+        deallocate(cv%minval)
         deallocate(cv%weight)
         deallocate(cv%fbwidth)
         deallocate(cv%num_fb_ave)
@@ -358,11 +375,17 @@ __CHARMM_ONLY##IF STRINGM
        endif
        end subroutine cv_common_done
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       function cv_common_add(type,k,gamma,weight,fbwidth)
-      
+       function cv_common_add(type,k,gamma,weight,fbwidth,temp,minv,maxv)
 !
        int :: type
-       float, optional :: k, gamma, weight, fbwidth
+       float, optional :: k, gamma, weight, fbwidth, temp, minv, maxv
+! k: 		force constant
+! gamma:	friction for evolution
+! weight:	weight factor for reparametrization
+! fbwidth:	width of flat-bottom potential (0 recovers harmonic potential)
+! temp:		temperature for BD evolution (0 means steepest descent; higher temp for TAMD)
+! minv:	minimum allowed value for cv
+! maxv:	maximum allowed value for cv
 !      locals
        int j
        int cv_common_add ! returns index into cv array
@@ -374,14 +397,16 @@ __CHARMM_ONLY##IF STRINGM
 !       assign cv values
         cv%num_cv=j
         cv%r(j,:)=__NAN ! undefined value
-        cv%r(j,runave)=zero    ! needed when CVs include angles which need to be averaged (b/c existing values are sticky)
+        cv%r(j,frunave)=zero
         cv%r(j,previnst)=zero
-        cv%r(j,fbave)=zero
+        cv%r(j,fbave)=zero     ! needed when CVs include angles which need to be averaged (b/c existing values are sticky)
 !
         cv%k(j)=zero
         if (present(k)) then
          if (k.ge.zero) then  ! negative k are ignored
           cv%k(j)=k
+         else
+          __WRN(whoami,'NEGATIVE FORCE CONSTANT SPECIFIED. WILL RESET TO ZERO.')
          endif
         endif
 !
@@ -389,7 +414,7 @@ __CHARMM_ONLY##IF STRINGM
          if (gamma.gt.zero) then
           cv%gamma(j)=one/gamma; ! disallow zero
          else
-          __WRN(whoami,'NONPOSITIVE GAMMA SPECIFIED. WILL RESET TO 1.0.')
+          __WRN(whoami,'NONPOSITIVE GAMMA SPECIFIED. WILL RESET TO 1.00.')
           cv%gamma(j)=one;
          endif
         else
@@ -406,13 +431,30 @@ __CHARMM_ONLY##IF STRINGM
         else
          cv%fbwidth(j)=zero;
         endif
-!
-        cv%weight(j)=zero
+! BD evolution temperature
+        if (present(temp)) then
+         if (temp.ge.zero) then
+          cv%temperature(j)=temp
+         else
+          __WRN(whoami,'NEGATIVE BD EVOLUTION TEMPERATURE SPECIFIED. WILL SET TO ZERO.')
+          cv%temperature(j)=zero;
+         endif
+        else
+         cv%temperature(j)=zero;
+        endif
+! reparametrization weight
         if (present(weight)) then
          if (weight.gt.zero) then  ! negative weights are ignored
           cv%weight(j)=weight
          endif
+        else
+          __WRN(whoami,'NEGATIVE CV WEIGHT SPECIFIED. WILL SET TO ZERO.')
+         cv%weight(j)=zero
         endif
+! minimum and maximum values
+        if (present(minv)) cv%minval(j)=minv
+        if (present(maxv)) cv%maxval(j)=maxv
+!==============================================================================
         cv%type(j)=type
         cv_common_add=j
 !
@@ -431,7 +473,6 @@ __CHARMM_ONLY##IF STRINGM
        end function cv_common_add
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_fill(i,val,c)
-      
 !
        int :: i
        float :: val
@@ -454,7 +495,6 @@ __CHARMM_ONLY##IF STRINGM
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_grad_init()
 !      initialize cv%grad arrays
-       
        if (associated(cv%grad)) deallocate(cv%grad)
 !       if (associated(cv%gradx)) deallocate(cv%gradx) !    delete old data if present
 !       if (associated(cv%grady)) deallocate(cv%grady) !    delete old data if present
@@ -498,7 +538,6 @@ __CHARMM_ONLY##IF STRINGM
        subroutine cv_common_compute_wgt()
 !      compute weight array from M matrix
 !      assume that M is valid on each node
-      
       __DEP_MULTICOM
       __DEP_MPI
 !
@@ -548,7 +587,7 @@ __MPI_ONLY     &        mpifloat, MPI_SUM, MPI_COMM_STRNG, ierror) ! use M inver
        end subroutine cv_common_compute_wgt
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_print_wgt(iunit,fmt,qraw_,qhead_)
-       
+!
        use parser, only : itoa
 !      only root process must call
        int, intent(in) :: iunit
@@ -600,7 +639,7 @@ __MPI_ONLY     &        mpifloat, MPI_SUM, MPI_COMM_STRNG, ierror) ! use M inver
        subroutine cv_common_read_wgt(iunit, qraw_, qlocal_)
        use parser, only : itoa, parse_file, parser_clear_context, getval_nocase, existtag_nocase, getval_nocase_upper, atol
        use cmd
-      
+!
       __DEP_MULTICOM
       __DEP_MPI
 !
@@ -674,7 +713,7 @@ __MPI_ONLY     &        mpifloat, MPI_SUM, MPI_COMM_STRNG, ierror) ! use M inver
        end subroutine cv_common_read_wgt
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_compute_k()
-       
+!      relevant for planar sampling only, which is to be overhauled
 !
        int :: i
        __IAM(CV_COMMON_COMPUTE_K)
@@ -700,7 +739,7 @@ __MPI_ONLY     &        mpifloat, MPI_SUM, MPI_COMM_STRNG, ierror) ! use M inver
        use sm_var, only: nstring
        __DEP_MULTICOM
        __DEP_MPI 
-       
+!
        int :: ierror
 !
 #include "mpitype.def"
@@ -953,9 +992,9 @@ __CHARMM_ONLY##ENDIF
        end subroutine cv_common_repa
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_evolve_smcv(dt)
-!      not parallelized (yet?) because it should be cheaper to execute locally than to broadcast info
+!      this is the main/original evolution routine that essentially follows the SMCV paper Maragliano et al.
+!      not parallelized because it should be cheaper to execute locally than to broadcast info
 !      in the future, may compute on roots, then broadcast
-      
       __DEP_CONST
 !
 !      the timestep can be specified optionally
@@ -974,35 +1013,8 @@ __CHARMM_ONLY##ENDIF
         __WRN( whoami,'NO SLICES IN THE AVERAGE. NOTHING DONE')
         return
        endif
-!    compute average F.E. gradient and dump into force set
-!    assuming that the runnung average has been computed
-! NOTE: this is obsolete and will be removed because for potentials
-! other than simple quadratic ones, the average force cannot be computed 
-! from average position (b/c it will be a nonlinear function)
-!
-       do i=1, cv%num_cv
-!
-        select case(cv%type(i))
-        case(dihe_com);
-          dummy=cv%r(i,main) - cv%r(i,runave)
-          dummy=modulo(dummy,TWOPI)
-          if (dummy.gt.PI) dummy=dummy-TWOPI;
-        case(angle_com, anglvec); ! cannot tell between theta/-theta, so make arithmetic arguments have the same sign
-          dummy=cv%r(i,main) - sign(cv%r(i,runave),cv%r(i,main))
-          dummy=modulo(dummy,TWOPI)
-          if (dummy.gt.PI) dummy=dummy-TWOPI;
-        case default
-          dummy=cv%r(i,main) - cv%r(i,runave)
-        end select
-!
-! force modification for FB potential centered on cv%(:,main)
-! note that we can use the identity max(0,x)=-min(0,-x) to see apply the FB relation
-! to -dummy as well [that corresponds to the equation in diffusion paper]
-! (in this case, we are simply computing the negative force)
-        dummy=max(zero, dummy - cv%fbwidth(i)) + min(zero, dummy + cv%fbwidth(i))
-!
-        cv%r(i,forces)=cv%k(i)*dummy
-       enddo
+!    (-)forces acting on the CV ( computed from approximate FE gradient i.e. running average of the displacement; see smcv_master, addhist):
+       cv%r(1:cv%num_cv,forces) = cv%k(1:cv%num_cv) * cv%r(1:cv%num_cv,frunave)
 !    compute free energy ( uses cv%r(:,forces) )
        call cv_common_compute_fe_fd()
 !    add fe to the fe running average
@@ -1011,6 +1023,7 @@ __CHARMM_ONLY##ENDIF
 !    (we are assuming that M has been computed)
 !    explicit Euler advancement (any reason to use more accuracy, e.g. A-B ?)
 !
+!    NOTE : below, consistent units require that cv%gamma have units of time (recall that cv%gamma is actually 1/friction[time])
        do i=1, cv%num_cv
         cv%r(i,main)=cv%r(i,main)-delt*cv%gamma(i)*                     &
      &               dot_product(cv%M(i,1:cv%num_cv,2),cv%r(1:cv%num_cv,forces))
@@ -1023,16 +1036,17 @@ __CHARMM_ONLY##ENDIF
 !====================================================================================
        subroutine cv_common_evolve_sd(dt) ! steepest descent evolution (no M) with temp; compare with cv_common_evolve_smcv
 !                                         temperature not added yet
-      
       __DEP_CONST
+      __DEP_RANDOM
 !
 !      the timestep can be specified optionally
 !      nskip ( the number of history elements to skip when computing the average) is also optional
        float, optional :: dt
        float :: dummy
        int :: i
-       float :: delt
-       __IAM(CV_COMMON_EVOLVE_BD)
+       float :: delt, normal_deviate(1)
+!
+       __IAM(CV_COMMON_EVOLVE_SD)
 !      do work
        cv%r(:,comp)=cv%r(:,main) ! save current as "old" coordinates in column 2
        if (present(dt)) then; delt=dt; else ; delt=cv%dt; endif
@@ -1041,41 +1055,29 @@ __CHARMM_ONLY##ENDIF
         __WRN( whoami,'NO SLICES IN THE AVERAGE. NOTHING DONE')
         return
        endif
-!    compute average F.E. gradient and dump into force set
-!    assuming that the runnung average has been computed
-       do i=1, cv%num_cv
-!
-        select case(cv%type(i))
-        case(dihe_com);
-          dummy=(cv%r(i,main) - cv%r(i,runave))
-          dummy=modulo(dummy,TWOPI)
-          if (dummy.gt.PI) dummy=dummy-TWOPI;
-        case(angle_com, anglvec); ! cannot tell between theta/-theta
-          dummy=cv%r(i,main) - sign(cv%r(i,runave),cv%r(i,main)) ! make 2nd arg same sign as 1st
-          dummy=modulo(dummy,TWOPI)
-          if (dummy.gt.PI) dummy=dummy-TWOPI;
-        case default
-          dummy=(cv%r(i,main) - cv%r(i,runave))
-        end select
-!
-! force modification for FB potential centered on cv%(:,main)
-! note that we can use the identity max(0,x)=-min(0,-x) to see apply the FB relation
-! to -dummy as well [that corresponds to the equation in diffusion paper]
-! (in this case, we are simply computing the negative force)
-!
-        dummy=max(zero, dummy - cv%fbwidth(i)) + min(zero, dummy + cv%fbwidth(i))
-        cv%r(i,forces)=cv%k(i)*dummy
-       enddo
+!    (-)forces acting on the CV ( computed from approximate FE gradient i.e. running average of the force; see smcv_master, addhist):
+       cv%r(1:cv%num_cv,forces) = cv%k(1:cv%num_cv) * cv%r(1:cv%num_cv,frunave)
 !    compute free energy ( uses cv%r(:,forces) )
        call cv_common_compute_fe_fd()
 !    add fe to the fe running average
        call cv_common_update_fe_ave()
 !    now evolve string -- take the negative of the FE gradient
+!    NOTE : here, consistent units require that D=kT/gamma, where D is the diffusion coefficient; which means that gamma has units mass/time
+!    cv%gamma is 1/gamma (i.e. 1/friction), which means that cv%gamma has implicit units time/mass
 !
        do i=1, cv%num_cv
-        cv%r(i,main)=cv%r(i,main)-delt*cv%gamma(i)*                     &
-!     &               dot_product(cv%M(i,:,2),cv%r(:,forces))
-     &                                        cv%r(i,forces) ! + temperature (coming soon)
+        cv%r(i,main)=cv%r(i,main) - delt * cv%gamma(i) * cv%r(i,forces)                             ! drift
+!
+        if (cv%temperature(i).gt.zero) then
+#ifdef __CHARMM
+         normal_deviate=bmgaus(one,__SEED)
+#else
+         call randomg_vector(normal_deviate,1)
+#endif
+!
+         __INCR(cv%r(i,main),      sqrt ( two*cv%gamma(i)*cv%temperature(i)*kboltz*delt ) * normal_deviate(1)) ! diffusion if T>0
+        endif ! temperature > 0
+!
         if (cv%type(i).eq.angle_com.or.cv%type(i).eq.anglvec) cv%r(i,main)=abs(cv%r(i,main))
        enddo
 !    now reset history (number of slices in the running average)
@@ -1085,14 +1087,13 @@ __CHARMM_ONLY##ENDIF
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_evolve_expo(a,nskip)
 !      evolve CV using equation: z(n+1)=a * z(n) + (1-a) * <theta(x)>
-      
       __DEP_CONST
 !
-       float :: a, a1
-       int, optional :: nskip
+       float, intent(in) :: a
+       int, optional, intent(in) :: nskip
 !      locals
-       float :: dummy, u, v
-       int :: numskip, i, j, k, n, k1, k2, k3, k4
+       float :: a1
+       int :: numskip, i, j ! , k, n, k1, k2, k3, k4
        __IAM(CV_COMMON_EVOLVE_EXPO)
        float :: temp(max_hist_base)=zero
 !
@@ -1111,34 +1112,8 @@ __CHARMM_ONLY##ENDIF
         __WRN( whoami,'NO SLICES IN THE AVERAGE. NOTHING DONE')
         return
        endif
-!     12.08.08: made modifications: 1) compute forces 2) evolve using runave
-!     from Euler evolve:
-!    compute average F.E. gradient and dump into force set
-!    assuming that the running average has been computed
-       do i=1, cv%num_cv
-!
-        select case(cv%type(i))
-        case(dihe_com);
-          dummy=cv%r(i,main) - cv%r(i,runave)
-          dummy=modulo(dummy,TWOPI)
-          if (dummy.gt.PI) dummy=dummy-TWOPI;
-        case(angle_com, anglvec); ! cannot tell between theta/-theta
-          dummy=cv%r(i,main) - sign(cv%r(i,runave), cv%r(i,main))
-          dummy=modulo(dummy,TWOPI)
-          if (dummy.gt.PI) dummy=dummy-TWOPI;
-        case default
-          dummy=(cv%r(i,main) - cv%r(i,runave))
-        end select
-! compute forces in case that we are running restrained dynamics
-!
-! force modification for FB potential centered on cv%(:,main)
-! note that we can use the identity max(0,x)=-min(0,-x) to see apply the FB relation
-! to -dummy as well [that corresponds to the equation in diffusion paper]
-! (in this case, we are simply computing the negative force)
-!
-        dummy=max(zero, dummy - cv%fbwidth(i)) + min(zero, dummy + cv%fbwidth(i))
-        cv%r(i,forces)=cv%k(i)*dummy
-       enddo
+!    (-)forces acting on the CV ( computed from approximate FE gradient i.e. running average of the force; see smcv_master, addhist):
+       cv%r(1:cv%num_cv,forces) = cv%k(1:cv%num_cv) * cv%r(1:cv%num_cv,frunave)
 !    compute free energy ( uses cv%r(:,forces) )
        call cv_common_compute_fe_fd()
 !    add fe to the fe running average
@@ -1146,16 +1121,16 @@ __CHARMM_ONLY##ENDIF
 !
 !       cv%r(:,:,comp)=cv%r(:,:,main) ! save current as "old" coordinates in column 2
 !     precompute indices for faster copying
-       k1=cv%beg_hist+main_offset
-       k2=max_hist_base+main_offset
-       k3=main_offset+1
-       k4=k1-1
+!       k1=cv%beg_hist+main_offset
+!       k2=max_hist_base+main_offset
+!       k3=main_offset+1
+!       k4=k1-1
 ! the above assumes that all of the history slots are to be used;
 ! to print only the _actual_ history which may be smaller than the
 ! max number of slots, use cv%num_hist
 !
        a1=one-a
-       n=cv%num_hist-numskip ! number of elements
+!       n=cv%num_hist-numskip ! number of elements
        do i=1, cv%num_cv
 !        temp=(/ (cv%r(i,k),k=k1,k2),(cv%r(i,k),k=k3,k4) /)  ! 'unwrap' history
 !c     need CV coordinates that are consistent with the current theta(x): simply take the last slice from above:
@@ -1164,27 +1139,17 @@ __CHARMM_ONLY##ENDIF
 !        cv%r(i,comp)=cv%r(i,instant) ! this should be better for alternating restrained/unrestrained equilibration
         cv%r(i,comp)=cv%r(i,main) ! better for restraints
 !===== evolve i_th cv ======
+! first, need to compute running average from history
+! (as of 8.2016 : runave no longer 
 !c        cv%r(i,main)=       a  * cv%r(i,main) +
 !c     &                      a1 * sum(temp(numskip+1:cv%num_hist))/n
 
 ! VO 3.24.09: angle correction
 ! NOTE: angle_com main could in principle be negative (e.g. if read in from file)
-        u=cv%r(i,main)
-        select case(cv%type(i));
-         case(dihe_com)
-          v=u-cv%r(i,runave)
-          v=modulo(v,TWOPI) ; if (v.gt.PI) v=v-TWOPI
-!========
-         case(angle_com, anglvec);
-          v=u-sign(cv%r(i,runave),u)
-          v=modulo(v,TWOPI) ; if (v.gt.PI) v=v-TWOPI
-!========
-         case default
-          v=u-cv%r(i,runave)
-        end select
-!
-        cv%r(i,main)=       u -                                         &
-     &                      a1 * v
+! 8.2016 : runave is removed ; instead, have frunave, which corresponds (in the case of 0 fb potential) to
+! ave < cv%(i,main) - cv%(i,instant) > (see smcv_master)
+! In the case of nonzero fb width, frunave is the distance from the fb window (which is probably not what you want)
+        __INCR( cv%r(i,main), a1 * ( cv%r(i,frunave) - cv%r(i,main) ) )
 !
         if (cv%type(i).eq.angle_com.or.cv%type(i).eq.anglvec) cv%r(i,main)=abs(cv%r(i,main))
 !    not clear what to do with M in this evolution scheme : 
@@ -1194,17 +1159,97 @@ __CHARMM_ONLY##ENDIF
 !    thus, store a long-term average in M(4)
 !      M:
         do j=1,i
-         cv%M(i,j,4) = a * cv%M(i,j,4) + a1 * cv%M(i,j,2);
+         __INCR ( cv%M(i,j,4) , a1 * ( cv%M(i,j,2) - cv%M(i,j,4) ) ) ;
          cv%M(j,i,4) = cv%M(i,j,4)
         enddo ! j
        enddo ! i
-!c      reset history (necessary)
-       call cv_common_clear_hist()
+!      reset history (necessary if we are using it for evolution ; not so if runave/frunave are used)
+!       call cv_common_clear_hist()
        cv%num_run_ave=0
 !      update voronoi cells
-!     call moved to smcv_master
+!      call moved to smcv_master
 !       if (cv_common_voronoi_initialized) call cv_common_voronoi_update() ! update V.cell nodes
        end subroutine cv_common_evolve_expo
+!===============================================================
+       subroutine cv_common_apply_bc()
+       __DEP_PARSER
+       __DEP_CONST
+!      ensure that the CVs stay within the limits [ cv%minval(i), cv%maxval(i) ]
+!      useful for TAMD in which the CVs evolve by a random walk on the FE surface;
+!      boundary values localize sampling to a region of interest
+!      bc are reflective
+       __IAM(CV_COMMON_APPLY_BC)
+       float :: cvmin, cvmax, d
+       int :: i
+!
+       do i=1, cv%num_cv
+!
+! skip if bc values not set
+        if ( (cv%minval(i).eq.-__INF).and.(cv%maxval(i).eq.__INF)) cycle
+!
+        select case(cv%type(i));
+!+==============================================
+         case(dihe_com)
+!    compute minima and maxima in the range [-pi pi] :
+!    first, make sure that we have both a minimum and a maximum (otherwise can violate condition via periodicity)
+          if ( (cv%minval(i).eq.-__INF).or.(cv%maxval(i).eq.__INF)) then
+           __WRN(whoami, ' FOR CV TYPE '//trim(cv_type_names(cv%type(i)))//' BOTH MAXIMUM AND MINIMUM VALUES MUST BE DEFINED. NOTHING DONE.')
+          else
+           __WRAP_ANGLE(cv%minval(i),cvmin)
+           __WRAP_ANGLE(cv%maxval(i),cvmax)
+           if (cvmax.lt.cvmin) then 
+            __INCR(cvmax,TWOPI)
+           elseif (cvmax.eq.cvmin) then
+            __WRN(whoami, ' MINIMUM VALUE FOR CV '//itoa(i)//' EQUAL TO THE MAXIMUM VALUE. NOTHING DONE.')
+            cycle
+           endif
+!    use flat-bottom algorithm to check if a reflection is necessary
+           __WRAP_ANGLE( half*(cvmin+cvmax) - cv%r(i,main), d)
+           d=max(zero, d - half * (cvmax-cvmin)) + min(zero, d + half * (cvmax-cvmin))
+           __INCR(cv%r(i,main), two*d) ! reflect into allowed region
+          endif
+!================================================
+         case(angle_com, anglvec)
+          if ( cv%minval(i).gt.-__INF ) then
+           __WRAP_ANGLE(cv%minval(i), cvmin) ; cvmin=abs(cvmin) ! linear angles defined up to sign
+          endif
+!
+          if ( cv%maxval(i).lt.__INF ) then
+           __WRAP_ANGLE(cv%maxval(i), cvmax) ; cvmax=abs(cvmax) ! linear angles defined up to sign
+          endif
+!
+          if (cvmax.lt.cvmin) then
+           d=cvmax ; cvmax=cvmin ; cvmin=d ! swap ; also works if one of the boundary values is not defined ; if both undefined, this code is not executed
+          elseif (cvmax.eq.cvmin) then
+           __WRN(whoami, ' MINIMUM VALUE FOR CV '//itoa(i)//' EQUAL TO THE MAXIMUM VALUE. NOTHING DONE.')
+           cycle
+          endif
+!
+!    check low boundary
+          d=cvmin-abs(cv%r(i,main))
+          if (d.gt.zero) then 
+           __INCR(cv%r(i,main), two * d * sign(one, cv%r(i,main)))
+           cycle ! to avoid high-boundary check
+          endif
+!    check high boundary
+           d=abs(cv%r(i,main))-cvmax
+           if (d.gt.zero) then
+             __INCR(cv%r(i,main), -two * d * sign(one, cv%r(i,main)))
+           endif
+!=========================================================================
+         case default ;
+           if (cv%minval(i).ge.cv%maxval(i)) then
+            __WRN(whoami, ' MINIMUM VALUE FOR CV '//itoa(i)//' GREATER THAN OR EQUAL TO THE MAXIMUM VALUE. NOTHING DONE.')
+           elseif (cv%r(i,main).lt.cv%minval(i)) then
+            cv%r(i,main) = two * cv%minval(i) - cv%r(i,main)
+           elseif (cv%r(i,main).gt.cv%maxval(i)) then
+            cv%r(i,main) = two * cv%maxval(i) - cv%r(i,main)
+           endif
+        end select
+!
+       enddo ! all cv
+!
+       end subroutine cv_common_apply_bc
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_set_bc(first,last)
 !      tells the module whether collective string operations include
@@ -1367,8 +1412,7 @@ __CHARMM_ONLY##ENDIF
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_print_hist_global(iunit, nskip) ! not used in regular SMCV
 !      assume that unit is prepared
-       
-       __DEP_MPI 
+       __DEP_MPI
        __DEP_MULTICOM
 !
 #include "mpitype.def"
@@ -1470,7 +1514,6 @@ __CHARMM_ONLY##ENDIF
 !      assume that unit is prepared
 !      NOTE that this is a local print!
 !      does not print fixed BC
-       
        __DEP_MULTICOM
        use parser, only : itoa
        int :: iunit
@@ -1511,7 +1554,7 @@ __CHARMM_ONLY##ENDIF
        subroutine cv_common_print_global(iunit,col,print_bc,qraw_)
 !      assume that unit is prepared
 !      NOTE that this is a global print!
-       
+!
        __DEP_MULTICOM
        __DEP_MPI
        use parser, only: itoa
@@ -1632,7 +1675,7 @@ __CHARMM_ONLY##ENDIF
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_unwrap_angles(col,ind)
        use sm_var, only: nstring, mestring ! all cpus need to know string length
-       
+!
        __DEP_MULTICOM
        __DEP_CONST
        __DEP_MPI
@@ -1706,7 +1749,7 @@ __CHARMM_ONLY##ENDIF
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_compute_fe_fd()
        use sm_var, only: nstring
-       
+!
        __DEP_MULTICOM
        __DEP_MPI 
 !
@@ -1715,9 +1758,7 @@ __CHARMM_ONLY##ENDIF
 !       define interface for work routine (calling by keyword)
        interface
         subroutine compute_work_fd(r,rbc0,rbc1,f,n,fe)
-!
-      __CHARMM_ONLY __DEP_KINDS
-!
+        __CHARMM_ONLY __DEP_KINDS
         int :: n
         float :: r(n), f(n)
         float :: fe(:)
@@ -1818,7 +1859,6 @@ __CHARMM_ONLY##ENDIF
        subroutine cv_common_read_local(iunit, col, replica_, qraw_)
 !      assume that unit is prepared
 !      for parallel, broadcast to slaves done by calling routine
-       
        __DEP_MULTICOM
        __DEP_CONST
        use parser
@@ -1885,7 +1925,6 @@ __CHARMM_ONLY##ENDIF
 !      assume that unit is prepared
 !      note that only the string root will get a valid file handle (all local roots enter, hence MPI)
 !      replica assumed to be specified relative to zero (not one)
-      
       __DEP_PARSER
       __DEP_MULTICOM
       __DEP_MPI
@@ -2196,7 +2235,6 @@ __CHARMM_ONLY##ENDIF
        end subroutine cv_common_print_feav
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_set_k(i,k)
-       
        int :: i
        float :: k
 ! no error checking: can set to anything you want!
@@ -2204,14 +2242,12 @@ __CHARMM_ONLY##ENDIF
        end subroutine cv_common_set_k
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_set_active(i,flag)
-       
        int :: i
        bool :: flag
        if (i.ge.0.and.i.le.cv%num_cv) cv%active(i)=flag
        end subroutine cv_common_set_active
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_set_kpara(k)
-       
        float :: k
 !
        __IAM(CV_COMMON_SET_KPARA)
@@ -2222,7 +2258,6 @@ __CHARMM_ONLY##ENDIF
        end subroutine cv_common_set_kpara
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_set_kperp(k)
-       
 !
        float :: k
 !
@@ -2234,13 +2269,10 @@ __CHARMM_ONLY##ENDIF
        end subroutine cv_common_set_kperp
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_set_fbwidth(i,dw)
-       
 !
        int :: i
        float :: dw
-!
        __IAM(CV_COMMON_SET_FBWIDTH)
-!
        if (i.gt.0.and.i.le.cv%num_cv) then
         if (dw.lt.zero) then
           __WRN(whoami,' NEGATIVE WIDTH FLAT-BOTTOM REGION OF RESTRAINT SPECIFIED. NOTHING DONE.')
@@ -2251,19 +2283,48 @@ __CHARMM_ONLY##ENDIF
        end subroutine cv_common_set_fbwidth
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_set_g(i,gamma)
-!
        int :: i
        float :: gamma
+       __IAM(CV_COMMON_SET_G)
 !
-       if (i.gt.0.and.i.le.cv%num_cv.and.gamma.gt.zero)                  & ! disallow neagtive or zero values
-     &      cv%gamma(i)=one/gamma
+       if (i.gt.0.and.i.le.cv%num_cv) then
+        if (gamma.le.zero) then
+          __WRN(whoami,' NONPOSITIVE FRICTION VALUE SPECIFIED. NOTHING DONE.')
+        else
+         cv%gamma(i)=one/gamma
+        endif
+       endif
        end subroutine cv_common_set_g
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       subroutine cv_common_set_temp(i,temp)
+       int :: i
+       float :: temp
+       __IAM(CV_COMMON_SET_TEMP)
+!
+       if (i.gt.0.and.i.le.cv%num_cv) then
+        if (temp.le.zero) then
+          __WRN(whoami,' NONPOSITIVE TEMPERATURE VALUE SPECIFIED. NOTHING DONE.')
+        else
+         cv%temperature(i)=temp
+        endif
+       endif
+       end subroutine cv_common_set_temp
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       subroutine cv_common_set_maxval(i,maxv)
+       int :: i
+       float :: maxv
+       cv%maxval(i)=maxv
+       end subroutine cv_common_set_maxval
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       subroutine cv_common_set_minval(i,minv)
+       int :: i
+       float :: minv
+       cv%minval(i)=minv
+       end subroutine cv_common_set_minval
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_set_w(i,weight)
-       
        int :: i
        float :: weight
-!
 !       if (weight.le.zero) return ! zero or negative weight breaks
        if (i.gt.0.and.i.le.cv%num_cv) then
         cv%weight(i)=weight
@@ -2273,7 +2334,6 @@ __CHARMM_ONLY##ENDIF
        end subroutine cv_common_set_w
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_set_r(i,z,col1)
-       
 !
        int :: i
        int, optional :: col1
@@ -2295,7 +2355,6 @@ __CHARMM_ONLY##ENDIF
        end subroutine cv_common_set_r
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_set_dt(dt)
-!
        float :: dt
 ! no error checking: can set to anything you want!
 !      locals
@@ -2303,8 +2362,6 @@ __CHARMM_ONLY##ENDIF
        end subroutine cv_common_set_dt
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_copy(c1, c2)
-       
-!
        int :: c1, c2
 !      local
        __IAM(CV_COMMON_COPY)
@@ -2320,7 +2377,6 @@ __CHARMM_ONLY##ENDIF
        end subroutine cv_common_copy
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_swap(col1, col2)
-       
        int, optional :: col1, col2
        __IAM(CV_COMMON_SWAP)
        int :: c1, c2
@@ -2342,14 +2398,11 @@ __CHARMM_ONLY##ENDIF
        end subroutine cv_common_swap
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        function cv_common_rmsd(col1, col2)
-       
-       __DEP_CONST 
-       
+       __DEP_CONST
        int, optional :: col1, col2
        int :: c1, c2
 !      local
        float :: cv_common_rmsd, dummy, dangle
-!       float, parameter :: pi=3.14159265358979 ! hardwired for angles
        int :: i
        __IAM(CV_COMMON_RMSD)
 !      start
@@ -2411,7 +2464,6 @@ __CHARMM_ONLY##ENDIF
        end subroutine cv_common_update_ave
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_update_fe_ave()
-       
 !      local
        float :: t
 !      begin
@@ -2421,7 +2473,6 @@ __CHARMM_ONLY##ENDIF
        end subroutine cv_common_update_fe_ave
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_set_ave_samples(n)
-       
        int :: n
        if (n.ge.0) cv%num_average_samples=n
        end subroutine cv_common_set_ave_samples
@@ -2458,7 +2509,6 @@ __CHARMM_ONLY##ENDIF
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_rex_set_temp(temp)
        __DEP_CONST 
-       
        float, optional :: temp
        float :: t
 !
@@ -2470,7 +2520,6 @@ __CHARMM_ONLY##ENDIF
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_rex_print_map(iunit,fmt)
        use sm_var, only: nstring
-       
 !
 !      only root process should call
        int :: iunit
@@ -2496,7 +2545,6 @@ __CHARMM_ONLY##ENDIF
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_rex_read_map(iunit)
        use sm_var, only: nstring
-       
        __DEP_MULTICOM
        __DEP_MPI 
 !
@@ -2534,11 +2582,9 @@ __CHARMM_ONLY##ENDIF
        subroutine cv_common_rex_print_log(iunit, fmt)
 !      assume that unit is prepared
 !      NOTE that this is a global print!
-      
       __DEP_MULTICOM
       __DEP_MPI
 !
-       
        int iunit
        character(len=*), optional :: fmt
 !      local
@@ -2654,7 +2700,6 @@ __MPI_ONLY     &                  MPI_COMM_STRNG,ierror)
 !===================================================================================================
        subroutine cv_common_print_voro_map(iunit,fmt)
        use sm_var, only: nstring
-       
        __DEP_MULTICOM
        __DEP_MPI 
 !
@@ -2688,7 +2733,6 @@ __MPI_ONLY     &                  MPI_COMM_STRNG,ierror)
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_read_voro_map(iunit)
        use sm_var, only: nstring
-       
        __DEP_MULTICOM
        __DEP_MPI 
 !
@@ -2728,7 +2772,6 @@ __MPI_ONLY     &                  MPI_COMM_STRNG,ierror)
        use sm_var, only: nstring, mestring, smcv_initialized
        __DEP_MULTICOM
        __DEP_MPI 
-       
 #include "mpitype.def"
 !
 !      locals
@@ -2819,7 +2862,6 @@ __CHARMM_ONLY##ENDIF
        subroutine cv_common_voronoi_smart_update(rnew, rold, m_iter)
        use sm_var, only: nstring, mestring, smcv_initialized
        use cv_types
-       
 !      cv%rall(:,:) is expected to have values from previous update that
 !      are consistent with rtemp; if this is not true, the routine
 !      just does a regular update and exits
