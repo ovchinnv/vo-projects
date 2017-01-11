@@ -12,21 +12,21 @@
 #else
 #define __EXTERN extern
 #endif
-__EXTERN __CINT smcv_init_from_namd (const __CINT, const __CFLOAT *,const  __CFLOAT *, const __CCHAR * , const __CINT, const __CCHAR *, const __CINT,  __CINT **);
-__EXTERN   void smcv_done_from_namd ();
-__EXTERN __CINT smcv_dyna_from_namd ( const long int, const __CFLOAT *, __CFLOAT *, __CFLOAT * );
+__EXTERN __CINT sm_init_from_namd (const __CINT, const __CFLOAT *,const  __CFLOAT *, const __CCHAR * , const __CINT, const __CCHAR *, const __CINT,  __CINT **);
+__EXTERN   void sm_done_from_namd ();
+__EXTERN __CINT sm_dyna_from_namd ( const long int, const __CFLOAT *, __CFLOAT *, __CFLOAT * );
 
-#ifndef GLOBALMASTERSMCV_H
-#define GLOBALMASTERSMCV_H
+#ifndef GLOBALMASTERSM_H
+#define GLOBALMASTERSM_H
 #endif
 
 class Molecule;
 class SubmitReduction;
 
-class GlobalMasterSMCV : public GlobalMaster {
+class GlobalMasterSM : public GlobalMaster {
  public:
-  GlobalMasterSMCV();
-  ~GlobalMasterSMCV();
+  GlobalMasterSM();
+  ~GlobalMasterSM();
  private:
   Bool initialized;
   void calculate();
@@ -35,7 +35,7 @@ class GlobalMasterSMCV : public GlobalMaster {
   SimParameters * params;
 //  SubmitReduction *reduction;
   long int iteration;
-  __CFLOAT smcv_energy;
+  __CFLOAT sm_energy;
   __CINT *atomlist=NULL; // to maintain a list of atoms that are needed by plugin; memory managed by FORTRAN side
   __CFLOAT *r=NULL, *fr=NULL ; //positions and forces
 };

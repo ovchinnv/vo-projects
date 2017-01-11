@@ -9,43 +9,44 @@
 #include "GlobalMaster.h"
 #include "SimParameters.h"
 //#include "ReductionMgr.h"
-#include "GlobalMasterSMCV.h"
+#include "GlobalMasterSM.h"
 //#define DEBUGM
 #include "Debug.h"
 
-GlobalMasterSMCV::GlobalMasterSMCV() {
+GlobalMasterSM::GlobalMasterSM() {
    __CCHAR *inputfile = NULL, *logfile = NULL;
    __CINT ilen=0, llen=0, ierr=0;
-   __CCHAR* deflogfile = "smcv.log" ;
+   const __CCHAR* deflogfile = "struna.log" ;
    params = Node::Object()->simParameters;
    molecule=Node::Object()->molecule ;
    __CINT natoms=molecule->numAtoms;
 //
    initialized=0;
-   smcv_energy=0.;
-   CkPrintf("# SMCV PLUGIN: Initializing ...\n");
+   sm_energy=0.;
+   CkPrintf("# STRUNA PLUGIN: Initializing ...\n");
 //
 // find input file
 //
-   inputfile = params->SMCVConfigFileName ;
+   inputfile = params->SMConfigFileName ;
    if (!inputfile) {
-    CkPrintf("# SMCV PLUGIN: input file not specified\n");
+    CkPrintf("# STRUNA PLUGIN: input file not specified\n");
     CkExit();
    } else {
-    CkPrintf("# SMCV PLUGIN: input file is '"); 
+    CkPrintf("# STRUNA PLUGIN: input file is '"); 
     CkPrintf(inputfile);
     CkPrintf("'\n");
    }
 //
 // find log file
 //
-   logfile = params->SMCVLogFileName ;
+   logfile = params->SMLogFileName ;
    if (!logfile) {
-    CkPrintf("# SMCV PLUGIN: log file not specified, will write to '");
-    logfile=deflogfile;
+    CkPrintf("# STRUNA PLUGIN: log file not specified, will write to '");
+    logfile=(__CCHAR *) deflogfile;
     CkPrintf(logfile);
     CkPrintf("'\n");
    } else {
+     CkPrintf("# STRUNA PLUGIN: log file is '"); 
      CkPrintf(logfile);
      CkPrintf("'\n");
    }
@@ -62,7 +63,7 @@ GlobalMasterSMCV::GlobalMasterSMCV() {
 //
    ilen=strlen(inputfile);
    llen=strlen(logfile);
-   ierr=smcv_init_from_namd(natoms, mass, charge, inputfile, ilen, logfile, llen, &atomlist) ;
+   ierr=sm_init_from_namd(natoms, mass, charge, inputfile, ilen, logfile, llen, &atomlist) ;
 // mass and charge no longer needed
    free(mass);
    free(charge);
@@ -71,12 +72,12 @@ GlobalMasterSMCV::GlobalMasterSMCV() {
    if (atomlist!=NULL) { // atom indices provided; add them
     // first element gives list size:
     for ( int l = 0 ; l++ < atomlist[0]  ; ) { // first value in atomlist is the list length
-     atomid = atomlist[l] - 1 ; // subtract one because atom indices are offset from 0 in NAMD, but from 1 in the SMCV plugin
+     atomid = atomlist[l] - 1 ; // subtract one because atom indices are offset from 0 in NAMD, but from 1 in the SM plugin
      if ( atomid >= 0 && atomid < molecule->numAtoms ) {
       DebugM(1,"Adding atom "<<atomid<<"\n");
       modifyRequestedAtoms().add(atomid); // note: atomlist will be deallocated in Fortran
      } else {
-      CkPrintf("# SMCV PLUGIN: Atom ID ");
+      CkPrintf("# STRUNA PLUGIN: Atom ID ");
       CkPrintf("%d", atomid);
       CkPrintf("is out of range\n");
       CkExit();
@@ -85,29 +86,29 @@ GlobalMasterSMCV::GlobalMasterSMCV() {
     r  =     (__CFLOAT *) calloc(3*molecule->numAtoms, sizeof(__CFLOAT));
     fr =     (__CFLOAT *) calloc(3*molecule->numAtoms, sizeof(__CFLOAT));
    } else {
-    CkPrintf("# SMCV PLUGIN: No restraint atoms found (nothing to do)\n");
+    CkPrintf("# STRUNA PLUGIN: No restraint atoms found (nothing to do)\n");
     CkExit();
    } // atomlist
 //
    iteration = params->firstTimestep;
 //   reduction = ReductionMgr::Object()->willSubmit(REDUCTIONS_BASIC);
-} // GlobalMasterSMCV
+} // GlobalMasterSM
 
 
-GlobalMasterSMCV::~GlobalMasterSMCV() {
+GlobalMasterSM::~GlobalMasterSM() {
  params=NULL;
  destroy();
-} // ~GlobalMasterSMCV
+} // ~GlobalMasterSM
 
 
-void GlobalMasterSMCV::calculate() {
+void GlobalMasterSM::calculate() {
  // load coordinates
   int atomid;
   AtomIDList::const_iterator a_i = getAtomIdBegin();
   AtomIDList::const_iterator a_e = getAtomIdEnd();
   PositionList::const_iterator p_i = getAtomPositionBegin();
   Vector p ;
-  for ( ; a_i != a_e; ++a_i, ++p_i ) { // this loop is nly over atoms that have been requested
+  for ( ; a_i != a_e; ++a_i, ++p_i ) { // this loop is only over atoms that have been requested
     atomid = (*a_i);
 #ifdef DEBUGM
     CkPrintf("%d\n",atomid);
@@ -118,8 +119,8 @@ void GlobalMasterSMCV::calculate() {
     r[atomid++] = p.y; // however, in principle, access can be random (at the very least, nonconsecutive)
     r[atomid]   = p.z;
   }
-  //call smcv
-  __CINT ierr=smcv_dyna_from_namd(iteration++, r, fr, &smcv_energy);
+  //call sm
+  __CINT ierr=sm_dyna_from_namd(iteration++, r, fr, &sm_energy);
 
 #ifdef DEBUGM
 // check that forces are received correctly
@@ -134,7 +135,7 @@ void GlobalMasterSMCV::calculate() {
   if (atomlist!=NULL) { // atom indices provided; add them
     // first element gives list size:
    for ( int l = 0 ; l++ < atomlist[0]  ; ) { // first value in atomlist is the list length
-     atomid = atomlist[l] - 1; // subtract one because atom indices are offset from 0 in NAMD, but from 1 in the SMCV plugin
+     atomid = atomlist[l] - 1; // subtract one because atom indices are offset from 0 in NAMD, but from 1 in the SM plugin
      modifyForcedAtoms().add(atomid);
      atomid*=3 ; // index into force array
      p.x=fr[atomid++];
@@ -148,9 +149,9 @@ void GlobalMasterSMCV::calculate() {
   if (iteration>params->N) destroy();
 } // calculate
 
-void GlobalMasterSMCV::destroy(){
-  CkPrintf("# SMCV PLUGIN: Finalizing...\n");
-  smcv_done_from_namd();
+void GlobalMasterSM::destroy(){
+  CkPrintf("# STRUNA PLUGIN: Finalizing...\n");
+  sm_done_from_namd();
 //    delete reduction;
   if (r) free(r);
   if (fr) free(fr);

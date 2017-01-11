@@ -22,13 +22,13 @@ if (read)
  phi0=-180 ; phi1 = 180 ;
  psi0=-180 ; psi1 = 180 ;
 
- fbw=[10, 10];
+ fbw=[5, 5];
  fbwrad=fbw * pi / 180 ;
 
 % fbwrad=[0.175 0.175];
 
- nphi=20;
- npsi=20;
+ nphi=40;
+ npsi=40;
 
  nbox =1; % number of statistical samples
 
