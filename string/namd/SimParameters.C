@@ -1530,11 +1530,11 @@ void SimParameters::config_parser_constraints(ParseOptions &opts) {
    opts.range("SMDOutputFreq", POSITIVE);
    
    //****** END SMD constraints changes 
-   //****** VO: BEGIN SMCV plugin parameters
-   opts.optionalB("main", "SMCVPlugin", "Plugin to use restraints from String Method in Collective Variables", &SMCVPluginActive, FALSE);
-   opts.require("SMCVPlugin", "SMCVConfigFile","Configuration file for SMCV plugin", SMCVConfigFileName);
-   opts.optional("SMCVPlugin", "SMCVLogFile","Log file for SMCV plugin", SMCVLogFileName);
-   //****** VO: END SMCV plugin parameters
+   //****** VO: BEGIN SM plugin parameters
+   opts.optionalB("main", "StrunaPlugin", "Plugin to use restraints from string method suite", &SMPluginActive, FALSE);
+   opts.require("StrunaPlugin", "StrunaConfigFile","Configuration file for struna plugin", SMConfigFileName);
+   opts.optional("StrunaPlugin", "StrunaLogFile","Log file for struna plugin", SMLogFileName);
+   //****** VO: END SM plugin parameters
 
    //****** BEGIN tabulated energies section
    opts.optionalB("main", "tabulatedEnergies", "Do we get energies from a table?", &tabulatedEnergies, FALSE);
@@ -4388,11 +4388,11 @@ if ( openatomOn )
    }
    
    //****** END SMD constraints changes 
-   //****** VO SMCV Plugin
-   if (SMCVPluginActive){
-    iout <<iINFO<<"String Method in Collective Variables (SMCV) Plugin Active\n";
+   //****** VO SM Plugin
+   if (SMPluginActive){
+    iout <<iINFO<<"Struna Plugin Active\n";
    }
-   //****** VO END SMCV Plugin
+   //****** VO END SM Plugin
    if (TMDOn) {
      iout << iINFO << "TMD ACTIVE BETWEEN STEPS " << TMDFirstStep 
           << " and " << TMDLastStep << "\n";
@@ -4586,7 +4586,7 @@ if ( openatomOn )
    // Global forces configuration
 
    globalForcesOn = ( tclForcesOn || freeEnergyOn || miscForcesOn ||
-                      (IMDon && ! IMDignore) || SMDOn || TMDOn || colvarsOn || symmetryOn || SMCVPluginActive );
+                      (IMDon && ! IMDignore) || SMDOn || TMDOn || colvarsOn || symmetryOn || SMPluginActive );
 
 
    if (tclForcesOn)
