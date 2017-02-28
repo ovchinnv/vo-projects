@@ -4390,7 +4390,7 @@ if ( openatomOn )
    //****** END SMD constraints changes 
    //****** VO SM Plugin
    if (SMPluginActive){
-    iout <<iINFO<<"Struna Plugin Active\n";
+    iout <<iINFO<<"STRUNA PLUGIN ACTIVE\n";
    }
    //****** VO END SM Plugin
    if (TMDOn) {

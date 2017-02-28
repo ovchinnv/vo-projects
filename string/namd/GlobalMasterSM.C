@@ -46,6 +46,7 @@ GlobalMasterSM::GlobalMasterSM() {
     CkPrintf(logfile);
     CkPrintf("'\n");
    } else {
+     CkPrintf("# STRUNA PLUGIN: log file is '"); 
      CkPrintf(logfile);
      CkPrintf("'\n");
    }
