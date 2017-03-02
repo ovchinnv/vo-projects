@@ -23,6 +23,7 @@ module sm_plugin
  bool, save :: defer_init_until_dyna=.false. ! if true, will call initializer after coordinates are available
  bool, save :: initialized=.false.
  bool, save :: minimal_system=.true. ! a minimal system results when a PDB file is not provided
+ bool, save :: qper_parser_override=.false. ! to turn off (override) periodicity in parser
  int, save :: iteration
  float, save :: sm_energy=zero
  int(__FCINT), save, allocatable, target :: atomlist(:)
@@ -151,6 +152,8 @@ module sm_plugin
  q=charge
 !
  __GET_OPT_PAR_B(defer_init_dyna, defer_init_until_dyna, .false., initctx);
+! periodicity override from parser :
+ __GET_OPT_PAR_B(pbc, qper_parser_override, qper, initctx); ! if not present use qper
 !
 ! defer initialization until coordinates are available
  if ( defer_init_until_dyna ) then 
@@ -163,7 +166,7 @@ module sm_plugin
    select case(sm_flavor);
      case(ftsm_flavor);    call ftsm_exec(initctx)
      case(smcv_flavor);
-      if (qper) then 
+      if (qper_parser_override) then ! should add option to override qper in input file ; esp. for acemd, where qper=.true.
        call cv%ucell%update_vectors(box) ; ! note that this is a hack since SMCV is not initialized yet
        call cv%ucell%print() ;
       endif
@@ -186,7 +189,7 @@ end function _ME
 #undef _ME
 !===================================================================
 #define _ME sm_dyna_plugin
- __CFUN(_ME, iteration_, r_plugin, f_plugin, e, alist, qper, box)
+ __CFUN(_ME, iteration_, r_plugin, f_double_plugin, f_single_plugin, qsingle, e, alist, qper, box)
 ! SMCV modules:
  use cv_common, only : cv
  use smcv_master, only : smcv_main
@@ -199,7 +202,9 @@ end function _ME
 !
  int(C_LONG), value, intent(in) :: iteration_
  real(__FCFLOAT), intent(in), dimension(3, natom) :: r_plugin
- real(__FCFLOAT), intent(out), dimension(3, natom) :: f_plugin
+ real(c_double), intent(out), dimension(3, natom) :: f_double_plugin
+ real(c_float), intent(out), dimension(3, natom) :: f_single_plugin
+ logical(__FCBOOL), value, intent(in) :: qsingle
  real(__FCFLOAT), intent(out) :: e
  type(c_ptr), intent(out) :: alist ! send back a list of atom indices if smcv not initialized
  logical(__FCBOOL), value, intent(in) :: qper
@@ -217,7 +222,7 @@ end function _ME
  if (initialized .or. defer_init_until_dyna) then
 
   iteration=iteration_
-  qper_=qper
+  qper_=qper.and.qper_parser_override
 !
   if (initialized) then ! just load coordinates
    r(:,atomlist(2:))=r_plugin(:,atomlist(2:))
@@ -268,7 +273,11 @@ end function _ME
 !
 ! update namd forces
 ! note that per CHARMM convention, which the plugin code inherits, forces correspond to grad V, not -grad V !
-  f_plugin(:,atomlist(2:)) = - f(:,atomlist(2:))
+  if (qsingle) then
+   f_single_plugin(:,atomlist(2:)) = - f(:,atomlist(2:))
+  else
+   f_double_plugin(:,atomlist(2:)) = - f(:,atomlist(2:))
+  endif
 ! update energy
   e=sm_energy
  endif
