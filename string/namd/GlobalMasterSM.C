@@ -145,14 +145,14 @@ void GlobalMasterSM::calculate() {
      modifyAppliedForces().add(p);
    } // for
   } // atomlist
-  // destructor is never called, so finalize after run length exceeded
-  if (iteration>params->N) destroy();
+  // destructor is not always called, so finalize after run length exceeded
+  if (iteration>params->N) destroy(); // this is problematic for multiple runs per script, e.g. minimize, then run MD
 } // calculate
 
 void GlobalMasterSM::destroy(){
   CkPrintf("# STRUNA PLUGIN: Finalizing...\n");
   sm_done_from_namd();
-//    delete reduction;
-  if (r) free(r);
-  if (fr) free(fr);
+// Keep in case there are multiple runs
+//  if (r) free(r);
+//  if (fr) free(fr);
 }
