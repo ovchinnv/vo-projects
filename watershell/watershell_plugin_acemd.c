@@ -98,7 +98,7 @@ aceplug_err_t aceplug_calcforces(struct aceplug_sim_t *s) {
    *(rptr++) = s -> pos[i].z;
   }
 // compute plugin forces
-  ierr=__NM(dyna_from_plugin) (iteration, r, fr, &__NM(energy)); // might return valid atomlist
+  ierr=__NM(dyna_from_acemd) (iteration, r, fr, &__NM(energy)); // might return valid atomlist
   private_data->atomlist=atomlist ;
 // apply plugin forces
   if (atomlist!=NULL) { // atom indices provided; store them as private data and use for adding forces
@@ -125,7 +125,7 @@ aceplug_err_t aceplug_calcforces(struct aceplug_sim_t *s) {
    *(rptr)   = s -> pos[j].z;
   }
 //
-  ierr=__NM(dyna_from_plugin)(iteration, r, fr, &__NM(energy));
+  ierr=__NM(dyna_from_acemd)(iteration, r, fr, &__NM(energy));
 //
   for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
    j=*aptr - 1;

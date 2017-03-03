@@ -62,7 +62,7 @@ module _N
  __PAR(structure_file, character(len=vartaglen),'NONE') ! coordinate file (e.g. PDB) with system information, such as atomic radii
  __PAR(output_file, character(len=vartaglen), 'watershell.restart.txt') ! output file name
  __PAR(surface_force_constant, float, one)      ! surface restraint force constant
- __PAR(target_surface_energy, float, 0.001d0) ! target average energy of surface potential / par area ( units of pressure or normal stress )
+ __PAR(target_surface_energy, float, 5d0) ! target average energy of surface potential / par area ( units of pressure or normal stress )
 !
 !  atom selections
  __PAR(surface_atom_selection, character(len=vartaglen), 'ANAME=CA')  ! protein CA trace
@@ -76,7 +76,9 @@ module _N
 &                  rho_solv(:), & ! density value at solvent coordinate
 &                  drho_solv(:,:) ! density gradient at solvent coordinate (inward surface normal)
  int, public :: nsurface=-1, nsolvent=-1
- float :: oonsolvent
+ int :: nsolvent_outside
+ float :: oonsolvent, oonsolvent_outside
+ float :: current_surface_distance
 !
  int :: fid
  bool :: qrestart=.false. ! whether we are restarting from a restart file
@@ -390,7 +392,8 @@ module _N
  float :: surface_energy, surface_force, density_beyond_contour
  int :: i
  __IAM(__NM(main))
-!
+!aa
+!return
 !================================================================
  if (.not. __NM(initialized)) then
   __WRN(whoami, ftoupper(__STRING(_N))//'NOT INITIALIZED. NOTHING DONE.');
@@ -430,7 +433,7 @@ module _N
    __INCR(distance_from_solute2, d0**2)
   enddo
 ! set contour value to average value + (a) x stdev ; a set empirically
-#define _a 1d0
+#define _a 0d0
   __SCALE(distance_from_solute,oonsolvent);
   __DBGOUT('Distance from solute ', distance_from_solute)
   __SCALE(distance_from_solute2,oonsolvent);
@@ -441,6 +444,7 @@ module _N
   __MESSAGE(whoami, 'COMPUTED SURFACE DISTANCE AT '//ftoa(surface_distance)//' A FROM PROTEIN. CONTOUR VALUE IS '//ftoa(surface_contour_value))
   __DBGOUT( 'COMPUTED SD, SCV: ', surface_distance, surface_contour_value)
  else
+! aa :  this is the most time consuming part of the force calculation ; perhaps we can do it on the GPU ? Or perhaps can regulate cost otherwise ?
   call __NM(compute_density_grad)(.true.) ! truncate if value exceeds
  endif
 !========================== compute contour value ^
@@ -448,18 +452,30 @@ module _N
 ! calculate density integral using only atoms beyond contour (to estimate surface area)
  density_beyond_contour=zero
 !
+ nsolvent_outside=izero;
  do i=1, nsolvent
   if ( rho_solv(i) .lt. surface_contour_value) then
+   __INC(nsolvent_outside);
    __INCR(density_beyond_contour, rho_solv(i))
    pre = ( __RHO_INVERSE ( rho_solv(i) ) - surface_distance ) ;
 !
 ! add atomic force
-   fr(:,isolvent_atoms(i)) = surface_force_constant * pre * drho_solv(:,i)
+   fr(:,isolvent_atoms(i)) = - surface_force_constant * pre * drho_solv(:,i) ! (-) because surface_distance is negative ; grad points toward protein
 ! sum "energy"
    __INCR(surface_force, pre) ! x k, below
    __INCR(surface_energy, pre**2) ! x k/2, below
+  else
+   fr(:,isolvent_atoms(i))=zero
   endif
  enddo
+!
+! compute current surface distance from pre :
+ if (nsolvent_outside .gt. 0) then 
+  oonsolvent_outside=one/nsolvent_outside
+ else
+  oonsolvent_outside=zero ;
+ endif
+ current_surface_distance=surface_distance + surface_force * oonsolvent_outside
 !
  __SCALE(surface_force, surface_force_constant)
  __SCALE(surface_energy, half*surface_force_constant)
@@ -471,8 +487,9 @@ module _N
   if __CHKUPDATE(distance_update_freq) then
 ! for now, a very simple update strategy
 ! in the future will add estimation of pressure and surface tension
-
-    d0 = ( target_surface_energy - oonsolvent * surface_energy );
+!
+! if the surface energy is higher than the target, d0 < 0, and the surface distance (which is nagative ) will decrease
+    d0 = ( target_surface_energy - oonsolvent_outside * surface_energy );
     __INCR(surface_distance, distance_update_step * d0)
     surface_contour_value = __RHO(surface_distance)
 
@@ -481,7 +498,23 @@ module _N
 !============================================= output restart file
  if (output_file_freq.gt.izero) then
   if __CHKUPDATE(output_file_freq) then
+! write a short update of simulation parameters:
+  i=0 ;
+#define __OUT(...)  __INC(i);write(_MSGBUF(i),*) __VA_ARGS__
+#define _TAB char(9)//char(9)
+  __OUT('===================')
+  __OUT('Iteration:', iteration)
+  __OUT('Target distance to protein:      ', surface_distance)
+  __OUT('Current avg. distance to protein:', current_surface_distance)
+  __OUT('# Solvent atoms outside / total: ', nsolvent_outside,'/',nsolvent)
+  __OUT('Surface contour value:           ', surface_contour_value)
+  __OUT('Target surface energy:           ', target_surface_energy)
+  __OUT('Current avg. surface energy:     ', surface_energy * oonsolvent_outside )
+  __OUT('===================')
 !
+  __PRINT(_MSGBUF)
+
+! write restart file
    __MESSAGE(whoami, 'WRITING OUTPUT/RESTART FILE TO ("'//trim(output_file)//'")')
    call __NM(write_restart_file)
 !
@@ -496,6 +529,13 @@ module _N
  float :: rp(3), rw(3), dr(3), dr2, a, b, expa, expb, ooc
  float :: rmaxsurf, rsurf, rsurfn
  __IAM(__NM(compute_density_grad))
+!
+! NOTE : using approximations does not make much speed difference
+  float :: erfsun ! external erf function; code by Sun Microsystems
+  float :: erfo7  ! approximation to within O(-7)
+  float :: erfo5  ! approximation to within O(-5) [contains an exponential term]
+!
+!
 ! naive algorithm to compute density at each solvent coordinate
 ! adapted from molecule.ftn in continua
 !
@@ -522,7 +562,7 @@ module _N
 !__DBGOUT('j ', j, ' RP: ', rp)
 !__DBGOUT(' DR: ', dr, rmaxsurf)
     if (any(abs(dr) .gt. rmaxsurf)) cycle
-    dr=dr**2 ; dr2=sum(dr);
+    dr2=sum(dr**2);
     if (dr2 .gt. rmaxsurf**2) cycle
 ! proceed with calculation
     rsurfn=rsurf * oo_surf_stdev
@@ -537,7 +577,7 @@ module _N
 ! update density
     __INCR(rho_solv(i), half * ( __erf(a) - __erf(b) ) + osq2pi * ooc * ( expa - expb )   )
     if (qtruncate_sum.and. &
-&      (__RHO_INVERSE(rho_solv(i)).gt.surface_contour_value) ) exit ! density threshold exceeded ; will not apply force to this atom
+&      (rho_solv(i).gt.surface_contour_value) ) exit ! density threshold exceeded ; will not apply force to this atom
 ! otherwise, compute gradient contribution : (note that I am flipping the direction of dr (in the notes it is r0-r)
     __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurfn + half * (expa - expb) * ooc) )
 ! add gradient contribution
