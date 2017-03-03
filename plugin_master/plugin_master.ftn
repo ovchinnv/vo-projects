@@ -1,17 +1,20 @@
 #define __CBIND use, intrinsic :: iso_c_binding
 !
 module __NM(plugin)
+ use system, only : r, rcomp, fr, radius, natom, system_PDB_initialized, system_PDB_init, system_done
  __DEP_OUTPUT
  __DEP_CONST
  __CBIND
- use _N
+!
+! include plugin modules
+ __DEP_WATERSHELL
 
  __IMPNONE
 
  private
 !
- bool, save :: initialized=.false.
- int(__FCINT), target, allocatable :: atomlist(:)
+ bool, save :: __NM(initialized)=.false.
+ int(__FCINT), target, allocatable :: __NM(forced_atomlist(:)), __NM(atomlist(:))
  int, parameter :: foutput=999 ! output file unit
 !
 !
@@ -38,8 +41,11 @@ module __NM(plugin)
  character(len=il), pointer :: ifname
  character(len=ol), pointer :: ofname
 !
- type (int_vector) :: atoms
- int :: i, j
+ character(len=vartaglen) :: structure_file, keyword, context
+ character(len=vartaglen) :: search_contexts(2)=(/'main    ', 'molecule'/)
+!
+ type (int_vector) :: atoms, forced_atoms
+ int :: i, j, l
 
  int :: fid
  __IAM(_ME)
@@ -49,7 +55,7 @@ module __NM(plugin)
 !
  call output_init(filename=ofname, fid_=foutput)
 ! make sure that the string method flavor is valid
- __MESSAGE(whoami, 'INITIALIZING '//ftoupper(__STRING(_N))//' PLUGIN');
+ __MESSAGE(ftoupper(whoami), 'INITIALIZING '//ftoupper(__STRING(_N))//' PLUGIN');
 ! open input file
  call c_f_pointer(inputname, ifname)
  fid=-1
@@ -66,28 +72,49 @@ module __NM(plugin)
  if (existtag_nocase('minmessagelev',__STRING(__OUTCTX))) call set_minmessagelev(atoi(getval('minmessagelev',__STRING(__OUTCTX))))
  if (existtag_nocase('minerrorlev'  ,__STRING(__OUTCTX))) call set_minerrorlev  (atoi(getval('minerrorlev',__STRING(__OUTCTX  ))))
 !=== ^ check output options
-!
- call __NM(initialize)()
-! compute atomlist and return
-! use vector uadd to include the (ostensibly nonsensical) possibility of overlapping selections
- call atoms%init()
- do i=1, nsurface
-  j=atoms%uadd(isurface_atoms(i))
+! check for structure file
+!=========== structure file
+ do i=1, len(search_contexts)
+  if (existtag_nocase('structure_file', trim(search_contexts(i)))) then
+   __MESSAGE(ftoupper(whoami), 'FOUND STRUCTURE FILE IN CONTEXT "'//trim(ftoupper(search_contexts(i)))//'"')
+   structure_file=getval_nocase('structure_file',search_contexts(i))
+   __MESSAGE(ftoupper(whoami), 'READING STRUCTURE FROM FILE "'//trim(structure_file)//'"');
+   call system_PDB_init(structure_file, 'PDB');
+   if (.not. fatal_warning()) system_PDB_initialized=.true.
+! save coordinates in rcomp, just in case we need them later ?
+   if (associated(rcomp) .and. associated(r)) rcomp=r
+   exit
+  endif
  enddo
+!=========== end structure file
 !
- do i=1, nsolvent
-  j=atoms%uadd(isolvent_atoms(i))
- enddo
+! initialize atom index lists
+ call atoms%init()        ! all atoms needed by plugins
+ call forced_atoms%init() ! forced atoms only (e.g. watershell plugin)
 !
- allocate(atomlist(atoms%last+1))
- atomlist(1)=atoms%last ! number of atoms first
- atomlist(2:)=atoms%i(1:atoms%last)
- alist=c_loc(atomlist)
+! module specific code
+ __NM(initialized)=.true.
+ __WATERSHELL_INITIALIZE
+!
+! compute list of all atoms required by plugin
+ i=atoms%last
+ allocate(__NM(atomlist(i+1)))
+ __NM(atomlist(1))=i ! number of atoms first
+ __NM(atomlist(2:))=atoms%i(1:i)
+ if (i.gt.1) call isort('i', i, __NM(atomlist(2)), j)  ! sort list : pass second element b/c 1st contains the list size
  call atoms%done()
 !
- if (fatal_warning()) return
+! compute list of forced atoms required by plugin
+ i=forced_atoms%last
+ allocate(__NM(forced_atomlist(i+1)))
+ __NM(forced_atomlist(1))=i ! number of atoms first
+ __NM(forced_atomlist(2:))=forced_atoms%i(1:i)
+ if (i.gt.1) call isort('i', i, __NM(forced_atomlist(2)), j)
+ call forced_atoms%done()
 !
- initialized=__NM(initialized)
+ alist=c_loc(__NM(atomlist)) ! return pointer to caller code
+!
+ if (fatal_warning()) return
  _ME=0
 !
 end function _ME
@@ -107,7 +134,7 @@ end function _ME
 !
  _ME=1
 !
- if (.not. initialized) then
+ if (.not. __NM(initialized)) then
   __WRN(whoami, ftoupper(__STRING(_N))//' NOT INITIALIZED. NOTHING DONE.');
   return
  endif
@@ -121,85 +148,35 @@ end function _ME
 ! to the watershell (even though watershell already has them as members !)
 !
 ! update coordinates :
- r(:,isurface_atoms)=r_plugin(:,isurface_atoms) ! possible type change
- r(:,isolvent_atoms)=r_plugin(:,isolvent_atoms)
+ r(:,__NM(atomlist(2:)))=r_plugin(:,__NM(atomlist(2:)))
 !
- call __NM(main)(r, fr, e)
+! module specific code
+ __WATERSHELL_MAIN
+
 ! update forces
-!write(666,*) fr(:,isolvent_atoms)
  if (qsingle) then
-  f_plugin_single(:,isolvent_atoms)=fr(:,isolvent_atoms)
+  f_plugin_single(:,__NM(forced_atomlist(2:)))=fr(:,__NM(forced_atomlist(2:)))
  else
-  f_plugin_double(:,isolvent_atoms)=fr(:,isolvent_atoms)
+  f_plugin_double(:,__NM(forced_atomlist(2:)))=fr(:,__NM(forced_atomlist(2:)))
  endif
-! f_plugin(:,iforced_atoms)=fr(:,iforced_atoms)
 !
  if (.not.fatal_warning()) _ME=0
 !
 end function _ME
 #undef _ME
-#ifdef __OBSOLETE
-!===================================================================
-! SINGLE PRECISION FORCE VERSION
-!===================================================================
-#define _ME __NM(dyna_from_acemd)
- __CFUN(_ME, iteration_, r_acemd, f_acemd, e)
- __DEP_PARSER
- int(__FCINT) :: _ME
- int(C_LONG), value, intent(in) :: iteration_
- real(__FCFLOAT), intent(in), dimension(3, natom) :: r_acemd
- real(C_FLOAT), intent(out), dimension(3, natom) :: f_acemd
- real(__FCFLOAT), intent(out) :: e
- __IAM(_ME)
-!
-!aa
-!return
- _ME=1
-!
- if (.not. initialized) then
-  __WRN(whoami, ftoupper(__STRING(_N))//' NOT INITIALIZED. NOTHING DONE.');
-  return
- endif
-!
- e=zero
-!
-! this plugin does not have coordinate/force arrays defined,
-! which are nevertheless needed for a possible type change, since ,e.g. the MD
-! software could pass data in a different type (single prec.) ; I hack into the
-! watershell module (into system, really) and copy the coordinates ; then, pass them
-! to the watershell (even though watershell already has them as members !)
-!
-! update coordinates :
-!! commented out because using r_acemd directly
-! hack into watershell to anticipate whether surface atoms will be needed (update)
-! if (structure_update_freq.gt.izero) then
-!   if(mod(iteration+1,structure_update_freq).eq.izero) &
-!    r(:,isurface_atoms)=r_acemd(:,isurface_atoms) ! note that we are using iteration from module, not iteration_
-! endif
-! r(:,isolvent_atoms)=r_acemd(:,isolvent_atoms)
-!
-! call __NM(main)(r, fr, e)
- call __NM(main)(r_acemd, fr, e)
-! update forces
-!write(666,*) fr(:,isolvent_atoms)
-!  close(666)
- f_acemd(:,isolvent_atoms)=fr(:,isolvent_atoms)
-!
- if (.not.fatal_warning()) _ME=0
-!
-end function _ME
-#undef _ME
-#endif
 !===================================================================
 #define _ME __NM(done_from_plugin)
  __CSUB(_ME)
  __DEP_PARSER
  __IAM(_ME)
  __MESSAGE(whoami, 'FINALIZING '//ftoupper(__STRING(_N))//' PLUGIN');
- call __NM(done)()
+! module specific code
+ __WATERSHELL_DONE
+
  call output_done()
- __DEALL(atomlist)
- initialized=.false.
+ __DEALL(__NM(atomlist))
+ __DEALL(__NM(forced_atomlist))
+ __NM(initialized)=.false.
 end subroutine _ME
 #undef _ME
 !===================================================================

@@ -5,7 +5,7 @@ OBJS= watershell.o watershell_plugin.o watershell_plugin_acemd.o
 
 DEPS=files dynamol continua output parser constants erf lu
 
-LIB=libwatershell.so libwatershell.a
+LIB=libwatershell.so # libwatershell.a
 LIBS+=$(LIB)
 
 include linkobjs.inc
@@ -21,6 +21,5 @@ $(LIB) : $(OBJS) $(COBJS) $(LOBJS) linkobjs.inc
 $(SOURCES) : $(LOCALDEPS)
 
 watershell_plugin.o : watershell.o
-watershell.o :
 
 watershell.F90 watershell_plugin.F90 : parser/parser_macro2.src

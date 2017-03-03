@@ -1,4 +1,4 @@
-LINKOBJS=\
+LINKOBJS+=\
  erfappx.o \
  erfsun_ref.o \
  erfsun_value.o \
