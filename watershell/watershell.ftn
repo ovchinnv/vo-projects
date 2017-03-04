@@ -542,6 +542,10 @@ module _N
  end __SUB(main)
 !================================================================
  __SUB(compute_density_grad)(qtruncate_sum)
+#ifdef __OMP
+ use omp_lib
+#endif
+!
  bool :: qtruncate_sum ! whether we can stop computation for each atom once the density reaches a threshold value
  int :: i, j
  float :: rp(3), rw(3), dr(3), dr2, a, b, expa, expb, ooc
@@ -556,6 +560,18 @@ module _N
   float :: erfo7  ! approximation to within O(-7)
   float :: erfo5  ! approximation to within O(-5) [contains an exponential term]
 !
+#ifdef __DEBUG
+#ifdef __OMP
+!$omp parallel
+!$omp single
+! __DBGOUT('OMP: Available processors: ',omp_get_num_procs());
+! __DBGOUT('OMP: Maximum threads:      ',omp_get_max_threads());
+! __DBGOUT('OMP: Current threads:      ',omp_get_num_threads());
+! __DBGOUT('OMP: This thread:          ',omp_get_thread_num());
+!$omp end single
+!$omp end parallel
+#endif __OMP
+#endif
 !
 ! naive algorithm to compute density at each solvent coordinate
 ! adapted from molecule.ftn in continua
@@ -568,6 +584,13 @@ module _N
 #endif
 !
  if (qtruncate_sum) then
+!$omp parallel &
+!$omp shared ( rho_solv, drho_solv, r_solv, r_surf, rad_surf, surf_padding, nsolvent, nsurface, cutoff_surf, oo_surf_stdev ) &
+!$omp private ( rw, i, j, rp, rsurf, rmaxsurf, dr, dr2, rsurfn, ooc, expa, expb, _MSGBUF )
+#ifdef __DEBUG
+! __DBGOUT('Thread ', omp_get_thread_num(), 'reporting')
+#endif
+!$omp do schedule(runtime)
   do i=1, nsolvent ! outer loop over solvent atoms
    rho_solv(i)=zero ;
    drho_solv(:,i)=zero
@@ -627,6 +650,8 @@ module _N
 ! _nonce
    enddo ! nsurface
   enddo ! nsolvent
+!$omp end do
+!$omp end parallel
  else ! qtruncate sum
   do i=1, nsolvent ! outer loop over solvent atoms
    rho_solv(i)=zero ;
