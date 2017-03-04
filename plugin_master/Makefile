@@ -11,11 +11,14 @@ LIBS+=$(LIB)
 LOCALMACROS+=-include source.defs -D__BINDC 
 LOCALDEPS+=source.defs
 
+default : all
+
 include plugins.inc
 include watershell.inc
+include struna.inc
+
 include $(ROOT)/Makefile.inc
 
-default : all
 all : $(LIB)
 $(LIB) : $(OBJS) $(COBJS) $(LOBJS)
 
@@ -23,3 +26,5 @@ $(SOURCES) : $(LOCALDEPS)
 
 plugin_acemd.o : aceplug.h
 plugin_master.F90 : parser/parser_macro2.src
+clean ::
+	

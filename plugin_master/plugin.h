@@ -1,5 +1,5 @@
 /* C prototypes */
 // C, not Fortran!
-extern int master_init_from_plugin (const char * , const int, const char *, const int, int **);
-extern int master_dyna_from_plugin ( const long int, const double *, double *, float *, double *, const _Bool );
-extern void master_done_from_plugin ();
+extern int master_init_plugin(const int, const double *, const double *, const char *, const int, const char *, const int, int **, const _Bool, const double *);
+extern int master_dyna_plugin(const long int, const double *, double *, float *, const _Bool, double *, int **, const _Bool, const double * );
+extern void master_done_plugin();

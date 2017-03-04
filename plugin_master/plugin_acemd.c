@@ -1,4 +1,4 @@
-// plugin for ACEMD
+// String Method Plugin for ACEMD; limited exposure of SMCV and FTSM functionality
 // C, not Fortran!
 #ifdef int
 #undef int
@@ -6,8 +6,8 @@
 
 #include "tcl.h"
 #include "aceplug.h"
-#include "plugin.h"
 #include "string.h"
+#include "plugin.h"
 #include <stdlib.h>
 
 // structure for plugin private data :
@@ -15,6 +15,7 @@ typedef struct {
  __CINT *atomlist ; // to maintain a list of atoms that are needed by plugin; other coordinates to be omitted
  __CFLOAT *r ; // coordinate array
  float *fr ; // forces array
+ __CFLOAT *ucell ; // lattice vectors
 } pdata ;
 
 aceplug_err_t aceplug_init(struct aceplug_sim_t *s, int argc, char **argkey, char **argval) {
@@ -24,7 +25,7 @@ aceplug_err_t aceplug_init(struct aceplug_sim_t *s, int argc, char **argkey, cha
 // for plugin private data :
  pdata *private_data = malloc(sizeof(pdata)) ;
 //
- printf("# MASTER PLUGIN: Initializing ...\n");
+ printf("# DYNAMOL PLUGIN: Initializing ...\n");
 //
  int i;
  for (i=0; i<argc; i++){
@@ -36,36 +37,52 @@ aceplug_err_t aceplug_init(struct aceplug_sim_t *s, int argc, char **argkey, cha
   } //if
  } // for
  if (inputfile == NULL) {
-  printf("# MASTER PLUGIN: input file not specified (syntax : input <inputfile>)\n");
+  printf("# DYNAMOL PLUGIN: input file not specified (syntax : input <inputfile>)\n");
   exit(1);
  } else {
-  printf("# MASTER PLUGIN: input file is '"); 
+  printf("# DYNAMOL PLUGIN: input file is '"); 
   printf(inputfile);
   printf("'\n");
  }
 //
  if (logfile == NULL) {
-  printf("# MASTER PLUGIN: log file not specified (syntax : log <logfile>); using '");
+  printf("# DYNAMOL PLUGIN: log file not specified (syntax : log <logfile>); using '");
   logfile=deflogfile;
   printf(logfile);
   printf("'\n");
  } else {
-  printf("# MASTER PLUGIN: log file is '"); 
+  printf("# DYNAMOL PLUGIN: log file is '"); 
   printf(logfile);
   printf("'\n");
  }
 //
  __CINT natoms=0;
+ __CFLOAT *m=NULL, *q=NULL;
+//
  natoms = s->natoms ;
 //
  private_data->r  = (__CFLOAT *) calloc(3 * natoms, sizeof(__CFLOAT));
  private_data->fr = (float *) calloc(3 * natoms, sizeof(float));
+ private_data->ucell = (__CFLOAT *) calloc( 9, sizeof(__CFLOAT) ) ;
  private_data->atomlist = NULL ; // NOTE that atomlist will be allocated in the FORTRAN code (which knows how to do it)
  s->privdata = private_data; // initialize private data pointer
 //
+ m = (__CFLOAT *) malloc(natoms * sizeof(__CFLOAT));
+ q = (__CFLOAT *) malloc(natoms * sizeof(__CFLOAT));
+ for (i=0; i<natoms; i++){
+  m[i]=s->mass[i];
+  q[i]=s->charge[i];
+ }
+// load unit cell vectors
+ private_data->ucell[0] = s->box.x;
+ private_data->ucell[4] = s->box.y;
+ private_data->ucell[8] = s->box.z;
+//
  ilen=strlen(inputfile);
  llen=strlen(logfile);
- ierr=__NM(init_from_plugin)(inputfile, ilen, logfile, llen, &(private_data->atomlist));
+ ierr=__NM(init_plugin)(natoms, m, q, inputfile, ilen, logfile, llen, &(private_data->atomlist), 1, private_data->ucell);
+ free(m);
+ free(q);
 //
  return (ierr>0) ? ACEPLUG_ERR : ACEPLUG_OK ;
 }
@@ -79,13 +96,17 @@ aceplug_err_t aceplug_calcforces(struct aceplug_sim_t *s) {
  __CINT *atomlist = private_data->atomlist ;
  __CFLOAT *r = private_data->r ;
  float *fr = private_data->fr ;
+ __CFLOAT *ucell = private_data->ucell ;
 //
  __CINT *aptr ;
  __CFLOAT *rptr;
  float *fptr;
- __CFLOAT __NM(energy);
+ __CFLOAT sm_energy;
  long int iteration =s->step ;
 //
+ ucell[0] = s->box.x;
+ ucell[4] = s->box.y;
+ ucell[8] = s->box.z;
 //
  if ( s-> plugin_load_positions() ) {return ACEPLUG_ERR;}
  if ( s-> plugin_load_forces() ) {return ACEPLUG_ERR;}
@@ -97,8 +118,7 @@ aceplug_err_t aceplug_calcforces(struct aceplug_sim_t *s) {
    *(rptr++) = s -> pos[i].z;
   }
 // compute plugin forces
-//  ierr=__NM(dyna_from_acemd) (iteration, r, fr, &__NM(energy)); // might return valid atomlist
-  ierr=__NM(dyna_from_plugin) (iteration, r, NULL, fr, &__NM(energy), 1); // single-prec;
+  ierr=__NM(dyna_plugin)(iteration, r, NULL, fr, 1, &sm_energy, &atomlist, 1, ucell); // might return valid atomlist ; single prec.
   private_data->atomlist=atomlist ;
 // apply plugin forces
   if (atomlist!=NULL) { // atom indices provided; store them as private data and use for adding forces
@@ -125,8 +145,8 @@ aceplug_err_t aceplug_calcforces(struct aceplug_sim_t *s) {
    *(rptr)   = s -> pos[j].z;
   }
 //
-//  ierr=__NM(dyna_from_acemd)(iteration, r, fr, &__NM(energy));
-  ierr=__NM(dyna_from_plugin)(iteration, r, NULL, fr, &__NM(energy), 1); // single-prec flag
+// atomlist should not be modified in this call
+  ierr=__NM(dyna_plugin)(iteration, r, NULL, fr, 1, &sm_energy, &atomlist, 1, ucell); // single prec.
 //
   for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
    j=*aptr - 1;
@@ -139,9 +159,9 @@ aceplug_err_t aceplug_calcforces(struct aceplug_sim_t *s) {
  } // atomlist == NULL
 //
  if ( s-> plugin_update_forces() ) { return ACEPLUG_ERR;}
- if ( s-> plugin_add_energy(ENERGY_EXTERNAL, __NM(energy)) ) { return ACEPLUG_ERR;}
+ if ( s-> plugin_add_energy(ENERGY_EXTERNAL, sm_energy) ) { return ACEPLUG_ERR;}
 // we know that energy is computed, but it does not seem to make into the ACEMD energy output
-//printf("%12.5f\n", __NM(energy));
+//printf("%12.5f\n", sm_energy);
 //
  return (ierr>0) ? ACEPLUG_ERR : ACEPLUG_OK ;
 }
@@ -152,10 +172,11 @@ aceplug_err_t aceplug_endstep(struct aceplug_sim_t *s) {
 //==========================================================
 aceplug_err_t aceplug_terminate(struct aceplug_sim_t *s) {
  pdata *private_data = s->privdata ;
- printf("# MASTER PLUGIN: Finalizing...\n");
- __NM(done_from_plugin)();
+ printf("# DYNAMOL PLUGIN: Finalizing...\n");
+ __NM(done_plugin)();
  free(private_data->r);
  free(private_data->fr);
+ free(private_data->ucell);
  private_data->atomlist=NULL ; // this memory is managed by FORTRAN
  free(private_data);
  return ACEPLUG_OK;

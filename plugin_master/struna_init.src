@@ -1,0 +1,89 @@
+!=================================================
+! determine the string method flavor :
+!=================================================
+! if (existtag_nocase("string_method", maincontext_name)) then;fl_name=getval_nocase_upper("string_method", maincontext_name);else;fl_name='SMCV';endif;
+ if (parser_find_context("SMCV_INIT").gt.0) then
+  fl_name='SMCV';
+ elseif (parser_find_context("FTSM_INIT").gt.0) then
+  fl_name='FTSM'
+ else
+  call message(whoami, 'STRING METHOD CONFIGURATION OPTIONS NOT PROVIDED. SKIPPING INTIALIZATION.');
+   goto 999
+ endif
+!
+ i=len_trim(fl_name)
+!
+ select case(fl_name(1:i))
+  case('FTSM','FTS','FINITE','FINITETEMPERATURE','FINITET','FINITETEMP','FTEMP','FITEMP','FINTEMP','FINITEMP');
+   sm_flavor=ftsm_flavor;
+   initctx="FTSM_INIT"
+   donectx="FTSM_DONE"
+   call message(whoami, 'FINITE TEMPERATURE STRING METHOD (FTSM) REQUESTED');
+  case('SMCV', 'COLVAR','CV','SCV','CVS','COLLECTIVE','COLVARS','COLLVAR','COLLVARS','COLV','COLLV','COLLECT');
+   sm_flavor=smcv_flavor;
+   initctx="SMCV_INIT"
+   donectx="SMCV_DONE"
+   call message(whoami, 'STRING METHOD IN COLLECTIVE VARIABLES (SMCV) REQUESTED');
+  case default ; sm_flavor=unknown
+   call message(whoami, 'UNKNOWN STRING METHOD "'//fl_name(1:i)//'" REQUESTED. ABORT.');
+   return
+ end select
+  if (.not. system_PDB_initialized) then
+   structure_file=getval_nocase('structure', initctx);
+   l=len_trim(structure_file)
+   call message(whoami, 'READING STRUCTURE FROM FILE "'//structure_file(1:l)//'"');
+   call system_PDB_init(structure_file, 'PDB');
+   system_PDB_initialized=.true.
+! save coordinates in rcomp
+   if (associated(rcomp) .and. associated(r)) rcomp=r
+  endif ! system_PDB_initialized
+ if (existtag_nocase("defer_init_dyna", initctx)) then;defer_init_until_dyna=atol(getval_nocase_upper("defer_init_dyna", initctx));else;defer_init_until_dyna=.false.;endif;
+! periodicity override from parser :
+ if (existtag_nocase("pbc", initctx)) then;qper_parser_override=atol(getval_nocase_upper("pbc", initctx));else;qper_parser_override=qper;endif; ! if not present use qper
+!
+! defer initialization until coordinates are available
+ if ( defer_init_until_dyna ) then
+  call message(whoami, 'WILL DEFER EXECUTION OF STRUNA INITIALIZATION STACK UNTIL DYNAMICS');
+ else
+  call message(whoami, 'EXECUTING STRUNA INITIALIZATION STACK');
+  if (noexec(initctx)) then
+   call warning(whoami, 'CONTEXT "'//initctx//'" DOES NOT CONTAIN EXECUTABLE STATEMENTS.', -1);
+  else
+   select case(sm_flavor);
+     case(ftsm_flavor); call ftsm_exec(initctx)
+     case(smcv_flavor);
+      if (qper_parser_override) then ! should add option to override qper in input file ; esp. for acemd, where qper=.true.
+       call cv%ucell%update_vectors(box) ; ! note that this is a hack since SMCV is not initialized yet
+       call cv%ucell%print() ;
+      endif
+      call smcv_exec(initctx)
+     case default ; call warning(whoami, ' UNKNOWN STRING METHOD REQUESTED.', -1)
+   end select
+  endif
+!
+  call parser_clear_context(initctx)
+  if (fatal_warning()) return
+! compute atomlist
+   if(allocated(sm_atomlist))deallocate(sm_atomlist)
+   select case(sm_flavor);
+   case(smcv_flavor);
+    i=cv%amap%last;
+    allocate(sm_atomlist(i+1)); ! include number of elements as first entry
+    sm_atomlist(2:)=cv%amap%i(1:i);
+   case(ftsm_flavor);
+    call ftsm_compute_atomlist()
+    i=iatom_a%last
+    allocate(sm_atomlist(i+1));
+    sm_atomlist(1)=i ; sm_atomlist(2:)=iatom_a%i(1:i)
+   end select;
+!
+   sm_atomlist(1)=i ; ! number of elements in list
+   if (i>1) call isort('i', i, sm_atomlist(2), ierr) ! sort list : pass second element b/c 1st contains the list size
+   alist=c_loc(sm_atomlist) ! get c-pointer to list
+ endif ! defer
+!
+ sm_initialized=.not.defer_init_until_dyna
+ sm_iteration=-abs(unknownf)
+!
+ 999 continue
+ if(allocated(sm_atomlist)) then ; do l=2,sm_atomlist(1)+1; ierr=atoms%uadd(sm_atomlist(l)) ; ierr=forced_atoms%uadd(sm_atomlist(l)) ; enddo ; endif ! make sure to add atoms to main ind arrays

@@ -1,0 +1,66 @@
+ if (sm_initialized .or. defer_init_until_dyna) then
+  sm_iteration=iteration_
+  qper_=qper.and.qper_parser_override
+!
+  if (sm_initialized) then ! just load coordinates and zero out force
+  else
+! complete initialization
+   call message(whoami, 'EXECUTING STRUNA INITIALIZATION STACK');
+! load all coords (we do not know which ones we will need b/c initialization is incomplete)
+   r=r_plugin
+   if (noexec(initctx)) then
+    call warning(whoami, 'CONTEXT "'//trim(initctx)//'" DOES NOT CONTAIN EXECUTABLE STATEMENTS.', -1);
+   else
+    select case(sm_flavor);
+     case(ftsm_flavor); call ftsm_exec(initctx)
+     case(smcv_flavor);
+      if (qper_) then
+       call cv%ucell%update_vectors(box) ; ! note that this is a hack since SMCV is not initialized yet
+       call cv%ucell%print() ;
+       qper_=.false. ! prevent repeat call
+      endif
+     call smcv_exec(initctx)
+     case default ; call warning(whoami, ' UNKNOWN STRING METHOD REQUESTED.', -1)
+    end select
+   endif
+   call parser_clear_context(initctx)
+   if (fatal_warning()) return
+!
+   sm_initialized=.true.
+! compute unique atomlist
+   if(allocated(sm_atomlist))deallocate(sm_atomlist)
+   select case(sm_flavor);
+   case(smcv_flavor);
+    i=cv%amap%last;
+    allocate(sm_atomlist(i+1)); ! include number of elements as first entry
+    sm_atomlist(2:)=cv%amap%i(1:i);
+   case(ftsm_flavor);
+    call ftsm_compute_atomlist()
+    i=iatom_a%last
+    allocate(sm_atomlist(i+1));
+    sm_atomlist(1)=i ; sm_atomlist(2:)=iatom_a%i(1:i)
+   end select;
+!
+   sm_atomlist(1)=i ; ! number of elements in list
+   if (i>1) call isort('i', i, sm_atomlist(2), ierr) ! sort list : pass second element b/c 1st contains the list size
+   alist=c_loc(sm_atomlist) ! get c-pointer to list
+! now the atom list should be defined -- use it below for forces
+   fr(:,sm_atomlist(2:))=zero ! reset force
+ do i=2,sm_atomlist(1)+1; ierr=atoms%uadd(sm_atomlist(i)) ; ierr=forced_atoms%uadd(sm_atomlist(i)) ; enddo ; alist=master_compute_atomlist() 
+  endif ! not sm_initialized
+  select case(sm_flavor);
+   case(ftsm_flavor);
+    call ftsm_main(r(1,:), r(2,:), r(3,:), rcomp(1,:), rcomp(2,:), rcomp(3,:), fr(1,:), fr(2,:), fr(3,:), m, sm_iteration)
+   case(smcv_flavor);
+    if (qper_) then
+     call cv%ucell%update_vectors(box) ! may move this functionality inside smcv_main; for now, minimal changes
+! debug/test unit cell output
+! call cv%ucell%print()
+    endif
+    call smcv_main(r(1,:), r(2,:), r(3,:), rcomp(1,:), rcomp(2,:), rcomp(3,:), m, fr(1,:), fr(2,:), fr(3,:), sm_iteration, sm_energy)
+   case default ;
+    call warning(whoami, ' UNKNOWN STRING METHOD REQUESTED.', -1)
+  end select
+! update energy
+  e=e+(sm_energy);
+ endif

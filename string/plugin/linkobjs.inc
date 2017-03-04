@@ -1,4 +1,4 @@
-LINKOBJS=\
+LINKOBJS+=\
  atompar.o \
  bondpar.o \
  anglpar.o \
@@ -78,4 +78,6 @@ LINKOBJS=\
  formats.o \
  stats.o \
  unitcell.o \
- util.o
+ util.o \
+ dmol.o \
+ verlet.o

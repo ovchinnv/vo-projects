@@ -1,22 +1,29 @@
 #define __CBIND use, intrinsic :: iso_c_binding
 !
 module __NM(plugin)
- use system, only : r, rcomp, fr, radius, natom, system_PDB_initialized, system_PDB_init, system_done
+ use system, only : m, q, r, rcomp, fr, radius, natom, system_PDB_initialized, system_PDB_init, system_done
  __DEP_OUTPUT
  __DEP_CONST
  __CBIND
+ __DEP_VECTORS
 !
-! include plugin modules
+! include plugin dependencies
  __DEP_WATERSHELL
+ __DEP_STRUNA
+
 
  __IMPNONE
+
 
  private
 !
  bool, save :: __NM(initialized)=.false.
  int(__FCINT), target, allocatable :: __NM(forced_atomlist(:)), __NM(atomlist(:))
  int, parameter :: foutput=999 ! output file unit
+ type (int_vector) :: atoms, forced_atoms
 !
+! plugin variables
+ __VARS_STRUNA
 !
  contains
 ! a collection of subroutines to call the watershell code from a plugin
@@ -24,19 +31,21 @@ module __NM(plugin)
 #define __CSUB(__NAME, ...) subroutine __NAME (__VA_ARGS__) bind(c, name=__STRING(__NAME))
 #define __CFUN(__NAME, ...) function __NAME (__VA_ARGS__) bind(c, name=__STRING(__NAME))
 !
-#define _ME __NM(init_from_plugin)
- __CFUN(_ME, inputname, il, outputname, ol, alist);
+#define _ME __NM(init_plugin)
+ __CFUN(_ME, n, mass, charge, inputname, il, outputname, ol, alist, qper, box)
  __DEP_PARSER
  __DEP_FILES
- __DEP_VECTORS
 #ifdef __PARALLEL
  __DEP_MPI
 #endif
 !
  int(__FCINT) :: _ME
- int( __FCINT), intent(in), value :: il, ol
+ int( __FCINT), intent(in), value :: n, il, ol
  type(c_ptr), value, intent(in) :: inputname, outputname
+ real(__FCFLOAT), intent(in), dimension(n) :: mass, charge
  type(c_ptr), intent(out) :: alist ! send back a list of atom indices
+ logical(__FCBOOL), value, intent(in) :: qper
+ real(__FCFLOAT), intent(in), dimension(3,3) :: box ! lattice vectors
 !
  character(len=il), pointer :: ifname
  character(len=ol), pointer :: ofname
@@ -44,7 +53,6 @@ module __NM(plugin)
  character(len=vartaglen) :: structure_file, keyword, context
  character(len=vartaglen) :: search_contexts(2)=(/'main    ', 'molecule'/)
 !
- type (int_vector) :: atoms, forced_atoms
  int :: i, j, l
 
  int :: fid
@@ -83,10 +91,17 @@ module __NM(plugin)
    if (.not. fatal_warning()) system_PDB_initialized=.true.
 ! save coordinates in rcomp, just in case we need them later ?
    if (associated(rcomp) .and. associated(r)) rcomp=r
+   if (n.ne.natom) then
+    __WRN(whoami, 'NUMBER OF ATOMS RECEIVED('//itoa(n)//') MUST EQUAL THAT IN THE STRUCTURE FILE ('//itoa(natom)//'). ABORT.')
+    return
+   endif
    exit
   endif
  enddo
 !=========== end structure file
+! currently, mass and charge can only be passed in from external code:
+ m=mass
+ q=charge
 !
 ! initialize atom index lists
  call atoms%init()        ! all atoms needed by plugins
@@ -94,25 +109,21 @@ module __NM(plugin)
 !
 ! module specific code
  __NM(initialized)=.true.
+!==========================
  __WATERSHELL_INITIALIZE
-!
+!==========================
+ __STRUNA_INITIALIZE
+!==========================
 ! compute list of all atoms required by plugin
- i=atoms%last
- allocate(__NM(atomlist(i+1)))
- __NM(atomlist(1))=i ! number of atoms first
- __NM(atomlist(2:))=atoms%i(1:i)
- if (i.gt.1) call isort('i', i, __NM(atomlist(2)), j)  ! sort list : pass second element b/c 1st contains the list size
- call atoms%done()
-!
-! compute list of forced atoms required by plugin
- i=forced_atoms%last
- allocate(__NM(forced_atomlist(i+1)))
- __NM(forced_atomlist(1))=i ! number of atoms first
- __NM(forced_atomlist(2:))=forced_atoms%i(1:i)
- if (i.gt.1) call isort('i', i, __NM(forced_atomlist(2)), j)
- call forced_atoms%done()
-!
- alist=c_loc(__NM(atomlist)) ! return pointer to caller code
+ alist=__NM(compute_atomlist)()
+#ifdef __DDEBUG
+ write(0,*) '# atoms in atomlists :', __NM(forced_atomlist(1)), __NM(atomlist(1))
+#endif
+! if struna is used, then there is the possibility that initialization is deferred until the first dynamics step (e.g. is coodinates are required)
+! in that case, we need to set alist to null which _should_ instruct the plugin code to provide all coordinates
+#ifdef __STRUNA
+ if(sm_initialized.and.defer_init_until_dyna) alist=c_null_ptr
+#endif
 !
  if (fatal_warning()) return
  _ME=0
@@ -120,8 +131,8 @@ module __NM(plugin)
 end function _ME
 #undef _ME
 !===================================================================
-#define _ME __NM(dyna_from_plugin)
- __CFUN(_ME, iteration_, r_plugin, f_plugin_double, f_plugin_single, e, qsingle)
+#define _ME __NM(dyna_plugin)
+ __CFUN(_ME, iteration_, r_plugin, f_plugin_double, f_plugin_single, qsingle, e, alist, qper, box)
  __DEP_PARSER
  int(__FCINT) :: _ME
  int(C_LONG), value, intent(in) :: iteration_
@@ -130,7 +141,14 @@ end function _ME
  real(c_float),  intent(out), dimension(3, natom) :: f_plugin_single
  logical(__FCBOOL), value, intent(in) :: qsingle
  real(__FCFLOAT), intent(out) :: e
+ type(c_ptr), intent(out) :: alist ! send back a list of atom indices if smcv not initialized
+ logical(__FCBOOL), value, intent(in) :: qper
+ logical(__FCBOOL) :: qper_ ! copy that I can modify
+ real(__FCFLOAT), intent(in), dimension(3,3) :: box ! lattice vectors
  __IAM(_ME)
+#ifdef __STRUNA
+ int :: i, l
+#endif
 !
  _ME=1
 !
@@ -139,20 +157,34 @@ end function _ME
   return
  endif
 !
- e=zero
+ e=0d0
 !
-! this plugin does not have coordinate/force arrays defined,
-! which are nevertheless needed for a possible type change, since ,e.g. the MD
-! software could pass data in a different type (single prec.) ; I hack into the
-! watershell module (into system, really) and copy the coordinates ; then, pass them
-! to the watershell (even though watershell already has them as members !)
-!
+! reset forces to zero
+ fr(:,__NM(forced_atomlist(2:)))=0d0
 ! update coordinates :
  r(:,__NM(atomlist(2:)))=r_plugin(:,__NM(atomlist(2:)))
 !
 ! module specific code
- __WATERSHELL_MAIN
-
+! NOTE : currently, STRUNA MUST come first because we need to flip the sign of the forces that it returns (relic of the CHARMM convention)
+! Also, STRUNA might need to initialize on first dynamics step (here); at which point the atom list is redefined ; in that case, need to re-zero the string forces
+! (this is done inside string macro below) ; master atom list must also be recomputed (also inside macro)
+!======================
+#ifdef __STRUNA
+ if (sm_initialized) then
+  __STRUNA_MAIN
+  fr(:,sm_atomlist(2:))=-fr(:,sm_atomlist(2:))
+ endif
+#endif
+!======================
+#ifdef __WATERSHELL
+ if (watershell_initialized) then ;
+#ifdef __DDEBUG
+ write(0,*) 'calling watershell main :', __NM(forced_atomlist(1)), __NM(atomlist(1))
+#endif
+  __WATERSHELL_MAIN
+ endif
+#endif
+!======================
 ! update forces
  if (qsingle) then
   f_plugin_single(:,__NM(forced_atomlist(2:)))=fr(:,__NM(forced_atomlist(2:)))
@@ -165,19 +197,55 @@ end function _ME
 end function _ME
 #undef _ME
 !===================================================================
-#define _ME __NM(done_from_plugin)
+#define _ME __NM(done_plugin)
  __CSUB(_ME)
  __DEP_PARSER
  __IAM(_ME)
  __MESSAGE(whoami, 'FINALIZING '//ftoupper(__STRING(_N))//' PLUGIN');
 ! module specific code
  __WATERSHELL_DONE
-
+#ifdef __STRUNA
+ if (sm_initialized) then
+  __STRUNA_DONE
+ endif
+#endif
+!
  call output_done()
  __DEALL(__NM(atomlist))
  __DEALL(__NM(forced_atomlist))
+ call forced_atoms%done()
+ call atoms%done()
  __NM(initialized)=.false.
 end subroutine _ME
 #undef _ME
+!===================================================================
+#define _ME __NM(compute_atomlist)
+ function _ME() result(alist)
+! compute list of all atoms required by plugin
+ type(c_ptr) :: alist
+ int :: i, j
+ __IAM(_ME)
+ i=atoms%last
+!
+#ifdef __DEBUG
+__DBGOUT(whoami, i, 'atoms found')
+#endif
+!
+ __DEALL(__NM(atomlist))
+ allocate(__NM(atomlist(i+1)))
+ __NM(atomlist(1))=i ! number of atoms first
+ __NM(atomlist(2:))=atoms%i(1:i)
+ if (i.gt.1) call isort('i', i, __NM(atomlist(2)), j)  ! sort list : pass second element b/c 1st contains the list size
+!
+! compute list of forced atoms required by plugin
+ i=forced_atoms%last
+ __DEALL(__NM(forced_atomlist))
+ allocate(__NM(forced_atomlist(i+1)))
+ __NM(forced_atomlist(1))=i ! number of atoms first
+ __NM(forced_atomlist(2:))=forced_atoms%i(1:i)
+ if (i.gt.1) call isort('i', i, __NM(forced_atomlist(2)), j)
+!
+ alist=c_loc(__NM(atomlist)) ! return pointer to caller code 
+ end function _ME
 !===================================================================
 end module __NM(plugin)
