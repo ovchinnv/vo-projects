@@ -5,7 +5,10 @@
 ! to avoid divide iverflow, define minimum density as the smallest float in single precision
 #define  __RHO_MIN FERRTOL()
 #define  __RHO(_X) ( one/(one+exp(-_X/logistic_constant)) )
-#define  __RHO_INVERSE(_L) ( - logistic_constant * log ( one/(max(_L,__RHO_MIN)) - one) )
+#define  __OORHO(_R) ( one/(max(_R,__RHO_MIN)))
+#define  __RHO_INVERSE(_L) ( - logistic_constant * log ( __OORHO(_L) - one) )
+#// if already have 1/rho
+#define  __RHO_INVERSE2(_OL) ( - logistic_constant * log ( _OL - one) )
 !
 #define __CTX __WATERSHELLCTX
 #define __RESTARTCTX __CONCAT(__WATERSHELLCTX,_RESTART)
@@ -32,6 +35,8 @@ module _N
 !
 ! hack to make variables from system visible from plugin
  public natom
+ public iteration
+ public structure_update_freq
  public r
  public fr
 
@@ -63,6 +68,7 @@ module _N
  __PAR(output_file, character(len=vartaglen), 'watershell.restart.txt') ! output file name
  __PAR(surface_force_constant, float, one)      ! surface restraint force constant
  __PAR(target_surface_energy, float, 5d0) ! target average energy of surface potential / par area ( units of pressure or normal stress )
+ __PAR(remove_force_torque, bool, .false.) ! whether to remove net force and torque on the solvent atom
 !
 !  atom selections
  __PAR(surface_atom_selection, character(len=vartaglen), 'ANAME=CA')  ! protein CA trace
@@ -256,6 +262,14 @@ module _N
 #define __DOIFOK if (__VAR.lt.__ERRTOL) __WRN(whoami, 'TARGET SURFACE ENERGY IS ALMOST ZERO.')
 #include "parser/parser_macro2.src"
 !
+#define __BOOL
+#define __VAR remove_force_torque
+#define __TAG __VAR
+#define __NAME flag to remove net force and torque from solvent atoms
+#include "parser/parser_macro2.src"
+!
+! done pocessing input file parameters
+!
 ! read structure file
 !
  __MESSAGE(whoami, 'READING STRUCTURE FROM FILE "'//trim(structure_file)//'"');
@@ -421,6 +435,7 @@ module _N
  distance_from_solute=zero
  distance_from_solute2=zero ! for computing second moment
 !
+!return ! aa
 !========================== compute contour value if needed
 ! if reference contour value is negative, estimate a reasonable value from density distribution
  if ( abs(surface_distance) .lt. __ERRTOL) then
@@ -433,7 +448,7 @@ module _N
    __INCR(distance_from_solute2, d0**2)
   enddo
 ! set contour value to average value + (a) x stdev ; a set empirically
-#define _a 0d0
+#define _a 0.25d0
   __SCALE(distance_from_solute,oonsolvent);
   __DBGOUT('Distance from solute ', distance_from_solute)
   __SCALE(distance_from_solute2,oonsolvent);
@@ -457,11 +472,14 @@ module _N
   if ( rho_solv(i) .lt. surface_contour_value) then
    __INC(nsolvent_outside);
    __INCR(density_beyond_contour, rho_solv(i))
-   pre = ( __RHO_INVERSE ( rho_solv(i) ) - surface_distance ) ;
+   d0=__OORHO( rho_solv(i))
+   pre = ( __RHO_INVERSE2 ( d0 ) - surface_distance ) ;
 !
 ! add atomic force
-   fr(:,isolvent_atoms(i)) = - surface_force_constant * pre * drho_solv(:,i) ! (-) because surface_distance is negative ; grad points toward protein
+   d0=logistic_constant*d0*(__OORHO(one-rho_solv(i))) ! derivative of the inverse of logistic function
+   fr(:,isolvent_atoms(i)) = - surface_force_constant * pre * d0 * drho_solv(:,i) ! (-) because surface_distance is negative ; grad points toward protein
 ! sum "energy"
+! NOT clear whether the surface_force or energy are meaningful
    __INCR(surface_force, pre) ! x k, below
    __INCR(surface_energy, pre**2) ! x k/2, below
   else
@@ -527,6 +545,9 @@ module _N
  bool :: qtruncate_sum ! whether we can stop computation for each atom once the density reaches a threshold value
  int :: i, j
  float :: rp(3), rw(3), dr(3), dr2, a, b, expa, expb, ooc
+#ifdef __ERFHYBRID
+ float :: isgn_, x_, erfa, erfb
+#endif
  float :: rmaxsurf, rsurf, rsurfn
  __IAM(__NM(compute_density_grad))
 !
@@ -541,49 +562,99 @@ module _N
 !
 ! error function definition
 #ifndef __erf
-#define __erf erf
+!#define __erf erf
+#// get an improvement of 20% when using inlined erfo7
+#define __erf __erfo7
 #endif
-#define __SMOOTH_GAUSS(__A,__B,__C)  half * ( __erf (__A) - __erf (__B) ) + osq2pi*( exp(-__A**2) - exp(-__B**2 ) ) /__C
-
 !
- do i=1, nsolvent ! outer loop over solvent atoms
-   rho_solv(i)=zero
+ if (qtruncate_sum) then
+  do i=1, nsolvent ! outer loop over solvent atoms
+   rho_solv(i)=zero ;
    drho_solv(:,i)=zero
    rw=r_solv(:,i);
    do j=1, nsurface ! inner loop over solute atoms
+!#define _nonce  rho_solv(i)=0.0001d0;
+!    if (qtruncate_sum.and.rho.gt.surface_contour_value) &     ! density threshold exceeded ; will not apply force to this atom
+!    exit
+!     cycle ! could actually be faster than exit (vectorization?) ; get 107 w/o if above
 ! determine if atoms are too far away :
+! _nonce cycle ! aa get 110
     rp=r_surf(:,j)
 !
+! _nonce cycle ! aa get 111
     rsurf    = ( rad_surf(j) + surf_padding )
-    rmaxsurf = ( cutoff_surf  + rsurf  )
+    rmaxsurf = ( cutoff_surf  + rsurf  ) ! note that this can be precomputed
 !
+!_nonce  cycle ! aa get 105
     dr = rp-rw ;
+! _nonce  cycle ! aa get 105
 !__DBGOUT('i ', i, ' RW: ', rw)
 !__DBGOUT('j ', j, ' RP: ', rp)
 !__DBGOUT(' DR: ', dr, rmaxsurf)
-    if (any(abs(dr) .gt. rmaxsurf)) cycle
+!    if (any(abs(dr) .gt. rmaxsurf)) cycle ! not necessary, might actually slow the code
     dr2=sum(dr**2);
     if (dr2 .gt. rmaxsurf**2) cycle
+! _nonce cycle ! aa get 54
 ! proceed with calculation
     rsurfn=rsurf * oo_surf_stdev
     dr2 = sqrt(dr2) * oo_surf_stdev
+! _nonce cycle ! aa get 54
 ! a and b
     a = osq2 * (dr2 + rsurfn)
     b = osq2 * (dr2 - rsurfn)
     ooc = one / dr2
+! _nonce cycle ! aa get 54
 !
     expa = exp ( - a**2 )
     expb = exp ( - b**2 )
+! _nonce cycle ! aa get 54
+!
 ! update density
+#ifdef __ERFHYBRID
+    __erfo7i(a,erfa)
+    __erfo7i(b,erfb)
+    __INCR(rho_solv(i), half * ( erfa - erfb ) + osq2pi * ooc * ( expa - expb )   )
+#else
     __INCR(rho_solv(i), half * ( __erf(a) - __erf(b) ) + osq2pi * ooc * ( expa - expb )   )
-    if (qtruncate_sum.and. &
-&      (rho_solv(i).gt.surface_contour_value) ) exit ! density threshold exceeded ; will not apply force to this atom
+#endif
+! _nonce cycle ! aa get 24
+!    if (qtruncate_sum .and.&
+    if(rho_solv(i).gt.surface_contour_value) exit ! density threshold exceeded ; will not apply force to this atom
 ! otherwise, compute gradient contribution : (note that I am flipping the direction of dr (in the notes it is r0-r)
     __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurfn + half * (expa - expb) * ooc) )
 ! add gradient contribution
     __INCR(drho_solv(:,i),dr)
+! _nonce
    enddo ! nsurface
- enddo ! nsolvent
+  enddo ! nsolvent
+ else ! qtruncate sum
+  do i=1, nsolvent ! outer loop over solvent atoms
+   rho_solv(i)=zero ;
+   drho_solv(:,i)=zero
+   rw=r_solv(:,i);
+   do j=1, nsurface ! inner loop over solute atoms
+    rp=r_surf(:,j)
+    rsurf    = ( rad_surf(j) + surf_padding )
+    rmaxsurf = ( cutoff_surf  + rsurf  )
+    dr = rp-rw ;
+    dr2=sum(dr**2);
+    if (dr2 .gt. rmaxsurf**2) cycle
+    rsurfn=rsurf * oo_surf_stdev
+    dr2 = sqrt(dr2) * oo_surf_stdev
+    a = osq2 * (dr2 + rsurfn)
+    b = osq2 * (dr2 - rsurfn)
+    ooc = one / dr2
+    expa = exp ( - a**2 )
+    expb = exp ( - b**2 )
+! update density
+    __INCR(rho_solv(i), half * ( __erf(a) - __erf(b) ) + osq2pi * ooc * ( expa - expb )   )
+    __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurfn + half * (expa - expb) * ooc) )
+! add gradient contribution
+    __INCR(drho_solv(:,i),dr)
+! _nonce
+   enddo ! nsurface
+  enddo ! nsolvent
+ endif ! truncate sum
 !
  end __SUB(compute_density_grad)
 !================================================================

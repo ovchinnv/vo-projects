@@ -1,0 +1,102 @@
+! 11/30/17 : code adapted from rtmd
+! need to compute center (e.g. COM), since the torque depends on its definition
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+!     if requested by user, distribute any net nonzero force and torque among
+!     orientation atoms (see rtmd paper)
+!
+         v%inv_orientWeights=1d0/v%orientWeights
+!        inv_orientWeights=1d0
+!
+!    build matrix
+         A=0d0
+         do i=1, v%norient
+          w=v%inv_orientWeights(i)
+          xx=v%rcurrent_o(i,1)
+          yy=v%rcurrent_o(i,2)
+          zz=v%rcurrent_o(i,3)
+          A(1,1)=A(1,1)+w
+          A(1,5)=A(1,5)+w*zz
+          A(1,6)=A(1,6)-w*yy
+          A(2,6)=A(2,6)+w*xx
+          A(4,4)=A(4,4)+w*(zz**2+yy**2)
+          A(4,5)=A(4,5)-w*xx*yy
+          A(4,6)=A(4,6)-w*zz*xx
+          A(5,5)=A(5,5)+w*(zz**2+xx**2)
+          A(5,6)=A(5,6)-w*zz*yy
+          A(6,6)=A(6,6)+w*(xx**2+yy**2)
+         enddo
+!
+         A(2,2)=A(1,1);
+         A(3,3)=A(1,1);
+!
+         A(2,4)=-A(1,5); A(4,2)=A(2,4)
+         A(3,4)=-A(1,6); A(4,3)=A(3,4)
+         A(3,5)=-A(2,6); A(5,3)=A(3,5)
+         A(5,1)=A(1,5);
+         A(6,1)=A(1,6);
+         A(6,2)=A(2,6);
+         A(5,4)=A(4,5);
+         A(6,4)=A(4,6);
+         A(6,5)=A(5,6);
+!
+         rhs(1:3)= - ftotal_o(1:3) - ftotal_f(1:3)
+         rhs(4:6)= - torque_o(1:3) - torque_f(1:3)
+!
+!       invert by LU
+         call inv_lu(A, A, 6, error);
+         rhs=matmul(A, rhs);
+!
+! working matlab code :
+!A=zeros(6);
+!wgt_f=1./wgt_f;
+!
+!A(1:3,1:3)=sum(wgt_f)*eye(3) * 0.5;
+!
+!A(1,5)=  wgt_f*z; %sum(z);
+!A(1,6)= -wgt_f*y; %sum(y);
+!A(2,4)= -wgt_f*z; %sum(z);
+!A(2,6)=  wgt_f*x; %sum(x);
+!A(3,4)=  wgt_f*y; %sum(y);
+!A(3,5)= -wgt_f*x; %sum(x);
+
+!A(4,4)= wgt_f * (z.^2 + y.^2 ) * 0.5;
+!A(4,5)= wgt_f * (- x.*y );
+!A(4,6)= wgt_f * (- z.*x );
+!A(5,5)= wgt_f * (z.^2 + x.^2 ) * 0.5;
+!A(5,6)= wgt_f * (- z.*y );
+!A(6,6)= wgt_f * (x.^2 + y.^2 ) * 0.5;
+
+!A=A+A';
+
+!%rhs(1:3)=ft(1:3);
+!%rhs(4:6)=tt(1:3);
+!
+!q=A\rhs';
+!
+!fx = wgt_f'.* ( q(1) + q(5)*z - q(6)*y );
+!fy = wgt_f'.* ( q(2) - q(4)*z + q(6)*x );
+!fz = wgt_f'.* ( q(3) + q(4)*y - q(5)*x );
+!
+! update forces:
+!
+         do i=1, v%norient
+          w=v%inv_orientWeights(i)
+          xx=v%rcurrent_o(i,1)
+          yy=v%rcurrent_o(i,2)
+          zz=v%rcurrent_o(i,3)
+          v%forces_oCorr(i,1)=w*(rhs(1)+zz*rhs(5)-yy*rhs(6))
+          v%forces_oCorr(i,2)=w*(rhs(2)-zz*rhs(4)+xx*rhs(6))
+          v%forces_oCorr(i,3)=w*(rhs(3)+yy*rhs(4)-xx*rhs(5))
+!
+          v%forces_o(i,:)=v%forces_o(i,:)+v%forces_oCorr(i,:)
+         enddo
+!
+!  recompute net torque + force
+         ftotal_o=sum(v%forces_o,1)
+!
+         torque_o=0d0;
+         do i=1,v%norient
+          torque_o=torque_o+veccross3(v%rcurrent_o(i,:),v%forces_o(i,:))
+         enddo
+!
+        endif ! correct_f_t
