@@ -564,10 +564,10 @@ module _N
 #ifdef __OMP
 !$omp parallel
 !$omp single
-! __DBGOUT('OMP: Available processors: ',omp_get_num_procs());
-! __DBGOUT('OMP: Maximum threads:      ',omp_get_max_threads());
-! __DBGOUT('OMP: Current threads:      ',omp_get_num_threads());
-! __DBGOUT('OMP: This thread:          ',omp_get_thread_num());
+ __DBGOUT('OMP: Available processors: ',omp_get_num_procs());
+ __DBGOUT('OMP: Maximum threads:      ',omp_get_max_threads());
+ __DBGOUT('OMP: Current threads:      ',omp_get_num_threads());
+ __DBGOUT('OMP: This thread:          ',omp_get_thread_num());
 !$omp end single
 !$omp end parallel
 #endif __OMP
@@ -578,20 +578,30 @@ module _N
 !
 ! error function definition
 #ifndef __erf
-!#define __erf erf
+#//define __erf erf
 #// get an improvement of 20% when using inlined erfo7
 #define __erf __erfo7
+#endif
+!
+! if openmp is used, cannot call the function erfo7, so hack to call inlined macro here
+#ifdef __OMP
+#define erfo7 __erfo7
 #endif
 !
  if (qtruncate_sum) then
 !$omp parallel &
 !$omp shared ( rho_solv, drho_solv, r_solv, r_surf, rad_surf, surf_padding, nsolvent, nsurface, cutoff_surf, oo_surf_stdev ) &
-!$omp private ( rw, i, j, rp, rsurf, rmaxsurf, dr, dr2, rsurfn, ooc, expa, expb, _MSGBUF )
-#ifdef __DEBUG
-! __DBGOUT('Thread ', omp_get_thread_num(), 'reporting')
-#endif
-!$omp do schedule(runtime)
+!$omp private ( rw, i, j, rp, rsurf, rmaxsurf, dr, dr2, ooc, expa, expb, _MSGBUF )
+!!$omp do schedule(runtime)
+!$omp do schedule(static)
   do i=1, nsolvent ! outer loop over solvent atoms
+! does not help below
+!#define zero 0d0
+!#define one 1d0
+!#define half 0.5d0
+!#define osq2pi 0.398942280401433d0
+!#define osq2   0.707106781186547d0
+!
    rho_solv(i)=zero ;
    drho_solv(:,i)=zero
    rw=r_solv(:,i);
@@ -619,12 +629,12 @@ module _N
     if (dr2 .gt. rmaxsurf**2) cycle
 ! _nonce cycle ! aa get 54
 ! proceed with calculation
-    rsurfn=rsurf * oo_surf_stdev
+    rsurf=rsurf * oo_surf_stdev ! NOTE: redefining rsurf to get rid o variable rsurfn (rsurf <== rsurfn)
     dr2 = sqrt(dr2) * oo_surf_stdev
 ! _nonce cycle ! aa get 54
 ! a and b
-    a = osq2 * (dr2 + rsurfn)
-    b = osq2 * (dr2 - rsurfn)
+    a = osq2 * (dr2 + rsurf)
+    b = osq2 * (dr2 - rsurf)
     ooc = one / dr2
 ! _nonce cycle ! aa get 54
 !
@@ -644,12 +654,17 @@ module _N
 !    if (qtruncate_sum .and.&
     if(rho_solv(i).gt.surface_contour_value) exit ! density threshold exceeded ; will not apply force to this atom
 ! otherwise, compute gradient contribution : (note that I am flipping the direction of dr (in the notes it is r0-r)
-    __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurfn + half * (expa - expb) * ooc) )
+    __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurf + half * (expa - expb) * ooc) )
 ! add gradient contribution
     __INCR(drho_solv(:,i),dr)
 ! _nonce
    enddo ! nsurface
   enddo ! nsolvent
+!#undef zero
+!#undef half
+!#undef one
+!#undef osq2
+!#undef osq2pi
 !$omp end do
 !$omp end parallel
  else ! qtruncate sum

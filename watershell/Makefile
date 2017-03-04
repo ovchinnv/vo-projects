@@ -11,7 +11,7 @@ LIBS+=$(LIB).so
 include linkobjs.inc
 include $(ROOT)/Makefile.inc
 
-LOCALMACROS+=-include source.defs -D__BINDC -include erf_as.def #-D__erf=erfo7
+LOCALMACROS+=-include source.defs -D__BINDC -include erf_as.def -D__erf=erfo7
 LOCALDEPS+=source.defs
 
 default : plugin
