@@ -63,12 +63,15 @@ module _N
  __PAR(structure_update_freq, int, ione)         ! frequency of updating coordinats from which the surface is generated
  __PAR(structure_update_memory, float, 0.999d0)  ! memory constant for exponential update
  __PAR(output_file_freq, int, 1000)              ! frequency of writing output file
+ __PAR(full_sum_freq, int, 60)                   ! frequency of force calculation without density truncation
+                                                 ! doing the full calculation allows all atoms to be sorted
  __PAR(restart_file, character(len=vartaglen), 'NONE') ! restart file name
  __PAR(structure_file, character(len=vartaglen),'NONE') ! coordinate file (e.g. PDB) with system information, such as atomic radii
  __PAR(output_file, character(len=vartaglen), 'watershell.restart.txt') ! output file name
  __PAR(surface_force_constant, float, one)      ! surface restraint force constant
  __PAR(target_surface_energy, float, 5d0) ! target average energy of surface potential / par area ( units of pressure or normal stress )
  __PAR(remove_force_torque, bool, .false.) ! whether to remove net force and torque on the solvent atom
+ __PAR(minimum_distance, bool, .false.) ! use the (cheaper) minimum distance method, rather than density method
 !
 !  atom selections
  __PAR(surface_atom_selection, character(len=vartaglen), 'ANAME=CA')  ! protein CA trace
@@ -244,6 +247,14 @@ module _N
 #include "parser/parser_macro2.src"
 #undef __CHAR
 !
+#define __INT
+#define __VAR	full_sum_freq
+#define __TAG	__VAR
+#define __NAME	frequency of force calculation without density truncation
+#include "parser/parser_macro2.src"
+!
+#undef __INT
+!
 #undef __MINUSERR
 #define __LEZEROERR
 !
@@ -270,6 +281,11 @@ module _N
 #define __VAR remove_force_torque
 #define __TAG __VAR
 #define __NAME flag to remove net force and torque from solvent atoms
+#include "parser/parser_macro2.src"
+!
+#define __VAR minimum_distance
+#define __TAG __VAR
+#define __NAME flag to use the (faster) minimum distance to solute method
 #include "parser/parser_macro2.src"
 !
 ! done pocessing input file parameters
@@ -487,7 +503,11 @@ module _N
   __DBGOUT( 'COMPUTED SD, SCV: ', surface_distance, surface_contour_value)
  else
 ! aa :  this is the most time consuming part of the force calculation ; perhaps we can do it on the GPU ? Or perhaps can regulate cost otherwise ?
-  call __NM(compute_density_grad)(.true.) ! truncate if value exceeds
+  if (full_sum_freq.gt.izero) then
+   call __NM(compute_density_grad)(.not.__CHKUPDATE(full_sum_freq)) ! truncate if running density value exceeds reference
+  else
+   call __NM(compute_density_grad)(.true.)
+  endif
  endif
 !========================== compute contour value ^
 !========================== compute forces :
@@ -753,32 +773,70 @@ module _N
 !$omp end parallel
 #endif
  else ! qtruncate sum
+#ifdef __OMP
+!$omp parallel &
+!$omp shared ( rho_solv, drho_solv, r_solv, r_surf, rad_surf, surf_padding, nsolvent, nsurface, cutoff_surf, oo_surf_stdev &
+#ifdef __NEIGHBOR_LIST
+!$OMP , solute_neighbor_list &
+#endif
+!$OMP ) &
+!$omp private ( rw, i, j, rp, rsurf, rmaxsurf, dr, dr2, ooc, expa, expb &
+#ifdef __NEIGHBOR_LIST
+!$OMP ,dr2old, jj &
+#endif
+!$OMP )
+!$omp do schedule(static)
+#endif
   do i=1, nsolvent ! outer loop over solvent atoms
    rho_solv(i)=zero ;
    drho_solv(:,i)=zero
    rw=r_solv(:,i);
+#ifdef __NEIGHBOR_LIST
+   dr2old=-1.d0 ; ! set to a small number to guarantee that no swap is done on first iteration
+   do jj=1, nsurface ! inner loop over solute atoms
+    j=solute_neighbor_list(jj,i)
+#else
    do j=1, nsurface ! inner loop over solute atoms
+#endif
     rp=r_surf(:,j)
     rsurf    = ( rad_surf(j) + surf_padding )
     rmaxsurf = ( cutoff_surf  + rsurf  )
     dr = rp-rw ;
     dr2=sum(dr**2);
+#ifdef __NEIGHBOR_LIST
+!   bubble sort between this and previous atom base on distance
+    if (dr2 .lt. dr2old) then ! bubble sort
+     solute_neighbor_list(jj,i)=solute_neighbor_list(jj-1,i)
+     solute_neighbor_list(jj-1,i)=j
+    endif
+    dr2old=dr2
+#endif
     if (dr2 .gt. rmaxsurf**2) cycle
-    rsurfn=rsurf * oo_surf_stdev
+    rsurf=rsurf * oo_surf_stdev
     dr2 = sqrt(dr2) * oo_surf_stdev
-    a = osq2 * (dr2 + rsurfn)
-    b = osq2 * (dr2 - rsurfn)
+    a = osq2 * (dr2 + rsurf)
+    b = osq2 * (dr2 - rsurf)
     ooc = one / dr2
     expa = exp ( - a**2 )
     expb = exp ( - b**2 )
 ! update density
+#ifdef __ERFHYBRID
+    __erfo7i(a,erfa)
+    __erfo7i(b,erfb)
+    __INCR(rho_solv(i), half * ( erfa - erfb ) + osq2pi * ooc * ( expa - expb )   )
+#else
     __INCR(rho_solv(i), half * ( __erf(a) - __erf(b) ) + osq2pi * ooc * ( expa - expb )   )
-    __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurfn + half * (expa - expb) * ooc) )
+#endif
+    __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurf + half * (expa - expb) * ooc) )
 ! add gradient contribution
     __INCR(drho_solv(:,i),dr)
 ! _nonce
    enddo ! nsurface
   enddo ! nsolvent
+#ifdef __OMP
+!$omp end do
+!$omp end parallel
+#endif
  endif ! truncate sum
 !
  end __SUB(compute_density_grad)
