@@ -81,7 +81,9 @@ module _N
 &                  r_solv(:,:), & ! solvent atom coordinates
 &                  rho_solv(:), & ! density value at solvent coordinate
 &                  drho_solv(:,:) ! density gradient at solvent coordinate (inward surface normal)
+#ifdef __NEIGHBOR_LIST
  int, pointer :: solute_neighbor_list(:,:) ! for each solvent atom, the solute atoms are sorted in terms of proximity
+#endif
 !
  int, public :: nsurface=-1, nsolvent=-1
  int :: nsolvent_outside
@@ -312,6 +314,7 @@ module _N
   __ALLOC(r_solv(3,nsolvent))
   __ALLOC(rho_solv(nsolvent))
   __ALLOC(drho_solv(3,nsolvent))
+#ifdef __NEIGHBOR_LIST
   __ALLOC(solute_neighbor_list(nsurface,nsolvent))
 ! initialize neighbor list with solute indices from 1 to nsurface for each solute atom:
 #ifdef __DEBUG
@@ -320,6 +323,7 @@ module _N
   do l=1,nsurface
    solute_neighbor_list(l,:)=l
   enddo
+#endif
 !
  else
   __WRN(whoami, 'COULD NOT ALLOCATE MEMORY FOR SOLVENT ATOM INDICES.')
@@ -403,7 +407,9 @@ module _N
  __FREE(drho_solv)
  __FREE(isurface_atoms)
  __FREE(isolvent_atoms)
+#ifdef __NEIGHBOR_LIST
  __FREE(solute_neighbor_list)
+#endif
 !
  __NM(initialized)=.false. ; radii_initialized=.false.
 !
@@ -416,6 +422,15 @@ module _N
 ! int :: ibeg, iend ! atom indices for looping
  float :: distance_from_solute, distance_from_solute2, pre, d0
  float :: surface_energy, surface_force, density_beyond_contour
+#ifdef __OMP
+#define _U _
+ float :: __CONCAT(surface_energy,_U)
+ float :: __CONCAT(surface_force,_U)
+ float :: __CONCAT(density_beyond_contour,_U)
+ int :: __CONCAT(nsolvent_outside,_U)
+#else 
+#define _U
+#endif
  int :: i
  __IAM(__NM(main))
 !aa
@@ -478,12 +493,29 @@ module _N
 !========================== compute forces :
 ! calculate density integral using only atoms beyond contour (to estimate surface area)
  density_beyond_contour=zero
+ surface_energy=zero
+ surface_force=zero
+ nsolvent_outside=izero
 !
- nsolvent_outside=izero;
+! NOTE: here OPENMP does not make much difference
+#ifdef __OMP
+#define _U _
+!$omp parallel &
+!$omp shared (rho_solv, drho_solv, surface_contour_value, surface_distance, logistic_constant, surface_force_constant, &
+!$omp nsolvent_outside, density_beyond_contour, surface_force, surface_energy, isolvent_atoms, fr) &
+!$omp private (i, d0, pre, __CONCAT(nsolvent_outside,_U), __CONCAT(surface_energy,_U), __CONCAT(surface_force,_U), __CONCAT(density_beyond_contour,_U))
+ __CONCAT(density_beyond_contour,_U)=zero
+ __CONCAT(surface_energy,_U)=zero
+ __CONCAT(surface_force,_U)=zero
+ __CONCAT(nsolvent_outside,_U)=izero
+!$omp do schedule(static)
+#else
+#define _U
+#endif
  do i=1, nsolvent
   if ( rho_solv(i) .lt. surface_contour_value) then
-   __INC(nsolvent_outside);
-   __INCR(density_beyond_contour, rho_solv(i))
+   __INC(__CONCAT(nsolvent_outside,_U))
+   __INCR(__CONCAT(density_beyond_contour,_U), rho_solv(i))
    d0=__OORHO( rho_solv(i))
    pre = ( __RHO_INVERSE2 ( d0 ) - surface_distance ) ;
 !
@@ -492,13 +524,22 @@ module _N
    fr(:,isolvent_atoms(i)) = - surface_force_constant * pre * d0 * drho_solv(:,i) ! (-) because surface_distance is negative ; grad points toward protein
 ! sum "energy"
 ! NOT clear whether the surface_force or energy are meaningful
-   __INCR(surface_force, pre) ! x k, below
-   __INCR(surface_energy, pre**2) ! x k/2, below
+   __INCR(__CONCAT(surface_force,_U), pre) ! x k, below
+   __INCR(__CONCAT(surface_energy,_U), pre**2) ! x k/2, below
   else
    fr(:,isolvent_atoms(i))=zero
   endif
  enddo
-!
+#ifdef __OMP
+!$omp end do
+!$omp critical
+ __INCR(nsolvent_outside, __CONCAT(nsolvent_outside,_U))
+ __INCR(surface_energy, __CONCAT(surface_energy,_U))
+ __INCR(surface_force, __CONCAT(surface_force,_U))
+ __INCR(density_beyond_contour, __CONCAT(density_beyond_contour,_U))
+!$omp end critical
+!$omp end parallel
+#endif
 ! compute current surface distance from pre :
  if (nsolvent_outside .gt. 0) then 
   oonsolvent_outside=one/nsolvent_outside
@@ -560,9 +601,12 @@ module _N
 #endif
 !
  bool :: qtruncate_sum ! whether we can stop computation for each atom once the density reaches a threshold value
- int :: i, j, jj
+ int :: i, j
  float :: rp(3), rw(3), dr(3), dr2, a, b, expa, expb, ooc
+#ifdef __NEIGHBOR_LIST
+ int :: jj
  float :: dr2old ! squared distance difference from previous iteration
+#endif
 #ifdef __ERFHYBRID
  float :: isgn_, x_, erfa, erfb
 #endif
@@ -603,11 +647,21 @@ module _N
 #endif
 !
  if (qtruncate_sum) then
+#ifdef __OMP
 !$omp parallel &
-!$omp shared ( rho_solv, drho_solv, r_solv, r_surf, rad_surf, surf_padding, nsolvent, nsurface, cutoff_surf, oo_surf_stdev, solute_neighbor_list ) &
-!$omp private ( rw, i, j, jj, rp, rsurf, rmaxsurf, dr, dr2, dr2old, ooc, expa, expb)
+!$omp shared ( rho_solv, drho_solv, r_solv, r_surf, rad_surf, surf_padding, nsolvent, nsurface, cutoff_surf, oo_surf_stdev &
+#ifdef __NEIGHBOR_LIST
+!$OMP , solute_neighbor_list &
+#endif
+!$OMP ) &
+!$omp private ( rw, i, j, rp, rsurf, rmaxsurf, dr, dr2, ooc, expa, expb &
+#ifdef __NEIGHBOR_LIST
+!$OMP ,dr2old, jj &
+#endif
+!$OMP )
 !!$omp do schedule(runtime)
 !$omp do schedule(static)
+#endif
   do i=1, nsolvent ! outer loop over solvent atoms
 ! does not help below
 !#define zero 0d0
@@ -619,9 +673,13 @@ module _N
    rho_solv(i)=zero ;
    drho_solv(:,i)=zero
    rw=r_solv(:,i);
-   dr2old=0d0 ; ! set to a small number to guarantee that no swap is done on first iteration
+#ifdef __NEIGHBOR_LIST
+   dr2old=-1.d0 ; ! set to a small number to guarantee that no swap is done on first iteration
    do jj=1, nsurface ! inner loop over solute atoms
     j=solute_neighbor_list(jj,i)
+#else
+   do j=1, nsurface ! inner loop over solute atoms
+#endif
 !#define _nonce  rho_solv(i)=0.0001d0;
 !    if (qtruncate_sum.and.rho.gt.surface_contour_value) &     ! density threshold exceeded ; will not apply force to this atom
 !    exit
@@ -642,12 +700,14 @@ module _N
 !__DBGOUT(' DR: ', dr, rmaxsurf)
 !    if (any(abs(dr) .gt. rmaxsurf)) cycle ! not necessary, might actually slow the code
     dr2=sum(dr**2);
+#ifdef __NEIGHBOR_LIST
 !   bubble sort between this and previous atom base on distance
     if (dr2 .lt. dr2old) then ! bubble sort
      solute_neighbor_list(jj,i)=solute_neighbor_list(jj-1,i)
      solute_neighbor_list(jj-1,i)=j
     endif
     dr2old=dr2
+#endif
 !
     if (dr2 .gt. rmaxsurf**2) cycle
 ! _nonce cycle ! aa get 54
@@ -688,8 +748,10 @@ module _N
 !#undef one
 !#undef osq2
 !#undef osq2pi
+#ifdef __OMP
 !$omp end do
 !$omp end parallel
+#endif
  else ! qtruncate sum
   do i=1, nsolvent ! outer loop over solvent atoms
    rho_solv(i)=zero ;
