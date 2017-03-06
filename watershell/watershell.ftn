@@ -62,7 +62,7 @@ module _N
  __PAR(distance_update_step, float, 0.001d0)     ! constant for update
  __PAR(structure_update_freq, int, ione)         ! frequency of updating coordinats from which the surface is generated
  __PAR(structure_update_memory, float, 0.999d0)  ! memory constant for exponential update
- __PAR(output_file_freq, int, 1000)              ! frequency of writing output file
+ __PAR(output_freq, int, 1000)              ! frequency of writing output file
  __PAR(full_sum_freq, int, 60)                   ! frequency of force calculation without density truncation
                                                  ! doing the full calculation allows all atoms to be sorted
  __PAR(restart_file, character(len=vartaglen), 'NONE') ! restart file name
@@ -71,7 +71,7 @@ module _N
  __PAR(surface_force_constant, float, one)      ! surface restraint force constant
  __PAR(target_surface_energy, float, 5d0) ! target average energy of surface potential / par area ( units of pressure or normal stress )
  __PAR(remove_force_torque, bool, .false.) ! whether to remove net force and torque on the solvent atom
- __PAR(minimum_distance, bool, .false.) ! use the (cheaper) minimum distance method, rather than density method
+ __PAR(qminimum_distance, bool, .false.) ! use the (cheaper) minimum distance method, rather than density method
 !
 !  atom selections
  __PAR(surface_atom_selection, character(len=vartaglen), 'ANAME=CA')  ! protein CA trace
@@ -83,7 +83,9 @@ module _N
 &                  rad_surf(:), & ! reference atom radii
 &                  r_solv(:,:), & ! solvent atom coordinates
 &                  rho_solv(:), & ! density value at solvent coordinate
-&                  drho_solv(:,:) ! density gradient at solvent coordinate (inward surface normal)
+&                  drho_solv(:,:),& ! density gradient at solvent coordinate (inward surface normal)
+&                  dist_solv(:), &! minimum distance to solute
+&                  ddist_solv(:,:) ! distance gradient at solvent coordinate (inward surface normal)
 #ifdef __NEIGHBOR_LIST
  int, pointer :: solute_neighbor_list(:,:) ! for each solvent atom, the solute atoms are sorted in terms of proximity
 #endif
@@ -140,6 +142,13 @@ module _N
 !
  endif ! have restart file
 !
+#define __BOOL
+#define __TAG minimum_distance
+#define __VAR __CONCAT(q,__TAG)
+#define __NAME flag to use the (faster) minimum distance to solute method
+#include "parser/parser_macro2.src"
+#undef __BOOL
+!
 #define __WARNIFMISSING
 #define __MINUSERR
 ! density padding
@@ -160,7 +169,7 @@ module _N
 #define __VAR	surface_distance
 #define __TAG __VAR
 #define __NAME	Distance of solvent surface from protein
-#define __DOIFOK if (__VAR.lt.__ERRTOL) then ; \
+#define __DOALWAYS if (__VAR.lt.__ERRTOL) then ; \
                   __MESSAGE(whoami, 'LOCATION OF SOLVENT SURFACE WILL BE SET FROM SOLVENT COORDINATES.') ; \
                  else ;\
                   __VAR=-(abs(__VAR)) ; \
@@ -212,7 +221,7 @@ module _N
 #define __DOIFOK if (__VAR.eq.izero) __MESSAGE(whoami, 'SURFACE UPDATE IS OFF.')
 #include "parser/parser_macro2.src"
 !
-#define __VAR	output_file_freq
+#define __VAR	output_freq
 #define __TAG	__VAR
 #define __NAME	frequency for writing output/restart file
 #define __DOIFOK if (__VAR.le.izero) __WRN(whoami, 'RESTART FILE WILL BE WRITTEN AT THE END ONLY')
@@ -283,11 +292,6 @@ module _N
 #define __NAME flag to remove net force and torque from solvent atoms
 #include "parser/parser_macro2.src"
 !
-#define __VAR minimum_distance
-#define __TAG __VAR
-#define __NAME flag to use the (faster) minimum distance to solute method
-#include "parser/parser_macro2.src"
-!
 ! done pocessing input file parameters
 !
 ! read structure file
@@ -329,7 +333,9 @@ module _N
   nsolvent=size(isolvent_atoms) ; oonsolvent=one/nsolvent ;
   __ALLOC(r_solv(3,nsolvent))
   __ALLOC(rho_solv(nsolvent))
+  dist_solv=>rho_solv
   __ALLOC(drho_solv(3,nsolvent))
+  ddist_solv=>drho_solv
 #ifdef __NEIGHBOR_LIST
   __ALLOC(solute_neighbor_list(nsurface,nsolvent))
 ! initialize neighbor list with solute indices from 1 to nsurface for each solute atom:
@@ -389,6 +395,8 @@ module _N
  _W '#WATERSHELL RESTART FILE'
  _W __STRING(__RESTARTCTX)//' {'
  _W 'iteration=',iteration
+ if (qminimum_distance)&
+ _W 'minimum_distance=on # use the simpler minimum distance to solvent algorithm'
 ! _W 'surface_contour_value=',surface_contour_value, ' # value for which density isosurface is computed'
  _W 'surface_distance=',surface_distance, ' # distance of solvent surface from solute'
  _W 'surface_force_constant=',surface_force_constant, ' # surface force constant'
@@ -420,7 +428,9 @@ module _N
  __FREE(r_solv)
  __FREE(rad_surf)
  __FREE(rho_solv)
+ nullify(dist_solv)
  __FREE(drho_solv)
+ nullify(ddist_solv)
  __FREE(isurface_atoms)
  __FREE(isolvent_atoms)
 #ifdef __NEIGHBOR_LIST
@@ -480,35 +490,71 @@ module _N
 !
 !return ! aa
 !========================== compute contour value if needed
-! if reference contour value is negative, estimate a reasonable value from density distribution
+! if surface distance value is zero estimate a reasonable value from current coordinates
  if ( abs(surface_distance) .lt. __ERRTOL) then
-  call __NM(compute_density_grad)(.false.) ! need entire sum
-  do i=1, nsolvent
+  if (qminimum_distance) then
+   call __NM(compute_mindist_grad)(.false.) ! need entire sum
+   do i=1, nsolvent
 ! convert to distance
-   d0 = __RHO_INVERSE(rho_solv(i))
-   __DBGOUT('Inst distance from solute  ', d0);
-   __INCR(distance_from_solute, d0)
-   __INCR(distance_from_solute2, d0**2)
-  enddo
+    d0 = dist_solv(i)
+    __DBGOUT('Inst distance from solute  ', d0);
+    __INCR(distance_from_solute, d0)
+    __INCR(distance_from_solute2, d0**2)
+   enddo
 ! set contour value to average value + (a) x stdev ; a set empirically
+   __SCALE(distance_from_solute,oonsolvent);
+   __DBGOUT('Distance from solute ', distance_from_solute)
+   __SCALE(distance_from_solute2,oonsolvent);
+   __DBGOUT('Distance from solute std ', sqrt ( distance_from_solute2 - distance_from_solute**2))
+   surface_distance = distance_from_solute - & ! average
 #define _a 0.25d0
-  __SCALE(distance_from_solute,oonsolvent);
-  __DBGOUT('Distance from solute ', distance_from_solute)
-  __SCALE(distance_from_solute2,oonsolvent);
-  __DBGOUT('Distance from solute std ', sqrt ( distance_from_solute2 - distance_from_solute**2))
-  surface_distance = distance_from_solute - & ! average
-&                         _a * sqrt( max(zero,distance_from_solute2 - distance_from_solute**2) ) ! analytically positive, but, just in case, protect from roundoff
-  surface_contour_value = __RHO(surface_distance)
-  __MESSAGE(whoami, 'COMPUTED SURFACE DISTANCE AT '//ftoa(surface_distance)//' A FROM PROTEIN. CONTOUR VALUE IS '//ftoa(surface_contour_value))
-  __DBGOUT( 'COMPUTED SD, SCV: ', surface_distance, surface_contour_value)
- else
+&                          _a * sqrt( max(zero,distance_from_solute2 - distance_from_solute**2) ) ! analytically positive, but, just in case, protect from roundoff
+#undef _a
+   surface_contour_value = __RHO(surface_distance) ! determine this for information, even though not relevant to algorithm
+   __MESSAGE(whoami, 'COMPUTED SURFACE DISTANCE AT '//ftoa(surface_distance)//' A FROM PROTEIN. CONTOUR VALUE IS '//ftoa(surface_contour_value))
+   __DBGOUT( 'COMPUTED SD, SCV: ', surface_distance, surface_contour_value)
+
+!============================================================
+  else ! qminimum_distance
+   call __NM(compute_density_grad)(.false.) ! need entire sum
+   do i=1, nsolvent
+! convert to distance
+    d0 = __RHO_INVERSE(rho_solv(i))
+    __DBGOUT('Inst distance from solute  ', d0);
+    __INCR(distance_from_solute, d0)
+    __INCR(distance_from_solute2, d0**2)
+   enddo
+! set contour value to average value + (a) x stdev ; a set empirically
+   __SCALE(distance_from_solute,oonsolvent);
+   __DBGOUT('Distance from solute ', distance_from_solute)
+   __SCALE(distance_from_solute2,oonsolvent);
+   __DBGOUT('Distance from solute std ', sqrt ( distance_from_solute2 - distance_from_solute**2))
+   surface_distance = distance_from_solute - & ! average
+#define _a 0.25d0
+&                          _a * sqrt( max(zero,distance_from_solute2 - distance_from_solute**2) ) ! analytically positive, but, just in case, protect from roundoff
+#undef _a
+   surface_contour_value = __RHO(surface_distance)
+   __MESSAGE(whoami, 'COMPUTED SURFACE DISTANCE AT '//ftoa(surface_distance)//' A FROM PROTEIN. CONTOUR VALUE IS '//ftoa(surface_contour_value))
+   __DBGOUT( 'COMPUTED SD, SCV: ', surface_distance, surface_contour_value)
+  endif ! qminimum_distance
+ else ! compute reference surface distance
 ! aa :  this is the most time consuming part of the force calculation ; perhaps we can do it on the GPU ? Or perhaps can regulate cost otherwise ?
-  if (full_sum_freq.gt.izero) then
-   call __NM(compute_density_grad)(.not.__CHKUPDATE(full_sum_freq)) ! truncate if running density value exceeds reference
-  else
-   call __NM(compute_density_grad)(.true.)
-  endif
- endif
+  if (qminimum_distance) then
+!
+   if (full_sum_freq.gt.izero) then
+    call __NM(compute_mindist_grad)(.not.__CHKUPDATE(full_sum_freq)) ! truncate if running density value exceeds reference
+   else
+    call __NM(compute_mindist_grad)(.true.)
+   endif ! full sum
+!
+  else ! original density-based calculation
+   if (full_sum_freq.gt.izero) then
+    call __NM(compute_density_grad)(.not.__CHKUPDATE(full_sum_freq)) ! truncate if running density value exceeds reference
+   else
+    call __NM(compute_density_grad)(.true.)
+   endif
+  endif ! qminimum_distance
+ endif ! compute reference surface distance
 !========================== compute contour value ^
 !========================== compute forces :
 ! calculate density integral using only atoms beyond contour (to estimate surface area)
@@ -517,25 +563,68 @@ module _N
  surface_force=zero
  nsolvent_outside=izero
 !
-! NOTE: here OPENMP does not make much difference
+! NOTE: here OPENMP does not make much difference but keeping because we are good.
 #ifdef __OMP
 #define _U _
+#else
+#define _U
+#endif
+#define __U(_WHAT) __CONCAT(_WHAT,_U)
+!
+! simple minimu distance algorithm
+ if (qminimum_distance) then
+#ifdef __OMP
+!$omp parallel &
+!$omp shared (dist_solv, ddist_solv, surface_distance, surface_force_constant, &
+!$omp nsolvent_outside, surface_force, surface_energy, isolvent_atoms, fr) &
+!$omp private (i, d0, pre, __U(nsolvent_outside), __U(surface_energy), __U(surface_force))
+ __U(surface_energy)=zero
+ __U(surface_force)=zero
+ __U(nsolvent_outside)=izero
+!$omp do schedule(static)
+#endif
+ do i=1, nsolvent
+  d0=dist_solv(i)
+  if ( d0 .lt. surface_distance) then ! for consistency with original algorithm, surface distance is negative
+   __INC(__U(nsolvent_outside))
+   pre = ( d0 - surface_distance ) ;
+!
+! add atomic force
+   fr(:,isolvent_atoms(i)) = - surface_force_constant * pre * ddist_solv(:,i) ! (-) because surface_distance is negative ; grad points toward protein
+! sum "energy"
+! NOT clear how the surface_force or energy are meaningful
+   __INCR(__U(surface_force), pre) ! x k, below
+   __INCR(__U(surface_energy), pre**2) ! x k/2, below
+  else
+   fr(:,isolvent_atoms(i))=zero
+  endif
+ enddo
+#ifdef __OMP
+!$omp end do
+!$omp critical
+ __INCR(nsolvent_outside, __U(nsolvent_outside))
+ __INCR(surface_energy, __U(surface_energy))
+ __INCR(surface_force, __U(surface_force))
+!$omp end critical
+!$omp end parallel
+#endif
+ else ! not qminimum_distance, i.e. original algorithm
+!================= original density based algorithm ==================
+#ifdef __OMP
 !$omp parallel &
 !$omp shared (rho_solv, drho_solv, surface_contour_value, surface_distance, logistic_constant, surface_force_constant, &
 !$omp nsolvent_outside, density_beyond_contour, surface_force, surface_energy, isolvent_atoms, fr) &
 !$omp private (i, d0, pre, __CONCAT(nsolvent_outside,_U), __CONCAT(surface_energy,_U), __CONCAT(surface_force,_U), __CONCAT(density_beyond_contour,_U))
- __CONCAT(density_beyond_contour,_U)=zero
- __CONCAT(surface_energy,_U)=zero
- __CONCAT(surface_force,_U)=zero
- __CONCAT(nsolvent_outside,_U)=izero
+ __U(density_beyond_contour)=zero
+ __U(surface_energy)=zero
+ __U(surface_force)=zero
+ __U(nsolvent_outside)=izero
 !$omp do schedule(static)
-#else
-#define _U
 #endif
  do i=1, nsolvent
   if ( rho_solv(i) .lt. surface_contour_value) then
-   __INC(__CONCAT(nsolvent_outside,_U))
-   __INCR(__CONCAT(density_beyond_contour,_U), rho_solv(i))
+   __INC(__U(nsolvent_outside))
+   __INCR(__U(density_beyond_contour), rho_solv(i))
    d0=__OORHO( rho_solv(i))
    pre = ( __RHO_INVERSE2 ( d0 ) - surface_distance ) ;
 !
@@ -544,8 +633,8 @@ module _N
    fr(:,isolvent_atoms(i)) = - surface_force_constant * pre * d0 * drho_solv(:,i) ! (-) because surface_distance is negative ; grad points toward protein
 ! sum "energy"
 ! NOT clear whether the surface_force or energy are meaningful
-   __INCR(__CONCAT(surface_force,_U), pre) ! x k, below
-   __INCR(__CONCAT(surface_energy,_U), pre**2) ! x k/2, below
+   __INCR(__U(surface_force), pre) ! x k, below
+   __INCR(__U(surface_energy), pre**2) ! x k/2, below
   else
    fr(:,isolvent_atoms(i))=zero
   endif
@@ -553,15 +642,18 @@ module _N
 #ifdef __OMP
 !$omp end do
 !$omp critical
- __INCR(nsolvent_outside, __CONCAT(nsolvent_outside,_U))
- __INCR(surface_energy, __CONCAT(surface_energy,_U))
- __INCR(surface_force, __CONCAT(surface_force,_U))
- __INCR(density_beyond_contour, __CONCAT(density_beyond_contour,_U))
+ __INCR(nsolvent_outside, __U(nsolvent_outside))
+ __INCR(surface_energy, __U(surface_energy))
+ __INCR(surface_force, __U(surface_force))
+ __INCR(density_beyond_contour, __U(density_beyond_contour)) ! not clear what to do with tis value, or whether it is useful
 !$omp end critical
 !$omp end parallel
 #endif
+!
+ endif ! qminimum_dist
+!
 ! compute current surface distance from pre :
- if (nsolvent_outside .gt. 0) then 
+ if (nsolvent_outside .gt. 0) then
   oonsolvent_outside=one/nsolvent_outside
  else
   oonsolvent_outside=zero ;
@@ -587,8 +679,8 @@ module _N
   endif
  endif
 !============================================= output restart file
- if (output_file_freq.gt.izero) then
-  if __CHKUPDATE(output_file_freq) then
+ if (output_freq.gt.izero) then
+  if __CHKUPDATE(output_freq) then
 ! write a short update of simulation parameters:
   i=0 ;
 #define __OUT(...)  __INC(i);write(_MSGBUF(i),*) __VA_ARGS__
@@ -630,10 +722,10 @@ module _N
 #ifdef __ERFHYBRID
  float :: isgn_, x_, erfa, erfb
 #endif
- float :: rmaxsurf, rsurf, rsurfn
+ float :: rmaxsurf, rsurf ! , rsurfn
  __IAM(__NM(compute_density_grad))
 !
-! NOTE : using approximations does not make much speed difference
+! different erf implementations/approximations
   float :: erfsun ! external erf function; code by Sun Microsystems
   float :: erfo7  ! approximation to within O(-7)
   float :: erfo5  ! approximation to within O(-5) [contains an exponential term]
@@ -804,7 +896,7 @@ module _N
     dr = rp-rw ;
     dr2=sum(dr**2);
 #ifdef __NEIGHBOR_LIST
-!   bubble sort between this and previous atom base on distance
+!   bubble sort between this and previous atom based on distance
     if (dr2 .lt. dr2old) then ! bubble sort
      solute_neighbor_list(jj,i)=solute_neighbor_list(jj-1,i)
      solute_neighbor_list(jj-1,i)=j
@@ -840,6 +932,173 @@ module _N
  endif ! truncate sum
 !
  end __SUB(compute_density_grad)
+!================================================================
+ __SUB(compute_mindist_grad)(quit_early)
+#ifdef __OMP
+ use omp_lib
+#endif
+!
+ bool :: quit_early ! whether we can stop computation for each atom once distance to any atom less than distance to solute surface
+ int :: i, j
+ float :: rp(3), rw(3), dr(3), dr2, dr2min, drmin(3)
+#ifdef __NEIGHBOR_LIST
+ int :: jj
+ float :: dr2old ! squared minimum distance difference from previous iteration
+#endif
+ float :: rmaxsurf, surface_distance2
+ __IAM(__NM(compute_density_grad))
+!
+#ifdef __DEBUG
+#ifdef __OMP
+!$omp parallel
+!$omp single
+ __DBGOUT('OMP: Available processors: ',omp_get_num_procs());
+ __DBGOUT('OMP: Maximum threads:      ',omp_get_max_threads());
+ __DBGOUT('OMP: Current threads:      ',omp_get_num_threads());
+ __DBGOUT('OMP: This thread:          ',omp_get_thread_num());
+!$omp end single
+!$omp end parallel
+#endif __OMP
+#endif
+!
+! simple algorithm to find the closest atom
+ surface_distance2=surface_distance**2
+!
+ if (quit_early) then
+#ifdef __OMP
+!$omp parallel &
+!$omp shared ( dist_solv, ddist_solv, r_solv, nsolvent, nsurface, surface_distance2 &
+#ifdef __NEIGHBOR_LIST
+!$OMP , solute_neighbor_list &
+#endif
+!$OMP ) &
+!$omp private ( rw, i, j, rp, dr, drmin, dr2, dr2min &
+#ifdef __NEIGHBOR_LIST
+!$OMP ,dr2old, jj &
+#endif
+!$OMP )
+!!$omp do schedule(runtime)
+!$omp do schedule(static)
+#endif
+  do i=1, nsolvent ! outer loop over solvent atoms
+   rw=r_solv(:,i);
+   dr2min=ilarge
+#ifdef __NEIGHBOR_LIST
+   dr2old=-1.d0 ; ! set to a small number to guarantee that no swap is done on first iteration
+   do jj=1, nsurface ! inner loop over solute atoms
+    j=solute_neighbor_list(jj,i)
+#else
+   do j=1, nsurface ! inner loop over solute atoms
+#endif
+    rp=r_surf(:,j) ! protein atom coordinate
+!
+    dr = rp-rw ;
+    dr2=sum(dr**2);
+#ifdef __NEIGHBOR_LIST
+!   bubble sort between this and previous atom based on distance
+    if (dr2 .lt. dr2old) then
+     solute_neighbor_list(jj,i)=solute_neighbor_list(jj-1,i)
+     solute_neighbor_list(jj-1,i)=j
+    endif
+    dr2old=dr2
+#endif
+!
+    if (dr2 .lt. surface_distance2) then 
+     dr2min=zero
+     drmin=zero
+#ifdef __NEIGHBOR_LIST
+! put this atom first in the list to increase our chances of quitting early next time
+     solute_neighbor_list(jj,i)=solute_neighbor_list(1,i)
+     solute_neighbor_list(1,i)=j
+#endif
+     exit ! atom is considered inside, so no need to loop further
+    endif
+    if (dr2 .lt. dr2min) then
+     dr2min=dr2
+     drmin=dr
+#ifdef __NEIGHBOR_LIST
+! put this atom first in the list
+     solute_neighbor_list(jj,i)=solute_neighbor_list(1,i)
+     solute_neighbor_list(1,i)=j
+#endif
+    endif
+   enddo ! nsurface
+   dist_solv(i) = -sqrt(dr2min)
+   ddist_solv(:,i) = drmin
+  enddo ! nsolvent
+#ifdef __OMP
+!$omp end do
+!$omp end parallel
+#endif
+ else ! quit_early
+#ifdef __OMP
+!$omp parallel &
+!$omp shared ( dist_solv, ddist_solv, r_solv, nsolvent, nsurface, surface_distance2 &
+#ifdef __NEIGHBOR_LIST
+!$OMP , solute_neighbor_list &
+#endif
+!$OMP ) &
+!$omp private ( rw, i, j, rp, dr, drmin, dr2, dr2min &
+#ifdef __NEIGHBOR_LIST
+!$OMP ,dr2old, jj &
+#endif
+!$OMP )
+!!$omp do schedule(runtime)
+!$omp do schedule(static)
+#endif
+  do i=1, nsolvent ! outer loop over solvent atoms
+   rw=r_solv(:,i);
+   dr2min=ilarge
+#ifdef __NEIGHBOR_LIST
+   dr2old=-1.d0 ; ! set to a small number to guarantee that no swap is done on first iteration
+   do jj=1, nsurface ! inner loop over solute atoms
+    j=solute_neighbor_list(jj,i)
+#else
+   do j=1, nsurface ! inner loop over solute atoms
+#endif
+    rp=r_surf(:,j) ! protein atom coordinate
+!
+    dr = rp-rw ;
+    dr2=sum(dr**2);
+#ifdef __NEIGHBOR_LIST
+!   bubble sort between this and previous atom based on distance
+    if (dr2 .lt. dr2old) then
+     solute_neighbor_list(jj,i)=solute_neighbor_list(jj-1,i)
+     solute_neighbor_list(jj-1,i)=j
+    endif
+    dr2old=dr2
+#endif
+!
+    if (dr2 .lt. surface_distance2) then 
+#ifdef __NEIGHBOR_LIST
+! put this atom first in the list to increase our chances of quitting early next time
+     solute_neighbor_list(jj,i)=solute_neighbor_list(1,i)
+     solute_neighbor_list(1,i)=j
+#endif
+    endif
+    if (dr2 .lt. dr2min) then
+     dr2min=dr2
+     drmin=dr
+#ifdef __NEIGHBOR_LIST
+! put this atom first in the list
+     solute_neighbor_list(jj,i)=solute_neighbor_list(1,i)
+     solute_neighbor_list(1,i)=j
+#endif
+    endif
+   enddo ! nsurface
+#ifdef __DEBUG
+ write(666,*) i,dr2min, ilarge
+#endif
+   dist_solv(i) = -sqrt(dr2min) ! convention
+   ddist_solv(:,i) = drmin
+  enddo ! nsolvent
+#ifdef __OMP
+!$omp end do
+!$omp end parallel
+#endif
+ endif ! quit_early
+!
+ end __SUB(compute_mindist_grad)
 !================================================================
 end module _N
 
