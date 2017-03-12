@@ -671,52 +671,43 @@ module _N
    call __NM(compute_mindist_grad)(.false.) ! need entire sum
    do i=1, nsolvent
     d0 = dist_solv(i)
-    __DBGOUT('Inst. distance from solute  ', d0);
+    __DBGOUT('Inst. distance from solute for atom ',i,' is ', d0);
     __INCR(distance_from_solute, d0)
     __INCR(distance_from_solute2, d0**2)
    enddo
-! set contour value to average value + (a) x stdev ; a set empirically
-   __SCALE(distance_from_solute,oonsolvent);
-   __DBGOUT('Distance from solute ', distance_from_solute)
-   __SCALE(distance_from_solute2,oonsolvent);
-   __DBGOUT('Distance from solute std ', sqrt ( distance_from_solute2 - distance_from_solute**2))
-   surface_distance = distance_from_solute - & ! average
-#define _a 0.25d0
-&                          _a * sqrt( max(zero,distance_from_solute2 - distance_from_solute**2) ) ! analytically positive, but, just in case, protect from roundoff
-#undef _a
-   surface_contour_value = __RHO(surface_distance) ! determine this for information, even though not relevant to algorithm
-   __MESSAGE(whoami, 'COMPUTED SURFACE DISTANCE AT '//ftoa(surface_distance)//' A FROM PROTEIN. CONTOUR VALUE IS '//ftoa(surface_contour_value))
-   __DBGOUT( 'COMPUTED SD, SCV: ', surface_distance, surface_contour_value)
-! at this point, qforced_solv is wrong : it will be true everywhere, because surface distance was undefined in the calc. loop
-! recompute qforced_solv :
-   qforced_solv=dist_solv.lt.surface_distance
-!============================================================
+   pre=0.25d0 ! prefactor for scaling std in computing reference distance
   else ! (NOT) qminimum_distance
    call __NM(compute_density_grad)(.false.) ! need entire sum
    do i=1, nsolvent
 ! convert to distance
     d0 = __RHO_INVERSE(rho_solv(i))
-    __DBGOUT('Inst. distance from solute  ', d0);
+    __DBGOUT('Inst. distance from solute for atom ',i,' is ', d0);
     __INCR(distance_from_solute, d0)
     __INCR(distance_from_solute2, d0**2)
    enddo
+   pre=0.1d0
+  endif ! qmin distance
 ! set contour value to average value + (a) x stdev ; a set empirically
-   __SCALE(distance_from_solute,oonsolvent);
-   __DBGOUT('Distance from solute ', distance_from_solute)
-   __SCALE(distance_from_solute2,oonsolvent);
-   __DBGOUT('Distance from solute std ', sqrt ( distance_from_solute2 - distance_from_solute**2))
-   surface_distance = distance_from_solute - & ! average
-#define _a 0.1d0
-&                          _a * sqrt( max(zero,distance_from_solute2 - distance_from_solute**2) ) ! analytically positive, but, just in case, protect from roundoff
-#undef _a
-   surface_contour_value = __RHO(surface_distance)
-   __MESSAGE(whoami, 'COMPUTED SURFACE DISTANCE AT '//ftoa(surface_distance)//' A FROM PROTEIN. CONTOUR VALUE IS '//ftoa(surface_contour_value))
-   __DBGOUT( 'COMPUTED SD, SCV: ', surface_distance, surface_contour_value)
-! recompute qforced_solv, similarly to above :
+  __SCALE(distance_from_solute,oonsolvent);
+  __DBGOUT('Distance from solute ', distance_from_solute)
+  __SCALE(distance_from_solute2,oonsolvent);
+  __DBGOUT('Distance from solute stdDev ', sqrt ( distance_from_solute2 - distance_from_solute**2))
+  surface_distance = distance_from_solute - & ! average
+&                    pre * sqrt( max(zero,distance_from_solute2 - distance_from_solute**2) ) ! analytically positive, but, just in case, protect from roundoff
+  surface_contour_value = __RHO(surface_distance) ! for mindist, determine this for information, even though not relevant to algorithm
+  __MESSAGE(whoami, 'COMPUTED SURFACE DISTANCE AT '//ftoa(surface_distance)//' A FROM PROTEIN. CONTOUR VALUE IS '//ftoa(surface_contour_value))
+  __DBGOUT( 'COMPUTED SD, SCV: ', surface_distance, surface_contour_value)
+! at this point, qforced_solv is wrong : it will be true everywhere, because surface distance was undefined in the calc. loop
+! recompute qforced_solv :
+  if (qminimum_distance) then
+   qforced_solv=dist_solv.lt.surface_distance
+!============================================================
+  else ! (NOT) qminimum_distance
    qforced_solv=rho_solv.lt.surface_contour_value
   endif ! qminimum_distance
-!========================== if we requested to run without neighbor lists then need to reset solute_neighbor_mind to max
-! otherwise, the early exit version of force routine could miss crucial atoms (the mind list is _not_ updated b/c qnlist=0)
+!====== NOTE : if we requested to run without neighbor lists then need to reset solute_neighbor_mind to max
+!====== otherwise, the early exit version of force routine could miss crucial atoms (the mind list is _not_ updated b/c qnlist=0)
+!====== this is because solute_neighbor_mind is recomputed in a full loop, so it will be smaller than nsurf
 #if defined(__NEIGHBOR_LIST) & defined(__SORT_LIST)
   if (.not. qneighbor_list) solute_neighbor_mind=nsurface
 #endif
@@ -995,7 +986,7 @@ module _N
    net_force = - net_force_ave  ! split net_force between correction atoms
 ! NOTE that r_com is the COM of the smoothed coordinates, but we apply correction forces to actual atoms
 ! note that I am not dividing by nsurface ; this is because below we have r_com (vs. r_com_inst) which is an average
-   ir_sum=r_com_inst-r_com;
+   ir_sum=r_com_inst-r_com; ! r_com_inst is here because force is constant and can be taken out of sum, then coords add up to N x rcominst
    __INCR(net_torque(1),  ir_sum(2) * net_force(3) - ir_sum(3) * net_force(2))
    __INCR(net_torque(2),  ir_sum(3) * net_force(1) - ir_sum(1) * net_force(3))
    __INCR(net_torque(3),  ir_sum(1) * net_force(2) - ir_sum(2) * net_force(1))
@@ -1240,7 +1231,7 @@ module _N
 ! for now, a very simple update strategy
 ! in the future will add estimation of pressure and surface tension
 !
-! if the surface energy is higher than the target, d0 < 0, and the surface distance (which is nagative ) will decrease
+! if the surface energy is higher than the target, d0 < 0, and the surface distance (which is negative ) will decrease
     d0 = ( target_surface_energy - oonsolvent_outside * surface_energy );
     __INCR(surface_distance, distance_update_step * d0)
     surface_contour_value = __RHO(surface_distance)
