@@ -4,8 +4,8 @@
  	src/fitrms.h \
  	src/Debug.h
  	$(CXX) $(CXXFLAGS) $(COPTO)obj/GlobalMasterTMD.o $(COPTC) src/GlobalMasterTMD.C
-+obj/GlobalMasterSM.o: \
-+	src/GlobalMasterSM.C \
++obj/GlobalMasterDY.o: \
++	src/GlobalMasterDY.C \
 +	src/InfoStream.h \
 +	src/NamdTypes.h \
 +	src/common.h \
@@ -19,8 +19,8 @@
 +	src/MGridforceParams.h \
 +	src/strlib.h \
 +	src/MStream.h \
-+	src/GlobalMasterSM.h
-+	$(CXX) $(CXXFLAGS) $(COPTO)obj/GlobalMasterSM.o $(COPTC) src/GlobalMasterSM.C
++	src/GlobalMasterDY.h
++	$(CXX) $(CXXFLAGS) $(COPTO)obj/GlobalMasterDY.o $(COPTC) src/GlobalMasterDY.C
  obj/Matrix4Symmetry.o: \
  	src/Matrix4Symmetry.C \
  	src/Matrix4Symmetry.h \
@@ -31,7 +31,7 @@
  EXTRADEFINES=-DREMOVE_PROXYRESULTMSG_EXTRACOPY -DNODEAWARE_PROXY_SPANNINGTREE -DUSE_NODEPATCHMGR
  EXTRAINCS=
 -EXTRALINKLIBS=
-+EXTRALINKLIBS+=-L$(STRUNA_LIBDIR) -lstruna
++EXTRALINKLIBS+=-L$(DYNAMO_LIBDIR) -ldynamo
  # to compile namd using PAPI counters to measure flops and modify include and library path
  # correspondingly
  #EXTRADEFINES=-DREMOVE_PROXYRESULTMSG_EXTRACOPY -DMEASURE_NAMD_WITH_PAPI
@@ -39,9 +39,9 @@
  	$(DSTDIR)/GlobalMasterTcl.o \
  	$(DSTDIR)/GlobalMasterSMD.o \
  	$(DSTDIR)/GlobalMasterTMD.o \
-+	$(DSTDIR)/GlobalMasterSM.o \
-   $(DSTDIR)/Matrix4Symmetry.o \
-   $(DSTDIR)/GlobalMasterSymmetry.o \
++	$(DSTDIR)/GlobalMasterDY.o \
+	$(DSTDIR)/Matrix4Symmetry.o \
+	$(DSTDIR)/GlobalMasterSymmetry.o \
  	$(DSTDIR)/GlobalMasterFreeEnergy.o \
 --- src/ComputeMgr.C	2013-12-27 14:59:49.000000000 -0500
 +++ src/ComputeMgr.C	2018-04-25 15:52:14.226220983 -0400
@@ -57,8 +57,8 @@
  #include "GlobalMasterIMD.h"
  #include "GlobalMasterTcl.h"
  #include "GlobalMasterSMD.h"
-+#include <stdbool.h> // VO Struna
-+#include "GlobalMasterSM.h" // VO Struna
++#include <stdbool.h> // VO Dynamo
++#include "GlobalMasterDY.h" // VO Dynamo
  #include "GlobalMasterTMD.h"
  #include "GlobalMasterSymmetry.h"
  #include "GlobalMasterEasy.h"
@@ -84,9 +84,9 @@
                                      simParams->firstTimestep, simParams->SMDFile,
                                      node->molecule->numAtoms)
              );
-+// VO Struna Plugin v
-+        if (simParams->SMPluginActive) masterServerObject->addClient(new GlobalMasterSM());
-+// VO Struna Plugin ^
++// VO Dynamo v
++        if (simParams->DYPluginActive) masterServerObject->addClient(new GlobalMasterDY());
++// VO Dynamo ^
              
          if (simParams->symmetryOn && 
            (simParams->firstTimestep < simParams->symmetryLastStep || 
@@ -96,11 +96,11 @@
     opts.range("SMDOutputFreq", POSITIVE);
     
     //****** END SMD constraints changes 
-+   //****** VO: BEGIN SM plugin parameters
-+   opts.optionalB("main", "StrunaPlugin", "Plugin to use restraints from string method suite", &SMPluginActive, FALSE);
-+   opts.require("StrunaPlugin", "StrunaConfigFile","Configuration file for struna plugin", SMConfigFileName);
-+   opts.optional("StrunaPlugin", "StrunaLogFile","Log file for struna plugin", SMLogFileName);
-+   //****** VO: END SM plugin parameters
++   //****** VO: BEGIN Dynamo plugin parameters
++   opts.optionalB("main", "DynamoPlugin", "Plugin to use restraints from dynamo suite", &DYPluginActive, FALSE);
++   opts.require("DynamoPlugin", "DynamoConfigFile","Configuration file for dynamo plugin", DYConfigFileName);
++   opts.optional("DynamoPlugin", "DynamoLogFile","Log file for dynamo plugin", DYLogFileName);
++   //****** VO: END Dynamo plugin parameters
  
     //****** BEGIN tabulated energies section
     opts.optionalB("main", "tabulatedEnergies", "Do we get energies from a table?", &tabulatedEnergies, FALSE);
@@ -109,20 +109,20 @@
     
     //****** END SMD constraints changes 
 -
-+   //****** VO SM Plugin
-+   if (SMPluginActive){
-+    iout <<iINFO<<"STRUNA PLUGIN ACTIVE\n";
++   //****** VO Dynamo Plugin
++   if (DYPluginActive){
++    iout <<iINFO<<"DYNAMO PLUGIN ACTIVE\n";
 +   }
-+   //****** VO END SM Plugin
++   //****** VO END Dynamo Plugin
     if (TMDOn) {
       iout << iINFO << "TMD ACTIVE BETWEEN STEPS " << TMDFirstStep 
            << " and " << TMDLastStep << "\n";
 @@ -4577,7 +4586,7 @@
  
     globalForcesOn = ( tclForcesOn || freeEnergyOn || miscForcesOn ||
-                       (IMDon && ! IMDignore) || SMDOn || TMDOn || 
+                       (IMDon && ! (IMDignore || IMDignoreForces)) || SMDOn || TMDOn || 
 -                      colvarsOn || symmetryOn || qmForcesOn );
-+                      colvarsOn || symmetryOn || qmForcesOn || SMPluginActive );
++                      colvarsOn || symmetryOn || qmForcesOn || DYPluginActive );
  
  
     if (tclForcesOn)
@@ -133,16 +133,16 @@
          int SMDOutputFreq;              //  Output frequency for SMD constr.
          //****** END SMD constraints changes 
 +
-+        //****** VO BEGIN SM Plugin changes
-+        Bool SMPluginActive;
-+        char SMConfigFileName[128];
-+        char SMLogFileName[128];
-+        //****** VO END SM Plugin changes
++        //****** VO BEGIN Dynamo Plugin changes
++        Bool DYPluginActive;
++        char DYConfigFileName[128];
++        char DYLogFileName[128];
++        //****** VO END Dynamo Plugin changes
          
    //****** BEGIN tabulated energy section
    Bool tabulatedEnergies;
 --- /dev/null	2018-04-05 13:57:26.716306436 -0400
-+++ src/GlobalMasterSM.C	2018-04-25 17:04:39.384308456 -0400
++++ src/GlobalMasterDY.C	2018-04-25 17:04:39.384308456 -0400
 @@ -0,0 +1,237 @@
 +#ifndef __BINDC
 +#define __BINDC
@@ -157,44 +157,44 @@
 +#include "SimParameters.h"
 +//#include "ReductionMgr.h"
 +#include <stdbool.h>
-+#include "GlobalMasterSM.h"
++#include "GlobalMasterDY.h"
 +//#define DEBUGM
 +#include "Debug.h"
 +
-+GlobalMasterSM::GlobalMasterSM() {
++GlobalMasterDY::GlobalMasterDY() {
 +   __CCHAR *inputfile = NULL, *logfile = NULL;
 +   __CINT ilen=0, llen=0, ierr=0;
-+   const __CCHAR* deflogfile = "struna.log" ;
++   const __CCHAR* deflogfile = "dynamo.log" ;
 +   params = Node::Object()->simParameters;
 +   molecule=Node::Object()->molecule ;
 +   __CINT natoms=molecule->numAtoms;
 +//
 +   initialized=0;
 +   sm_energy=0.;
-+   CkPrintf("# STRUNA PLUGIN: Initializing ...\n");
++   CkPrintf("# DYNAMO PLUGIN: Initializing ...\n");
 +//
 +// find input file
 +//
-+   inputfile = params->SMConfigFileName ;
++   inputfile = params->DYConfigFileName ;
 +   if (!inputfile) {
-+    CkPrintf("# STRUNA PLUGIN: input file not specified (syntax : StrunaConfigFile <inputfile>)\n");
++    CkPrintf("# DYNAMO PLUGIN: input file not specified (syntax : DynamoConfigFile <inputfile>)\n");
 +    CkExit();
 +   } else {
-+    CkPrintf("# STRUNA PLUGIN: input file is '"); 
++    CkPrintf("# DYNAMO PLUGIN: input file is '"); 
 +    CkPrintf(inputfile);
 +    CkPrintf("'\n");
 +   }
 +//
 +// find log file
 +//
-+   logfile = params->SMLogFileName ;
++   logfile = params->DYLogFileName ;
 +   if (!logfile) {
-+    CkPrintf("# STRUNA PLUGIN: log file not specified (syntax : StrunaLogFile <logfile>), will write to '");
++    CkPrintf("# DYNAMO PLUGIN: log file not specified (syntax : DynamoLogFile <logfile>), will write to '");
 +    logfile=(__CCHAR *) deflogfile;
 +    CkPrintf(logfile);
 +    CkPrintf("'\n");
 +   } else {
-+     CkPrintf("# STRUNA PLUGIN: log file is '"); 
++     CkPrintf("# DYNAMO PLUGIN: log file is '"); 
 +     CkPrintf(logfile);
 +     CkPrintf("'\n");
 +   }
@@ -212,11 +212,11 @@
 +   ilen=strlen(inputfile);
 +   llen=strlen(logfile);
 +// PBC
-+//   CkPrintf("# STRUNA PLUGIN: checking if simulation uses periodic boundary conditions\n"); 
++//   CkPrintf("# DYNAMO PLUGIN: checking if simulation uses periodic boundary conditions\n"); 
 +   Lattice &lattice = params->lattice;
 +   usesPeriodic = ( lattice.a_p() && lattice.b_p() && lattice.c_p() ) ;
 +   if (usesPeriodic) {
-+    CkPrintf("# STRUNA PLUGIN: Simulation uses periodic boundary conditions\n"); 
++    CkPrintf("# DYNAMO PLUGIN: Simulation uses periodic boundary conditions\n"); 
 +    Vector const a = lattice.a() ;
 +    Vector const b = lattice.b() ;
 +    Vector const c = lattice.c() ;
@@ -236,8 +236,8 @@
 +   } else {
 +    for ( int i=0 ; i < 12 ; i++ ) { box[i]=0.0 ; }
 +   }
-+// initialize struna
-+   ierr=sm_init_plugin(natoms, mass, charge, inputfile, ilen, logfile, llen, &atomlist, usesPeriodic, box);
++// initialize dynamo
++   ierr=master_init_plugin(natoms, mass, charge, inputfile, ilen, logfile, llen, &atomlist, usesPeriodic, box);
 +// mass and charge no longer needed
 +   free(mass);
 +   free(charge);
@@ -246,12 +246,12 @@
 +   if (atomlist!=NULL) { // atom indices provided; add them
 +    // first element gives list size:
 +    for ( int l = 0 ; l++ < atomlist[0]  ; ) { // first value in atomlist is the list length
-+     atomid = atomlist[l] - 1 ; // subtract one because atom indices are offset from 0 in NAMD, but from 1 in the SM plugin
++     atomid = atomlist[l] - 1 ; // subtract one because atom indices are offset from 0 in NAMD, but from 1 in the DY plugin
 +     if ( atomid >= 0 && atomid < molecule->numAtoms ) {
 +      DebugM(1,"Adding atom "<<atomid<<"\n");
 +      modifyRequestedAtoms().add(atomid); // note: atomlist will be deallocated in Fortran
 +     } else {
-+      CkPrintf("# STRUNA PLUGIN: Atom ID ");
++      CkPrintf("# DYNAMO PLUGIN: Atom ID ");
 +      CkPrintf("%d", atomid);
 +      CkPrintf("is out of range\n");
 +      CkExit();
@@ -268,16 +268,16 @@
 +//
 +//   iteration = params->firstTimestep; // not sure we need to keep a local counter
 +//   reduction = ReductionMgr::Object()->willSubmit(REDUCTIONS_BASIC);
-+} // GlobalMasterSM
++} // GlobalMasterDY
 +
 +
-+GlobalMasterSM::~GlobalMasterSM() {
++GlobalMasterDY::~GlobalMasterDY() {
 + params=NULL;
 + destroy();
-+} // ~GlobalMasterSM
++} // ~GlobalMasterDY
 +
 +
-+void GlobalMasterSM::calculate() {
++void GlobalMasterDY::calculate() {
 + // load coordinates
 +  int atomid;
 +  AtomIDList::const_iterator a_i = getAtomIdBegin();
@@ -326,10 +326,10 @@
 +  //
 +  if (atomlist!=NULL) { // atom indices already provided; compute and add forces
 +    //call sm
-+    __CINT ierr=sm_dyna_plugin(step, r, fr, NULL, 0, &sm_energy, &atomlist, usesPeriodic, box);
++    __CINT ierr=master_dyna_plugin(step, r, fr, NULL, 0, &sm_energy, &atomlist, usesPeriodic, box);
 +    // first element gives list size:
 +   for ( int l = 0 ; l++ < atomlist[0]  ; ) { // first value in atomlist is the list length
-+     atomid = atomlist[l] - 1; // subtract one because atom indices are offset from 0 in NAMD, but from 1 in the SM plugin
++     atomid = atomlist[l] - 1; // subtract one because atom indices are offset from 0 in NAMD, but from 1 in the DY plugin
 +     modifyForcedAtoms().add(atomid);
 +     atomid*=3 ; // index into force array
 +     p.x=fr[atomid++];
@@ -340,13 +340,13 @@
 +   } // for
 +  } else { // atomlist is NULL, but we expect it to be populated by the plugin at the first dynamics step
 +    //call sm
-+    __CINT ierr=sm_dyna_plugin(step, r, fr, NULL, 0, &sm_energy, &atomlist, usesPeriodic, box);
++    __CINT ierr=master_dyna_plugin(step, r, fr, NULL, 0, &sm_energy, &atomlist, usesPeriodic, box);
 +    //
 +    if (atomlist!=NULL) { // atom indices provided; add them
 +     modifyRequestedAtoms().resize(0);
 +    // first element gives list size:
 +     for ( int l = 0 ; l++ < atomlist[0]  ; ) { // first value in atomlist is the list length
-+      atomid = atomlist[l] - 1 ; // subtract one because atom indices are offset from 0 in NAMD, but from 1 in the SM plugin
++      atomid = atomlist[l] - 1 ; // subtract one because atom indices are offset from 0 in NAMD, but from 1 in the DY plugin
 +      if ( atomid >= 0 && atomid < molecule->numAtoms ) {
 +       DebugM(1,"Adding atom "<<atomid<<"\n");
 +       modifyRequestedAtoms().add(atomid); // note: atomlist will be deallocated in Fortran
@@ -359,14 +359,14 @@
 +       DebugM(1,"Adding force "<< p << " to atom "<<atomid<<"\n");
 +       modifyAppliedForces().add(p);
 +      } else {
-+       CkPrintf("# STRUNA PLUGIN: Atom ID ");
++       CkPrintf("# DYNAMO PLUGIN: Atom ID ");
 +       CkPrintf("%d", atomid);
 +       CkPrintf("is out of range\n");
 +       CkExit();
 +      } // atomid valid
 +     } // over list
 +   } else { // atom list still undefined
-+    CkPrintf("# STRUNA PLUGIN: No restraint atoms found (nothing to do)\n");
++    CkPrintf("# DYNAMO PLUGIN: No restraint atoms found (nothing to do)\n");
 +    CkExit(); 
 +   } // atomlist
 +  }
@@ -374,27 +374,27 @@
 +  if (step>params->N) destroy(); // this is problematic for multiple runs per script, e.g. minimize, then run MD
 +} // calculate
 +
-+void GlobalMasterSM::destroy(){
-+  CkPrintf("# STRUNA PLUGIN: Finalizing...\n");
-+  sm_done_plugin();
++void GlobalMasterDY::destroy(){
++  CkPrintf("# DYNAMO PLUGIN: Finalizing...\n");
++  master_done_plugin();
 +// Keep in case there are multiple runs
 +//  if (r) free(r);
 +//  if (fr) free(fr);
 +}
 --- /dev/null	2018-04-05 13:57:26.716306436 -0400
-+++ src/GlobalMasterSM.h	2018-04-25 17:19:21.638272676 -0400
++++ src/GlobalMasterDY.h	2018-04-25 17:19:21.638272676 -0400
 @@ -0,0 +1,37 @@
 +/* C prototypes */
 +// C, not Fortran!
-+extern "C" int sm_init_plugin(const int, const double *, const double *, const char * , const int, const char *, const int, int **, const _Bool, const double *);
-+extern "C" int sm_dyna_plugin( const long int, const double *, double *, float *, const _Bool, double *, int **, const _Bool, const double * );
-+extern "C" void sm_done_plugin();
++extern "C" int master_init_plugin(const int, const double *, const double *, const char * , const int, const char *, const int, int **, const _Bool, const double *);
++extern "C" int master_dyna_plugin( const long int, const double *, double *, float *, const _Bool, double *, int **, const _Bool, const double * );
++extern "C" void master_done_plugin();
 +class Molecule;
 +class SubmitReduction;
-+class GlobalMasterSM : public GlobalMaster {
++class GlobalMasterDY : public GlobalMaster {
 + public:
-+  GlobalMasterSM();
-+  ~GlobalMasterSM();
++  GlobalMasterDY();
++  ~GlobalMasterDY();
 + private:
 +  Bool initialized;
 +  void calculate();

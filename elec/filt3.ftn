@@ -1,0 +1,158 @@
+
+subroutine filt3()
+ __DEP_CONST
+ use vars
+ __IMPNONE
+
+ __IPAR(nimg,1)
+ float :: support, support2
+ float :: oos3
+#ifdef _NORMALIZE_FILTER
+ float :: temp(nx,ny,nz)
+ float :: fnorm ! discrete filter norm
+ float :: f ! instantaneous filter value
+#endif
+ float xmin, xmax, ymin, ymax, zmin, zmax
+ int imin, imax, jmin, jmax, kmin, kmax
+ int ii, jj, kk, im, jm, km
+ int img, jmg, kmg
+ int i, j
+ float r
+ float dx2, dy2, dz2, odx, ody, odz
+ float dxq, dyq, dzq, pre
+
+#if _FILTER==_GAUSS
+ support = _GAUSS_SUPPORT*spt
+#else
+ support = spt
+#endif
+ support2=support**2
+ oos3=oos**3
+!
+ odx=1d0/dxx
+ ody=1d0/dyy
+ odz=1d0/dzz
+!
+ rho=0d0 ! initialize
+ elsr=0d0
+ grad_elsr=0d0
+!
+#ifdef _NORMALIZE_FILTER
+ temp=0d0
+#endif
+!
+ do i=1,npt ! charges
+  if (.not.quiet) __OUT(' Gridding charge #', i,' of ', npt);
+! determine limit indices on the (periodic) grid
+  xmin = x(i) - support
+  xmax = x(i) + support
+!
+  imin = INT( (xmin-x0)*odx ) + 1 ! could be negative (i.e. off-the-grid), but the indices are consistent with the 1-based offset
+  imax = INT( (xmax-x0)*odx ) + 2
+!
+  ymin = y(i) - support
+  ymax = y(i) + support
+!
+  jmin = INT( (ymin-y0)*ody ) + 1
+  jmax = INT( (ymax-y0)*ody ) + 2
+!
+  zmin = z(i) - support
+  zmax = z(i) + support
+!
+  kmin = INT( (zmin-z0)*odz ) + 1
+  kmax = INT( (zmax-z0)*odz ) + 2
+!
+#ifdef _NORMALIZE_FILTER
+  fnorm=0d0
+#endif
+! spread charge into temporary array and compute normalization
+  do ii=imin,imax
+   dx2=(dxx*(ii-1) - (x(i) - x0) )**2; ! actual x-distance between gridpoint and charge
+   im=modulo(ii-1,nx-1)+1 ! x-grid index in the primary cell
+   do jj=jmin,jmax
+    dy2=dx2+(dyy*(jj-1) - (y(i) - y0) )**2;
+    if (dy2>support2) cycle
+    jm=modulo(jj-1,ny-1)+1
+    do kk=kmin,kmax
+     dz2=dy2+(dzz*(kk-1) - (z(i) - z0) )**2;
+     if (dz2>support2) cycle
+     km=modulo(kk-1,nz-1)+1
+     r=sqrt(dz2)*oos; ! normalize by support
+#ifdef __NORMALIZE_FILTER
+     f=filter(r);
+     temp(im,jm,km) = q(i) * f
+     __INCR(fnorm,f)
+#else
+     __INCR(rho(im,jm,km), q(i) * filter(r))
+#endif
+    enddo !kk
+   enddo !jj
+  enddo !ii
+!
+#ifdef _NORMALIZE_FILTER
+  if (fnorm>kzero) then ; fnorm=1d0/(dxx*dyy*dzz*fnorm*oos3) ; else ; fnorm=1d0 ; endif ! remember that the filter f is nondimensional; must be scaled by 1/s^3
+  do ii=imin,imax
+   im=modulo(ii-1,nx-1)+1 ! x-grid index in the primary cell
+   do jj=jmin,jmax
+    jm=modulo(jj-1,ny-1)+1
+    do kk=kmin,kmax
+     km=modulo(kk-1,nz-1)+1
+     __INCR(rho(im,jm,km), temp(im,jm,km) * fnorm)
+     temp(im,jm,km)=0d0
+    enddo !kk
+   enddo !jj
+  enddo !ii
+#endif
+!
+! also need to compute short-range potential energy at grid points
+! do this in a primitive O(n^2) loop
+!if (.false.) then
+  do j=i+1,npt
+   do img=-nimg,nimg
+    dxq = (x(i)-x(j)) + Lx*img
+    if (abs(dxq)>support) cycle
+    do jmg=-nimg,nimg
+     dyq = (y(i)-y(j)) + Ly*jmg
+     if (abs(dyq)>support) cycle
+     dy2=dxq**2 + dyq**2
+     if (dy2>support2) cycle
+     do kmg=-nimg,nimg
+      dzq = (z(i)-z(j)) + Lz*kmg
+      if (abs(dzq)>support) cycle
+      dz2=dy2 + dzq**2
+      if (dz2 > support2 .or. dz2 < kzero) cycle
+      r=sqrt(dz2)*oos
+! short-range potential
+      __INCR( elsr , q(i) * q(j) * fshort(r) ) ; ! might have contributions from multiple images ; need to x oos, because r has been scaled above
+
+! short-range potential gradients
+      pre = q(i) * q(j) * fshortp(r) ; ! double check normalization by support : need to x oos^3
+!
+      __INCR(elsr_dx(i) , pre*dxq)
+      __INCR(elsr_dy(i) , pre*dyq)
+      __INCR(elsr_dz(i) , pre*dzq)
+! reflect for other atom in pair
+      __INCR(elsr_dx(j) , -pre*dxq)
+      __INCR(elsr_dy(j) , -pre*dyq)
+      __INCR(elsr_dz(j) , -pre*dzq)
+     enddo !kmg
+    enddo !jmg
+   enddo !img
+  enddo ! j/npt
+!endif
+!
+ enddo ! i/npt
+
+! normalization
+ __SCALE(rho, oos3)
+! apply periodic BC to rho :
+ rho(nx,:,:)=rho(1,:,:)
+ rho(:,ny,:)=rho(:,1,:)
+ rho(:,:,nz)=rho(:,:,1)
+!
+ __SCALE(elsr, oos/(fourpi*eps)) ! no division by 2 because loop does not double count
+ __SCALE(elsr_dx, oos3/(fourpi*eps)) ! these normalizations are needed because the filter is normalized by support, but units must be physical
+ __SCALE(elsr_dy, oos3/(fourpi*eps))
+ __SCALE(elsr_dz, oos3/(fourpi*eps))
+
+end subroutine filt3

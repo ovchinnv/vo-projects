@@ -6,9 +6,11 @@
 #include "NamdTypes.h"
 #include "Node.h"
 #include "Molecule.h"
+#include "Lattice.h"
 #include "GlobalMaster.h"
 #include "SimParameters.h"
 //#include "ReductionMgr.h"
+#include <stdbool.h>
 #include "GlobalMasterSM.h"
 //#define DEBUGM
 #include "Debug.h"
@@ -63,7 +65,33 @@ GlobalMasterSM::GlobalMasterSM() {
 //
    ilen=strlen(inputfile);
    llen=strlen(logfile);
-   ierr=sm_init_from_namd(natoms, mass, charge, inputfile, ilen, logfile, llen, &atomlist) ;
+// PBC
+//   CkPrintf("# STRUNA PLUGIN: checking if simulation uses periodic boundary conditions\n"); 
+   Lattice &lattice = params->lattice;
+   usesPeriodic = ( lattice.a_p() && lattice.b_p() && lattice.c_p() ) ;
+   if (usesPeriodic) {
+    CkPrintf("# STRUNA PLUGIN: Simulation uses periodic boundary conditions\n"); 
+    Vector const a = lattice.a() ;
+    Vector const b = lattice.b() ;
+    Vector const c = lattice.c() ;
+    Position const o = lattice.origin() ;
+    box[0]=a.x;
+    box[1]=a.y;
+    box[2]=a.z;
+    box[3]=b.x;
+    box[4]=b.y;
+    box[5]=b.z;
+    box[6]=c.x;
+    box[7]=c.y;
+    box[8]=c.z;
+    box[9]=o.x;
+    box[10]=o.y;
+    box[11]=o.z;
+   } else {
+    for ( int i=0 ; i < 12 ; i++ ) { box[i]=0.0 ; }
+   }
+// initialize struna
+   ierr=sm_init_plugin(natoms, mass, charge, inputfile, ilen, logfile, llen, &atomlist, usesPeriodic, box);
 // mass and charge no longer needed
    free(mass);
    free(charge);
@@ -92,7 +120,7 @@ GlobalMasterSM::GlobalMasterSM() {
    r  = (__CFLOAT *) calloc(3*molecule->numAtoms, sizeof(__CFLOAT));
    fr = (__CFLOAT *) calloc(3*molecule->numAtoms, sizeof(__CFLOAT));
 //
-   iteration = params->firstTimestep;
+//   iteration = params->firstTimestep; // not sure we need to keep a local counter
 //   reduction = ReductionMgr::Object()->willSubmit(REDUCTIONS_BASIC);
 } // GlobalMasterSM
 
@@ -128,13 +156,31 @@ void GlobalMasterSM::calculate() {
    CkPrintf("%15.10f %15.10f\n",r[i],fr[i]);
   }
 #endif
+  if (usesPeriodic) {
+   Vector const a = lattice->a() ;
+   Vector const b = lattice->b() ;
+   Vector const c = lattice->c() ;
+   Position const o = lattice->origin() ;
+   box[0]=a.x;
+   box[1]=a.y;
+   box[2]=a.z;
+   box[3]=b.x;
+   box[4]=b.y;
+   box[5]=b.z;
+   box[6]=c.x;
+   box[7]=c.y;
+   box[8]=c.z;
+   box[9]=o.x;
+   box[10]=o.y;
+   box[11]=o.z;
+  }
   // apply forces
   modifyAppliedForces().resize(0);
   modifyForcedAtoms().resize(0);
   //
   if (atomlist!=NULL) { // atom indices already provided; compute and add forces
     //call sm
-    __CINT ierr=sm_dyna_from_namd(iteration++, r, fr, &sm_energy, &atomlist);
+    __CINT ierr=sm_dyna_plugin(step, r, fr, NULL, 0, &sm_energy, &atomlist, usesPeriodic, box);
     // first element gives list size:
    for ( int l = 0 ; l++ < atomlist[0]  ; ) { // first value in atomlist is the list length
      atomid = atomlist[l] - 1; // subtract one because atom indices are offset from 0 in NAMD, but from 1 in the SM plugin
@@ -148,7 +194,7 @@ void GlobalMasterSM::calculate() {
    } // for
   } else { // atomlist is NULL, but we expect it to be populated by the plugin at the first dynamics step
     //call sm
-    __CINT ierr=sm_dyna_from_namd(iteration++, r, fr, &sm_energy, &atomlist);
+    __CINT ierr=sm_dyna_plugin(step, r, fr, NULL, 0, &sm_energy, &atomlist, usesPeriodic, box);
     //
     if (atomlist!=NULL) { // atom indices provided; add them
      modifyRequestedAtoms().resize(0);
@@ -179,12 +225,12 @@ void GlobalMasterSM::calculate() {
    } // atomlist
   }
   // destructor is not always called, so finalize after run length exceeded
-  if (iteration>params->N) destroy(); // this is problematic for multiple runs per script, e.g. minimize, then run MD
+  if (step>params->N) destroy(); // this is problematic for multiple runs per script, e.g. minimize, then run MD
 } // calculate
 
 void GlobalMasterSM::destroy(){
   CkPrintf("# STRUNA PLUGIN: Finalizing...\n");
-  sm_done_from_namd();
+  sm_done_plugin();
 // Keep in case there are multiple runs
 //  if (r) free(r);
 //  if (fr) free(fr);

@@ -84,7 +84,8 @@
 #include "GlobalMasterIMD.h"
 #include "GlobalMasterTcl.h"
 #include "GlobalMasterSMD.h"
-#include "GlobalMasterSM.h" // VO Struna Plugin
+#include <stdbool.h> // VO Struna
+#include "GlobalMasterSM.h" // VO Struna
 #include "GlobalMasterTMD.h"
 #include "GlobalMasterSymmetry.h"
 #include "GlobalMasterEasy.h"
