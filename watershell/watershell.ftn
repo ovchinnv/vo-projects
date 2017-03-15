@@ -493,7 +493,9 @@ module _N
 #ifdef __RMFT
 ! compute com if removing torque
  if (remove_net_torque) then 
+#ifdef __TORQUE_COM_SURFACE
   r_com = oonsurface * sum(r_surf,2)
+#endif
   if (qrestart) then ! read average force
    line=getval_nocase('average_net_force',__STRING(__RESTARTCTX))
    if (len_trim(line).gt.0) then
@@ -531,8 +533,7 @@ module _N
  _W '#WATERSHELL RESTART FILE'
  _W __STRING(__RESTARTCTX)//' {'
  _W 'iteration=',iteration
- if (qminimum_distance)&
- _W 'minimum_distance=on # use the simpler minimum distance to solvent algorithm'
+ if (qminimum_distance) _W 'minimum_distance=on # use the simpler minimum distance to solvent algorithm'
 ! _W 'surface_contour_value=',surface_contour_value, ' # value for which density isosurface is computed'
  _W 'surface_distance=',surface_distance, ' # distance of solvent surface from solute'
  _W 'surface_force_constant=',surface_force_constant, ' # surface force constant'
@@ -596,25 +597,33 @@ module _N
  float :: distance_from_solute, distance_from_solute2, pre, d0
  float :: surface_energy, surface_force, density_beyond_contour
 #ifdef __RMFT
+! to update coefficients for computing torque matrix ; doing this way to separate com contribution :
+#define __UPDATE_TMAT_C \
+  __INCR(__U(ir1),ir(1));\
+  __INCR(__U(ir2),ir(2));\
+  __INCR(__U(ir3),ir(3));\
+  __INCR(__U(ir1s),ir(1)**2);\
+  __INCR(__U(ir2s),ir(2)**2);\
+  __INCR(__U(ir3s),ir(3)**2);\
+  __INCR(__U(ir12),ir(1)*ir(2));\
+  __INCR(__U(ir13),ir(1)*ir(3));\
+  __INCR(__U(ir23),ir(2)*ir(3));
  float, dimension(3) :: ir, iforce, itorque ! inst position, force and torque corresponding to an atom
-#if defined(__SIMPLE_NET_FORCE_SOLVENT) || defined(__SIMPLE_NET_FORCE_SURFACE)
+ float :: ir1,ir2,ir3,ir1s,ir2s,ir3s,ir12,ir13,ir23, oontorque
  float, dimension(3) :: ir_sum
-#endif
  float, dimension(3) :: oforce ! existing force
  float, dimension(6,6) :: A ! matrix for torque removal
  float, dimension(6) :: rhs ! vector for net force and torque removal
 #endif
 #ifdef __OMP
+#define __REDUCE(_W) __INCR(_W,__U(_W)) ! thread reduction
  float :: __U(surface_energy)
  float :: __U(surface_force)
  float :: __U(density_beyond_contour)
  int :: __U(nsolvent_outside)
 #ifdef __RMFT
  float, dimension(3) :: __U(net_force), __U(net_torque), __U(max_force) ! thread locals
-#ifdef __SIMPLE_NET_FORCE_SOLVENT
- float, dimension(3) :: __U(ir_sum)
-#endif
- float, dimension(6,6) :: __U(A)
+ float :: __U(ir1),__U(ir2),__U(ir3),__U(ir1s),__U(ir2s),__U(ir3s),__U(ir12),__U(ir13),__U(ir23)
  float, dimension(6) :: __U(rhs)
 #endif
 #endif
@@ -632,7 +641,7 @@ module _N
 !
 #ifdef __RMFT
 #ifdef __SIMPLE_NET_FORCE_SURFACE
- if (remove_net_torque) r_com_inst = oonsurface * sum(r(:,isurface_atoms),2) ; ! need instant com for SIMPLE_NET_FORCE_SURFACE
+ if (remove_net_torque) r_com_inst = oonsurface * sum(r(:,isurface_atoms),2) ; ! need instant com for SIMPLE_NET_FORCE_SURFACE, b/c forces applied to prot. atoms
 #endif
 #endif
 !============================================= update reference coordinates
@@ -640,6 +649,7 @@ module _N
   if __CHKUPDATE(structure_update_freq) then
    r_surf = structure_update_memory * r_surf + (one - structure_update_memory) * r(:,isurface_atoms)
 #ifdef __RMFT
+#ifdef __TORQUE_COM_SURFACE
 ! recompute COM if subtracting torque
    if (remove_net_torque) then 
 #ifdef __SIMPLE_NET_FORCE_SURFACE
@@ -650,20 +660,16 @@ module _N
 #endif
    endif ! remove_net_torque
 #endif
+#endif
   endif
  endif
-
-#ifdef __DEBUG
- write(0,*) 'COM ERROR:', r_com - oonsurface*sum(r_surf,2)
-#endif
-
+!
 !============================================= compute contour value/distance and gradient at solvent coordinates
 !
  surface_energy=zero
  distance_from_solute=zero
  distance_from_solute2=zero ! for computing second moment
 !
-!return ! aa
 !========================== compute contour value if needed
 ! if surface distance value is zero, estimate a reasonable value from current coordinates
  if ( abs(surface_distance) .lt. __ERRTOL) then
@@ -756,12 +762,10 @@ module _N
  nsolvent_outside=izero
 #ifdef __RMFT
  if (remove_net_torque) then
+  ir1=zero ; ir2=zero; ir3=zero; ir1s=zero ; ir2s=zero ; ir3s=zero ; ir12=zero ; ir23=zero ; ir13=zero ;
   net_force=zero
   net_torque=zero
   A=zero
-#ifdef __SIMPLE_NET_FORCE_SOLVENT
-  ir_sum=zero
-#endif
  endif
 #endif
 !
@@ -773,17 +777,13 @@ module _N
 !$omp shared (dist_solv, ddist_solv, surface_distance, surface_force_constant, &
 #ifdef __RMFT
 !$omp remove_net_torque, net_force, net_torque, A, rhs, qforced_solv, r_com, &
-#ifdef __SIMPLE_NET_FORCE_SOLVENT
-!$omp ir_sum, &
-#endif
+!$omp ir1,ir2,ir3,ir1s,ir2s,ir3s,ir12,ir13,ir23, &
 #endif
 !$omp nsolvent, nsurface, nsolvent_outside, surface_force, surface_energy, isolvent_atoms, isurface_atoms, r_surf, r_solv, fr ) &
 !$omp private (i, d0, pre, __U(nsolvent_outside), __U(surface_energy), __U(surface_force)  &
 #ifdef __RMFT
-!$omp ,ir, iforce, __U(net_force), __U(net_torque), __U(A) &
-#ifdef __SIMPLE_NET_FORCE_SOLVENT
-!$omp ,__U(ir_sum) &
-#endif
+!$omp ,ir, iforce, __U(net_force), __U(net_torque) &
+!$omp ,__U(ir1),__U(ir2),__U(ir3),__U(ir1s),__U(ir2s),__U(ir3s),__U(ir12),__U(ir13),__U(ir23) &
 #endif
 !$omp )
  __U(surface_energy)=zero
@@ -794,10 +794,7 @@ module _N
   if (remove_net_torque) then
    __U(net_force)=zero
    __U(net_torque)=zero
-   __U(A)=zero
-#ifdef __SIMPLE_NET_FORCE_SOLVENT
-   __U(ir_sum)=zero
-#endif
+   __U(ir1)=zero;__U(ir2)=zero;__U(ir3)=zero;__U(ir1s)=zero;__U(ir2s)=zero;__U(ir3s)=zero;__U(ir12)=zero;__U(ir13)=zero;__U(ir23)=zero
   endif
 #endif
 #endif
@@ -806,69 +803,38 @@ module _N
 #endif
  do i=1, nsolvent
   if (qforced_solv(i)) then
-!  if (d0.lt.surface_distance) then
    d0=dist_solv(i)
    __INC(__U(nsolvent_outside))
    pre = ( d0 - surface_distance ) ;
 !
-! add atomic force
-!   fr(:,isolvent_atoms(i)) = surface_force_constant * pre / d0 * ddist_solv(:,i) ! re sign : note that surface_distance is negative
-!
 #ifdef __RMFT
    if (remove_net_torque) then ! for now, here; optimize later, if needed
-    ir=r_solv(:,i)-r_com ;
-#ifdef __SIMPLE_NET_FORCE_SOLVENT
-#ifdef __TORQUE_FROM_ALL_SOLVENT
-! here, we will simply subtract a constant force for each solute atom (possibly including or excluding outside/shell atoms), keep track of COG and 
-! correct torque later, when the total force and COG are known
-    __INCR(__U(ir_sum)(1), ir(1))
-    __INCR(__U(ir_sum)(2), ir(2))
-    __INCR(__U(ir_sum)(3), ir(3))
-#endif
+    ir=r_solv(:,i); ! removed r_com subtraction for extra flexibility ; to be accounted for later
+
+#ifdef __TORQUE_FROM_FORCED_SOLVENT
+    __UPDATE_TMAT_C
 #endif
     iforce=surface_force_constant * pre / d0 * ddist_solv(:,i) ! re sign : note that surface_distance is negative
-!    __INCR(__U(net_force),iforce)     ! comment these out not to remove net force
+! set force
+    __INCR(fr(1,isolvent_atoms(i)),iforce(1)) ;
+    __INCR(fr(2,isolvent_atoms(i)),iforce(2)) ;
+    __INCR(fr(3,isolvent_atoms(i)),iforce(3)) ;
+! update net force & torque (torque missing COM contribution, to be added in later)
     __INCR(__U(net_force)(1),iforce(1))
     __INCR(__U(net_force)(2),iforce(2))
     __INCR(__U(net_force)(3),iforce(3))
-    __INCR(__U(net_torque)(1), ir(2) * iforce(3) - ir(3) * iforce(2)) ! similarly : comment out not to remove net torque
+    __INCR(__U(net_torque)(1), ir(2) * iforce(3) - ir(3) * iforce(2))
     __INCR(__U(net_torque)(2), ir(3) * iforce(1) - ir(1) * iforce(3))
     __INCR(__U(net_torque)(3), ir(1) * iforce(2) - ir(2) * iforce(1))
-#ifdef __TORQUE_FROM_ALL_SOLVENT
-! update matrix
-!     note : custom weights possible -- see rtmd code
-!     __INCR(__U(A)(1,1),1) ! skip here ; this is just the sum of weights (ones here; totaling nsolvent_atoms)
-     __INCR(__U(A)(5,1),  ir(3))
-     __INCR(__U(A)(6,1), -ir(2))
-     __INCR(__U(A)(6,2),  ir(1))
-     __INCR(__U(A)(4,4),  ir(2)**2 + ir(3)**2)
-     __INCR(__U(A)(5,4), -ir(1)*ir(2))
-     __INCR(__U(A)(6,4), -ir(1)*ir(3))
-     __INCR(__U(A)(5,5),  ir(1)**2 + ir(3)**2)
-     __INCR(__U(A)(6,5), -ir(2)*ir(3))
-     __INCR(__U(A)(6,6),  ir(1)**2 + ir(2)**2)
-#endif
-! set force
-!     fr(:,isolvent_atoms(i))=iforce ;
-!     __INCR(fr(:,isolvent_atoms(i)),iforce) ; ! slightly faster componentwise
-     __INCR(fr(1,isolvent_atoms(i)),iforce(1)) ;
-     __INCR(fr(2,isolvent_atoms(i)),iforce(2)) ;
-     __INCR(fr(3,isolvent_atoms(i)),iforce(3)) ;
 !
    else ! keep net force/torque
 #endif
-! set force
-!    fr(:,isolvent_atoms(i))=surface_force_constant * pre / d0 * ddist_solv(:,i) ! re sign : note that surface_distance is negative
-!    __INCR(fr(1,isolvent_atoms(i)),surface_force_constant * pre / d0 * ddist_solv(1,i))
-!    __INCR(fr(2,isolvent_atoms(i)),surface_force_constant * pre / d0 * ddist_solv(2,i))
-!    __INCR(fr(3,isolvent_atoms(i)),surface_force_constant * pre / d0 * ddist_solv(3,i))
-!
+! just set the force
     d0=surface_force_constant * pre / d0
     __INCR(fr(1,isolvent_atoms(i)), d0 * ddist_solv(1,i))
     __INCR(fr(2,isolvent_atoms(i)), d0 * ddist_solv(2,i))
     __INCR(fr(3,isolvent_atoms(i)), d0 * ddist_solv(3,i))
 !
-
 #ifdef __RMFT
    endif
 #endif
@@ -880,48 +846,21 @@ module _N
 
 #ifdef __RMFT
    if (remove_net_torque) then ! for now, here; optimize later
-    ir=r_solv(:,i)-r_com ;
-#ifdef __SIMPLE_NET_FORCE_SOLVENT
-! accumulate sum of positions to update torque below
-! this is because unforced solvent atoms are used to remove force
-    __INCR(__U(ir_sum)(1), ir(1))
-    __INCR(__U(ir_sum)(2), ir(2))
-    __INCR(__U(ir_sum)(3), ir(3))
+#ifdef __TORQUE_FROM_FREE_SOLVENT
+    ir=r_solv(:,i);
+    __UPDATE_TMAT_C
 #endif
-! update matrix
-! NOTE : by default (and in the original algorithm) the torque/force were removed from solvent atoms to which shell forces were not applied
-! which is why we are updating the torque matrix below
-!     note : custom weights possible -- see rtmd code
-!     __INCR(__U(A)(1,1),1) ! skip here ; this is just the sum of weights (ones here; totaling nsolvent_atoms)
-     __INCR(__U(A)(5,1),  ir(3))
-     __INCR(__U(A)(6,1), -ir(2))
-     __INCR(__U(A)(6,2),  ir(1))
-     __INCR(__U(A)(4,4),  ir(2)**2 + ir(3)**2)
-     __INCR(__U(A)(5,4), -ir(1)*ir(2))
-     __INCR(__U(A)(6,4), -ir(1)*ir(3))
-     __INCR(__U(A)(5,5),  ir(1)**2 + ir(3)**2)
-     __INCR(__U(A)(6,5), -ir(2)*ir(3))
-     __INCR(__U(A)(6,6),  ir(1)**2 + ir(2)**2)
-   endif
+   endif ! remove_net_torque
 #endif
-!   fr(:,isolvent_atoms(i))=zero ! make sure this is done elsewhere
-  endif
+!   fr(:,isolvent_atoms(i))=zero ! make sure this is done somewhere
+  endif ! distance check
  enddo ! nsolvent
 #ifdef __OMP
 !$omp end do
-#ifdef __RMFT
-! if doing here should use __U(A) instead
-! A(1,5)=__U(A)(5,1)
-! A(1,6)=__U(A)(6,1)
-! A(2,6)=__U(A)(6,2)
-! A(4,5)=__U(A)(5,4)
-! A(4,6)=__U(A)(6,4)
-! A(5,6)=__U(A)(6,5)
-#endif
 !$omp critical
- __INCR(nsolvent_outside, __U(nsolvent_outside))
- __INCR(surface_energy, __U(surface_energy))
- __INCR(surface_force, __U(surface_force))
+ __REDUCE(nsolvent_outside)
+ __REDUCE(surface_energy)
+ __REDUCE(surface_force)
 !$omp end critical
 #endif
 #ifdef __DEBUG
@@ -939,54 +878,72 @@ module _N
  if (remove_net_torque) then
 #ifdef __OMP
 !$omp critical
-  __INCR(net_force, __U(net_force))
-  __INCR(net_torque, __U(net_torque))
-#ifdef __SIMPLE_NET_FORCE_SOLVENT
-  if (remove_net_force) __INCR(ir_sum, __U(ir_sum))
-#endif
-  __INCR(A(5,1), __U(A)(5,1))
-  __INCR(A(6,1), __U(A)(6,1))
-  __INCR(A(6,2), __U(A)(6,2))
-  __INCR(A(5,4), __U(A)(5,4))
-  __INCR(A(6,4), __U(A)(6,4))
-  __INCR(A(6,5), __U(A)(6,5))
-  __INCR(A(4,4), __U(A)(4,4))
-  __INCR(A(5,5), __U(A)(5,5))
-  __INCR(A(6,6), __U(A)(6,6))
+  __REDUCE(net_force)
+  __REDUCE(net_torque)
+  __REDUCE(ir1)
+  __REDUCE(ir2)
+  __REDUCE(ir3)
+  __REDUCE(ir1s)
+  __REDUCE(ir2s)
+  __REDUCE(ir3s)
+  __REDUCE(ir12)
+  __REDUCE(ir13)
+  __REDUCE(ir23)
 !$omp end critical
 ! solve for force correction
-! complete (symmetric) matrix :
-! make sure all threads update the global matrix
-!$omp barrier ! this necessary to ensure that A and rhs are correct
+! construct matrix
+!$omp barrier ! this necessary to ensure that reduction is complete
 !$omp single
 #endif
+!
+#ifdef __TORQUE_FROM_ALL_SOLVENT
+#define ntorque_atoms nsolvent
+#elif defined(__TORQUE_FROM_FORCED_SOLVENT)
+#define ntorque_atoms nsolvent_outside
+#elif defined(__TORQUE_FROM_FREE_SOLVENT)
+#define ntorque_atoms (nsolvent-nsolvent_outside)
+#endif
+  oontorque=one/max(1,ntorque_atoms)
+!
+! == add contribution to torque from center-of-mass :
+!
+#ifdef __TORQUE_COM_SOLVENT
+  r_com(1)=ir1*oontorque
+  r_com(2)=ir2*oontorque
+  r_com(3)=ir3*oontorque
+#elif defined(__SIMPLE_NET_FORCE_SOLVENT)
+  ir_sum(1)=ir1*oontorque
+  ir_sum(2)=ir2*oontorque
+  ir_sum(3)=ir3*oontorque
+#endif
+  __INCR(net_torque(1),  -r_com(2) * net_force(3) + r_com(3) * net_force(2))
+  __INCR(net_torque(2),  -r_com(3) * net_force(1) + r_com(1) * net_force(3))
+  __INCR(net_torque(3),  -r_com(1) * net_force(2) + r_com(2) * net_force(1))
+!
 #ifdef __DEBUG
  write(0,*) 'Force and torque before(2): ', net_force, net_torque
 #endif
-!  A(1,1)=nsolvent_outside
-!  A(2,2)=nsolvent_outside
-!  A(3,3)=nsolvent_outside
-#ifdef __TORQUE_FROM_ALL_SOLVENT
-#define nsolvent_outside 0
-#endif
-  if (remove_net_force) then
 !
+  if (remove_net_force) then
    net_force_ave = net_force_ave_update_memo * net_force_ave + ( one - net_force_ave_update_memo) * net_force ;
 #ifdef __SIMPLE_NET_FORCE_SOLVENT
-   net_force = - net_force_ave/(max(1,nsolvent-nsolvent_outside))  ! split net_force between correction atoms
+   net_force = - net_force_ave*oontorque  ! split net_force between correction atoms
 ! correct torque the implicit addition of net force (which we have not done yet !), i.e.
 ! by subtracting the net_force as above, we add torque to the system, which we need to account for (i.e. subtract) ; hence below;
 ! note that the added force is uniform across correction atoms, and therefore the cross product can be factored out
-! second division (x d0) for getting ir_sum from sum !
-   __INCR(net_torque(1),  ir_sum(2) * net_force(3) - ir_sum(3) * net_force(2))
-   __INCR(net_torque(2),  ir_sum(3) * net_force(1) - ir_sum(1) * net_force(3))
-   __INCR(net_torque(3),  ir_sum(1) * net_force(2) - ir_sum(2) * net_force(1))
+! NOTE that when using __TORQUE_COM_SOLVENT, no new torque would be added, so skip for that case
+#ifdef __TORQUE_COM_SURFACE
+   __INCR(net_torque(1),  (ir_sum(2)-r_com(2)) * net_force(3) - (ir_sum(3)-r_com(3)) * net_force(2))
+   __INCR(net_torque(2),  (ir_sum(3)-r_com(3)) * net_force(1) - (ir_sum(1)-r_com(1)) * net_force(3))
+   __INCR(net_torque(3),  (ir_sum(1)-r_com(1)) * net_force(2) - (ir_sum(2)-r_com(2)) * net_force(1))
+#endif
    rhs(1:3)=0d0
 #elif defined(__SIMPLE_NET_FORCE_SURFACE)
    net_force = - net_force_ave  ! split net_force between correction atoms
 ! NOTE that r_com is the COM of the smoothed coordinates, but we apply correction forces to actual atoms
-! note that I am not dividing by nsurface ; this is because below we have r_com (vs. r_com_inst) which is an average
+! NOTE that I am not dividing by nsurface ; this is because below we have r_com (vs. r_com_inst) which is an average
    ir_sum=r_com_inst-r_com; ! r_com_inst is here because force is constant and can be taken out of sum, then coords add up to N x rcominst
+! NOTE that when using __TORQUE_COM_SURFACE, we are subtracting the r_com contribution just added above, replacing it with rcom_inst
    __INCR(net_torque(1),  ir_sum(2) * net_force(3) - ir_sum(3) * net_force(2))
    __INCR(net_torque(2),  ir_sum(3) * net_force(1) - ir_sum(1) * net_force(3))
    __INCR(net_torque(3),  ir_sum(1) * net_force(2) - ir_sum(2) * net_force(1))
@@ -1005,15 +962,40 @@ module _N
   endif ! remove_net_force
   rhs(4:6)=-net_torque;
 !
-  A(1,1)=nsolvent - nsolvent_outside
-  A(2,2)=nsolvent - nsolvent_outside
-  A(3,3)=nsolvent - nsolvent_outside
+! now, can compute A :
+! note that for the special case __TORQUE_COM_SOLVENT && __TORQUE_FROM_FORCED_SOLVENT, can sinvert matrix analytically
+! we may implement this case separately later ; difference in the computational efficiency is expected to be small,
+! but we may be able to expose singularities, or other ill-conditioning, in a more transparant way
 !
-#ifdef __TORQUE_FROM_ALL_SOLVENT
-#undef nsolvent_outside
-#endif
-!
-  A(1,5)=A(5,1)
+  A(1,1)=ntorque_atoms
+  A(2,2)=ntorque_atoms
+  A(3,3)=ntorque_atoms
+! modify irxx variables to include COM contribution
+! squared terms :
+  __INCR(ir1s, r_com(1)*(ntorque_atoms*r_com(1)-2d0*ir1))
+  __INCR(ir2s, r_com(2)*(ntorque_atoms*r_com(2)-2d0*ir2))
+  __INCR(ir3s, r_com(3)*(ntorque_atoms*r_com(3)-2d0*ir3))
+! cross-terms :
+  __INCR(ir12, ntorque_atoms*r_com(1)*r_com(2)-(r_com(1)*ir2 + r_com(2)*ir1))
+  __INCR(ir13, ntorque_atoms*r_com(1)*r_com(3)-(r_com(1)*ir3 + r_com(3)*ir1))
+  __INCR(ir23, ntorque_atoms*r_com(2)*r_com(3)-(r_com(2)*ir3 + r_com(3)*ir2))
+! linear terms :
+  __INCR(ir1,-ntorque_atoms*r_com(1))
+  __INCR(ir2,-ntorque_atoms*r_com(2))
+  __INCR(ir3,-ntorque_atoms*r_com(3))
+#undef ntorque_atoms
+! now, compute the matrix from these variables
+  A(5,1)= ir3
+  A(6,1)=-ir2
+  A(6,2)= ir1
+  A(4,4)= ir2s+ir3s
+  A(5,4)=-ir12
+  A(6,4)=-ir13
+  A(5,5)= ir1s+ir3s
+  A(6,5)=-ir23
+  A(6,6)= ir1s+ir2s
+! remaining entries from symmetry :
+  A(1,5)=A(5,1) ! symmetry of main matrix
   A(1,6)=A(6,1)
   A(2,6)=A(6,2)
   A(4,5)=A(5,4)
@@ -1044,9 +1026,8 @@ module _N
   endif
 #endif
   rhs=matmul(A, rhs);
-!  write(666,*)
 #ifdef __SIMPLE_NET_FORCE_SOLVENT
-! include implicit force mod in rhs (permissible -- see below)
+! include implicit force mod in rhs (note that in this case netforce have been sign-inverted above)
   if (remove_net_force) then
    __INCR(rhs(1),net_force(1))
    __INCR(rhs(2),net_force(2))
@@ -1060,9 +1041,14 @@ module _N
 !$omp do schedule(runtime)
 #endif
   do i=1,nsolvent
-!   if (qforced_solv(i)) then
 #ifndef __TORQUE_FROM_ALL_SOLVENT
-   if (.not.qforced_solv(i)) then
+   if (&
+#ifdef __TORQUE_FROM_FREE_SOLVENT
+&       .not.&
+#elif defined(__TORQUE_FROM_FORCED_SOLVENT)
+! nothing !
+#endif
+&      qforced_solv(i)) then
 #endif
     ir=r_solv(:,i)-r_com
     iforce(1) = rhs(1) + ir(3)*rhs(5) - ir(2)*rhs(6)
@@ -1086,15 +1072,17 @@ module _N
 !    if (dot_product(__U(net_force), __U(net_force)).gt.(dot_product(net_force, net_force))) net_force = __U(net_force)
 !$omp barrier
 #endif
-#endif
 !$omp single
+#endif
 ! print max force :
 !#ifdef __DEBUG
 !  write(777,*) 'Iteration: ', iteration
 !  write(777,'(7g12.5)') dot_product(rhs,rhs), rhs
 !  write(777,'(7g12.5)') dot_product(net_force,net_force), net_force
 !#endif
+#ifdef __OMP
 !$omp end single
+#endif
 ! check net force
 #if defined(__DEBUG) || defined(__SHOW_TORQUE)
 #ifdef __SHOW_TORQUE
@@ -1113,7 +1101,7 @@ module _N
 !$omp do schedule(runtime)
 #endif
   do i=1, nsolvent
-! compute torque and force after correction :
+! compute total torque and force after correction :
     iforce=fr(:,isolvent_atoms(i))
     ir=r_solv(:,i)-r_com
     __INCR(__U(net_force),iforce)
@@ -1137,8 +1125,8 @@ module _N
 #ifdef __OMP
 !$omp end do
 !$omp critical
-  __INCR(net_force, __U(net_force))
-  __INCR(net_torque, __U(net_torque))
+  __REDUCE(net_force)
+  __REDUCE(net_torque)
 !$omp end critical
 !$omp single
 #endif __OMP
@@ -1195,7 +1183,7 @@ module _N
    __INCR(__U(surface_force), pre) ! x k, below
    __INCR(__U(surface_energy), pre**2) ! x k/2, below
   else
-!   fr(:,isolvent_atoms(i))=zero ! make sure this gets done elsewhere
+!   fr(:,isolvent_atoms(i))=zero ! make sure this gets done somewhere
   endif
  enddo
 #ifdef __OMP
