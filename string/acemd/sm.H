@@ -12,7 +12,7 @@
 #else
 #define __EXTERN extern
 #endif
-__EXTERN __CINT sm_init_from_acemd (const __CINT, const __CFLOAT *,const  __CFLOAT *, \
+__EXTERN __CINT sm_init_from_acemd (const __CINT, const __CFLOAT *, const  __CFLOAT *, \
                                     const __CCHAR * , const __CINT, \
                                     const __CCHAR *, const __CINT, \
                                     __CINT **, \

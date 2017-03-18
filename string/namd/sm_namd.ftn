@@ -1,11 +1,13 @@
-#define __INITCTX SMCV_INIT
-#define __FIRSTCTX SMCV_FIRST
-#define __DONECTX SMCV_DONE
+#define __SMCVINITCTX SMCV_INIT
+#define __SMCVDONECTX SMCV_DONE
+#define __FTSMINITCTX FTSM_INIT
+#define __FTSMDONECTX FTSM_DONE
 !
 #define __CBIND use, intrinsic :: iso_c_binding
 !
 module sm_namd
- use minimal_system
+ use system, only : r, rcomp, m, q, bfactor, occupancy, fr, natom, system_PDB_initialized, system_minimal_initialized, system_PDB_init, system_done
+ use system, f=>fr
  __DEP_OUTPUT, set_minwarnlev, set_minerrorlev, set_minmessagelev
  __DEP_CONST
  __CBIND
@@ -14,10 +16,15 @@ module sm_namd
 
  private
 
+ int, parameter :: ftsm_flavor=1, smcv_flavor=2, unknown=-1
+ int, save :: sm_flavor = unknown
+ character(len=9) :: initctx='UNDEFINED', donectx='UNDEFINED'
+ bool, save :: defer_init_until_dyna=.false. ! if true, will call initializer after coordinates are available
  bool, save :: initialized=.false.
+ bool, save :: minimal_system=.true. ! a minimal system results when a PDB file is not provided
  int, save :: iteration
+ float, save :: sm_energy=zero
  int(__FCINT), save, allocatable, target :: atomlist(:)
- float, save, pointer, dimension(:) :: x, y, z, xc, yc, zc, fx, fy, fz
 !
  interface
   subroutine smcv_exec(ctx)
@@ -38,17 +45,25 @@ module sm_namd
  __DEP_PARSER
  __DEP_FILES
  __DEP_MPI
+! smcv modules :
  use cv_common, only : cv
+! ftsm modules :
+ use ftsm, only : ftsm_exec
+ use ftsm_var, only : iatom_a ! needed to compute atoms used by ftsm
+ use ftsm_util, only : ftsm_compute_atomlist
+!
  int(__FCINT) :: _ME
  type(c_ptr), intent(out) :: alist ! send back a list of atom indices
- type (c_ptr), value, intent(in) :: inputname, outputname
+ type(c_ptr), value, intent(in) :: inputname, outputname
  real(__FCFLOAT), intent(in), dimension(n) :: mass, charge
  int( __FCINT), intent(in), value :: n, il, ol
 !
  character(len=il), pointer :: ifname
  character(len=ol), pointer :: ofname
-
- int :: i, fid, ierr
+!
+ character(len=vartaglen) :: structurefile, fl_name
+!
+ int :: i, fid, ierr, l
  __IAM(_ME)
  _ME=1
 !
@@ -56,71 +71,128 @@ module sm_namd
  call c_f_pointer(outputname, ofname)
 !
  call output_init(ofname)
+!==================================================
+! open input file
+ fid=-1
+ call files_open(fid, ifname, 'FORMATTED', 'READ')
+! parse input file
+ call parse_file(fid, &
+#ifdef __PARALLEL
+ & MPI_COMM_NULL, &
+#endif
+ & quiet_=.false.)
+ call files_close(fid)
+!=== output options
+ if (existtag_nocase('minwarnlev'   ,__STRING(__OUTCTX))) call set_minwarnlev   (atoi(getval('minwarnlev',__STRING(__OUTCTX))))
+ if (existtag_nocase('minmessagelev',__STRING(__OUTCTX))) call set_minmessagelev(atoi(getval('minmessagelev',__STRING(__OUTCTX))))
+ if (existtag_nocase('minerrorlev'  ,__STRING(__OUTCTX))) call set_minerrorlev  (atoi(getval('minerrorlev',__STRING(__OUTCTX  ))))
+!=================================================
+! determine the string method flavor :
+!=================================================
+ __GET_OPT_PAR(string_method, fl_name, 'SMCV', maincontext_name);
+ i=len_trim(fl_name)
 !
- if (n<0) then
-  __WRN(whoami, 'NUMBER OF ATOMS MUST BE POSITIVE (RECEIVED '//itoa(n)//')')
-  return
+ select case(fl_name(1:i))
+  case('FTSM','FTS','FINITE','FINITETEMPERATURE','FINITET','FINITETEMP','FTEMP','FITEMP','FINTEMP','FINITEMP');
+   sm_flavor=ftsm_flavor;
+   initctx=__STRING(__FTSMINITCTX)
+   donectx=__STRING(__FTSMDONECTX)
+   __MESSAGE(whoami, 'FINITE TEMPERATURE STRING METHOD (FTSM) REQUESTED');
+  case('SMCV', 'COLVAR','CV','SCV','CVS','COLLECTIVE','COLVARS','COLLVAR','COLLVARS','COLV','COLLV','COLLECT'); 
+   sm_flavor=smcv_flavor;
+   initctx=__STRING(__SMCVINITCTX)
+   donectx=__STRING(__SMCVDONECTX)
+   __MESSAGE(whoami, 'STRING METHOD IN COLLECTIVE VARIABLES (SMCV) REQUESTED');
+  case default ; sm_flavor=unknown
+   __MESSAGE(whoami, 'UNKNOWN METHOD "'//fl_name(1:i)//'" REQUESTED. ABORT.');
+   return
+ end select
+!=== output options
+! check for structure (PDB) file
+ if (existtag_nocase('structure', initctx)) then
+  structurefile=getval_nocase('structure', initctx);
+  l=len_trim(structurefile)
+  __MESSAGE(whoami, 'READING STRUCTURE FROM FILE "'//structurefile(1:l)//'"');
+  call system_PDB_init(structurefile, 'PDB');
+  system_PDB_initialized=.true.
+! save coordinates in rcomp
+  if (associated(rcomp) .and. associated(r)) rcomp=r
+  minimal_system = .false.
+! check to make sure that NAMD sent the correct number of atoms
+  if (n.ne.natom) then
+   __WRN(whoami, 'NUMBER OF NAMD ATOMS ('//itoa(n)//') MUST EQUAL THAT IN THE STRUCTURE FILE ('//itoa(natom)//'). ABORT.')
+   return
+  endif
  else
-  call sm_done_from_namd()
-  __MESSAGE(whoami, 'INITIALIZING SMCV PLUGIN WITH '//itoa(n)//' ATOMS');
+  call warning(whoami, 'STRUCTURE PDB FILE UNSPECIFIED. ASSUMING A MINIMAL SYSTEM WITH NO TOPOLOGY.',0)
+  minimal_system=.true.
+  if (n<0) then
+   __WRN(whoami, 'NUMBER OF NAMD ATOMS MUST BE POSITIVE (RECEIVED '//itoa(n)//'). ABORT')
+   return
+  endif
+!
+  __MESSAGE(whoami, 'INITIALIZING SMCV PLUGIN WITH '//itoa(n)//' ATOMS FROM NAMD');
 ! maintaining coordinate compatibility with dynamol
-  allocate(r(3,n), rcomp(3,n), f(3,n), m(n), q(n)) ! note transposed dimensions relative to acemd plugin + dynamol
-  minimal_system_natom=n
-  m=mass
-  q=charge
+! however, not using state variables below, i.e. allocating here
+  allocate(r(3,n), rcomp(3,n), f(3,n), m(n), q(n), bfactor(n), occupancy(n)) ! note transposed dimensions relative to acemd plugin + dynamol
+  natom=n
+  system_minimal_initialized=.true.
   r=__NAN
   rcomp=__NAN
-! open input file
-  fid=-1
-  call files_open(fid, ifname, 'FORMATTED', 'READ')
-! parse input file
-  call parse_file(fid, MPI_COMM_NULL, quiet_=.false.)
-  call files_close(fid)
-!=== output options
-  if (existtag_nocase('minwarnlev'   ,__STRING(__OUTCTX))) call set_minwarnlev   (atoi(getval('minwarnlev',__STRING(__OUTCTX))))
-  if (existtag_nocase('minmessagelev',__STRING(__OUTCTX))) call set_minmessagelev(atoi(getval('minmessagelev',__STRING(__OUTCTX))))
-  if (existtag_nocase('minerrorlev'  ,__STRING(__OUTCTX))) call set_minerrorlev  (atoi(getval('minerrorlev',__STRING(__OUTCTX  ))))
-!=== output options
+  bfactor=__NAN
+  occupancy=__NAN
+ endif ! structure file exists
+! currently, mass and charge can only be passed in from NAMD:
+ m=mass
+ q=charge
 !
-! Note : we need to tell NAMD which atom coordinates will be needed; therefore
-! we will parse cv definitions here, even though coordinates, masses or charges are
-! not available, all that is passed in is the total number of atoms
-! the user bears the burden of computing cv values correctly
-! to help with this, an additional context smcv_first{} will be provided
+ __GET_OPT_PAR_B(defer_init_dyna, defer_init_until_dyna, .false., initctx);
 !
+! defer initialization until coordinates are available
+ if ( defer_init_until_dyna ) then 
+  __MESSAGE(whoami, 'WILL DEFER EXECUTION OF INITIALIZATION STACK UNTIL DYNAMICS');
+ else
   __MESSAGE(whoami, 'EXECUTING INITIALIZATION STACK');
-  if (noexec(__STRING(__INITCTX))) then
-   call warning(whoami, 'CONTEXT "'//__STRING(__INITCTX)//'" DOES NOT CONTAIN EXECUTABLE STATEMENTS.', -1);
+  if (noexec(initctx)) then
+   call warning(whoami, 'CONTEXT "'//initctx//'" DOES NOT CONTAIN EXECUTABLE STATEMENTS.', -1);
   else
-   call smcv_exec(__STRING(__INITCTX))
+   select case(sm_flavor);
+     case(ftsm_flavor);    call ftsm_exec(initctx)
+     case(smcv_flavor);    call smcv_exec(initctx)
+     case default ; __WRN(whoami, ' UNKNOWN METHOD REQUESTED.')
+   end select
   endif
-  if (fatal_warning()) return
-  call parser_clear_context(__STRING(__INITCTX))
-! compute atomlist
-  i=cv%amap%last
-  allocate(atomlist(i+1)) ; ! include number of elements as first entry
-  atomlist(1)=i ; atomlist(2:)=cv%amap%i(1:i)
-  call isort('i', i, atomlist(2), ierr) ! pass second element b/c 1st contains the list size
-  alist=c_loc(atomlist)
- endif ! n
 !
+  call parser_clear_context(initctx)
+  if (fatal_warning()) return
+! compute atomlist
+#include "../atomlist.def"
+ endif ! defer
+!
+ initialized=.not.defer_init_until_dyna
  iteration=-abs(__NAN)
- initialized=.false. ! need to execute context string_first
  _ME=0
 !
 end function _ME
 #undef _ME
 !===================================================================
 #define _ME sm_dyna_from_namd
- __CFUN(_ME, iteration_, r_namd, f_namd, e)
+ __CFUN(_ME, iteration_, r_namd, f_namd, e, alist)
+! SMCV modules:
  use cv_common, only : cv
  use smcv_master, only : smcv_main
+! FTSM modules:
+ use ftsm, only : ftsm_main, ftsm_exec
+ use ftsm_var, only : iatom_a ! needed to compute atoms used by ftsm
+ use ftsm_util, only : ftsm_compute_atomlist
+
  __DEP_PARSER
 !
  int(C_LONG), value, intent(in) :: iteration_
- real(__FCFLOAT), intent(in), dimension(3, minimal_system_natom) :: r_namd
- real(__FCFLOAT), intent(out), dimension(3, minimal_system_natom) :: f_namd
+ real(__FCFLOAT), intent(in), dimension(3, natom) :: r_namd
+ real(__FCFLOAT), intent(out), dimension(3, natom) :: f_namd
  real(__FCFLOAT), intent(out) :: e
+ type(c_ptr), intent(out) :: alist ! send back a list of atom indices if smcv not initialized
  int(__FCINT) :: _ME
  int :: i, ierr
 !
@@ -129,32 +201,54 @@ end function _ME
  _ME=1 ! default return is failure
 !
  e=zero ; ! not computed yet
- iteration=iteration_
-! load coordinates
 !
- if (.not.initialized) then ! execute first-iteration stack, if present
-! complete initialization
-  if (.not.noexec(__STRING(__FIRSTCTX))) then
-   r=r_namd; ! will overwrite nans
-   __MESSAGE(whoami, 'EXECUTING FIRST ITERATION STACK');
-   call smcv_exec(__STRING(__FIRSTCTX))
-   call parser_clear_context(__STRING(__FIRSTCTX))
-  else
-   call warning(whoami, 'CONTEXT "'//__STRING(__FIRSTCTX)//'" DOES NOT CONTAIN EXECUTABLE STATEMENTS.', 0);
-  endif
-  if (fatal_warning()) return
-  initialized=.true.
- else ! all subsequent steps
-  r(:,atomlist(2:))=r_namd(:,atomlist(2:))
- endif
+ if (initialized .or. defer_init_until_dyna) then
 
+  iteration=iteration_
 !
- f(:,atomlist(2:))=zero ! start from zero force
- call smcv_main(__X, __Y, __Z, __XCOMP, __YCOMP, __ZCOMP, m, f(1,:), f(2,:), f(3,:), iteration)
+  if (initialized) then ! just load coordinates
+   r(:,atomlist(2:))=r_namd(:,atomlist(2:))
+  else
+! complete initialization
+   __MESSAGE(whoami, 'EXECUTING INITIALIZATION STACK');
+! load all coords (we do not know which ones we will need b/c initialization is incomplete)
+   r=r_namd
+   if (noexec(initctx)) then
+    call warning(whoami, 'CONTEXT "'//trim(initctx)//'" DOES NOT CONTAIN EXECUTABLE STATEMENTS.', -1);
+   else
+    select case(sm_flavor);
+     case(ftsm_flavor);    call ftsm_exec(initctx)
+     case(smcv_flavor);    call smcv_exec(initctx)
+     case default ; __WRN(whoami, ' UNKNOWN METHOD REQUESTED.')
+    end select
+   endif
+   call parser_clear_context(initctx)
+   if (fatal_warning()) return
+!
+   initialized=.true.
+! compute unique atomlist
+#include "../atomlist.def"
+! now the atom list should be defined -- use it below for forces
+  endif ! not initialized
+!
+  f(:,atomlist(2:))=zero ! start from zero force
+!
+  select case(sm_flavor);
+   case(ftsm_flavor);
+    call ftsm_main(__X, __Y, __Z, __XCOMP, __YCOMP, __ZCOMP, f(1,:), f(2,:), f(3,:), m, iteration)
+   case(smcv_flavor);
+    call smcv_main(__X, __Y, __Z, __XCOMP, __YCOMP, __ZCOMP, m, f(1,:), f(2,:), f(3,:), iteration, sm_energy)
+   case default ;
+    __WRN(whoami, ' UNKNOWN METHOD REQUESTED.')
+  end select
+!
 ! update namd forces
 ! note that per CHARMM convention, which the plugin code inherits, forces correspond to grad V, not -grad V !
- f_namd(:,atomlist(2:)) = - f(:,atomlist(2:))
+  f_namd(:,atomlist(2:)) = - f(:,atomlist(2:))
 ! update energy
+  e=sm_energy
+ endif
+!
  _ME=0
 !
 end function _ME
@@ -163,22 +257,42 @@ end function _ME
 #define _ME sm_done_from_namd
  __CSUB(_ME)
  use sm_var, only : smcv_initialized
+ use ftsm, only : ftsm_exec, ftsm_done
+ use ftsm_var, only : ftsm_initialized
  __DEP_PARSER, only : parser_done, parser_clear_context
 !
- call smcv_exec(__STRING(__DONECTX))
+ __IAM(_ME)
+!
+ select case(sm_flavor);
+  case(smcv_flavor); call smcv_exec(donectx)
+  case(ftsm_flavor); call ftsm_exec(donectx)
+  case default ; __WRN(whoami, ' UNKNOWN METHOD REQUESTED.')
+ end select
+!
 ! NAMD may have multiple runs concatenated in one script file (e.g. minimization followed by dynamics); for this reason
 ! we will not destruct this object
  if ( .false. ) then
 !
- call parser_clear_context(__STRING(__DONECTX))
-!
+ call parser_clear_context(donectx)
  call parser_done()
- if (smcv_initialized) call smcv_done()
+
+ select case(sm_flavor);
+  case(smcv_flavor); if (smcv_initialized) call smcv_done()
+  case(ftsm_flavor); if (ftsm_initialized) call ftsm_done()
+  case default ; __WRN(whoami, ' UNKNOWN METHOD REQUESTED.')
+ end select
 !
- __FREE(r)
- __FREE(rcomp)
- __FREE(m)
- __FREE(q)
+ call system_done()
+!
+ if (minimal_system) then ! free variables allocated outside of state
+  __FREE(r)
+  __FREE(rcomp)
+  __FREE(f)
+  __FREE(m)
+  __FREE(q)
+  __FREE(bfactor)
+  __FREE(occupancy)
+ endif
 !
  __DEALL(atomlist)
  initialized=.false.
@@ -186,4 +300,5 @@ end function _ME
  endif
 !
 end subroutine _ME
+!
 end module sm_namd
