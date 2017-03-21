@@ -18,10 +18,9 @@ typedef struct {
 } pdata ;
 
 aceplug_err_t aceplug_init(struct aceplug_sim_t *s, int argc, char **argkey, char **argval) {
- __CCHAR *inputfile = NULL, *logfile = NULL, *smtype = NULL;
- __CINT ilen=0, llen=0, smlen=0, ierr=0;
+ __CCHAR *inputfile = NULL, *logfile = NULL;
+ __CINT ilen=0, llen=0, ierr=0;
  __CCHAR *deflogfile = "struna.log" ;
- __CCHAR *defaultflavor = "SMCV";
 // for plugin private data :
  pdata *private_data = malloc(sizeof(pdata)) ;
 //
@@ -34,10 +33,7 @@ aceplug_err_t aceplug_init(struct aceplug_sim_t *s, int argc, char **argkey, cha
   } else if ( !(strcmp(argkey[i], "output")) || !(strcmp(argkey[i], "outputfile")) || !(strcmp(argkey[i], "log")) || !(strcmp(argkey[i], "logfile")) ||\
               !(strcmp(argkey[i], "OUTPUT")) || !(strcmp(argkey[i], "OUTPUTFILE")) || !(strcmp(argkey[i], "LOG")) || !(strcmp(argkey[i], "LOGFILE")) ) {
    logfile=argval[i];
-  } else if ( !(strcmp(argkey[i], "flavor")) || !(strcmp(argkey[i], "FLAVOR")) || !(strcmp(argkey[i], "method")) || !(strcmp(argkey[i], "METHOD")) ||\
-              !(strcmp(argkey[i], "type"))   || !(strcmp(argkey[i], "TYPE")) || !(strcmp(argkey[i], "alg")) || !(strcmp(argkey[i], "ALG")) ) {
-   smtype=argval[i];
-  }
+  } //if
  } // for
  if (inputfile == NULL) {
   printf("# STRUNA PLUGIN: input file not specified (syntax : input <inputfile>)\n");
@@ -59,16 +55,6 @@ aceplug_err_t aceplug_init(struct aceplug_sim_t *s, int argc, char **argkey, cha
   printf("'\n");
  }
 //
- if (smtype == NULL) {
-  printf("# STRUNA PLUGIN: method not specified (syntax : method <SMCV|FTSM>); using '");
-  smtype=defaultflavor;
-  printf(smtype);
-  printf("'\n");
- } else {
-  printf("# STRUNA PLUGIN: method is '"); 
-  printf(smtype);
-  printf("'\n");
- }
 
  __CINT natoms=0;
  __CFLOAT *m=NULL, *q=NULL;
@@ -89,8 +75,7 @@ aceplug_err_t aceplug_init(struct aceplug_sim_t *s, int argc, char **argkey, cha
 //
  ilen=strlen(inputfile);
  llen=strlen(logfile);
- smlen=strlen(smtype);
- ierr=sm_init_from_acemd(natoms, m, q, inputfile, ilen, logfile, llen, &(private_data->atomlist), smtype, smlen);
+ ierr=sm_init_from_acemd(natoms, m, q, inputfile, ilen, logfile, llen, &(private_data->atomlist));
  free(m);
  free(q);
 //
