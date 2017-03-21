@@ -12,7 +12,7 @@ include $(ROOT)/Makefile.inc
 
 LOCALMACROS+=-include source.defs
 LOCALMACROS+=-include $(COMMON)/source.defs
-LOCALDEPS+=source.defs
+LOCALDEPS+=source.defs ../atomlist.def
 LOCALDEPS+=$(COMMON)/source.defs
 
 include $(COMMON)/Makefile.inc

@@ -12,9 +12,9 @@
 #else
 #define __EXTERN extern
 #endif
-__EXTERN __CINT sm_init_from_namd (const __CINT, const __CFLOAT *,const  __CFLOAT *, const __CCHAR * , const __CINT, const __CCHAR *, const __CINT,  __CINT **);
+__EXTERN __CINT sm_init_from_namd (const __CINT, const __CFLOAT *, const  __CFLOAT *, const __CCHAR * , const __CINT, const __CCHAR *, const __CINT,  __CINT **);
 __EXTERN   void sm_done_from_namd ();
-__EXTERN __CINT sm_dyna_from_namd ( const long int, const __CFLOAT *, __CFLOAT *, __CFLOAT * );
+__EXTERN __CINT sm_dyna_from_namd ( const long int, const __CFLOAT *, __CFLOAT *, __CFLOAT *, __CINT ** );
 
 #ifndef GLOBALMASTERSM_H
 #define GLOBALMASTERSM_H

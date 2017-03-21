@@ -1,7 +1,7 @@
 INCLUDES+= -I $(COMMON) -I $(COMMON)/acemd -I $(COMMON)/ftsm -I $(COMMON)/smcv
 
-LOCALMACROS+=-include $(COMMON)/acemd.defs
-LOCALDEPS+=$(COMMON)/acemd.defs
+#LOCALMACROS+=-include $(COMMON)/acemd.defs
+#LOCALDEPS+=$(COMMON)/acemd.defs
 
 $(COMMON)/%.mod : $(COMMON)/%.o
 	file=$(notdir $@) ; \

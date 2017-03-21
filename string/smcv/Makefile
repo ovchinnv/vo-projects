@@ -11,6 +11,7 @@ LOCALMACROS=-include source.defs -include $(COMMON)/source.defs
 LOCALMACROS+=-include $(ROOT)/dmol.defs
 LOCALDEPS=source.defs $(ROOT)/mpitype.def $(COMMON)/source.defs
 LOCALDEPS+=$(ROOT)/dmol.defs cv_frames_calc.def
+LOCALDEPS+=$(ROOT)/dmol.defs $(ROOT)/dmol_select_macro.def
 
 include $(ROOT)/Makefile.inc
 include $(COMMON)/Makefile.inc
