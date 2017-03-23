@@ -17,7 +17,7 @@ LOCALDEPS+=$(COMMON)/source.defs
 include $(COMMON)/Makefile.inc
 include MakeACEMD.inc
 
-sm_acemd.o : $(COMMON)/sm_var.mod $(COMMON)/sm_config.mod atomlist.def
+sm_acemd.o : $(COMMON)/sm_var.mod $(COMMON)/sm_config.mod ../atomlist.def
 
 sm_plugin_acemd.o : sm_plugin_acemd.c aceplug.h sm.h $(LOCALDEPS)
 	$(CC) $(CFLAGS) $(LOCALDEFS) $(LOCALMACROS) $< -o $@

@@ -1,0 +1,163 @@
+diff -ruN src/HomePatch.C src/HomePatch.C
+--- src/HomePatch.C	2016-09-29 17:30:47.000000000 -0400
++++ src/HomePatch.C	2017-02-24 19:59:33.403169132 -0500
+@@ -3077,20 +3077,40 @@
+   BigReal epsilon_p_i = 1/simParams->dielectric;
+   BigReal coulomb_radius_offset = simParams->coulomb_radius_offset;
+   BigReal kappa = simParams->kappa;
+-  BigReal fij, expkappa, Dij, dEdai, dedasum;
++  BigReal fij, expkappa, Dij, dEdai;//, dedasum;
+   BigReal rhoi, rhoi0, psii, nbetapsi;
+   BigReal gammapsi2, tanhi, daidr;
++// VO ACE Model
++  bool    ACEOn = simParams->GBISACEOn;
++  bool    q0=0, q6=0;//, q1=0, q2=0, q3=0, q4=0, q5=0;
++  BigReal ace_solvent_radius=simParams->ace_solvent_radius;
++  BigReal ace_exponent=simParams->ace_exponent;
++  BigReal ace_surface_energy=simParams->ace_surface_energy * 4 * PI;
++  BigReal gbACEEnergy=0.0, gbdACEEnergyda=0.0; // VO ACE
++  BigReal d0, d1, d2, oofij ;
++//
++  if (ACEOn) {
++   if      (fabs(ace_exponent-6.0)<1.0e-7 ) { q6=1; }
++   else if (fabs(ace_exponent)    <1.0e-7 ) { q0=1; }
++/*   else if (fabs(ace_exponent-1.0)<1.0e-7 ) { q1=1; }
++   else if (fabs(ace_exponent-2.0)<1.0e-7 ) { q2=1; }
++   else if (fabs(ace_exponent-3.0)<1.0e-7 ) { q3=1; }
++   else if (fabs(ace_exponent-4.0)<1.0e-7 ) { q4=1; }
++   else if (fabs(ace_exponent-5.0)<1.0e-7 ) { q5=1; }
++*/  }
++// end VO ACE
+   for (int i = 0; i < numAtoms; i++) {
+     //add diagonal dEda term
+     dHdrPrefix[i] += dEdaSum[i];//accumulated from proxies
+-    fij = bornRad[i];//inf
++    fij = bornRad[i] ;//use this equality to replace bornRad[i] below
++    oofij = (fij > 0) ? 1.0 / fij : 0.0 ;
+     expkappa = exp(-kappa*fij);//0
+     Dij = epsilon_p_i - expkappa*epsilon_s_i;//dielectric term
+     //calculate dHij prefix
+     dEdai = -0.5*COULOMB*atom[i].charge*atom[i].charge
+-                  *(kappa*epsilon_s_i*expkappa-Dij/fij)/bornRad[i];
++                  *(kappa*epsilon_s_i*expkappa-Dij*oofij)*oofij;
+     dHdrPrefix[i] += dEdai;
+-    dedasum = dHdrPrefix[i];
++//    dedasum = dHdrPrefix[i]; // not used
+ 
+     rhoi0 = intRad[2*i];
+     rhoi = rhoi0+coulomb_radius_offset;
+@@ -3098,8 +3118,34 @@
+     nbetapsi = -beta*psii;
+     gammapsi2 = gamma*psii*psii;
+     tanhi = tanh(psii*(delta+nbetapsi+gammapsi2));
+-    daidr = bornRad[i]*bornRad[i]*rhoi0/rhoi*(1-tanhi*tanhi)
++    daidr = fij*fij*rhoi0/rhoi*(1-tanhi*tanhi)
+            * (delta+nbetapsi+nbetapsi+gammapsi2+gammapsi2+gammapsi2);
++//VO GBIS ACE add derivative prefactor here
++//ACE energy must be added in the ComputeGBIS routines
++//done on CPU
++    if (q6) {
++     d0 = rhoi + ace_solvent_radius ; 
++     d1 = rhoi * oofij;
++     d2 = d1 * d1; d2=d2*d2*d2 ;
++     gbACEEnergy    = ace_surface_energy * d0 * d0 * d2;
++     gbdACEEnergyda = - ace_exponent * gbACEEnergy * oofij ; 
++     dHdrPrefix[i] +=gbdACEEnergyda; // add ACE prefactor
++    } else if (q0) {
++     d0 = rhoi + ace_solvent_radius ; 
++     d2 = fij * oofij ; // = 0 when fij=0
++     gbACEEnergy    = ace_surface_energy * d0 * d0 * d2;
++     gbdACEEnergyda = - ace_exponent * gbACEEnergy * oofij ; 
++     dHdrPrefix[i] +=gbdACEEnergyda;
++    } else {
++     d0 = rhoi + ace_solvent_radius ; 
++     d1 = rhoi * oofij ;
++     d2 = pow(d1,ace_exponent);
++     gbACEEnergy    = ace_surface_energy * d0 * d0 * d2;
++     gbdACEEnergyda = - ace_exponent * gbACEEnergy * oofij ; 
++     dHdrPrefix[i] +=gbdACEEnergyda;
++    }
++// end ACE
++
+     dHdrPrefix[i] *= daidr;//dHdrPrefix previously equaled dEda
+ #ifdef PRINT_COMP
+     CkPrintf("DHDR(%04i)[%04i] = % .4e\n",flags.sequence,pExt[i].id,dHdrPrefix[i]);
+diff -ruN src/Molecule.C src/Molecule.C
+--- src/Molecule.C	2016-11-14 15:24:41.000000000 -0500
++++ src/Molecule.C	2017-02-27 13:45:22.977292224 -0500
+@@ -1339,7 +1339,8 @@
+       atoms[atom_number-1].status |= LonepairAtom;
+     } else if (atoms[atom_number-1].mass < 1.0) {
+       atoms[atom_number-1].status |= DrudeAtom;
+-    } else if (atoms[atom_number-1].mass <=3.5) {
++    } else if ((atoms[atom_number-1].mass <=4.0) &&  //2/17: VO Changing H mass cutoff to 4 so that we can use heavy hydrogens ; Note that mass(He) = 4.00262>4 amu.
++               (atomNames[atom_number-1].atomname[0] != 'C')) { // with 4amu H methyl Carbons come out at 3.5 amu
+       atoms[atom_number-1].status |= HydrogenAtom;
+     } else if ((atomNames[atom_number-1].atomname[0] == 'O') && 
+          (atoms[atom_number-1].mass >= 14.0) && 
+diff -ruN src/SimParameters.C src/SimParameters.C
+--- src/SimParameters.C	2017-02-03 16:39:23.000000000 -0500
++++ src/SimParameters.C	2017-02-24 21:05:50.781683163 -0500
+@@ -1647,12 +1647,19 @@
+       "maximum allowable born radius", &alpha_max, 30);
+    opts.optional("GBIS", "fsMax",
+       "maximum screened intrinsic radius", &fsMax, 1.728);
+-
++// VO add Shaefer-Bartels-Karplus ACE Surface area model
++   opts.optionalB("GBIS", "GBISACE", "Include ACE surface are contribution?", &GBISACEOn, FALSE);
++   opts.optional("GBISACE","ACESolventRadius", "Solvent Radius in ACE Model", &ace_solvent_radius, 1.4); //angstroms
++   opts.optional("GBISACE","ACEExponent", "Exponent of ratio of vdW and Born Radii in ACE Model", &ace_exponent, 6.0); //dimensionless
++   opts.optional("GBISACE","ACESurfaceEnergy", "Energy Prefactor in ACE Model", &ace_surface_energy, 0.0054); //kcal/mol/A/A
++// end VO add Shaefer-Bartels-Karplus model
+    opts.optionalB("main", "SASA", "Use Linear Combination of Pairwise Overlaps (LCPO) for calculating SASA",
+       &LCPOOn, FALSE);
+    opts.optional("SASA", "surfaceTension",
+       "Surfce Tension for SASA (kcal/mol/Ang^2)", &surface_tension, 0.005);
+ 
++
++
+    //****** BEGIN SMD constraints changes 
+ 
+    // SMD constraints
+@@ -3108,6 +3115,9 @@
+       }
+       //LCPO requires patches to be at least 16.2Ang in each dimension
+       // twoAway[XYZ} is ignored for now
++      if (GBISOn && GBISACEOn) {
++       iout << iWARN << "GBIS ACE nonpolar solvation model and SASA/LCPO are both active (is what you want?)";
++      }
+     }
+ 
+    //  Turn on global integration if not explicitly specified
+@@ -5174,7 +5184,14 @@
+      iout << iINFO << "GBIS MAX BORN RADIUS: " << alpha_max << " Ang\n";
+      iout << endi;
+   }
+-
++//VO ACE MODEL
++  if (GBISOn && GBISACEOn) {
++     iout << iINFO << "GBIS ACE SURFACE AREA NONPOLAR SOLVATION MODEL ACTIVE\n";
++     iout << iINFO << "GBIS ACE SOLVENT RADIUS: " << ace_solvent_radius<< " Ang\n";
++     iout << iINFO << "GBIS ACE EXPONENT: " << ace_exponent<< "\n";
++     iout << iINFO << "GBIS ACE SURFACE ENERGY: " << ace_surface_energy<< " Kcal/mol/Ang^2\n";
++  }
++// end VO ACE MODEL
+   if (LCPOOn) {
+     iout << iINFO << "SASA SURFACE TENSION: " << surface_tension<< " kcal/mol/Ang^2\n";
+   }
+diff -ruN src/SimParameters.h src/SimParameters.h
+--- src/SimParameters.h	2017-02-03 16:39:23.000000000 -0500
++++ src/SimParameters.h	2017-02-24 16:03:42.731660822 -0500
+@@ -493,6 +493,12 @@
+ 	BigReal gbis_gamma;
+ 	BigReal alpha_cutoff;						//pairwise cutoff for integrating born radius
+ 	BigReal alpha_max;								//maximum allowable born radius
++//VO GBIS ACE MODEL
++  Bool GBISACEOn;             // is model active
++  BigReal ace_solvent_radius; // solvent probe radius (e.g. 1.4A for water default)
++  BigReal ace_exponent;       // exponent of the ratio of vdw/gb radii (default is 6)
++  BigReal ace_surface_energy; // Surface area force constant
++//end VO GBIS ACE MODEL
+   Bool LCPOOn;                    //do LCPO SASA for GBSA
+   BigReal surface_tension;        //surface tension (kcal/mol/Ang^2) for LCPO
+ 

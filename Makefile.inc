@@ -34,10 +34,11 @@ LOMP=-lgomp
 # G95 reguires no space between "-D" and the name
 FORTRAN_COMPILER=$(notdir $(FC))
 DEFS+=-Dint=integer -Dfloat=real*8 -Dbool=logical -Dmpiint=MPI_INTEGER -Dmpifloat=MPI_REAL8 -Dmpichar=MPI_CHARACTER -Dmpiint4=MPI_INTEGER4\
-     -Dmpibool=MPI_LOGICAL -Dint1="integer(kind=KIND('a'))" -D__RCOMP -D__DMOL -D__CHES -D__EDDIE -D__$(FORTRAN_COMPILER) \
-     -Dint4mpi=integer -D__TIMER  -D__PARALLEL #-D__DEBUG -D__PATHSCALE #-Dint4mpi="integer(KIND=MPI_INTEGER_KIND)" 
+     -Dmpibool=MPI_LOGICAL -Dint1=integer\(kind=KIND\(\'a\'\)\) -D__RCOMP -D__DMOL -D__CHES -D__EDDIE -D__$(FORTRAN_COMPILER) \
+     -Dint4mpi=integer -D__TIMER  #-D__PARALLEL #-D__DEBUG -D__PATHSCALE #-Dint4mpi="integer(KIND=MPI_INTEGER_KIND)" 
 
 STRING_FLAGS=-D__STRING_SERIAL -D__ACEMD -D__NAMD $(OMP)
+
 DEFS+=$(STRING_FLAGS)
 #
 # preprocess with C++ style preprocessor
