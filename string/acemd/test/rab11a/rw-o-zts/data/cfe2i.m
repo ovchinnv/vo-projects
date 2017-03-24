@@ -93,7 +93,7 @@ ib   =1;
 %ib=40;
 %
 ib=round(niter * 0.5);
-nbox =1;
+nbox =2;
 bsize=ceil( (ie-ib+1)/nbox);
 
 lw=1.;
