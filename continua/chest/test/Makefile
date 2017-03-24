@@ -1,4 +1,4 @@
-ROOT=../..
+ROOT=../../..
 include $(ROOT)/Makefile.inc
 
 #FC=gfortran
@@ -32,10 +32,10 @@ SCRATCH=\
 	test.F90\
 	compare.F90
 
-default : all
 all : print $(TESTS)
 $(TESTS) : force_look
 	./$@ "$(FC)" "$(FFLAGS)" "$(DEFS)">& $@.out ; echo " $@ : " `grep " TEST " $@.out`
+#	./$@ "$(FC)" "$(FFLAGS)" "$(DEFS)">& $@.out ; echo " $@ : " `grep " TEST " $@.out`
 
 
 print:
