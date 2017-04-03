@@ -84,7 +84,7 @@
 #include "GlobalMasterIMD.h"
 #include "GlobalMasterTcl.h"
 #include "GlobalMasterSMD.h"
-#include "GlobalMasterSMCV.h" // VO SMCV Plugin
+#include "GlobalMasterSM.h" // VO Struna Plugin
 #include "GlobalMasterTMD.h"
 #include "GlobalMasterSymmetry.h"
 #include "GlobalMasterEasy.h"
@@ -855,9 +855,9 @@ ComputeMgr::createComputes(ComputeMap *map)
                                     simParams->firstTimestep, simParams->SMDFile,
                                     node->molecule->numAtoms)
             );
-// VO SMCV Plugin v
-        if (simParams->SMCVPluginActive) masterServerObject->addClient(new GlobalMasterSMCV());
-// VO SMCV Plugin ^
+// VO Struna Plugin v
+        if (simParams->SMPluginActive) masterServerObject->addClient(new GlobalMasterSM());
+// VO Struna Plugin ^
             
         if (simParams->symmetryOn && 
           (simParams->firstTimestep < simParams->symmetryLastStep || 

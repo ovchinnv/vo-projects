@@ -55,8 +55,18 @@ LINKOBJS=\
  splines.o \
  rng.o clcg.o \
  mpi_compat_stub.o \
+ system.o \
+ psf.o \
+ ch_param.o \
+ mol_formats.o \
+ smcv_check_set.o \
+ psfatom.o \
+ state.o \
+ fieldbcdef.o \
+ formats.o \
  sm_plugin_acemd.o \
  sm_acemd.o
+
 
 default : acemd
 acemd : $(LIB)

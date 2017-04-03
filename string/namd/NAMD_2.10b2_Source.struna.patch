@@ -1,0 +1,383 @@
+--- Make.depends	2014-11-15 11:30:50.000000000 -0500
++++ Make.depends	2017-02-27 14:54:07.000000000 -0500
+@@ -3880,6 +3880,23 @@
+ 	src/fitrms.h \
+ 	src/Debug.h
+ 	$(CXX) $(CXXFLAGS) $(COPTO)obj/GlobalMasterTMD.o $(COPTC) src/GlobalMasterTMD.C
++obj/GlobalMasterSM.o: \
++	src/GlobalMasterSM.C \
++	src/InfoStream.h \
++	src/NamdTypes.h \
++	src/common.h \
++	src/Vector.h \
++	src/ResizeArray.h \
++	src/ResizeArrayRaw.h \
++	src/GlobalMaster.h \
++	src/SimParameters.h \
++	src/Lattice.h \
++	src/Tensor.h \
++	src/MGridforceParams.h \
++	src/strlib.h \
++	src/MStream.h \
++	src/GlobalMasterSM.h
++	$(CXX) $(CXXFLAGS) $(COPTO)obj/GlobalMasterSM.o $(COPTC) src/GlobalMasterSM.C
+ obj/Matrix4Symmetry.o: \
+ 	src/Matrix4Symmetry.C \
+ 	src/Matrix4Symmetry.h \
+--- Makefile	2014-11-15 11:46:41.000000000 -0500
++++ Makefile	2017-02-27 15:10:28.932261466 -0500
+@@ -68,7 +68,7 @@
+ #EXTRADEFINES=-DREMOVE_PROXYDATAMSG_EXTRACOPY -DREMOVE_PROXYRESULTMSG_EXTRACOPY
+ EXTRADEFINES=-DREMOVE_PROXYRESULTMSG_EXTRACOPY -DNODEAWARE_PROXY_SPANNINGTREE -DUSE_NODEPATCHMGR
+ EXTRAINCS=
+-EXTRALINKLIBS=
++EXTRALINKLIBS+=-L$(STRUNA_LIBDIR) -lstruna_namd
+ # to compile namd using PAPI counters to measure flops and modify include and library path
+ # correspondingly
+ #EXTRADEFINES=-DREMOVE_PROXYRESULTMSG_EXTRACOPY -DMEASURE_NAMD_WITH_PAPI
+@@ -194,6 +194,7 @@
+ 	$(DSTDIR)/GlobalMasterTcl.o \
+ 	$(DSTDIR)/GlobalMasterSMD.o \
+ 	$(DSTDIR)/GlobalMasterTMD.o \
++	$(DSTDIR)/GlobalMasterSM.o \
+   $(DSTDIR)/Matrix4Symmetry.o \
+   $(DSTDIR)/GlobalMasterSymmetry.o \
+ 	$(DSTDIR)/GlobalMasterFreeEnergy.o \
+--- src/ComputeMgr.C	2013-12-27 14:59:49.000000000 -0500
++++ src/ComputeMgr.C	2017-02-27 14:29:42.574405779 -0500
+@@ -8,6 +8,7 @@
+ #include "ProcessorPrivate.h"
+ 
+ //#define DEBUGM
++
+ #define MIN_DEBUG_LEVEL 1
+ #include "Debug.h"
+ 
+@@ -83,6 +84,7 @@
+ #include "GlobalMasterIMD.h"
+ #include "GlobalMasterTcl.h"
+ #include "GlobalMasterSMD.h"
++#include "GlobalMasterSM.h" // VO Struna Plugin
+ #include "GlobalMasterTMD.h"
+ #include "GlobalMasterSymmetry.h"
+ #include "GlobalMasterEasy.h"
+@@ -94,6 +96,7 @@
+ 
+ ComputeMgr::ComputeMgr()
+ {
++    DebugM(1,"ComputeMgr constructor called\n");
+     CkpvAccess(BOCclass_group).computeMgr = thisgroup;
+     computeGlobalObject = 0;
+     computeGlobalResultsMsgSeq = -1;
+@@ -120,7 +123,9 @@
+ 
+ ComputeMgr::~ComputeMgr(void)
+ {
++    DebugM(1,"ComputeMgr destructor called\n");
+     delete computeNonbondedWorkArrays;
++//    if (masterServerObject) delete masterServerObject; // make sure to call client destructors
+ }
+ 
+ void ComputeMgr::updateComputes(int ep, CkGroupID chareID)
+@@ -850,6 +855,9 @@
+                                     simParams->firstTimestep, simParams->SMDFile,
+                                     node->molecule->numAtoms)
+             );
++// VO Struna Plugin v
++        if (simParams->SMPluginActive) masterServerObject->addClient(new GlobalMasterSM());
++// VO Struna Plugin ^
+             
+         if (simParams->symmetryOn && 
+           (simParams->firstTimestep < simParams->symmetryLastStep || 
+@@ -928,7 +936,7 @@
+         DebugM(1,"  node = " << map->computeData[i].node << '\n');
+         DebugM(1,"  type = " << map->computeData[i].type << '\n');
+         DebugM(1,"  numPids = " << map->computeData[i].numPids << '\n');
+-        DebugM(1,"  numPidsAllocated = " << map->computeData[i].numPidsAllocated << '\n');
++//        DebugM(1,"  numPidsAllocated = " << map->computeData[i].numPidsAllocated << '\n');
+         for (int j=0; j < map->computeData[i].numPids; j++)
+         {
+             //      DebugM(1,"  pid " << map->computeData[i].pids[j] << '\n');
+--- src/SimParameters.C	2014-09-05 16:15:44.000000000 -0400
++++ src/SimParameters.C	2017-02-28 11:45:50.789006340 -0500
+@@ -1530,6 +1530,11 @@
+    opts.range("SMDOutputFreq", POSITIVE);
+    
+    //****** END SMD constraints changes 
++   //****** VO: BEGIN SM plugin parameters
++   opts.optionalB("main", "StrunaPlugin", "Plugin to use restraints from string method suite", &SMPluginActive, FALSE);
++   opts.require("StrunaPlugin", "StrunaConfigFile","Configuration file for struna plugin", SMConfigFileName);
++   opts.optional("StrunaPlugin", "StrunaLogFile","Log file for struna plugin", SMLogFileName);
++   //****** VO: END SM plugin parameters
+ 
+    //****** BEGIN tabulated energies section
+    opts.optionalB("main", "tabulatedEnergies", "Do we get energies from a table?", &tabulatedEnergies, FALSE);
+@@ -4383,7 +4388,11 @@
+    }
+    
+    //****** END SMD constraints changes 
+-
++   //****** VO SM Plugin
++   if (SMPluginActive){
++    iout <<iINFO<<"STRUNA PLUGIN ACTIVE\n";
++   }
++   //****** VO END SM Plugin
+    if (TMDOn) {
+      iout << iINFO << "TMD ACTIVE BETWEEN STEPS " << TMDFirstStep 
+           << " and " << TMDLastStep << "\n";
+@@ -4577,7 +4586,7 @@
+    // Global forces configuration
+ 
+    globalForcesOn = ( tclForcesOn || freeEnergyOn || miscForcesOn ||
+-                      (IMDon && ! IMDignore) || SMDOn || TMDOn || colvarsOn || symmetryOn );
++                      (IMDon && ! IMDignore) || SMDOn || TMDOn || colvarsOn || symmetryOn || SMPluginActive );
+ 
+ 
+    if (tclForcesOn)
+--- src/SimParameters.h	2014-05-09 17:39:06.000000000 -0400
++++ src/SimParameters.h	2017-02-27 14:34:45.694219690 -0500
+@@ -344,6 +344,12 @@
+  	char SMDFile[128];		//  File for SMD information
+         int SMDOutputFreq;              //  Output frequency for SMD constr.
+         //****** END SMD constraints changes 
++
++        //****** VO BEGIN SM Plugin changes
++        Bool SMPluginActive;
++        char SMConfigFileName[128];
++        char SMLogFileName[128];
++        //****** VO END SM Plugin changes
+         
+   //****** BEGIN tabulated energy section
+   Bool tabulatedEnergies;
+--- /dev/null	2017-03-07 10:51:46.515916292 -0500
++++ src/GlobalMasterSM.C	2017-03-17 21:30:47.447012523 -0400
+@@ -0,0 +1,191 @@
++#ifndef __BINDC
++#define __BINDC
++#endif
++
++#include "InfoStream.h"
++#include "NamdTypes.h"
++#include "Node.h"
++#include "Molecule.h"
++#include "GlobalMaster.h"
++#include "SimParameters.h"
++//#include "ReductionMgr.h"
++#include "GlobalMasterSM.h"
++//#define DEBUGM
++#include "Debug.h"
++
++GlobalMasterSM::GlobalMasterSM() {
++   __CCHAR *inputfile = NULL, *logfile = NULL;
++   __CINT ilen=0, llen=0, ierr=0;
++   const __CCHAR* deflogfile = "struna.log" ;
++   params = Node::Object()->simParameters;
++   molecule=Node::Object()->molecule ;
++   __CINT natoms=molecule->numAtoms;
++//
++   initialized=0;
++   sm_energy=0.;
++   CkPrintf("# STRUNA PLUGIN: Initializing ...\n");
++//
++// find input file
++//
++   inputfile = params->SMConfigFileName ;
++   if (!inputfile) {
++    CkPrintf("# STRUNA PLUGIN: input file not specified (syntax : StrunaConfigFile <inputfile>)\n");
++    CkExit();
++   } else {
++    CkPrintf("# STRUNA PLUGIN: input file is '"); 
++    CkPrintf(inputfile);
++    CkPrintf("'\n");
++   }
++//
++// find log file
++//
++   logfile = params->SMLogFileName ;
++   if (!logfile) {
++    CkPrintf("# STRUNA PLUGIN: log file not specified (syntax : StrunaLogFile <logfile>), will write to '");
++    logfile=(__CCHAR *) deflogfile;
++    CkPrintf(logfile);
++    CkPrintf("'\n");
++   } else {
++     CkPrintf("# STRUNA PLUGIN: log file is '"); 
++     CkPrintf(logfile);
++     CkPrintf("'\n");
++   }
++//
++   __CFLOAT *mass=NULL, *charge=NULL;
++//
++   mass =   (__CFLOAT *) calloc(molecule->numAtoms, sizeof(__CFLOAT));
++   charge = (__CFLOAT *) calloc(molecule->numAtoms, sizeof(__CFLOAT));
++//
++   for (int i=0; i<molecule->numAtoms; i++){
++    mass[i]=molecule->atommass(i);
++    charge[i]=molecule->atomcharge(i);
++   }
++//
++   ilen=strlen(inputfile);
++   llen=strlen(logfile);
++   ierr=sm_init_from_namd(natoms, mass, charge, inputfile, ilen, logfile, llen, &atomlist) ;
++// mass and charge no longer needed
++   free(mass);
++   free(charge);
++//
++   int atomid;
++   if (atomlist!=NULL) { // atom indices provided; add them
++    // first element gives list size:
++    for ( int l = 0 ; l++ < atomlist[0]  ; ) { // first value in atomlist is the list length
++     atomid = atomlist[l] - 1 ; // subtract one because atom indices are offset from 0 in NAMD, but from 1 in the SM plugin
++     if ( atomid >= 0 && atomid < molecule->numAtoms ) {
++      DebugM(1,"Adding atom "<<atomid<<"\n");
++      modifyRequestedAtoms().add(atomid); // note: atomlist will be deallocated in Fortran
++     } else {
++      CkPrintf("# STRUNA PLUGIN: Atom ID ");
++      CkPrintf("%d", atomid);
++      CkPrintf("is out of range\n");
++      CkExit();
++     } // atomid valid
++    } // over list
++   } else { // no indices provided, assume that initialization is deferred until dynamics; request all coordinates
++    for ( atomid = 0 ; atomid < molecule->numAtoms ; atomid++) {
++      DebugM(1,"Adding atom "<<atomid<<"\n");
++      modifyRequestedAtoms().add(atomid);
++    }
++   } // atomlist
++   r  = (__CFLOAT *) calloc(3*molecule->numAtoms, sizeof(__CFLOAT));
++   fr = (__CFLOAT *) calloc(3*molecule->numAtoms, sizeof(__CFLOAT));
++//
++   iteration = params->firstTimestep;
++//   reduction = ReductionMgr::Object()->willSubmit(REDUCTIONS_BASIC);
++} // GlobalMasterSM
++
++
++GlobalMasterSM::~GlobalMasterSM() {
++ params=NULL;
++ destroy();
++} // ~GlobalMasterSM
++
++
++void GlobalMasterSM::calculate() {
++ // load coordinates
++  int atomid;
++  AtomIDList::const_iterator a_i = getAtomIdBegin();
++  AtomIDList::const_iterator a_e = getAtomIdEnd();
++  PositionList::const_iterator p_i = getAtomPositionBegin();
++  Vector p ;
++  for ( ; a_i != a_e; ++a_i, ++p_i ) { // this loop is only over atoms that have been requested
++    atomid = (*a_i);
++#ifdef DEBUGM
++    CkPrintf("%d\n",atomid);
++#endif
++    atomid*=3; // index into coordinate array
++    p = *p_i;
++    r[atomid++] = p.x; // a_i dereferences to atomid ; p_i dereferences to position (instance of Vector)
++    r[atomid++] = p.y; // however, in principle, access can be random (at the very least, nonconsecutive)
++    r[atomid]   = p.z;
++  }
++//
++#ifdef DEBUGM
++// check that forces are received correctly
++  for (int i=0;i<3*molecule->numAtoms;i++){
++   CkPrintf("%15.10f %15.10f\n",r[i],fr[i]);
++  }
++#endif
++  // apply forces
++  modifyAppliedForces().resize(0);
++  modifyForcedAtoms().resize(0);
++  //
++  if (atomlist!=NULL) { // atom indices already provided; compute and add forces
++    //call sm
++    __CINT ierr=sm_dyna_from_namd(iteration++, r, fr, &sm_energy, &atomlist);
++    // first element gives list size:
++   for ( int l = 0 ; l++ < atomlist[0]  ; ) { // first value in atomlist is the list length
++     atomid = atomlist[l] - 1; // subtract one because atom indices are offset from 0 in NAMD, but from 1 in the SM plugin
++     modifyForcedAtoms().add(atomid);
++     atomid*=3 ; // index into force array
++     p.x=fr[atomid++];
++     p.y=fr[atomid++];
++     p.z=fr[atomid];
++     DebugM(1,"Adding force "<< p << " to atom "<<atomid<<"\n");
++     modifyAppliedForces().add(p);
++   } // for
++  } else { // atomlist is NULL, but we expect it to be populated by the plugin at the first dynamics step
++    //call sm
++    __CINT ierr=sm_dyna_from_namd(iteration++, r, fr, &sm_energy, &atomlist);
++    //
++    if (atomlist!=NULL) { // atom indices provided; add them
++     modifyRequestedAtoms().resize(0);
++    // first element gives list size:
++     for ( int l = 0 ; l++ < atomlist[0]  ; ) { // first value in atomlist is the list length
++      atomid = atomlist[l] - 1 ; // subtract one because atom indices are offset from 0 in NAMD, but from 1 in the SM plugin
++      if ( atomid >= 0 && atomid < molecule->numAtoms ) {
++       DebugM(1,"Adding atom "<<atomid<<"\n");
++       modifyRequestedAtoms().add(atomid); // note: atomlist will be deallocated in Fortran
++       // now add forces :
++       modifyForcedAtoms().add(atomid);
++       atomid*=3 ; // index into force array
++       p.x=fr[atomid++];
++       p.y=fr[atomid++];
++       p.z=fr[atomid];
++       DebugM(1,"Adding force "<< p << " to atom "<<atomid<<"\n");
++       modifyAppliedForces().add(p);
++      } else {
++       CkPrintf("# STRUNA PLUGIN: Atom ID ");
++       CkPrintf("%d", atomid);
++       CkPrintf("is out of range\n");
++       CkExit();
++      } // atomid valid
++     } // over list
++   } else { // atom list still undefined
++    CkPrintf("# STRUNA PLUGIN: No restraint atoms found (nothing to do)\n");
++    CkExit(); 
++   } // atomlist
++  }
++  // destructor is not always called, so finalize after run length exceeded
++  if (iteration>params->N) destroy(); // this is problematic for multiple runs per script, e.g. minimize, then run MD
++} // calculate
++
++void GlobalMasterSM::destroy(){
++  CkPrintf("# STRUNA PLUGIN: Finalizing...\n");
++  sm_done_from_namd();
++// Keep in case there are multiple runs
++//  if (r) free(r);
++//  if (fr) free(fr);
++}
+--- /dev/null	2017-03-07 10:51:46.515916292 -0500
++++ src/GlobalMasterSM.h	2017-03-18 15:44:56.165685679 -0400
+@@ -0,0 +1,35 @@
++/* C prototypes */
++// C, not Fortran!
++extern "C" int sm_init_from_namd (const int, const double *, const double *, const char * , const int, const char *, const int, int **);
++extern "C" void sm_done_from_namd ();
++extern "C" int sm_dyna_from_namd ( const long int, const double *, double *, double *, int ** );
++class Molecule;
++class SubmitReduction;
++class GlobalMasterSM : public GlobalMaster {
++ public:
++  GlobalMasterSM();
++  ~GlobalMasterSM();
++ private:
++  Bool initialized;
++  void calculate();
++  void destroy();
++  Molecule *molecule;
++  SimParameters * params;
++//  SubmitReduction *reduction;
++  long int iteration;
++  double sm_energy;
++  int *atomlist=NULL; // to maintain a list of atoms that are needed by plugin; memory managed by FORTRAN side
++  double *r=NULL, *fr=NULL ; //positions and forces
++};
++#if defined(__BINDC)
++#define __FCFLOAT c_double 
++#define __CFLOAT double 
++#define __CFLOATFMT "%lf"
++#define __FCINT c_int
++#define __CINT int
++#define __CINTFMT "%d"
++#define __FCBOOL c_bool
++#define __CBOOL _Bool
++#define __FCCHAR c_char
++#define __CCHAR char
++#endif
