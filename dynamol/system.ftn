@@ -1203,7 +1203,8 @@ module system
   character(len=8) :: keyword
 !
 !  character(len=100, parameter :: pdbfmt='(A6,I5,1X,A4,1X,A3,2X,I4,4X,3F8.3,2F6.2,1X,3X,2X,A4)'
-  character(len=100), parameter :: pdbfmt='(A6,I5,1X,A4,1X,A3,2X,A4,4X,3F8.3,2F6.2,1X,3X,2X,A4)' ! resid is a string
+!  character(len=100), parameter :: pdbfmt='(A6,I5,1X,A4,1X,A3,2X,A4,4X,3F8.3,2F6.2,1X,3X,2X,A4)' ! resid is a string
+  character(len=100), parameter :: pdbfmt='(A6,A5,1X,A4,1X,A3,2X,A4,4X,3F8.3,2F6.2,1X,3X,2X,A4)' ! treat atomid as a string
   character(len=100), parameter :: pqrfmt='*'
   character(len=100), parameter :: freefmt='*'
   character(len=100), parameter :: charmmextfmt='(I10,10X,2(2X,A8),3F20.10,2X,A8,2X,A8,F20.10)'
@@ -1214,6 +1215,7 @@ module system
   integer :: ioerr
   float :: x,y,z,occ,bf,d
   character(len=8) :: aname='UNKNOWN', resname='UNKNOWN', segid='UNKNOWN', resid='UNKNOWN'
+  character(len=5) :: atomid_str
 !
   character(len=*) :: filename
   character(len=len(filename)) :: fname
@@ -1224,6 +1226,7 @@ module system
   bool :: fext=.false.
   bool :: found=.false.
   bool :: qinit=.false.
+  bool :: qbadatomid=.false. ! whether all atom ids read correctly from PDB file
 !
   fname=filename
   call adjustleft(fname)
@@ -1309,7 +1312,8 @@ module system
    return
   endif ! paramtype CHARMM
 !
-  i=1
+  i=1 ! atom count
+  atomid=0 ! current atomid, in case we cannot read it from file (see comments below)
   do while (ioerr.eq.0)
 ! process command line
 #ifdef DEBUG
@@ -1323,8 +1327,28 @@ module system
 !
     select case(keyword(1:6))
      case('ATOM  ', 'HETATM');
-      if (paramtype.eq.'PDB') read(cmdline,fmt) keyword, atomid, aname, resname, resid, x, y, z, occ, bf, segid
-      if (paramtype.eq.'PQR') read(cmdline,fmt) keyword, atomid, aname, resname, resid, x, y, z, occ, bf
+!     NOTE : when the number of atoms exceeds 99999, the atomid field overflows and incorrect symbols are
+!     printed; if they are read as numbers, an error will be generated; instead, read the atomid as a string,
+!     and attempt to extract the number out of it; if this fails, display a warning and use the previous atomid
+!     incremented by 1.
+      if (paramtype.eq.'PDB') then
+       read(cmdline,fmt) keyword, atomid_str, aname, resname, resid, x, y, z, occ, bf, segid
+       read(atomid_str, '(I5)', IOSTAT=ioerr) j ! unsafe to read atomid
+      elseif (paramtype.eq.'PQR') then
+       read(cmdline,fmt) keyword, atomid_str, aname, resname, resid, x, y, z, occ, bf
+       read(atomid_str, *, IOSTAT=ioerr) j
+      endif
+!
+      if (ioerr.ne.0) then
+        if (.not.qbadatomid) then
+         call warning(whoami, 'COULD NOT READ ATOMID (FORMAT OVERFLOW?) WILL INCREMENT FROM PRIOR VALUE ('//itoa(atomid)//'). STRUCTURE MAY BE INCORRECT.',0)
+         qbadatomid=.true.
+        endif
+        atomid=atomid+1
+      else
+        atomid=j
+      endif
+!
      case('TER   ','END   ');
       exit ! loop over lines
      case default ! keyword not recognized; assume that we can continue (we are not enforcing the PDB standard)
