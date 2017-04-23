@@ -470,7 +470,7 @@ __SETQROOT
 #endif
 !
       character(len=8) :: key
-      int :: i, j, atom_group, ipt, nslct, ind, fr=0, iproj
+      int :: i, j, l, ipt, nslct, ind, fr=0, iproj
       type (int_vector), dimension(2) :: dist_com_list ! for storing atom indices
       float :: p(2,3) ! for point definition
       float :: vec(3)
@@ -482,20 +482,25 @@ __SETQROOT
 !     first check for CV options
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       ind=0
+!    initialize atom arrays
+      do i=1,2; call int_vector_init(dist_com_list(i)); enddo
 !     expecting 2 points or atom selections that specify each atom group in succession;
 !     process each selection sequentially
       p=zero
       ipt=zero
-      do atom_group=1,2
+      do l=1,2
 !     process vector specifications (expecting four points)
-       key=__NEXTA(comlyn, comlen)
-       if (__STRNCMP(key,'P1',2)) then
-        ipt=1 ;        qp1=.true.
-       elseif (__STRNCMP(key,'P2',2)) then
-        ipt=2 ;        qp2=.true.
-       else
+!     rule out the case that the case that the selection is provided without P1-2 prefix
+       __TRIMA(comlyn, comlen)
+       if (__INDX(comlyn, comlen, 'SELE', 4).ne.1) then ! next word is NOT select (select may occur later, or be absent altogether, which will give an error later)
+        key=__NEXTA(comlyn, comlen)
+        if (__STRNCMP(key,'P1',2)) then
+         ipt=1 ;        qp1=.true.
+        elseif (__STRNCMP(key,'P2',2)) then
+         ipt=2 ;        qp2=.true.
+        endif
+       else ! next word is select
 ! for backward compatibility reasons, assume that points are added in order ; disable warning
-!        __WARN(whoami,'VECTOR DEFINITION ERROR. EXPECTED "P[1-4]", GOT "',key,'"')
         if (ipt.lt. 2) __INC(ipt) ;
         select case(ipt)
          case(1) ; qp1=.true.
@@ -533,17 +538,16 @@ __SETQROOT
          return
         endif
 !
-        call int_vector_init(dist_com_list(atom_group))
 #ifdef __CHARMM
         do i=1,natom ! loop over all atoms
          if (iselct(i).eq.1) then
-          j=int_vector_add(dist_com_list(atom_group),i)
+          j=int_vector_add(dist_com_list(ipt),i)
           if (j.le.0) then ; __WRN(whoami,'COULD NOT ADD ATOM INDEX TO COM LIST') ; endif
          endif
         enddo
 #elif defined (__DMOL)
         do i=1,size(__INDEX)
-         j=int_vector_add(dist_com_list(atom_group),__INDEX (i))
+         j=int_vector_add(dist_com_list(ipt),__INDEX (i))
          if (j.le.0) then ; __WRN(whoami,'COULD NOT ADD ATOM INDEX TO COM LIST') ; endif
         enddo
         __FREE(__INDEX)
@@ -616,9 +620,9 @@ __SETQROOT
         endif
 !
         if (fr.gt.0) then
-         write(_MSGBUF(4),'(A,I3)') _TAB//' RELATIVE TO LOCAL FRAME ',fr
+         write(_MSGBUF(4),'(A,I3)') whoami//' RELATIVE TO LOCAL FRAME ',fr
         else
-         write(_MSGBUF(4),'(A)') _TAB//' RELATIVE TO THE ABSOLUTE FRAME'
+         write(_MSGBUF(4),'(A)') whoami//' RELATIVE TO THE ABSOLUTE FRAME'
         endif
        endif
        __PRINT(_MSGBUF) ! qroot

@@ -24,6 +24,7 @@ __CHARMM_ONLY##IF STRINGM
        function cv_dist_com_add(atom_list, p, _COMMON_ARGS, iproj, frame_, vec) result(l) ! note: i is the atom index in the PSF
        __DEP_OUTPUT
        __DEP_CONST
+       __DEP_NUMBER
        __DEP_BESTFIT
        use parser, only : itoa
        __DECLARE_MSGBUF
@@ -62,7 +63,7 @@ __CHARMM_ONLY##IF STRINGM
        do i=1,2
         ncom(i)=atom_list(i)%last
        enddo
-       if (ncom(1).eq.0.and.ncom(2).eq.0) then
+       if (all(ncom.eq.0)) then
           __WRN(whoami,' A CONSTANT DISTANCE CV IS NOT ALLOWED BECAUSE IT IS PROBABLY USELESS. NOTHING DONE.')
           return
        endif
@@ -127,7 +128,7 @@ __CHARMM_ONLY##IF STRINGM
            if (m.le.0) __WRN( whoami,' INVALID ATOM INDEX SPECIFIED.')
            cv%priv(l)%p(ind)=int_vlist_uaddu(cv%amap,m,l) ! add indices into unique map
            m=int_vector_uadd(unique_amap_ptr,cv%priv(l)%p(ind))
-           ind=ind+1
+           __INC(ind)
           enddo
          enddo
 !    real data:
@@ -137,7 +138,7 @@ __CHARMM_ONLY##IF STRINGM
          enddo;    enddo
 !        projection spec
          cv%priv(l)%p(ind)=iproj; __INC(ind)
-         if (proj.gt.0) then
+         if (iproj.gt.0) then
           cv%priv(l)%p(ind)=frame
 !    since the CV depends on atom coords through the definition of a frame,
 !    we have to add the relevant atom lists in cv%amap with the index of this cv (l)
@@ -153,7 +154,7 @@ __CHARMM_ONLY##IF STRINGM
            deallocate(indf)
           endif ! frame > 0
 ! add projection vector
-          cv%priv(i)%pr(7:9)=vec
+          cv%priv(l)%pr(7:9)=vec
           if (vnorm.lt.__ERRTOL ) then
            write(_MSGBUF,'(A)')  whoami//' A VALID PROJECTION VECTOR WAS NOT SPECIFIED.'
            write(_MSGBUF(2),'(A)')  whoami//' WILL USE THE VECTOR TO SELECTION COM IN SPECIFIED FRAME [FIRST COMPUTED VALUE]'
@@ -183,6 +184,7 @@ __CHARMM_ONLY##IF STRINGM
        subroutine cv_dist_com_calc(i,x,y,z,mass,fx,fy,fz,               &
      &                             calctheta,deriv,addforce,fext)
 !
+       __CHARMM_ONLY use sm_var, only : Id3
        __DEP_CONST
        __DEP_NUMBER
        __DEP_BESTFIT
@@ -210,8 +212,7 @@ __CHARMM_ONLY##IF STRINGM
 !      variables for cv and derivative calculations
        float :: theta, theta_proj,                                     & ! the convention is that any CV value is called `theta`
      &           com1(3), com2(3), dcom(3), dcoml(3),                  &
-     &           fx12, fy12, fz12,                                     &
-     &           f1x, f1y, f1z, f2x, f2y, f2z, f, ood, w, totm1=zero, totm2=zero
+     &           f, ood, w, totm1=zero, totm2=zero
        float :: vec(3), vecabs(3), vnorm ! projection vector (local and absolute frames) and its norm
        float :: A(3,3) ! transformation matrix (frame vectors)
        float :: dA(3,3)! derivatives of transformation matrix
@@ -230,7 +231,7 @@ __CHARMM_ONLY##IF STRINGM
        qcom1=ncom1.gt.0;  qcom2=ncom2.gt.0;
 !
        allocate(ind1(ncom1),r1(3,ncom1),m1(ncom1))
-       allocate(ind2(ncom2),r2(3,ncom2),m1(ncom2))
+       allocate(ind2(ncom2),r2(3,ncom2),m2(ncom2))
 !       allocate(indpsf1(ncom1),indpsf2(ncom2))
 !
 !     extract indices into the atom map
@@ -307,7 +308,7 @@ __CHARMM_ONLY##IF STRINGM
 ! compute projection component of distance :
          theta_proj=dot_product(dcoml,vec) ! this quantity can be negative
          theta=abs(theta_proj) ! projection distance is direction-invariant and positive
-         if (qortho) theta=sqrt(dot_product(dcom,dcom) - theta**2) ! distance within a plane
+         if (qortho) theta=sqrt ( max(zero,dot_product(dcom,dcom) - theta**2) ) ! distance within a plane
 ! NOTE that |dcom|^2 equals |dcoml|^2 because A is a pure rotation
 !=====================================================
         else ! not qproj : compute regular distance
@@ -371,6 +372,8 @@ __CHARMM_ONLY##IF STRINGM
            enddo ! over frame atoms
            deallocate(indf)
           endif ! qframe
+         else
+          f=zero
          endif ! qproj
 !
 !      __DBGOUT(*, whoiam, 'computed frame component')
@@ -396,8 +399,8 @@ __CHARMM_ONLY##IF STRINGM
           __INCR( cv%grady(i,ind,1), dummy3(2))
           __INCR( cv%grady(i,ind,2), dummy3(2)*w)
 !    gradz
-          __INCR( cv%gradz(i,ind,1), dummy3(2))
-          __INCR( cv%gradz(i,ind,2), dummy3(2)*w)
+          __INCR( cv%gradz(i,ind,1), dummy3(3))
+          __INCR( cv%gradz(i,ind,2), dummy3(3)*w)
          enddo ! ncom1
 ! second group :
          do j=1,ncom2
@@ -417,8 +420,8 @@ __CHARMM_ONLY##IF STRINGM
           __INCR( cv%grady(i,ind,1), dummy3(2))
           __INCR( cv%grady(i,ind,2), dummy3(2)*w)
 !    gradz
-          __INCR( cv%gradz(i,ind,1), dummy3(2))
-          __INCR( cv%gradz(i,ind,2), dummy3(2)*w)
+          __INCR( cv%gradz(i,ind,1), dummy3(3))
+          __INCR( cv%gradz(i,ind,2), dummy3(3)*w)
          enddo ! ncom1
 
         endif ! deriv
@@ -492,7 +495,7 @@ __CHARMM_ONLY##IF STRINGM
         ii=3;    jj=ii+ncom1-1; ind1=cv%priv(i)%p(ii:jj)
         ii=jj+1; jj=ii+ncom2-1; ind2=cv%priv(i)%p(ii:jj)
 !
-        write(_MSGBUF,'(A)') _TAB//' DISTANCE BETWEEN POINTS, POINT 1'            ; __PRINT(_MSGBUF)
+        write(_MSGBUF,'(A)') _TAB//' DISTANCE BETWEEN POINTS'            ; __PRINT(_MSGBUF)
 !    first point:
         if (ncom1.eq.0) then ! constant point
          write(_MSGBUF,'(A,3(F11.5,", "))') _TAB//' POINT 1, CONSTANT: ',p(1,:)  ; __PRINT(_MSGBUF)
@@ -506,7 +509,7 @@ __CHARMM_ONLY##IF STRINGM
         endif
 !    second point
         if (ncom2.eq.0) then ! constant point
-         write(_MSGBUF,'(A,3(F11.5,", "))') _TAB//' POINT 2, CONSTANT: ',p(1,:)  ; __PRINT(_MSGBUF)
+         write(_MSGBUF,'(A,3(F11.5,", "))') _TAB//' POINT 2, CONSTANT: ',p(2,:)  ; __PRINT(_MSGBUF)
         else
          write(_MSGBUF,'(A)') _TAB//' POINT 2, COM OF ATOM GROUP:'            ; __PRINT(_MSGBUF)
          do j=1, ncom2;
