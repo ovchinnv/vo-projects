@@ -8,6 +8,7 @@ __CHARMM_ONLY##IF STRINGM
 !
       use cv_common
       use cv_types
+      use cv_frames
       use ivector ! vector class for storing atom lists
       use ivector_list
 !
@@ -20,18 +21,55 @@ __CHARMM_ONLY##IF STRINGM
 !
       contains
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       function cv_dist_com_add(atom_list,_COMMON_ARGS) result(l) ! note: i is the atom index in the PSF
+       function cv_dist_com_add(atom_list, p, _COMMON_ARGS, iproj, frame_, vec) result(l) ! note: i is the atom index in the PSF
        __DEP_OUTPUT
+       __DEP_CONST
+       __DEP_NUMBER
+       __DEP_BESTFIT
+       use parser, only : itoa
+       __DECLARE_MSGBUF
+!
        float  :: _COMMON_ARGS
        type (int_vector), dimension(2) :: atom_list
+       float, dimension(2,3) :: p ! fixed points (set to zero if not used)
+       int, intent(in) :: iproj ! 0 - no projection, 1 - distance along projection, 2 - distance in plane orthogonal to projection
+       int, intent(in) :: frame_ ! reference frame
+       float, intent(in) :: vec(3)
 !      locals
-       int :: i, j, l, m, ind, num_int, ncom(2)
+       int :: i, j, l, m, ind, num_int, ncom(2), ii, jj, ncomf, frame
+       int, pointer :: indf(:)
        bool :: found
+       float :: vnorm
        type (int_vector) :: unique_amap_ptr ! contains a unique list of atom map pointers (to speed up gradient computation, etc)
 !
        __IAM(CV_DIST_COM_ADD)
 !
+!
+       select case(iproj)
+        case(0); ! nothing to check
+        case(1,2) ;
+!cccccccccccccccc  check frame indices ccccccccccccccccccccccccccccccccc
+         if (frame_.ge.0.and.frame_.le.frames%num_frames) then
+          frame=frame_
+         else
+          __WRN( whoami,' INVALID FRAME SPECIFIED. WILL USE FIXED COORDINATE SYSTEM.')
+          frame=0
+         endif
+        case default
+          __WRN( whoami,' INVALID DISTANCE TYPE SPECIFIED ('//itoa(iproj)//'. NOTHING DONE.')
+       end select ! iproj
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+! make sure that at least one atom group exists
+       do i=1,2
+        ncom(i)=atom_list(i)%last
+       enddo
+       if (all(ncom.eq.0)) then
+          __WRN(whoami,' A CONSTANT DISTANCE CV IS NOT ALLOWED BECAUSE IT IS PROBABLY USELESS. NOTHING DONE.')
+          return
+       endif
+!
        l=0
+       vnorm=norm3(vec)
 !    check for duplicate CV (exact identical entry only)
        found=.false.
        do l=1, cv%num_cv
@@ -49,7 +87,27 @@ __CHARMM_ONLY##IF STRINGM
            ind=ind+1
           enddo
          enddo
-        endif
+         if (found) found=(iproj.eq.cv%priv(l)%p(ind)); __INC(ind)      ! check distance type
+         if (found .and. iproj.gt.0) found=(frame.eq.cv%priv(l)%p(ind)) ! check frame index
+!
+! second, check real private data
+! distance vector spec
+         ind=1
+         do i=1,2; do j=1,3
+                    if (found) found=(p(i,j).eq.cv%priv(l)%pr(ind))
+                    __INC(ind)
+         enddo;    enddo
+! projection vector spec
+! the convention is that if a vector is determined from selection, its norm will be nonpositive (abs taken at calc)
+!
+         if (cv%priv(l)%pr(10).gt.0) then
+          if (found) found=(vnorm.gt.0) ! check that norm is positive
+          if (found) found=norm3( vec/vnorm - cv%priv(l)%pr(10)*cv%priv(l)%pr(7:9) ).lt.__ERRTOL ! check that vectors are the same
+         else ! the value of the cv vector norm is zero (or negative, which means that it was initialized w/ zero)
+          if (found) found=vnorm.eq.zero ! atom selections are the same, and both vectors are to be computed at first calc. assume a duplicate
+         endif
+!
+        endif ! type
         if (found) exit
        enddo
 !
@@ -58,8 +116,7 @@ __CHARMM_ONLY##IF STRINGM
         if  (l.gt.0) then
 !     allocate private data
 !     space needed:
-         do i=1,2 ; ncom(i)=atom_list(i)%last ; enddo
-         num_int = 2 + sum(ncom) ! number of ints needded for storage
+         num_int = 2 + sum(ncom) + 2 ! number of ints needded for storage
 !
          allocate(cv%priv(l)%p(num_int));
          cv%priv(l)%p(1:2)=ncom(1:2)
@@ -71,9 +128,43 @@ __CHARMM_ONLY##IF STRINGM
            if (m.le.0) __WRN( whoami,' INVALID ATOM INDEX SPECIFIED.')
            cv%priv(l)%p(ind)=int_vlist_uaddu(cv%amap,m,l) ! add indices into unique map
            m=int_vector_uadd(unique_amap_ptr,cv%priv(l)%p(ind))
-           ind=ind+1
+           __INC(ind)
           enddo
          enddo
+!    real data:
+         allocate(cv%priv(l)%pr(10));
+         do i=1,2; do j=1,3
+                    cv%priv(l)%pr(j+(i-1)*3)=p(i,j)
+         enddo;    enddo
+!        projection spec
+         cv%priv(l)%p(ind)=iproj; __INC(ind)
+         if (iproj.gt.0) then
+          cv%priv(l)%p(ind)=frame
+!    since the CV depends on atom coords through the definition of a frame,
+!    we have to add the relevant atom lists in cv%amap with the index of this cv (l)
+          if (frame.gt.0) then
+           ncomf=frames%priv(frame)%p(1); ! number of atoms that define the frame
+           allocate(indf(ncomf));      ! allocate temporary array for indices into amap
+           ii=2; jj=ii+ncomf-1;        ! range in the private array that corresponds to indices
+           indf=frames%priv(frame)%p(ii:jj) ! copy atom indices from amap into temporary array
+           do j=1, ncomf ! loop over frame atoms (amap indices)
+             i=int_vector_uadd(cv%amap%v(indf(j)),l) ! add index of this cv (l) to the list corr. to amap index indf(j)
+             i=int_vector_uadd(unique_amap_ptr,indf(j)) ! add index of the frame atom to the list of unique atom labels
+           enddo
+           deallocate(indf)
+          endif ! frame > 0
+! add projection vector
+          cv%priv(l)%pr(7:9)=vec
+          if (vnorm.lt.__ERRTOL ) then
+           write(_MSGBUF,'(A)')  whoami//' A VALID PROJECTION VECTOR WAS NOT SPECIFIED.'
+           write(_MSGBUF(2),'(A)')  whoami//' WILL USE THE VECTOR TO SELECTION COM IN SPECIFIED FRAME [FIRST COMPUTED VALUE]'
+           write(_MSGBUF(3),'(A)')  whoami//' MAKE SURE THAT THE FRAME IS DEFINED CORRECTLY PRIOR TO COMPUTATION [INCLUDING ALIGNMENT].'
+           __PRINT(_MSGBUF)
+          else
+           vnorm=one/vnorm ! store reciprocal
+          endif
+          cv%priv(l)%pr(10)=vnorm
+         endif ! iproj
 !
          m=unique_amap_ptr%last ! number of unique atoms this cv depends on
          allocate(cv%priv(l)%amap_ptr(m+1)) ! add one to include length of list
@@ -93,8 +184,10 @@ __CHARMM_ONLY##IF STRINGM
        subroutine cv_dist_com_calc(i,x,y,z,mass,fx,fy,fz,               &
      &                             calctheta,deriv,addforce,fext)
 !
+       __CHARMM_ONLY use sm_var, only : Id3
        __DEP_CONST
        __DEP_NUMBER
+       __DEP_BESTFIT
 !
        float :: x(:), y(:), z(:),                                      &
      &           fx(:), fy(:), fz(:), mass(:)
@@ -106,30 +199,39 @@ __CHARMM_ONLY##IF STRINGM
        bool :: addforce ! whether or not to add forces on simulation atoms
 !
        float, parameter :: tol=1.0e-10
-       float :: dummy
+       float :: dummy, dummy3(3)
 !
-       int, pointer, dimension(:) :: ind1, ind2
+       int, pointer, dimension(:) :: ind1, ind2, indf
 !     &                           ,indpsf1, indpsf2
-       float, pointer, dimension(:)  :: x1, x2
-       float, pointer, dimension(:)  :: y1, y2
-       float, pointer, dimension(:)  :: z1, z2
+       float, pointer, dimension(:,:)  :: r1, r2
        float, pointer, dimension(:)  :: m1, m2
 !
-       int :: ncom1, ncom2, ind ! , indpsf
-       int :: j, ii, jj
+       int :: ncom1, ncom2, ind, ncomf ! , indpsf
+       int :: j, k, ii, jj, &
+     &                  fr ! frame index
 !      variables for cv and derivative calculations
-       float :: theta,                                                 & ! the convention is that any CV value is called `theta`
-     &           xcom1, xcom2, ycom1, ycom2, zcom1, zcom2,              &
-     &           dx12, dy12, dz12, fx12, fy12, fz12,                    &
-     &           f1x, f1y, f1z, f2x, f2y, f2z, f, w, totm1, totm2
+       float :: theta, theta_proj,                                     & ! the convention is that any CV value is called `theta`
+     &           com1(3), com2(3), dcom(3), dcoml(3),                  &
+     &           f, ood, w, totm1=zero, totm2=zero
+       float :: vec(3), vecabs(3), vnorm ! projection vector (local and absolute frames) and its norm
+       float :: A(3,3) ! transformation matrix (frame vectors)
+       float :: dA(3,3)! derivatives of transformation matrix
+
+       bool :: qframe=.false., qcom1, qcom2, &
+     &   qproj, & ! whether to compute a 1-component projection distance ; requires vector computed in 'vec' above
+     &   qortho   ! whether to compute a 2D distance with 1 component projected out
        int, pointer :: priv(:)
+!
+       __IAM(CV_DIST_COM_CALC)
 !      do work:
 ! look up atom index in the private array of CV i; obtain the PSF index from amap
        ncom1=cv%priv(i)%p(1)
        ncom2=cv%priv(i)%p(2)
+!     determine which points are atom selections and which are constant
+       qcom1=ncom1.gt.0;  qcom2=ncom2.gt.0;
 !
-       allocate(ind1(ncom1),x1(ncom1),y1(ncom1),z1(ncom1),m1(ncom1))
-       allocate(ind2(ncom2),x2(ncom2),y2(ncom2),z2(ncom2),m2(ncom2))
+       allocate(ind1(ncom1),r1(3,ncom1),m1(ncom1))
+       allocate(ind2(ncom2),r2(3,ncom2),m2(ncom2))
 !       allocate(indpsf1(ncom1),indpsf2(ncom2))
 !
 !     extract indices into the atom map
@@ -139,61 +241,85 @@ __CHARMM_ONLY##IF STRINGM
        do j=1, ncom1;
         ind=cv%amap%i(ind1(j)) ! actual psf index
 !        indpsf1(j)=ind ;
-                      x1(j)=x(ind) ; y1(j)=y(ind) ; z1(j)=z(ind) ;
-                      m1(j)=mass(ind)
+         r1(1,j)=x(ind) ; r1(2,j)=y(ind) ; r1(3,j)=z(ind) ; m1(j)=mass(ind)
        enddo
        do j=1, ncom2;
         ind=cv%amap%i(ind2(j))
 !        indpsf2(j)=ind;
-                      x2(j)=x(ind); y2(j)=y(ind) ; z2(j)=z(ind)
-                      m2(j)=mass(ind)
+         r2(1,j)=x(ind) ; r2(2,j)=y(ind) ; r2(3,j)=z(ind) ; m2(j)=mass(ind)
        enddo
 !    now we have all the coordinates needed to compute distance and its derivative :
 !    set this CV energy to zero by default
 !       cv%r(i,energy)=zero
 !
        if (calctheta) then
-!
-        totm1=one/sum(m1); totm2=one/sum(m2);
 !    normalize masses
-        m1=m1*totm1;  m2=m2*totm2;
+        if (qcom1) then ; totm1=one/sum(m1); m1=m1*totm1; endif
+        if (qcom2) then ; totm2=one/sum(m2); m2=m2*totm2; endif
 !
-        xcom1=zero; xcom2=zero;
-        ycom1=zero; ycom2=zero;
-        zcom1=zero; zcom2=zero;
-        do j=1, ncom1;
-         xcom1=xcom1+x1(j)*m1(j);
-         ycom1=ycom1+y1(j)*m1(j);
-         zcom1=zcom1+z1(j)*m1(j);
-        enddo
-        do j=1, ncom2;
-         xcom2=xcom2+x2(j)*m2(j);
-         ycom2=ycom2+y2(j)*m2(j);
-         zcom2=zcom2+z2(j)*m2(j);
-        enddo
-!      compute centers of mass
-!       xcom1=xcom1*totm1; ycom1=ycom1*totm1; zcom1=zcom1*totm1;
-!       xcom2=xcom2*totm2; ycom2=ycom2*totm2; zcom2=zcom2*totm2;
+        com1=zero; com2=zero;
+        do k=1,3;
+         do j=1, ncom1;
+          com1(k)=com1(k)+r1(k,j)*m1(j); ! center of mass in absolute frame
+         enddo
+         do j=1, ncom2;
+          com2(k)=com2(k)+r2(k,j)*m2(j)
+         enddo ! j
+        enddo ! k - components
 !
-        dx12=xcom2-xcom1;  dy12=ycom2-ycom1;  dz12=zcom2-zcom1;
+!      now compute vector
+!       constant contribution
+        dcom=cv%priv(i)%pr(4:6)-cv%priv(i)%pr(1:3)
+!      add atomic contribution
+        __INCR(dcom,com2-com1)
+! is this a projected distance ?
+        qproj=cv%priv(i)%p(jj+1).gt.0              ! distance along 1D projection
+        qortho=qproj.and.(cv%priv(i)%p(jj+1).gt.1) ! distance within a plane orthogonal to vector
 !
-        theta=sqrt(dx12*dx12 + dy12*dy12 + dz12*dz12)
+        if (qproj) then
+!      compute displacement vector p (possibly in local coordinates) :
+!      extract frame index
+         fr=cv%priv(i)%p(jj+2)
+         qframe=fr.gt.0
+         if (qframe) then ! if this position is relative to a local frame, obtain frame gradients
+          call frames_calc(fr,x,y,z,mass,deriv)
+!          A=transpose(frames%r(:,:,frame)); ! transformation matrix
+          A=frames%r(:,:,fr); ! making transposition implicit
+!          dcoml=matmul(A,dcom); ! components in local frame
+          dcoml=matmul(dcom,A); ! transposition implicit
+         else ! qframe
+          A=Id3;  ! identity
+          dcoml=dcom; ! trivial transformation
+         endif ! qframe
+!
+!      check that the projection vector is defined properly
+         if (cv%priv(i)%pr(10).eq.zero) then ! this is the first calculation; set vector from p
+          vnorm=norm3(dcoml)
+          if (vnorm.gt.__ERRTOL) then ! only if norm nonzero
+           cv%priv(i)%pr(7:9)=dcoml
+           cv%priv(i)%pr(10)=-one/vnorm ! keep negative as indicator
+          else
+           __WRN(whoami, 'CANNOT SET PROJECTION VECTOR: SELECTION COM IS AT FRAME ORIGIN.')
+          endif
+         endif
+! normalized projection vector
+         vec = cv%priv(i)%pr(7:9) * abs(cv%priv(i)%pr(10)) ! normalized to one
+         if (deriv) vecabs=matmul(A,vec) ! projection vector in absolute frame
+! compute projection component of distance :
+         theta_proj=dot_product(dcoml,vec) ! this quantity can be negative
+         theta=abs(theta_proj) ! projection distance is direction-invariant and positive
+         if (qortho) theta=sqrt ( max(zero,dot_product(dcom,dcom) - theta**2) ) ! distance within a plane
+! NOTE that |dcom|^2 equals |dcoml|^2 because A is a pure rotation
+!=====================================================
+        else ! not qproj : compute regular distance
+         theta=sqrt(dot_product(dcom,dcom))
+        endif ! qproj
+!
         cv%r(i,previnst)=cv%r(i,instant)
         cv%r(i,instant)=theta
-!cccccccccccccccccc now compute derivative
+!================== now compute derivative
         if (deriv) then
-         if (theta.gt.tol) then
-          f=one/theta
-         else
-          f=one ! avoid singularity at near zero separation
-         endif
-         fx12=f*dx12; fy12=f*dy12; fz12=f*dz12
-!     compute derivatives w.r.t COMs:
-         f1x=-fx12; f1y=-fy12; f1z=-fz12;
-         f2x= fx12; f2y= fy12; f2z= fz12;
-!     compute derivatives w.r.t. COM components
 !     initialize derivative arrays
-!         do j=1,cv%amap%last
          priv=>cv%priv(i)%amap_ptr ! this should copy the pointers statically; the pointers point to the _same_ data
          do jj=2,priv(1)+1 ! only a subset of indices needs to be considered
           j=priv(jj)
@@ -202,42 +328,102 @@ __CHARMM_ONLY##IF STRINGM
           cv%gradx(i,j,ii)=zero;cv%grady(i,j,ii)=zero;cv%gradz(i,j,ii)=zero
           enddo
          enddo
-!     loop over all groups
-!     COM1
-!     loop over all relevant indices in the map
+!     compute derivative prefactor
+         if (theta.gt.tol) then
+          ood=one/theta
+         else
+          ood=one ! avoid singularity at near zero separation
+         endif
+!     projection distance :
+         if (qproj) then
+          f=ood*theta_proj ! projection prefactor
+          if (qortho) f=-f ! subtracting projection force from total force (to be computed below)
+!     contribution from frame atoms :
+          if (qframe) then
+!    extract frame indices (need to compute gradients w.r.t atoms that define the frame!)
+           ncomf=frames%priv(fr)%p(1);
+           allocate(indf(ncomf));
+           ii=2; jj=ii+ncomf-1;
+           indf=frames%priv(fr)%p(ii:jj)
+!     derivatives wrt atoms that define the frame
+!     loop over all atoms in the frame definition
+!     note implicited transposition
+           do j=1, ncomf ! loop over frame atoms
+            ind=indf(j) ! index into atom map
+            w=one/sqrt(mass(cv%amap%i(ind))) ! actual psf index
+!    gradx
+!           dA=transpose(frames%gradrx(:,:,ind,fr))
+            dA=frames%gradrx(:,:,ind,fr)
+            dummy=f*dot_product(matmul(dcom,dA),vec) ! note implicit transposition
+            cv%gradx(i,ind,1)=dummy
+            cv%gradx(i,ind,2)=dummy*w
+!    grady
+!           dA=transpose(frames%gradry(:,:,ind,frame))
+            dA=frames%gradry(:,:,ind,fr)
+            dummy=f*dot_product(matmul(dcom,dA),vec)
+            cv%grady(i,ind,1)=dummy
+            cv%grady(i,ind,2)=dummy*w
+!    gradz
+!           dA=transpose(frames%gradrz(:,:,ind,frame))
+            dA=frames%gradrz(:,:,ind,fr)
+            dummy=f*dot_product(matmul(dcom,dA),vec)
+            cv%gradz(i,ind,1)=dummy
+            cv%gradz(i,ind,2)=dummy*w
+           enddo ! over frame atoms
+           deallocate(indf)
+          endif ! qframe
+         else
+          f=zero
+         endif ! qproj
+!
+!      __DBGOUT(*, whoiam, 'computed frame component')
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+!     derivatives wrt actual position coordinates
+         dcom=ood*dcom   ! scale distance vector
+         vecabs=f*vecabs ! scale projection vector
+!     loop over all atoms in the CV COM
          do j=1,ncom1
           ind=ind1(j)
           w=sqrt(totm1/m1(j)) ! for mass-weighting
-!
-          f=f1x*m1(j)
-          cv%gradx(i,ind,1)=f ! derivative w.r.t x component of atom indpsf1(j)
-          cv%gradx(i,ind,2)=f*w
-!
-          f=f1y*m1(j)
-          cv%grady(i,ind,1)=f
-          cv%grady(i,ind,2)=f*w
-!
-          f=f1z*m1(j)
-          cv%gradz(i,ind,1)=f
-          cv%gradz(i,ind,2)=f*w
-         enddo
-!     COM2
+          if (qproj) then
+           dummy3=vecabs ! note the implicited transposition above, i.e. A here is no longer A^T, but A
+           if (qortho) __INCR(dummy3, dcom)
+          else
+           dummy3=dcom
+          endif
+          dummy3 = -m1(j)*dummy3 ! mass weight from COM coordinate
+!    gradx
+          __INCR( cv%gradx(i,ind,1), dummy3(1))
+          __INCR( cv%gradx(i,ind,2), dummy3(1)*w)
+!    grady
+          __INCR( cv%grady(i,ind,1), dummy3(2))
+          __INCR( cv%grady(i,ind,2), dummy3(2)*w)
+!    gradz
+          __INCR( cv%gradz(i,ind,1), dummy3(3))
+          __INCR( cv%gradz(i,ind,2), dummy3(3)*w)
+         enddo ! ncom1
+! second group :
          do j=1,ncom2
           ind=ind2(j)
-          w=sqrt(totm2/m2(j))
-!
-          f=f2x*m2(j)
-          cv%gradx(i,ind,1)=cv%gradx(i,ind,1)+f
-          cv%gradx(i,ind,2)=cv%gradx(i,ind,2)+f*w
-!
-          f=f2y*m2(j)
-          cv%grady(i,ind,1)=cv%grady(i,ind,1)+f
-          cv%grady(i,ind,2)=cv%grady(i,ind,2)+f*w
-!
-          f=f2z*m2(j)
-          cv%gradz(i,ind,1)=cv%gradz(i,ind,1)+f
-          cv%gradz(i,ind,2)=cv%gradz(i,ind,2)+f*w
-         enddo
+          w=sqrt(totm2/m2(j)) ! for mass-weighting
+          if (qproj) then
+           dummy3=vecabs
+           if (qortho) __INCR(dummy3, dcom)
+          else
+           dummy3=dcom
+          endif
+          dummy3 = m2(j)*dummy3 ! mass weight from COM coordinate
+!    gradx
+          __INCR( cv%gradx(i,ind,1), dummy3(1))
+          __INCR( cv%gradx(i,ind,2), dummy3(1)*w)
+!    grady
+          __INCR( cv%grady(i,ind,1), dummy3(2))
+          __INCR( cv%grady(i,ind,2), dummy3(2)*w)
+!    gradz
+          __INCR( cv%gradz(i,ind,1), dummy3(3))
+          __INCR( cv%gradz(i,ind,2), dummy3(3)*w)
+         enddo ! ncom1
+
         endif ! deriv
        else ! .not.calctheta
         theta=cv%r(i,instant)
@@ -265,7 +451,7 @@ __CHARMM_ONLY##IF STRINGM
        endif ! addforce
 !     free memory
        deallocate(ind1, ind2,                                           & ! indpsf1, indpsf2,
-     &            x1, x2, y1, y2, z1, z2,m1, m2)
+     &            r1, r2, m1, m2)
        end subroutine cv_dist_com_calc
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_dist_com_list(i)
@@ -273,13 +459,16 @@ __CHARMM_ONLY##IF STRINGM
        __DEP_MULTICOM
        __DEP_MPI 
        __DEP_ATOMID
+       __DEP_CONST
+       use sm_var
  __DECLARE_MSGBUF
 !
-       int :: i, j, type, ii, jj, iatom
+       int :: i, j, k, type, ii, jj, iatom
        character(len=8) :: sid, rid, ren, ac
 !
-       int :: ncom1, ncom2
+       int :: ncom1, ncom2, iproj, ifr
        int, pointer, dimension(:) :: ind1, ind2
+       float :: p(2,3), vec(3), vnorm
        __IAM(CV_DIST_COM_LIST)
 !
 !
@@ -298,24 +487,67 @@ __CHARMM_ONLY##IF STRINGM
 !
         allocate(ind1(ncom1),ind2(ncom2))
 !
+!    extract constant points
+        do j=1,2; do k=1,3
+                    p(j,k)=cv%priv(i)%pr(k+(j-1)*3)
+        enddo;    enddo
 !     extract indices into the atom map
         ii=3;    jj=ii+ncom1-1; ind1=cv%priv(i)%p(ii:jj)
         ii=jj+1; jj=ii+ncom2-1; ind2=cv%priv(i)%p(ii:jj)
 !
-        write(_MSGBUF,'(A)') _TAB//' DISTANCE-COM, GROUP 1'            ; __PRINT(_MSGBUF)
-        do j=1, ncom1;
-         iatom=cv%amap%i(ind1(j)) ! actual psf index
-         __ATOMID(iatom, sid, rid, ren, ac)
-         write(_MSGBUF,667) _TAB,j, iatom, sid, rid, ren, ac       ; __PRINT(_MSGBUF)
-        enddo
-        write(_MSGBUF,'(A)') _TAB//' DISTANCE-COM, GROUP 2'            ; __PRINT(_MSGBUF)
-        do j=1, ncom2;
-         iatom=cv%amap%i(ind2(j))
-         __ATOMID(iatom, sid, rid, ren, ac)
-         write(_MSGBUF,667) _TAB,j, iatom, sid, rid, ren, ac       ; __PRINT(_MSGBUF)
-        enddo
+        write(_MSGBUF,'(A)') _TAB//' DISTANCE BETWEEN POINTS'            ; __PRINT(_MSGBUF)
+!    first point:
+        if (ncom1.eq.0) then ! constant point
+         write(_MSGBUF,'(A,3(F11.5,", "))') _TAB//' POINT 1, CONSTANT: ',p(1,:)  ; __PRINT(_MSGBUF)
+        else
+         write(_MSGBUF,'(A)') _TAB//' POINT 1, COM OF ATOM GROUP:'            ; __PRINT(_MSGBUF)
+         do j=1, ncom1;
+          iatom=cv%amap%i(ind1(j)) ! actual psf index
+          __ATOMID(iatom, sid, rid, ren, ac)
+          write(_MSGBUF,667) _TAB,j, iatom, sid, rid, ren, ac       ; __PRINT(_MSGBUF)
+         enddo
+        endif
+!    second point
+        if (ncom2.eq.0) then ! constant point
+         write(_MSGBUF,'(A,3(F11.5,", "))') _TAB//' POINT 2, CONSTANT: ',p(2,:)  ; __PRINT(_MSGBUF)
+        else
+         write(_MSGBUF,'(A)') _TAB//' POINT 2, COM OF ATOM GROUP:'            ; __PRINT(_MSGBUF)
+         do j=1, ncom2;
+          iatom=cv%amap%i(ind2(j))
+          __ATOMID(iatom, sid, rid, ren, ac)
+          write(_MSGBUF,667) _TAB,j, iatom, sid, rid, ren, ac       ; __PRINT(_MSGBUF)
+         enddo
+        endif
         deallocate(ind1,ind2)
-       endif
+!
+        iproj=cv%priv(i)%p(jj+1)
+        if (iproj.gt.0) then
+         select case(iproj)
+          case(1);
+          write(_MSGBUF(1), '(A)') _TAB//' DISTANCE IS MEASURED ALONG A PROJECTION VECTOR'
+          case(2);
+          write(_MSGBUF(1), '(A)') _TAB//' DISTANCE IS MEASURED WITHIN THE PLANE ORTHOGONAL TO A PROJECTION VECTOR'
+          case default;
+          __WRN(whoami, ' UNKNOWN DISTANCE TYPE.')
+         end select
+!    extract vector
+         vnorm=cv%priv(i)%pr(10)
+         vec=cv%priv(i)%pr(7:9)
+         if (abs(vnorm).lt.__ERRTOL) then
+          write(_MSGBUF(2), '(A)') _TAB//' PROJECTION VECTOR WILL BE DEFINED AS THE FIRST COMPUTED DISTANCE VECTOR'
+         elseif(vnorm.gt.0) then
+          write(_MSGBUF(2),'(A,3'//real_fmt//',A)')  whoami//' THE PROJECTION VECTOR IS ( ', vec, ' )'
+         else ! <0
+          write(_MSGBUF(2),'(A,3'//real_fmt//',A)')  whoami//' THE PROJECTION VECTOR WAS SET FROM THE FIRST COMPUTED DISTANCE VECTOR AS ( ',vec, ' )'
+         endif
+         __PRINT(_MSGBUF)
+!    check reference frame
+         ifr=cv%priv(i)%p(jj+2)
+         if (ifr.gt.0) &
+     &    write(_MSGBUF,'(A, I3)')                                          &
+     &    _TAB//' PROJECTION VECTOR IS SPECIFIED IN THE LOCAL FRAME ',ifr
+        endif ! iproj
+       endif ! ME_STRNG
 !
  667  format(A,2I8,' ',4A)
 !
