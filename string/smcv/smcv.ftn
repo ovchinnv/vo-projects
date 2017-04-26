@@ -72,6 +72,7 @@ __CHARMM_ONLY##IF STRINGM
       __DEP_COORIO
 __CHARMM_ONLY use coorio_mod ! dependency hack
       __DEP_FILES
+      __DEP_RANDOM
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       __IMPNONE
 !
@@ -122,6 +123,10 @@ __CHARMM_ONLY use coorio_mod ! dependency hack
       bool :: lresid
 #elif defined (__DMOL)
       int :: ifmt
+#endif
+!
+#ifndef __CHARMM
+      int, pointer :: random_seeds(:,:)=>NULL() ! random seeds for seamless BD evolution for TAMD
 #endif
 !
       bool :: interp_cv, inte_get_coor, qcomp
@@ -315,10 +320,10 @@ __MPI_ONLY     &         1, MPI_LOGICAL, MPI_LAND, MPI_COMM_STRNG, ierror)
         endif
 !
         evolve_bd_on=(__INDX_RM(comlyn,comlen,'BD').gt.0) ! use brownian dynamics (M not used); for T-accelerated sampling
-        if (evolve_bd_on) then
-!       evolve step specified above (will modify this section later)
-         evolve_bd_T=__GET_RM_F(comlyn,comlen,'TEMP',zero)
-        endif
+#ifndef __CHARMM
+! initialize RNG
+        if (qroot .and. .not.random_initialized) call random_init() ! only roots perform evolution
+#endif
 !
         evolve_aver_on=(__INDX_RM(comlyn,comlen,'AVER').gt.0) ! z=mean(theta)
         if (evolve_aver_on) then
@@ -427,9 +432,9 @@ __MPI_ONLY     &         1, MPI_LOGICAL, MPI_LAND, MPI_COMM_STRNG, ierror)
  672  format(A,' WILL EVOLVE CV BY SMOOTHING MD TRAJECTORY',/,          &
      &       A,' USING FILTER WIDTH D=',F8.3)
             elseif (evolve_bd_on) then
-               write(_MSGBUF,6720) whoami, whoami, evolve_step, evolve_bd_T ; __PRINT(_MSGBUF)
- 6720 format(A,' WILL EVOLVE CV USING BD ADVANCEMENT',/,                &
-     &       A,' AT T=',F8.3,' WITH STEP=',F11.5)
+               write(_MSGBUF,6720) whoami, evolve_step ; __PRINT(_MSGBUF)
+ 6720 format(A,' WILL EVOLVE CV USING BD ADVANCEMENT WITH STEP=',F11.5, &
+     &       A,' AT THE EVOLUTION TEMPERATURES SPECIFIED FOR EACH CV.' )
             elseif (evolve_smcv_on) then
                write(_MSGBUF,673) whoami, whoami, evolve_step ; __PRINT(_MSGBUF)
  673  format(A,' WILL EVOLVE CV USING SMCV ADVANCEMENT ',/,             &
@@ -807,6 +812,110 @@ __MPI_ONLY     &       cv%voronoi_map, 1, mpiint, MPI_COMM_STRNG, ierror)
          endif ! flen
         endif ! VMAP
        endif ! VCUT
+! for now, it is unclear how to best provide seamless RNG series in CHARMM
+#ifndef __CHARMM
+!============================ SEEDS FOR RNG =============================
+      elseif (__STRNCMP(keyword,'RSEE',4)) then ! RNG parser
+       keyword=__NEXTA(comlyn,comlen)
+       if (__STRNCMP(keyword, 'READ',4)) then
+        qall = max( __INDX_RM(comlyn,comlen,'ALL'),__INDX_RM(comlyn,comlen,'LOCAL')) ! whether to read on all nodes
+!
+!      prepare file
+        ifile=__GET_RM_I(comlyn,comlen,'UNIT',-1)
+        __GET_RM_A(COMLYN,COMLEN,'NAME',4,FNAME,80,FLEN)
+!        note: flen will be UPPER CASE
+        if (qroot) then
+!cccccccccccccccccccccccccccc OPEN FILE ccccccccccccccccccccccc
+         if (qall.gt.0.or.qprint) then
+          if (flen.gt.0) then ; __OPEN_FILE(ifile,fname,'FORMATTED','READ') ; endif
+         endif
+         if(ifile .eq. -1) then
+          __WRN(whoami, 'CANNOT OPEN FILE "'//trim(fname)//'". NOTHING DONE')
+          return
+         endif
+!cccccccccccccccccccccccccccc ^OPEN FILE^ cccccccccccccccccccccc
+         if (qprint) then ; write(_MSGBUF,'(2A)') whoami, ' READING RANDOM NUMBER SEEDS FROM FILE" '//trim(fname)//'"' ; __PRINT(_MSGBUF) ; endif
+         __FREE(random_seeds)
+         allocate(random_seeds(4,nstring)) ! allocate enough space for all roots
+         if (qall.gt.0) then ! local read on all string roots
+          read(ifile,*) random_seeds(:,mestring+1)
+         else ! string root reads and scatters to other roots
+          if (qprint) then
+           do i=1,nstring
+            read(ifile,*) random_seeds(:,i)
+           enddo
+          endif ! string root
+! scatter to other roots
+          if (nstring.gt.1) then
+           if (mestring.eq.0) then
+ __MPI_ONLY         call MPI_SCATTER(random_seeds, 4, mpifloat,      &
+ __MPI_ONLY     &    MPI_IN_PLACE,4,mpifloat,0,MPI_COMM_STRNG,   &
+ __MPI_ONLY     &    ierror)
+           else
+ __MPI_ONLY         call MPI_SCATTER(random_seeds, 4, mpifloat,      &
+ __MPI_ONLY     &    random_seeds(1,mestring+1),4,mpifloat,0,MPI_COMM_STRNG,   &
+ __MPI_ONLY     &    ierror)
+           endif
+          endif ! nstring > 1
+         endif ! qall
+!    close file
+         if (qprint.or.qall.gt.0) then ; __CLOSE_FILE(ifile,'KEEP',ierror) ; endif
+!    assign seeds
+         call random_init(random_seeds(:,mestring+1))
+         __FREE(random_seeds)
+        endif ! qroot
+!======================================================================================
+       elseif ((__STRNCMP(keyword, 'WRIT',4)).or.(__STRNCMP(keyword, 'PRIN',4))) then
+        qall = max( __INDX_RM(comlyn,comlen,'ALL'),__INDX_RM(comlyn,comlen,'LOCAL')) ! whether to read on all nodes
+!
+!      prepare file
+        ifile=__GET_RM_I(comlyn,comlen,'UNIT',-1)
+        __GET_RM_A(COMLYN,COMLEN,'NAME',4,FNAME,80,FLEN)
+!        note: flen will be UPPER CASE
+        if (qroot) then
+!cccccccccccccccccccccccccccc OPEN FILE ccccccccccccccccccccccc
+         if (qall.gt.0.or.qprint) then
+          if (flen.gt.0) then ; __OPEN_FILE(ifile,fname,'FORMATTED','WRITE') ; endif
+         endif
+         if(ifile .eq. -1) then
+          __WRN(whoami, 'CANNOT OPEN FILE "'//trim(fname)//'". NOTHING DONE')
+          return
+         endif
+!cccccccccccccccccccccccccccc ^OPEN FILE^ cccccccccccccccccccccc
+         if (qprint) then ; write(_MSGBUF,'(2A)') whoami, ' WRITING RANDOM NUMBER SEEDS TO FILE" '//trim(fname)//'"' ; __PRINT(_MSGBUF) ; endif
+         __FREE(random_seeds)
+         allocate(random_seeds(4,nstring)) ! allocate enough space for all roots
+         random_seeds(:,mestring+1)=random_get_seeds()
+         if (qall.gt.0) then ! local write on all string roots
+          write(ifile,*) random_seeds(:,mestring+1)
+         else ! string root gathers from all roots and writes
+! scatter to other roots
+          if (nstring.gt.1) then
+           if (mestring.eq.0) then
+ __MPI_ONLY         call MPI_GATHER(MPI_IN_PLACE, 4, mpifloat,   &
+ __MPI_ONLY     &    random_seeds,4,mpifloat,0,MPI_COMM_STRNG,   &
+ __MPI_ONLY     &    ierror)
+           else
+ __MPI_ONLY         call MPI_GATHER(random_seeds(:,mestring+1), 4, mpifloat,   &
+ __MPI_ONLY     &    random_seeds,4,mpifloat,0,MPI_COMM_STRNG,                 &
+ __MPI_ONLY     &    ierror)
+           endif
+          endif ! nstring > 1
+!
+          if (qprint) then
+           do i=1,nstring
+            write(ifile,*) random_seeds(:,i)
+           enddo
+          endif ! string root
+!
+         endif ! qall
+!    close file
+         if (qprint.or.qall.gt.0) then ; __CLOSE_FILE(ifile,'KEEP',ierror) ; endif
+         __FREE(random_seeds)
+        endif ! qroot
+!
+       endif
+#endif
 !cccccccccccccccccccc FRAMES PARSER ccccccccccccccccccccccccccccccccccccc
       elseif (__STRNCMP(keyword,'FRAM',4)) then ! frames parser
 !    get frames command
