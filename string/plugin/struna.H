@@ -10,7 +10,7 @@
 #ifdef __CPLUSPLUS
 #define __EXTERN extern "C"
 #else
-#define __EXTERN extern
+#define __EXTERN extern "C"
 #endif
 __EXTERN __CINT sm_init_plugin(const __CINT, const __CFLOAT *, const  __CFLOAT *, \
                                     const __CCHAR * , const __CINT, \

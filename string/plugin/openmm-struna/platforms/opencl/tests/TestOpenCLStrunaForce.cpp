@@ -89,7 +89,7 @@ void testForce() {
 
     State state = context.getState(State::Energy | State::Forces);
     Vec3 delta = positions[0]-positions[2];
-    double energy = delta.dot(delta)
+    double energy = delta.dot(delta);
     double dist = sqrt(energy);
     ASSERT_EQUAL_TOL(energy, state.getPotentialEnergy(), 1e-5);
     ASSERT_EQUAL_VEC(-delta/dist, state.getForces()[0], 1e-5);

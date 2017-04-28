@@ -29,46 +29,113 @@
  * USE OR OTHER DEALINGS IN THE SOFTWARE.                                     *
  * -------------------------------------------------------------------------- */
 
-#include "ReferenceStrunaKernels.h"
-#include "StrunaForce.h"
-#include "openmm/OpenMMException.h"
+#include "CudaStrunaKernels.h"
+#include "CudaStrunaKernelSources.h"
 #include "openmm/NonbondedForce.h"
 #include "openmm/internal/ContextImpl.h"
-#include "openmm/reference/RealVec.h"
-#include "openmm/reference/ReferencePlatform.h"
+#include "openmm/internal/ThreadPool.h"
+#include "openmm/cuda/CudaBondedUtilities.h"
+#include "openmm/cuda/CudaForceInfo.h"
 #include <cstring>
+#include <map>
 
 using namespace StrunaPlugin;
 using namespace OpenMM;
 using namespace std;
 
-static vector<RealVec>& extractPositions(ContextImpl& context) {
-    ReferencePlatform::PlatformData* data = reinterpret_cast<ReferencePlatform::PlatformData*>(context.getPlatformData());
-    return *((vector<RealVec>*) data->positions);
-}
+class CudaCalcStrunaForceKernel::StartCalculationPreComputation : public CudaContext::ForcePreComputation {
+public:
+    StartCalculationPreComputation(CudaCalcStrunaForceKernel& owner) : owner(owner) {
+    }
+    void computeForceAndEnergy(bool includeForces, bool includeEnergy, int groups) {
+        owner.beginComputation(includeForces, includeEnergy, groups);
+    }
+    CudaCalcStrunaForceKernel& owner;
+};
 
-static vector<RealVec>& extractForces(ContextImpl& context) {
-    ReferencePlatform::PlatformData* data = reinterpret_cast<ReferencePlatform::PlatformData*>(context.getPlatformData());
-    return *((vector<RealVec>*) data->forces);
-}
+class CudaCalcStrunaForceKernel::ExecuteTask : public CudaContext::WorkTask {
+public:
+    ExecuteTask(CudaCalcStrunaForceKernel& owner) : owner(owner) {
+    }
+    void execute() {
+        owner.executeOnWorkerThread();
+    }
+    CudaCalcStrunaForceKernel& owner;
+};
 
-ReferenceCalcStrunaForceKernel::ReferenceCalcStrunaForceKernel(std::string name, \
-               const OpenMM::Platform& platform, \
-               OpenMM::ContextImpl& contextImpl) : CalcStrunaForceKernel(name, platform), \
-               contextImpl(contextImpl), hasInitialized(false), atomlist(NULL), natoms(0), r(NULL), fr(NULL) {
-}
+class CudaCalcStrunaForceKernel::CopyForcesTask : public ThreadPool::Task {
+public:
+    CopyForcesTask(CudaContext& cu, vector<Vec3>& forces) : cu(cu), forces(forces) {
+    }
+    void execute(ThreadPool& threads, int threadIndex) {
+        // Copy the forces applied by STRUNA to a buffer for uploading.  This is done in parallel for speed.
 
-ReferenceCalcStrunaForceKernel::~ReferenceCalcStrunaForceKernel() {
+        int numParticles = cu.getNumAtoms();
+        int numThreads = threads.getNumThreads();
+        int start = threadIndex*numParticles/numThreads;
+        int end = (threadIndex+1)*numParticles/numThreads;
+        if (cu.getUseDoublePrecision()) {
+            double* buffer = (double*) cu.getPinnedBuffer();
+            for (int i = start; i < end; ++i) {
+                const Vec3& p = forces[i];
+                buffer[3*i] = p[0];
+                buffer[3*i+1] = p[1];
+                buffer[3*i+2] = p[2];
+            }
+        }
+        else {
+            float* buffer = (float*) cu.getPinnedBuffer();
+            for (int i = start; i < end; ++i) {
+                const Vec3& p = forces[i];
+                buffer[3*i] = (float) p[0];
+                buffer[3*i+1] = (float) p[1];
+                buffer[3*i+2] = (float) p[2];
+            }
+        }
+    }
+    CudaContext& cu;
+    vector<Vec3>& forces;
+};
+
+class CudaCalcStrunaForceKernel::AddForcesPostComputation : public CudaContext::ForcePostComputation {
+public:
+    AddForcesPostComputation(CudaCalcStrunaForceKernel& owner) : owner(owner) {
+    }
+    double computeForceAndEnergy(bool includeForces, bool includeEnergy, int groups) {
+        return owner.addForces(includeForces, includeEnergy, groups);
+    }
+    CudaCalcStrunaForceKernel& owner;
+};
+
+CudaCalcStrunaForceKernel::~CudaCalcStrunaForceKernel() {
     if (hasInitialized) {
         sm_done_plugin();
         free(r);
         free(fr);
         free(atomlist);
     }
+    cu.setAsCurrent();
+    if (strunaForces != NULL)
+        delete strunaForces;
+    cuStreamDestroy(stream);
+    cuEventDestroy(syncEvent);
 }
 
-void ReferenceCalcStrunaForceKernel::initialize(const System& system, const StrunaForce& force) {
-    //
+void CudaCalcStrunaForceKernel::initialize(const System& system, const StrunaForce& force) {
+    cu.setAsCurrent();
+    cuStreamCreate(&stream, CU_STREAM_NON_BLOCKING);
+    cuEventCreate(&syncEvent, CU_EVENT_DISABLE_TIMING);
+    int elementSize = (cu.getUseDoublePrecision() ? sizeof(double) : sizeof(float));
+    strunaForces = new CudaArray(cu, 3*system.getNumParticles(), elementSize, "strunaForces");
+    map<string, string> defines;
+    defines["NUM_ATOMS"] = cu.intToString(cu.getNumAtoms());
+    defines["PADDED_NUM_ATOMS"] = cu.intToString(cu.getPaddedNumAtoms());
+    CUmodule module = cu.createModule(CudaStrunaKernelSources::strunaForce, defines);
+    addForcesKernel = cu.getKernel(module, "addForces");
+    forceGroupFlag = (1<<force.getForceGroup());
+    cu.addPreComputation(new StartCalculationPreComputation(*this));
+    cu.addPostComputation(new AddForcesPostComputation(*this));
+
     natoms = system.getNumParticles();
     //script name
     string inputfile__=force.getScript();
@@ -77,14 +144,14 @@ void ReferenceCalcStrunaForceKernel::initialize(const System& system, const Stru
     std::strcpy(&inputfile_[0], inputfile__.c_str());
     char* inputfile = &inputfile_[0];
     //log name
-    string logfile = force.getLog();
+    string logfile__ = force.getLog();
     int llen=logfile__.length();
     std::vector<char> logfile_(llen+1);
     std::strcpy(&logfile_[0], logfile__.c_str());
     char* logfile = &logfile_[0];
     // allocate position and force arrays
-    r=(double*) calloc(3 * natoms * sizeof(double));
-    fr=(double*) calloc(3 * natoms * sizeof(double));
+    r=(double*) calloc(3 * natoms, sizeof(double));
+    fr=(double*) calloc(3 * natoms, sizeof(double));
     // Get particle masses and charges (if available)
 
     double *m=NULL; //mass
@@ -93,7 +160,7 @@ void ReferenceCalcStrunaForceKernel::initialize(const System& system, const Stru
     for (int i = 0; i < natoms; i++)
         m[i] = system.getParticleMass(i);
 
-    q = (double*) calloc(natoms * sizeof(double));
+    q = (double*) calloc(natoms, sizeof(double));
     // If there's a NonbondedForce, get charges from it (otherwise, they will remain zero)
 
     for (int j = 0; j < system.getNumForces(); j++) {
@@ -111,17 +178,26 @@ void ReferenceCalcStrunaForceKernel::initialize(const System& system, const Stru
     hasInitialized = true;
 }
 
-double ReferenceCalcStrunaForceKernel::execute(ContextImpl& context, bool includeForces, bool includeEnergy) {
-    //
-    ReferencePlatform::PlatformData* data = reinterpret_cast<ReferencePlatform::PlatformData*>(context.getPlatformData());
-    int iteration = data->stepCount;
-    double sm_energy; // struna energy
-    double* rptr; // pointer to positions array
-    double* fptr; // pointer to force array
-    int* aptr; // pointer to atom index array
+double CudaCalcStrunaForceKernel::execute(ContextImpl& context, bool includeForces, bool includeEnergy) {
+    // This method does nothing.  The actual calculation is started by the pre-computation, continued on
+    // the worker thread, and finished by the post-computation.
+    return 0;
+}
+
+void CudaCalcStrunaForceKernel::beginComputation(bool includeForces, bool includeEnergy, int groups) {
+    if ((groups&forceGroupFlag) == 0)
+        return;
+    contextImpl.getPositions(pos);
+    // The actual force computation will be done on a different thread.
+    cu.getWorkThread().addTask(new ExecuteTask(*this));
+}
+
+void CudaCalcStrunaForceKernel::executeOnWorkerThread() {
+    int iteration = cu.getStepCount();
+    double *rptr; // pointer to positions array
+    double *fptr; // pointer to force array
+    int *aptr; // pointer to atom index array
     int i, j, ierr;
-    vector<RealVec>& pos = extractPositions(context);
-    vector<RealVec>& frc = extractForces(context);
     //
     // copy coordinates :
     if (atomlist==NULL) { // atomlist is not defined; therefore, provide all coords
@@ -151,7 +227,7 @@ double ReferenceCalcStrunaForceKernel::execute(ContextImpl& context, bool includ
     } else { // atomlist not null : loop over only the desired indices
      for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
       j=*aptr - 1;
-      rptr=r + 3*j;
+      rptr=r + 3*j ;
       *(rptr++) = pos[j][0];
       *(rptr++) = pos[j][1];
       *(rptr)   = pos[j][2];
@@ -167,5 +243,27 @@ double ReferenceCalcStrunaForceKernel::execute(ContextImpl& context, bool includ
       frc[j][2]+= *(fptr);
      }
     } // atomlist == NULL
+    //
+    // Upload the forces to the device.
+    CopyForcesTask task(cu, frc);
+    cu.getPlatformData().threads.execute(task);
+    cu.getPlatformData().threads.waitForThreads();
+    cu.setAsCurrent();
+    cuMemcpyHtoDAsync(strunaForces->getDevicePointer(), cu.getPinnedBuffer(), strunaForces->getSize()*strunaForces->getElementSize(), stream);
+    cuEventRecord(syncEvent, stream);
+}
+
+double CudaCalcStrunaForceKernel::addForces(bool includeForces, bool includeEnergy, int groups) {
+    if ((groups&forceGroupFlag) == 0)
+        return 0;
+    // Wait until executeOnWorkerThread() is finished.
+    cu.getWorkThread().flush();
+    cuStreamWaitEvent(cu.getCurrentStream(), syncEvent, 0);
+    // Add in the forces.
+    if (includeForces) {
+        void* args[] = {&strunaForces->getDevicePointer(), &cu.getForce().getDevicePointer(), &cu.getAtomIndexArray().getDevicePointer()};
+        cu.executeKernel(addForcesKernel, args, cu.getNumAtoms());
+    }
+    // Return plugin energy.
     return sm_energy;
 }

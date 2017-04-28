@@ -1,7 +1,21 @@
-LIB=libstruna.so
+LIB=libstruna.so libstruna.a
 LIBS+=$(LIB)
 LINKOBJS=\
- constants.o\
+ atompar.o \
+ bondpar.o \
+ anglpar.o \
+ dihepar.o \
+ tlist.o \
+ bonds.o \
+ angles.o \
+ dihedrals.o \
+ pdbio.o \
+ charmmio.o \
+ chestio.o \
+ corio.o \
+ freeio.o \
+ plot3dio.o \
+ constants.o \
  output.o \
  parser.o \
  cmd.o prm.o \
@@ -64,6 +78,8 @@ LINKOBJS=\
  state.o \
  fieldbcdef.o \
  formats.o \
+ stats.o \
+ util.o \
  sm_plugin.o
 
 

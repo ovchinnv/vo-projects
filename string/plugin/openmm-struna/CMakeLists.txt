@@ -10,8 +10,8 @@ INCLUDE_DIRECTORIES("${OPENMM_DIR}/include")
 LINK_DIRECTORIES("${OPENMM_DIR}/lib" "${OPENMM_DIR}/lib/plugins")
 
 # We also need to know where Struna is installed.
-SET(STRUNA_LIBRARY_DIR "/usr/local/lib" CACHE PATH "Where the Struna libraries are installed")
-SET(STRUNA_INCLUDE_DIR "/usr/local/include/struna" CACHE PATH "Where the Struna header files are installed")
+SET(STRUNA_LIBRARY_DIR "$ENV{STRUNAPLUGIN}" CACHE PATH "Where the Struna libraries are installed")
+SET(STRUNA_INCLUDE_DIR "$ENV{STRUNAPLUGIN}" CACHE PATH "Where the Struna header files are installed")
 INCLUDE_DIRECTORIES("${STRUNA_INCLUDE_DIR}")
 LINK_DIRECTORIES("${STRUNA_LIBRARY_DIR}")
 

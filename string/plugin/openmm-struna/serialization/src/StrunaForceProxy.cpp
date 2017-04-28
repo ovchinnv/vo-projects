@@ -44,11 +44,12 @@ void StrunaForceProxy::serialize(const void* object, SerializationNode& node) co
     node.setIntProperty("version", 1);
     const StrunaForce& force = *reinterpret_cast<const StrunaForce*>(object);
     node.setStringProperty("script", force.getScript());
+    node.setStringProperty("log", force.getLog());
 }
 
 void* StrunaForceProxy::deserialize(const SerializationNode& node) const {
     if (node.getIntProperty("version") != 1)
         throw OpenMMException("Unsupported version number");
-    StrunaForce* force = new StrunaForce(node.getStringProperty("script"));
+    StrunaForce* force = new StrunaForce(node.getStringProperty("script"),node.getStringProperty("log"));
     return force;
 }

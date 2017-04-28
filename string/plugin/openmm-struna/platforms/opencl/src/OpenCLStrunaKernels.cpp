@@ -29,13 +29,12 @@
  * USE OR OTHER DEALINGS IN THE SOFTWARE.                                     *
  * -------------------------------------------------------------------------- */
 
-#include "CudaStrunaKernels.h"
-#include "CudaStrunaKernelSources.h"
+#include "OpenCLStrunaKernels.h"
+#include "OpenCLStrunaKernelSources.h"
 #include "openmm/NonbondedForce.h"
 #include "openmm/internal/ContextImpl.h"
-#include "openmm/internal/ThreadPool.h"
-#include "openmm/cuda/CudaBondedUtilities.h"
-#include "openmm/cuda/CudaForceInfo.h"
+#include "openmm/opencl/OpenCLBondedUtilities.h"
+#include "openmm/opencl/OpenCLForceInfo.h"
 #include <cstring>
 #include <map>
 
@@ -43,98 +42,53 @@ using namespace StrunaPlugin;
 using namespace OpenMM;
 using namespace std;
 
-class CudaCalcStrunaForceKernel::StartCalculationPreComputation : public CudaContext::ForcePreComputation {
+class OpenCLCalcStrunaForceKernel::StartCalculationPreComputation : public OpenCLContext::ForcePreComputation {
 public:
-    StartCalculationPreComputation(CudaCalcStrunaForceKernel& owner) : owner(owner) {
+    StartCalculationPreComputation(OpenCLCalcStrunaForceKernel& owner) : owner(owner) {
     }
     void computeForceAndEnergy(bool includeForces, bool includeEnergy, int groups) {
         owner.beginComputation(includeForces, includeEnergy, groups);
     }
-    CudaCalcStrunaForceKernel& owner;
+    OpenCLCalcStrunaForceKernel& owner;
 };
 
-class CudaCalcStrunaForceKernel::ExecuteTask : public CudaContext::WorkTask {
+class OpenCLCalcStrunaForceKernel::ExecuteTask : public OpenCLContext::WorkTask {
 public:
-    ExecuteTask(CudaCalcStrunaForceKernel& owner) : owner(owner) {
+    ExecuteTask(OpenCLCalcStrunaForceKernel& owner) : owner(owner) {
     }
     void execute() {
         owner.executeOnWorkerThread();
     }
-    CudaCalcStrunaForceKernel& owner;
+    OpenCLCalcStrunaForceKernel& owner;
 };
 
-class CudaCalcStrunaForceKernel::CopyForcesTask : public ThreadPool::Task {
+class OpenCLCalcStrunaForceKernel::AddForcesPostComputation : public OpenCLContext::ForcePostComputation {
 public:
-    CopyForcesTask(CudaContext& cu, vector<Vec3>& forces) : cu(cu), forces(forces) {
-    }
-    void execute(ThreadPool& threads, int threadIndex) {
-        // Copy the forces applied by STRUNA to a buffer for uploading.  This is done in parallel for speed.
-
-        int numParticles = cu.getNumAtoms();
-        int numThreads = threads.getNumThreads();
-        int start = threadIndex*numParticles/numThreads;
-        int end = (threadIndex+1)*numParticles/numThreads;
-        if (cu.getUseDoublePrecision()) {
-            double* buffer = (double*) cu.getPinnedBuffer();
-            for (int i = start; i < end; ++i) {
-                const Vec3& p = forces[i];
-                buffer[3*i] = p[0];
-                buffer[3*i+1] = p[1];
-                buffer[3*i+2] = p[2];
-            }
-        }
-        else {
-            float* buffer = (float*) cu.getPinnedBuffer();
-            for (int i = start; i < end; ++i) {
-                const Vec3& p = forces[i];
-                buffer[3*i] = (float) p[0];
-                buffer[3*i+1] = (float) p[1];
-                buffer[3*i+2] = (float) p[2];
-            }
-        }
-    }
-    CudaContext& cu;
-    vector<Vec3>& forces;
-};
-
-class CudaCalcStrunaForceKernel::AddForcesPostComputation : public CudaContext::ForcePostComputation {
-public:
-    AddForcesPostComputation(CudaCalcStrunaForceKernel& owner) : owner(owner) {
+    AddForcesPostComputation(OpenCLCalcStrunaForceKernel& owner) : owner(owner) {
     }
     double computeForceAndEnergy(bool includeForces, bool includeEnergy, int groups) {
         return owner.addForces(includeForces, includeEnergy, groups);
     }
-    CudaCalcStrunaForceKernel& owner;
+    OpenCLCalcStrunaForceKernel& owner;
 };
 
-CudaCalcStrunaForceKernel::~CudaCalcStrunaForceKernel() {
-    if (hasInitialized) {
-        sm_done_plugin();
-        free(r);
-        free(fr);
-        free(atomlist);
-    }
-    cu.setAsCurrent();
+OpenCLCalcStrunaForceKernel::~OpenCLCalcStrunaForceKernel() {
     if (strunaForces != NULL)
         delete strunaForces;
-    cuStreamDestroy(stream);
-    cuEventDestroy(syncEvent);
 }
 
-void CudaCalcStrunaForceKernel::initialize(const System& system, const StrunaForce& force) {
-    cu.setAsCurrent();
-    cuStreamCreate(&stream, CU_STREAM_NON_BLOCKING);
-    cuEventCreate(&syncEvent, CU_EVENT_DISABLE_TIMING);
-    int elementSize = (cu.getUseDoublePrecision() ? sizeof(double) : sizeof(float));
-    strunaForces = new CudaArray(cu, 3*system.getNumParticles(), elementSize, "strunaForces");
+void OpenCLCalcStrunaForceKernel::initialize(const System& system, const StrunaForce& force) {
+    queue = cl::CommandQueue(cl.getContext(), cl.getDevice());
+    int elementSize = (cl.getUseDoublePrecision() ? sizeof(double) : sizeof(float));
+    strunaForces = new OpenCLArray(cl, 3*system.getNumParticles(), elementSize, "strunaForces");
     map<string, string> defines;
-    defines["NUM_ATOMS"] = cu.intToString(cu.getNumAtoms());
-    defines["PADDED_NUM_ATOMS"] = cu.intToString(cu.getPaddedNumAtoms());
-    CUmodule module = cu.createModule(CudaStrunaKernelSources::strunaForce, defines);
-    addForcesKernel = cu.getKernel(module, "addForces");
+    defines["NUM_ATOMS"] = cl.intToString(cl.getNumAtoms());
+    defines["PADDED_NUM_ATOMS"] = cl.intToString(cl.getPaddedNumAtoms());
+    cl::Program program = cl.createProgram(OpenCLStrunaKernelSources::strunaForce, defines);
+    addForcesKernel = cl::Kernel(program, "addForces");
     forceGroupFlag = (1<<force.getForceGroup());
-    cu.addPreComputation(new StartCalculationPreComputation(*this));
-    cu.addPostComputation(new AddForcesPostComputation(*this));
+    cl.addPreComputation(new StartCalculationPreComputation(*this));
+    cl.addPostComputation(new AddForcesPostComputation(*this));
 
     natoms = system.getNumParticles();
     //script name
@@ -144,23 +98,23 @@ void CudaCalcStrunaForceKernel::initialize(const System& system, const StrunaFor
     std::strcpy(&inputfile_[0], inputfile__.c_str());
     char* inputfile = &inputfile_[0];
     //log name
-    string logfile = force.getLog();
+    string logfile__ = force.getLog();
     int llen=logfile__.length();
     std::vector<char> logfile_(llen+1);
     std::strcpy(&logfile_[0], logfile__.c_str());
     char* logfile = &logfile_[0];
     // allocate position and force arrays
-    r=(double*) calloc(3 * natoms * sizeof(double));
-    fr=(double*) calloc(3 * natoms * sizeof(double));
+    r=(double*) calloc(3 * natoms, sizeof(double));
+    fr=(double*) calloc(3 * natoms, sizeof(double));
+    //
     // Get particle masses and charges (if available)
-
     double *m=NULL; //mass
     double *q=NULL; //charge
     m = (double*) malloc(natoms * sizeof(double)); // allocate memory
     for (int i = 0; i < natoms; i++)
         m[i] = system.getParticleMass(i);
 
-    q = (double*) calloc(natoms * sizeof(double));
+    q = (double*) calloc(natoms, sizeof(double));
     // If there's a NonbondedForce, get charges from it (otherwise, they will remain zero)
 
     for (int j = 0; j < system.getNumForces(); j++) {
@@ -178,26 +132,28 @@ void CudaCalcStrunaForceKernel::initialize(const System& system, const StrunaFor
     hasInitialized = true;
 }
 
-double CudaCalcStrunaForceKernel::execute(ContextImpl& context, bool includeForces, bool includeEnergy) {
+double OpenCLCalcStrunaForceKernel::execute(ContextImpl& context, bool includeForces, bool includeEnergy) {
     // This method does nothing.  The actual calculation is started by the pre-computation, continued on
     // the worker thread, and finished by the post-computation.
+    
     return 0;
 }
 
-void CudaCalcStrunaForceKernel::beginComputation(bool includeForces, bool includeEnergy, int groups) {
+void OpenCLCalcStrunaForceKernel::beginComputation(bool includeForces, bool includeEnergy, int groups) {
     if ((groups&forceGroupFlag) == 0)
         return;
     contextImpl.getPositions(pos);
     // The actual force computation will be done on a different thread.
-    cu.getWorkThread().addTask(new ExecuteTask(*this));
+    cl.getWorkThread().addTask(new ExecuteTask(*this));
 }
 
-void CudaCalcStrunaForceKernel::executeOnWorkerThread() {
-    int iteration = cu.getStepCount();
-    double* rptr; // pointer to positions array
+void OpenCLCalcStrunaForceKernel::executeOnWorkerThread() {
+    int iteration = cl.getStepCount();
+    double* rptr; // pointer to coordinate array
     int* aptr; // pointer to atom index array
     int i, j, ierr;
-    //
+    // buffer for uploading forces to the device:
+    bool qdble=cl.getUseDoublePrecision();
     // copy coordinates :
     if (atomlist==NULL) { // atomlist is not defined; therefore, provide all coords
      for (i=0, rptr=r ; i < natoms ; i++) {
@@ -208,21 +164,39 @@ void CudaCalcStrunaForceKernel::executeOnWorkerThread() {
     // compute plugin forces and energy
      ierr=sm_dyna_plugin(iteration, r, fr, &sm_energy, &atomlist); // might return valid atomlist
     // copy plugin forces
-     if (atomlist!=NULL) { // atom indices provided; use them for adding forces
-      for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
-       j=*aptr - 1; // for zero offset (e.g. first coordinate lives in r[0]
-       fptr=fr + 3*j ;
-       frc[j][0]+= *(fptr++);
-       frc[j][1]+= *(fptr++);
-       frc[j][2]+= *(fptr);
-      }
-     } else { // no atomlist provided; loop over all atoms
-      for (i=0, fptr=fr ; i < natoms ; i++) {
-       frc[i][0]+= *(fptr++);
-       frc[i][1]+= *(fptr++);
-       frc[i][2]+= *(fptr++);
-      }
-     } // atomlist
+//=============
+     if (qdble) { // double precision version
+      double *frc = (double*) cl.getPinnedBuffer();
+      if (atomlist!=NULL) { // atom indices provided; use them for adding forces
+       for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
+        i=*aptr - 1; // for zero offset (e.g. first coordinate lives in r[0]
+        j=3*i;
+        frc[j]= fr[j++];
+        frc[j]= fr[j++];
+        frc[j]= fr[j];
+       }
+      } else { // no atomlist provided; loop over all atoms
+       for (j=0 ; j < 3*natoms ; j++) {
+        frc[j]= fr[j++];
+       }
+      } // atomlist
+//=============
+     } else { // single precision, identical code
+      float *frc = (float*) cl.getPinnedBuffer();
+      if (atomlist!=NULL) { // atom indices provided; use them for adding forces
+       for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
+        i=*aptr - 1; // for zero offset (e.g. first coordinate lives in r[0]
+        j=3*i;
+        frc[j]= (float) fr[j++];
+        frc[j]= (float) fr[j++];
+        frc[j]= (float) fr[j];
+       }
+      } else { // no atomlist provided; loop over all atoms
+       for (j=0 ; j < 3*natoms ; j++) {
+        frc[j]= fr[j++];
+       }
+      } // atomlist
+     } //qdble
     } else { // atomlist not null : loop over only the desired indices
      for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
       j=*aptr - 1;
@@ -234,35 +208,46 @@ void CudaCalcStrunaForceKernel::executeOnWorkerThread() {
 //
      ierr=sm_dyna_plugin(iteration, r, fr, &sm_energy, &atomlist); // atomlist should not be modified in this call
 //
-     for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
-      j=*aptr - 1;
-      fptr=fr + 3*j ;
-      frc[j][0]+= *(fptr++);
-      frc[j][1]+= *(fptr++);
-      frc[j][2]+= *(fptr);
-     }
+     if (qdble) { // double
+      double *frc = (double*) cl.getPinnedBuffer();
+      for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
+       i=*aptr - 1; // zero offset (see above)
+       j=3*i ;
+       frc[j]= fr[j++];
+       frc[j]= fr[j++];
+       frc[j]= fr[j];
+      }
+     } else { // single
+      float *frc = (float*) cl.getPinnedBuffer();
+      for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
+       i=*aptr - 1; // zero offset (see above)
+       j=3*i ;
+       frc[j]= (float) fr[j++];
+       frc[j]= (float) fr[j++];
+       frc[j]= (float) fr[j];
+      }
+     } // qdble
     } // atomlist == NULL
-    //
-    // Upload the forces to the device.
-    CopyForcesTask task(cu, frc);
-    cu.getPlatformData().threads.execute(task);
-    cu.getPlatformData().threads.waitForThreads();
-    cu.setAsCurrent();
-    cuMemcpyHtoDAsync(strunaForces->getDevicePointer(), cu.getPinnedBuffer(), strunaForces->getSize()*strunaForces->getElementSize(), stream);
-    cuEventRecord(syncEvent, stream);
+    // upload forces to device
+    queue.enqueueWriteBuffer(strunaForces->getDeviceBuffer(), CL_FALSE, 0, strunaForces->getSize()*strunaForces->getElementSize(), cl.getPinnedBuffer(), NULL, &syncEvent);
 }
 
-double CudaCalcStrunaForceKernel::addForces(bool includeForces, bool includeEnergy, int groups) {
+double OpenCLCalcStrunaForceKernel::addForces(bool includeForces, bool includeEnergy, int groups) {
     if ((groups&forceGroupFlag) == 0)
         return 0;
     // Wait until executeOnWorkerThread() is finished.
-    cu.getWorkThread().flush();
-    cuStreamWaitEvent(cu.getCurrentStream(), syncEvent, 0);
+    cl.getWorkThread().flush();
+    vector<cl::Event> events(1);
+    events[0] = syncEvent;
+    syncEvent = cl::Event();
+    queue.enqueueWaitForEvents(events);
     // Add in the forces.
     if (includeForces) {
-        void* args[] = {&strunaForces->getDevicePointer(), &cu.getForce().getDevicePointer(), &cu.getAtomIndexArray().getDevicePointer()};
-        cu.executeKernel(addForcesKernel, args, cu.getNumAtoms());
+        addForcesKernel.setArg<cl::Buffer>(0, strunaForces->getDeviceBuffer());
+        addForcesKernel.setArg<cl::Buffer>(1, cl.getForceBuffers().getDeviceBuffer());
+        addForcesKernel.setArg<cl::Buffer>(2, cl.getAtomIndexArray().getDeviceBuffer());
+        cl.executeKernel(addForcesKernel, cl.getNumAtoms());
     }
-    // Return plugin energy.
+    // Return the energy.
     return sm_energy;
 }

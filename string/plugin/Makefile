@@ -1,8 +1,8 @@
-NAME=string/openmm
+NAME=string/plugin
 ROOT=../..
 COMMON=..
 OBJS=sm_plugin.o
-HEADS=sm.h
+HEADS=struna.h
 DEPS=string dynamol mpi_stub
 
 LOCALDEFS+=-D__BINDC
@@ -20,4 +20,4 @@ include Makefile.inc
 sm_plugin.o : $(COMMON)/sm_var.mod $(COMMON)/sm_config.mod ../atomlist.def
 
 clean::
-	rm -f $(OBJS) sm.h
+	rm -f $(OBJS) $(HEADS)

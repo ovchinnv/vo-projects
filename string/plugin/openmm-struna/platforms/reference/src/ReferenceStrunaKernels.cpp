@@ -29,67 +29,46 @@
  * USE OR OTHER DEALINGS IN THE SOFTWARE.                                     *
  * -------------------------------------------------------------------------- */
 
-#include "OpenCLStrunaKernels.h"
-#include "OpenCLStrunaKernelSources.h"
+#include "ReferenceStrunaKernels.h"
+#include "StrunaForce.h"
+#include "openmm/OpenMMException.h"
 #include "openmm/NonbondedForce.h"
 #include "openmm/internal/ContextImpl.h"
-#include "openmm/opencl/OpenCLBondedUtilities.h"
-#include "openmm/opencl/OpenCLForceInfo.h"
+#include "openmm/reference/RealVec.h"
+#include "openmm/reference/ReferencePlatform.h"
 #include <cstring>
-#include <map>
 
 using namespace StrunaPlugin;
 using namespace OpenMM;
 using namespace std;
 
-class OpenCLCalcStrunaForceKernel::StartCalculationPreComputation : public OpenCLContext::ForcePreComputation {
-public:
-    StartCalculationPreComputation(OpenCLCalcStrunaForceKernel& owner) : owner(owner) {
-    }
-    void computeForceAndEnergy(bool includeForces, bool includeEnergy, int groups) {
-        owner.beginComputation(includeForces, includeEnergy, groups);
-    }
-    OpenCLCalcStrunaForceKernel& owner;
-};
-
-class OpenCLCalcStrunaForceKernel::ExecuteTask : public OpenCLContext::WorkTask {
-public:
-    ExecuteTask(OpenCLCalcStrunaForceKernel& owner) : owner(owner) {
-    }
-    void execute() {
-        owner.executeOnWorkerThread();
-    }
-    OpenCLCalcStrunaForceKernel& owner;
-};
-
-class OpenCLCalcStrunaForceKernel::AddForcesPostComputation : public OpenCLContext::ForcePostComputation {
-public:
-    AddForcesPostComputation(OpenCLCalcStrunaForceKernel& owner) : owner(owner) {
-    }
-    double computeForceAndEnergy(bool includeForces, bool includeEnergy, int groups) {
-        return owner.addForces(includeForces, includeEnergy, groups);
-    }
-    OpenCLCalcStrunaForceKernel& owner;
-};
-
-OpenCLCalcStrunaForceKernel::~OpenCLCalcStrunaForceKernel() {
-    if (strunaForces != NULL)
-        delete strunaForces;
+static vector<RealVec>& extractPositions(ContextImpl& context) {
+    ReferencePlatform::PlatformData* data = reinterpret_cast<ReferencePlatform::PlatformData*>(context.getPlatformData());
+    return *((vector<RealVec>*) data->positions);
 }
 
-void OpenCLCalcStrunaForceKernel::initialize(const System& system, const StrunaForce& force) {
-    queue = cl::CommandQueue(cl.getContext(), cl.getDevice());
-    int elementSize = (cl.getUseDoublePrecision() ? sizeof(double) : sizeof(float));
-    strunaForces = new OpenCLArray(cl, 3*system.getNumParticles(), elementSize, "strunaForces");
-    map<string, string> defines;
-    defines["NUM_ATOMS"] = cl.intToString(cl.getNumAtoms());
-    defines["PADDED_NUM_ATOMS"] = cl.intToString(cl.getPaddedNumAtoms());
-    cl::Program program = cl.createProgram(OpenCLStrunaKernelSources::strunaForce, defines);
-    addForcesKernel = cl::Kernel(program, "addForces");
-    forceGroupFlag = (1<<force.getForceGroup());
-    cl.addPreComputation(new StartCalculationPreComputation(*this));
-    cl.addPostComputation(new AddForcesPostComputation(*this));
+static vector<RealVec>& extractForces(ContextImpl& context) {
+    ReferencePlatform::PlatformData* data = reinterpret_cast<ReferencePlatform::PlatformData*>(context.getPlatformData());
+    return *((vector<RealVec>*) data->forces);
+}
 
+ReferenceCalcStrunaForceKernel::ReferenceCalcStrunaForceKernel(std::string name, \
+               const OpenMM::Platform& platform, \
+               OpenMM::ContextImpl& contextImpl) : CalcStrunaForceKernel(name, platform), \
+               contextImpl(contextImpl), hasInitialized(false), atomlist(NULL), natoms(0), r(NULL), fr(NULL) {
+}
+
+ReferenceCalcStrunaForceKernel::~ReferenceCalcStrunaForceKernel() {
+    if (hasInitialized) {
+        sm_done_plugin();
+        free(r);
+        free(fr);
+        free(atomlist);
+    }
+}
+
+void ReferenceCalcStrunaForceKernel::initialize(const System& system, const StrunaForce& force) {
+    //
     natoms = system.getNumParticles();
     //script name
     string inputfile__=force.getScript();
@@ -98,23 +77,23 @@ void OpenCLCalcStrunaForceKernel::initialize(const System& system, const StrunaF
     std::strcpy(&inputfile_[0], inputfile__.c_str());
     char* inputfile = &inputfile_[0];
     //log name
-    string logfile = force.getLog();
+    string logfile__ = force.getLog();
     int llen=logfile__.length();
     std::vector<char> logfile_(llen+1);
     std::strcpy(&logfile_[0], logfile__.c_str());
     char* logfile = &logfile_[0];
     // allocate position and force arrays
-    r=(double*) calloc(3 * natoms * sizeof(double));
-    fr=(double*) calloc(3 * natoms * sizeof(double));
-    //
+    r=(double*) calloc(3 * natoms, sizeof(double));
+    fr=(double*) calloc(3 * natoms, sizeof(double));
     // Get particle masses and charges (if available)
+
     double *m=NULL; //mass
     double *q=NULL; //charge
     m = (double*) malloc(natoms * sizeof(double)); // allocate memory
     for (int i = 0; i < natoms; i++)
         m[i] = system.getParticleMass(i);
 
-    q = (double*) calloc(natoms * sizeof(double));
+    q = (double*) calloc(natoms, sizeof(double));
     // If there's a NonbondedForce, get charges from it (otherwise, they will remain zero)
 
     for (int j = 0; j < system.getNumForces(); j++) {
@@ -132,28 +111,18 @@ void OpenCLCalcStrunaForceKernel::initialize(const System& system, const StrunaF
     hasInitialized = true;
 }
 
-double OpenCLCalcStrunaForceKernel::execute(ContextImpl& context, bool includeForces, bool includeEnergy) {
-    // This method does nothing.  The actual calculation is started by the pre-computation, continued on
-    // the worker thread, and finished by the post-computation.
-    
-    return 0;
-}
-
-void OpenCLCalcStrunaForceKernel::beginComputation(bool includeForces, bool includeEnergy, int groups) {
-    if ((groups&forceGroupFlag) == 0)
-        return;
-    contextImpl.getPositions(pos);
-    // The actual force computation will be done on a different thread.
-    cl.getWorkThread().addTask(new ExecuteTask(*this));
-}
-
-void OpenCLCalcStrunaForceKernel::executeOnWorkerThread() {
-    int iteration = cl.getStepCount();
-    double* rptr; // pointer to coordinate array
+double ReferenceCalcStrunaForceKernel::execute(ContextImpl& context, bool includeForces, bool includeEnergy) {
+    //
+    ReferencePlatform::PlatformData* data = reinterpret_cast<ReferencePlatform::PlatformData*>(context.getPlatformData());
+    int iteration = data->stepCount;
+    double sm_energy; // struna energy
+    double* rptr; // pointer to positions array
+    double* fptr; // pointer to force array
     int* aptr; // pointer to atom index array
     int i, j, ierr;
-    // buffer for uploading forces to the device:
-    cl.getUseDoublePrecision() ? double* frc = (double*) cl.getPinnedBuffer() : float* frc = (float*) cl.getPinnedBuffer();
+    vector<RealVec>& pos = extractPositions(context);
+    vector<RealVec>& frc = extractForces(context);
+    //
     // copy coordinates :
     if (atomlist==NULL) { // atomlist is not defined; therefore, provide all coords
      for (i=0, rptr=r ; i < natoms ; i++) {
@@ -166,21 +135,23 @@ void OpenCLCalcStrunaForceKernel::executeOnWorkerThread() {
     // copy plugin forces
      if (atomlist!=NULL) { // atom indices provided; use them for adding forces
       for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
-       i=*aptr - 1; // for zero offset (e.g. first coordinate lives in r[0]
-       j=3*i;
-       frc[j]= fr[j++];
-       frc[j]= fr[j++];
-       frc[j]= fr[j];
+       j=*aptr - 1; // for zero offset (e.g. first coordinate lives in r[0]
+       fptr=fr + 3*j ;
+       frc[j][0]+= *(fptr++);
+       frc[j][1]+= *(fptr++);
+       frc[j][2]+= *(fptr);
       }
      } else { // no atomlist provided; loop over all atoms
-      for (j=0 ; j < 3*natoms ; j++) {
-       frc[j]= fr[j++];
+      for (i=0, fptr=fr ; i < natoms ; i++) {
+       frc[i][0]+= *(fptr++);
+       frc[i][1]+= *(fptr++);
+       frc[i][2]+= *(fptr++);
       }
      } // atomlist
     } else { // atomlist not null : loop over only the desired indices
      for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
       j=*aptr - 1;
-      rptr=r + 3*j ;
+      rptr=r + 3*j;
       *(rptr++) = pos[j][0];
       *(rptr++) = pos[j][1];
       *(rptr)   = pos[j][2];
@@ -189,33 +160,12 @@ void OpenCLCalcStrunaForceKernel::executeOnWorkerThread() {
      ierr=sm_dyna_plugin(iteration, r, fr, &sm_energy, &atomlist); // atomlist should not be modified in this call
 //
      for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
-      i=*aptr - 1; // zero offset (see above)
-      j=3*i ;
-      frc[j]= fr[j++];
-      frc[j]= fr[j++];
-      frc[j]= fr[j];
+      j=*aptr - 1;
+      fptr=fr + 3*j ;
+      frc[j][0]+= *(fptr++);
+      frc[j][1]+= *(fptr++);
+      frc[j][2]+= *(fptr);
      }
     } // atomlist == NULL
-    // upload forces to device
-    queue.enqueueWriteBuffer(strunaForces->getDeviceBuffer(), CL_FALSE, 0, strunaForces->getSize()*strunaForces->getElementSize(), cl.getPinnedBuffer(), NULL, &syncEvent);
-}
-
-double OpenCLCalcStrunaForceKernel::addForces(bool includeForces, bool includeEnergy, int groups) {
-    if ((groups&forceGroupFlag) == 0)
-        return 0;
-    // Wait until executeOnWorkerThread() is finished.
-    cl.getWorkThread().flush();
-    vector<cl::Event> events(1);
-    events[0] = syncEvent;
-    syncEvent = cl::Event();
-    queue.enqueueWaitForEvents(events);
-    // Add in the forces.
-    if (includeForces) {
-        addForcesKernel.setArg<cl::Buffer>(0, strunaForces->getDeviceBuffer());
-        addForcesKernel.setArg<cl::Buffer>(1, cl.getForceBuffers().getDeviceBuffer());
-        addForcesKernel.setArg<cl::Buffer>(2, cl.getAtomIndexArray().getDeviceBuffer());
-        cl.executeKernel(addForcesKernel, cl.getNumAtoms());
-    }
-    // Return the energy.
     return sm_energy;
 }

@@ -1,10 +1,10 @@
 OpenMM STRUNA Plugin
 =====================
 
-This project provides a connection between [OpenMM](http://openmm.org) and [STRUNA](http://www.struna.org).
-It allows you to bias or analyze an OpenMM simulation based on collective variables.
-
-This plugin requires STRUNA version 2.3b or greater.
+This project provides a connection between [OpenMM](http://openmm.org)
+and [STRUNA](http://www.victorovchinnikov.com/research/string-method). It
+allows you to bias or analyze an OpenMM simulation based on collective
+variables.
 
 Building The Plugin
 ===================
@@ -43,14 +43,14 @@ install the Python wrapper.
 Using The Plugin
 ================
 
-Simply create a `StrunaForce` object, passing the STRUNA control script as an argument to the
-constructor, then add it to your `System`.  For example,
+Simply create a `StrunaForce` object, passing the STRUNA script file name
+and the output file name as an argument to the constructor, then add it
+to your `System`.  For example,
 
 ```Python
-script = """
-d: DISTANCE ATOMS=1,10
-METAD ARG=d SIGMA=0.2 HEIGHT=0.3 PACE=500"""
-system.addForce(StrunaForce(script))
+script = """test.sm"""
+log = """test.log"""
+system.addForce(StrunaForce(script,log))
 ```
 
 Be aware that STRUNA numbers atoms starting from 1, whereas OpenMM numbers them starting from 0.

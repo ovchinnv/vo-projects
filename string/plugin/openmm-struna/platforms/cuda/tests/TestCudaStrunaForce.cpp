@@ -30,7 +30,7 @@
  * -------------------------------------------------------------------------- */
 
 /**
- * This tests the Reference implementation of StrunaForce.
+ * This tests the CUDA implementation of StrunaForce.
  */
 
 #include "StrunaForce.h"
@@ -49,7 +49,7 @@ using namespace StrunaPlugin;
 using namespace OpenMM;
 using namespace std;
 
-extern "C" OPENMM_EXPORT void registerStrunaReferenceKernelFactories();
+extern "C" OPENMM_EXPORT void registerStrunaCudaKernelFactories();
 
 void testForce() {
     // Create a System that applies a force based on the distance between two atoms.
@@ -81,7 +81,7 @@ void testForce() {
     StrunaForce* struna = new StrunaForce(script, log);
     system.addForce(struna);
     LangevinIntegrator integ(300.0, 1.0, 1.0);
-    Platform& platform = Platform::getPlatformByName("Reference");
+    Platform& platform = Platform::getPlatformByName("CUDA");
     Context context(system, integ, platform);
     context.setPositions(positions);
 
@@ -89,7 +89,7 @@ void testForce() {
 
     State state = context.getState(State::Energy | State::Forces);
     Vec3 delta = positions[0]-positions[2];
-    double energy = delta.dot(delta)
+    double energy = delta.dot(delta);
     double dist = sqrt(energy);
     ASSERT_EQUAL_TOL(energy, state.getPotentialEnergy(), 1e-5);
     ASSERT_EQUAL_VEC(-delta/dist, state.getForces()[0], 1e-5);
@@ -98,9 +98,11 @@ void testForce() {
     ASSERT_EQUAL_VEC(Vec3(), state.getForces()[3], 1e-5);
 }
 
-int main() {
+int main(int argc, char* argv[]) {
     try {
-        registerStrunaReferenceKernelFactories();
+        registerStrunaCudaKernelFactories();
+        if (argc > 1)
+            Platform::getPlatformByName("CUDA").setPropertyDefaultValue("CudaPrecision", string(argv[1]));
         testForce();
     }
     catch(const std::exception& e) {
