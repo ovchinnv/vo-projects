@@ -157,9 +157,9 @@ void OpenCLCalcStrunaForceKernel::executeOnWorkerThread() {
     // copy coordinates :
     if (atomlist==NULL) { // atomlist is not defined; therefore, provide all coords
      for (i=0, rptr=r ; i < natoms ; i++) {
-      *(rptr++) = pos[i][0];
-      *(rptr++) = pos[i][1];
-      *(rptr++) = pos[i][2];
+      *(rptr++) = pos[i][0]*nm2A; //units
+      *(rptr++) = pos[i][1]*nm2A;
+      *(rptr++) = pos[i][2]*nm2A;
      }
     // compute plugin forces and energy
      ierr=sm_dyna_plugin(iteration, r, fr, &sm_energy, &atomlist); // might return valid atomlist
@@ -171,13 +171,13 @@ void OpenCLCalcStrunaForceKernel::executeOnWorkerThread() {
        for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
         i=*aptr - 1; // for zero offset (e.g. first coordinate lives in r[0]
         j=3*i;
-        frc[j]= fr[j++];
-        frc[j]= fr[j++];
-        frc[j]= fr[j];
+        frc[j]= fr[j++]*str2omm_f; //units
+        frc[j]= fr[j++]*str2omm_f;
+        frc[j]= fr[j]*str2omm_f;
        }
       } else { // no atomlist provided; loop over all atoms
        for (j=0 ; j < 3*natoms ; j++) {
-        frc[j]= fr[j++];
+        frc[j]= fr[j++]*str2omm_f; //units
        }
       } // atomlist
 //=============
@@ -187,13 +187,13 @@ void OpenCLCalcStrunaForceKernel::executeOnWorkerThread() {
        for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
         i=*aptr - 1; // for zero offset (e.g. first coordinate lives in r[0]
         j=3*i;
-        frc[j]= (float) fr[j++];
-        frc[j]= (float) fr[j++];
-        frc[j]= (float) fr[j];
+        frc[j]= (float) fr[j++]*str2omm_f; //units
+        frc[j]= (float) fr[j++]*str2omm_f;
+        frc[j]= (float) fr[j]*str2omm_f;
        }
       } else { // no atomlist provided; loop over all atoms
        for (j=0 ; j < 3*natoms ; j++) {
-        frc[j]= fr[j++];
+        frc[j]= fr[j++]*str2omm_f; //units
        }
       } // atomlist
      } //qdble
@@ -201,9 +201,9 @@ void OpenCLCalcStrunaForceKernel::executeOnWorkerThread() {
      for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
       j=*aptr - 1;
       rptr=r + 3*j ;
-      *(rptr++) = pos[j][0];
-      *(rptr++) = pos[j][1];
-      *(rptr)   = pos[j][2];
+      *(rptr++) = pos[j][0]*nm2A; //units
+      *(rptr++) = pos[j][1]*nm2A;
+      *(rptr)   = pos[j][2]*nm2A;
      }
 //
      ierr=sm_dyna_plugin(iteration, r, fr, &sm_energy, &atomlist); // atomlist should not be modified in this call
@@ -213,18 +213,18 @@ void OpenCLCalcStrunaForceKernel::executeOnWorkerThread() {
       for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
        i=*aptr - 1; // zero offset (see above)
        j=3*i ;
-       frc[j]= fr[j++];
-       frc[j]= fr[j++];
-       frc[j]= fr[j];
+       frc[j]= fr[j++]*str2omm_f; //units
+       frc[j]= fr[j++]*str2omm_f;
+       frc[j]= fr[j]*str2omm_f;
       }
      } else { // single
       float *frc = (float*) cl.getPinnedBuffer();
       for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
        i=*aptr - 1; // zero offset (see above)
        j=3*i ;
-       frc[j]= (float) fr[j++];
-       frc[j]= (float) fr[j++];
-       frc[j]= (float) fr[j];
+       frc[j]= (float) fr[j++]*str2omm_f; //units
+       frc[j]= (float) fr[j++]*str2omm_f;
+       frc[j]= (float) fr[j]*str2omm_f;
       }
      } // qdble
     } // atomlist == NULL

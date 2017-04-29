@@ -1,4 +1,4 @@
-LIB=libstruna.so libstruna.a
+LIB=libstruna.so # libstruna.a
 LIBS+=$(LIB)
 LINKOBJS=\
  atompar.o \

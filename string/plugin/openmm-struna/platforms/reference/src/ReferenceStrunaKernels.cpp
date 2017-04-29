@@ -126,9 +126,9 @@ double ReferenceCalcStrunaForceKernel::execute(ContextImpl& context, bool includ
     // copy coordinates :
     if (atomlist==NULL) { // atomlist is not defined; therefore, provide all coords
      for (i=0, rptr=r ; i < natoms ; i++) {
-      *(rptr++) = pos[i][0];
-      *(rptr++) = pos[i][1];
-      *(rptr++) = pos[i][2];
+      *(rptr++) = pos[i][0]*nm2A; // include unit conversion
+      *(rptr++) = pos[i][1]*nm2A;
+      *(rptr++) = pos[i][2]*nm2A;
      }
     // compute plugin forces and energy
      ierr=sm_dyna_plugin(iteration, r, fr, &sm_energy, &atomlist); // might return valid atomlist
@@ -137,24 +137,24 @@ double ReferenceCalcStrunaForceKernel::execute(ContextImpl& context, bool includ
       for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
        j=*aptr - 1; // for zero offset (e.g. first coordinate lives in r[0]
        fptr=fr + 3*j ;
-       frc[j][0]+= *(fptr++);
-       frc[j][1]+= *(fptr++);
-       frc[j][2]+= *(fptr);
+       frc[j][0]+= (*(fptr++))*str2omm_f; // include unit conversion
+       frc[j][1]+= (*(fptr++))*str2omm_f;
+       frc[j][2]+= (*(fptr))*str2omm_f;
       }
      } else { // no atomlist provided; loop over all atoms
       for (i=0, fptr=fr ; i < natoms ; i++) {
-       frc[i][0]+= *(fptr++);
-       frc[i][1]+= *(fptr++);
-       frc[i][2]+= *(fptr++);
+       frc[i][0]+= *(fptr++)*str2omm_f;
+       frc[i][1]+= *(fptr++)*str2omm_f;
+       frc[i][2]+= *(fptr++)*str2omm_f;
       }
      } // atomlist
     } else { // atomlist not null : loop over only the desired indices
      for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
       j=*aptr - 1;
       rptr=r + 3*j;
-      *(rptr++) = pos[j][0];
-      *(rptr++) = pos[j][1];
-      *(rptr)   = pos[j][2];
+      *(rptr++) = pos[j][0]*nm2A;
+      *(rptr++) = pos[j][1]*nm2A;
+      *(rptr)   = pos[j][2]*nm2A;
      }
 //
      ierr=sm_dyna_plugin(iteration, r, fr, &sm_energy, &atomlist); // atomlist should not be modified in this call
@@ -162,10 +162,11 @@ double ReferenceCalcStrunaForceKernel::execute(ContextImpl& context, bool includ
      for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
       j=*aptr - 1;
       fptr=fr + 3*j ;
-      frc[j][0]+= *(fptr++);
-      frc[j][1]+= *(fptr++);
-      frc[j][2]+= *(fptr);
+      frc[j][0]+= *((fptr++))*str2omm_f;
+      frc[j][1]+= *((fptr++))*str2omm_f;
+      frc[j][2]+= *((fptr))*str2omm_f;
      }
     } // atomlist == NULL
+    sm_energy*=str2omm_e ; // convert units
     return sm_energy;
 }
