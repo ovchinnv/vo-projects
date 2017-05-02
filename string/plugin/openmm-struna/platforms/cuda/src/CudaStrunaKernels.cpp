@@ -122,11 +122,13 @@ CudaCalcStrunaForceKernel::~CudaCalcStrunaForceKernel() {
 }
 
 void CudaCalcStrunaForceKernel::initialize(const System& system, const StrunaForce& force) {
+    natoms = system.getNumParticles();
+    //
     cu.setAsCurrent();
     cuStreamCreate(&stream, CU_STREAM_NON_BLOCKING);
     cuEventCreate(&syncEvent, CU_EVENT_DISABLE_TIMING);
     int elementSize = (cu.getUseDoublePrecision() ? sizeof(double) : sizeof(float));
-    strunaForces = new CudaArray(cu, 3*system.getNumParticles(), elementSize, "strunaForces");
+    strunaForces = new CudaArray(cu, 3*natoms, elementSize, "strunaForces");
     map<string, string> defines;
     defines["NUM_ATOMS"] = cu.intToString(cu.getNumAtoms());
     defines["PADDED_NUM_ATOMS"] = cu.intToString(cu.getPaddedNumAtoms());
@@ -136,7 +138,6 @@ void CudaCalcStrunaForceKernel::initialize(const System& system, const StrunaFor
     cu.addPreComputation(new StartCalculationPreComputation(*this));
     cu.addPostComputation(new AddForcesPostComputation(*this));
 
-    natoms = system.getNumParticles();
     //script name
     string inputfile__=force.getScript();
     int ilen=inputfile__.length();
@@ -175,6 +176,8 @@ void CudaCalcStrunaForceKernel::initialize(const System& system, const StrunaFor
     int ierr=sm_init_plugin(natoms, m, q, inputfile, ilen, logfile, llen, &atomlist);
     free(m);
     free(q);
+    pos.resize(natoms);
+    frc.resize(natoms);
     hasInitialized = true;
 }
 
@@ -198,7 +201,6 @@ void CudaCalcStrunaForceKernel::executeOnWorkerThread() {
     double *fptr; // pointer to force array
     int *aptr; // pointer to atom index array
     int i, j, ierr;
-    //
     // copy coordinates :
     if (atomlist==NULL) { // atomlist is not defined; therefore, provide all coords
      for (i=0, rptr=r ; i < natoms ; i++) {
@@ -213,15 +215,15 @@ void CudaCalcStrunaForceKernel::executeOnWorkerThread() {
       for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
        j=*aptr - 1; // for zero offset (e.g. first coordinate lives in r[0]
        fptr=fr + 3*j ;
-       frc[j][0]+= (*(fptr++))*str2omm_f;
-       frc[j][1]+= (*(fptr++))*str2omm_f;
-       frc[j][2]+= (*(fptr))*str2omm_f;
+       frc[j][0]= (*(fptr++))*str2omm_f;
+       frc[j][1]= (*(fptr++))*str2omm_f;
+       frc[j][2]= (*(fptr))*str2omm_f;
       }
      } else { // no atomlist provided; loop over all atoms
       for (i=0, fptr=fr ; i < natoms ; i++) {
-       frc[i][0]+= (*(fptr++))*str2omm_f;
-       frc[i][1]+= (*(fptr++))*str2omm_f;
-       frc[i][2]+= (*(fptr++))*str2omm_f;
+       frc[i][0]= (*(fptr++))*str2omm_f;
+       frc[i][1]= (*(fptr++))*str2omm_f;
+       frc[i][2]= (*(fptr++))*str2omm_f;
       }
      } // atomlist
     } else { // atomlist not null : loop over only the desired indices
@@ -238,9 +240,9 @@ void CudaCalcStrunaForceKernel::executeOnWorkerThread() {
      for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
       j=*aptr - 1;
       fptr=fr + 3*j ;
-      frc[j][0]+= (*(fptr++))*str2omm_f; // convert units
-      frc[j][1]+= (*(fptr++))*str2omm_f;
-      frc[j][2]+= (*(fptr))*str2omm_f;
+      frc[j][0]= (*(fptr++))*str2omm_f; // convert units
+      frc[j][1]= (*(fptr++))*str2omm_f;
+      frc[j][2]= (*(fptr))*str2omm_f;
      }
     } // atomlist == NULL
     //

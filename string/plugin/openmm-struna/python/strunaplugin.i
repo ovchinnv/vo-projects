@@ -22,8 +22,9 @@ namespace StrunaPlugin {
 
 class StrunaForce : public OpenMM::Force {
 public:
-    StrunaForce(const std::string& script);
+    StrunaForce(const std::string& script, const std::string& log);
     const std::string& getScript() const;
+    const std::string& getLog() const;
 };
 
 }
