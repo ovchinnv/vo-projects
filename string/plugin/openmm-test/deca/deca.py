@@ -4,7 +4,7 @@
 #platformName='CPU' ; # default is CUDA; CPU is usually too slow
 #
 # aux parameters (e.g. they help define the required ones, but are not themselves used by CHOMM)
-firstrun=11   ;# initial run index
+firstrun=32   ;# initial run index
 numrun=1    ;# numbef of runs
 name='deca' ; #prefix for output files
 
