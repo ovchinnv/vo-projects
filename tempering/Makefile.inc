@@ -1,5 +1,5 @@
-LIB=libadtemp.so
-LIBS+=$(LIB)
+LIB=libadtemp
+LIBS+=$(LIB).so
 LINKOBJS=\
  constants.o\
  output.o \
@@ -9,14 +9,23 @@ LINKOBJS=\
  rng.o clcg.o \
  mpi_compat_stub.o \
  ivector.o \
- isort.o \
- tempering_plugin_acemd.o \
- tempering_plugin.o \
- tempering.o \
- energy_grid.o \
- griddata.o
+ isort.o
 
-default : plugin
-plugin : $(LIB)
-$(LIB) : $(LOBJS) Makefile.inc
+default : plugin tcl python
+plugin : $(LIB).so
+$(LIB).so : $(OBJS) $(COBJS) $(LOBJS) Makefile.inc
 
+tcl : $(LIB)_tcl.so
+$(LIB)_tcl.so : tempering_tcl.o $(OBJS)
+	$(LD) $(LDFLAGS) -shared tempering_tcl.o $(OBJS) $(LOBJS) $(LTCL) -Wl,-z,defs -o $@
+
+python : $(LIB)_python.so
+$(LIB)_python.so : tempering_python.o $(OBJS)
+	$(LD) $(LDFLAGS) -shared tempering_python.o $(OBJS) $(LOBJS) $(LPYTHON) -Wl,-z,defs -o $@
+
+tempering_python.o : tempering.i
+tempering_tcl.o : tempering.i
+tempering.i : $(HEADS)
+
+clean ::
+	rm -f tempering_tcl.* tempering_python.* tempering.py

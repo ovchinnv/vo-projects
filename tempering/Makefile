@@ -1,10 +1,19 @@
 NAME=tempering
 ROOT=..
 HEADS=tempering.h
-OBJS=tempering_plugin_acemd.o tempering_plugin.o tempering.o griddata.o energy_grid.o
+OBJS= tempering_plugin.o tempering.o griddata.o energy_grid.o
+COBJS=tempering_plugin_acemd.o
+
 DEPS=files output parser random constants vectors
 
-LOCALDEFS+=-D__BINDC
+PYTHONH=-I /usr/include/python3.6m/
+LPYTHON=-lpython3.6m
+LTCL=-ltcl
+
+SWIGC=swig
+SFLAGS=
+
+LOCALDEFS+=-D__BINDC $(PYTHONH)
 
 include $(ROOT)/Makefile.inc
 
