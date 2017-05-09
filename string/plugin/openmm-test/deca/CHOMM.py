@@ -1,1 +1,1 @@
-/home/surgeon/scripts/openmm/string/CHOMM.py
+/home/surgeon/scripts/openmm/CHOMM.py

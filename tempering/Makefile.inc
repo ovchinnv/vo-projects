@@ -22,6 +22,10 @@ $(LIB)_tcl.so : tempering_tcl.o $(OBJS)
 python : _tempering.so
 _tempering.so : tempering_python.o $(OBJS)
 	$(LD) $(LDFLAGS) -shared tempering_python.o $(OBJS) $(LOBJS) $(LPYTHON) -Wl,-z,defs -o $@
+	cat tempering_wrap.py >> tempering.py
+
+pythoninstall : python
+	cp -f _tempering.so tempering.py $(PYTHONINSTALL)
 
 tempering_python.o : tempering.i
 tempering_tcl.o : tempering.i
