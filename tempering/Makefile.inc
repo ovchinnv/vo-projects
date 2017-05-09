@@ -1,4 +1,4 @@
-LIB=libtemp_acemd.so
+LIB=libadtemp.so
 LIBS+=$(LIB)
 LINKOBJS=\
  constants.o\
@@ -9,13 +9,14 @@ LINKOBJS=\
  rng.o clcg.o \
  mpi_compat_stub.o \
  ivector.o \
+ isort.o \
  tempering_plugin_acemd.o \
- tempering_acemd.o \
+ tempering_plugin.o \
  tempering.o \
  energy_grid.o \
  griddata.o
 
-default : acemd
-acemd : $(LIB)
-$(LIB) : $(LOBJS) MakeACEMD.inc
+default : plugin
+plugin : $(LIB)
+$(LIB) : $(LOBJS) Makefile.inc
 
