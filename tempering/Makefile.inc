@@ -19,8 +19,8 @@ tcl : $(LIB)_tcl.so
 $(LIB)_tcl.so : tempering_tcl.o $(OBJS)
 	$(LD) $(LDFLAGS) -shared tempering_tcl.o $(OBJS) $(LOBJS) $(LTCL) -Wl,-z,defs -o $@
 
-python : $(LIB)_python.so
-$(LIB)_python.so : tempering_python.o $(OBJS)
+python : _tempering.so
+_tempering.so : tempering_python.o $(OBJS)
 	$(LD) $(LDFLAGS) -shared tempering_python.o $(OBJS) $(LOBJS) $(LPYTHON) -Wl,-z,defs -o $@
 
 tempering_python.o : tempering.i
