@@ -9,6 +9,11 @@ DEPS=files output parser random constants vectors
 PYTHONH=-I /usr/include/python3.6m/
 PYTHONINSTALL=/usr/lib/python3.6/site-packages
 LPYTHON=-lpython3.6m
+
+PYTHONH=-I /usr/include/python2.7/
+PYTHONINSTALL=/usr/lib/python2.7/site-packages
+LPYTHON=-lpython2.7
+
 LTCL=-ltcl
 
 SWIGC=swig
