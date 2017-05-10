@@ -34,4 +34,4 @@ tempering_tcl.o : tempering.i
 tempering.i : $(HEADS)
 
 clean ::
-	rm -f tempering_tcl.* tempering_python.* tempering.py*
+	rm -f tempering_tcl.* tempering_python.* tempering.py* tempering*txt
