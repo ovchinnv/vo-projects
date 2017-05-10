@@ -1,1 +1,1 @@
-/home/surgeon/projects/tempering/acetest/diala/gdata.m
+../../acetest/diala/gdata.m
