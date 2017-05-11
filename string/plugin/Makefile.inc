@@ -79,8 +79,7 @@ LINKOBJS=\
  fieldbcdef.o \
  formats.o \
  stats.o \
- util.o \
- sm_plugin.o
+ util.o
 
 
 default : plugin
