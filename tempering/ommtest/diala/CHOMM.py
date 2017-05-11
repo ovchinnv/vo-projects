@@ -394,8 +394,7 @@ if 1:
 # compute potential energy
     state=simulation.context.getState(getEnergy=True)
     pener=state.getPotentialEnergy().value_in_unit(u.kilocalories_per_mole);
-    e0=pote(simulation);
-    newAdTemperature=tempering.update(simulation.currentStep, e0, adTemperature);
+    newAdTemperature=tempering.update(simulation.currentStep, pener, adTemperature);
     if (abs(newAdTemperature-adTemperature) > 1.0e-10) :
      state=simulation.context.getState(getVelocities=True)
 #     dprint("Updating thermostat temperature ",adTemperature," --> ",newAdTemperature);

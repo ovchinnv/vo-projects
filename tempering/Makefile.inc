@@ -19,7 +19,7 @@ tcl : $(LIB)_tcl.so
 $(LIB)_tcl.so : tempering_tcl.o $(OBJS)
 	$(LD) $(LDFLAGS) -shared tempering_tcl.o $(OBJS) $(LOBJS) $(LTCL) -Wl,-z,defs -o $@
 
-python : _tempering.so tempering_wrap.py
+python : _tempering.so tempering_wrap.py $(OBJS) $(LOBJS)
 _tempering.so : tempering_python.o $(OBJS)
 	$(LD) $(LDFLAGS) -shared tempering_python.o $(OBJS) $(LOBJS) $(LPYTHON) -Wl,-z,defs -o $@
 	cat tempering_wrap.py >> tempering.py
