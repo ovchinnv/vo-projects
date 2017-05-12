@@ -3,7 +3,7 @@
 file='gdata.dat';
 
 % extract grid
-system(['gdata > ',file]);
+system(['./gdata > ',file]);
 
 d=load(file);
 
