@@ -1,1 +1,1 @@
-/home/surgeon/projects/tempering/acetest/diala/avg.m
+../..//acetest/diala/avg.m

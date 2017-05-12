@@ -5,6 +5,8 @@
 #define __DONECTX TEMPERING_DONE
 #endif
 #define _N TEMPERING
+#//define __CHKUPDATE(_WHAT)   ( (mod(iteration, _WHAT) .eq. ione) .or. _WHAT.eq.ione )
+#define __CHKUPDATE(_WHAT)   (mod(iteration, _WHAT) .eq. izero)
 
 module _N
 
@@ -61,7 +63,7 @@ module _N
  bool :: qrestart=.false. ! whether we are restarting from a restart file
 !
 ! for storing random numbers
- int, parameter :: nrandmax = 10000 ! maximum random number array size (many numbers precomputed for speed)
+ int, parameter :: nrandmax = 100000 ! maximum random number array size (many numbers precomputed for speed)
  int :: nrand = 0 !actual size of random number array size
  int :: irand=0 ! pointer into random number array eta
  float :: eta(0:nrandmax-1)
@@ -79,8 +81,6 @@ module _N
  __PAR(stat_output_file, character(len=vartaglen), 'tempering.series.txt') ! time series file
  character(len=7) :: stat_acc='WRITE' ! access mode for series file ('WRITE'/'READ'/'APPEND')
  character(len=vartaglen) :: line ! for reading grid data from restart file
-!
-_DECL_MSGBUF
 !
  contains
 !====================================================================================
@@ -324,6 +324,8 @@ _DECL_MSGBUF
  irand=0 ! make sure that we are pointing to the beginning of random number array
 ! make sure nrand=0 is not allowed
  __ASSERT(nrand,>,0)
+! make sure we do not overflow eta array
+ __ASSERT(nrand,<=,nrandmax)
  if (fatal_warning()) return
 ! initialize grid data
 
@@ -335,7 +337,7 @@ _DECL_MSGBUF
 
 ! statistics
 ! for now, make sure history array does not overflow during dynamics
- __ASSERT(stat_add_freq*stat_output_freq,<=,maxhist)
+ __ASSERT(stat_output_freq/stat_add_freq,<=,maxhist)
  bhist=0
  ehist=-1
 !
@@ -366,11 +368,12 @@ _DECL_MSGBUF
 !
 !========================================== update averages
  if (average_update_freq.gt.izero) then
-  if ( (mod(iteration, average_update_freq) .eq. ione) .or. average_update_freq.eq.ione) call energy_grid_update_averages(temperature,energy)
+  if __CHKUPDATE(average_update_freq) &
+  & call energy_grid_update_averages(temperature,energy)
  endif
 !========================================== compute new temperature
  if (temperature_update_freq.gt.izero) then
-  if ( (mod(iteration, temperature_update_freq) .eq. ione) .or. temperature_update_freq.eq.ione) then
+  if __CHKUPDATE(temperature_update_freq) then
 ! compute average energy
 ! NOTE : the Langevin equation to solve is :
 ! dT/dt = ( E-Eavg )/kB - \alpha T + T sqrt[2] x \eta(t), where \alpha is the inverse temp distribution exponent ; \eta is Wiener process derivative
@@ -414,7 +417,7 @@ _DECL_MSGBUF
 !
 !============================================= save temperature time series
  if (stat_add_freq.gt.izero) then
-  if ( (mod(iteration, stat_add_freq) .eq. ione) .or. stat_add_freq.eq.ione) then
+  if __CHKUPDATE(stat_add_freq) then
 
    __INC(ehist)
    if (ehist.gt.0) then ! true for all samples except the first
@@ -431,7 +434,7 @@ _DECL_MSGBUF
 !
 !============================================= output temperature time series
  if (stat_output_freq.gt.izero) then
-  if ( (mod(iteration, stat_output_freq) .eq. ione) .or. stat_output_freq.eq.ione) then
+  if __CHKUPDATE(stat_output_freq) then
 !
    __MESSAGE(whoami, ' WRITING TIME SERIES TO FILE ("'//trim(stat_output_file)//'")')
    call tempering_write_history()
@@ -441,7 +444,7 @@ _DECL_MSGBUF
 !
 !============================================= output restart file
  if (output_file_freq.gt.izero) then
-  if ( (mod(iteration, output_file_freq) .eq. ione) .or. output_file_freq.eq.ione) then
+  if __CHKUPDATE(output_file_freq) then
 !
    __MESSAGE(whoami, ' WRITING OUTPUT/RESTART FILE TO ("'//trim(output_file)//'")')
    call tempering_write_restart_file()

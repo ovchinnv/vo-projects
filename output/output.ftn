@@ -4,11 +4,13 @@ module output
 ! for a message to be printed, need level  > minmessagelev
 ! for a error   to be printed, need level  > minerrorlev
 !
+#define __CHKINIT   if (.not.( output_initialized.or.fout.eq.0)) call output_init()
+
  __IMPNONE
- int, save :: fout=-1
- bool, save :: output_initialized=.false.
- bool, save :: qprint = .true.
- character(len=80) :: msg__ ! buffer for output (see message.src) macro
+ __DECL_MSGBUF
+ int, save, public :: fout=0
+ bool, save, public :: output_initialized=.false.
+ bool, save, public :: qprint = .true.
 ! character(len=10), public, parameter :: realfmt = 'ES20.7E3'
  character(len=10), public, parameter :: realfmt = 'E23.15'
 !
@@ -69,14 +71,13 @@ module output
   module procedure reset_minmessagelev
  end interface set_minmessagelev
 !
-
  contains
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  subroutine error4(whoami,msg,level)
   integer*4 :: level
   character(len=*) :: whoami, msg
 !
-  if (.not.output_initialized) call output_init()
+  __CHKINIT
   if (level.lt.minerrorlev) then
    stat=' FATAL'; l=6
   else
@@ -95,7 +96,7 @@ module output
   integer*8 :: level
   character(len=*) :: whoami, msg
 !
-  if (.not.output_initialized) call output_init()
+  __CHKINIT
   if (level.lt.minerrorlev) then
    stat=' FATAL'; l=6
   else
@@ -119,7 +120,7 @@ module output
 !
  character(len=*) :: whoami
 !
- if (.not.output_initialized) call output_init()
+ __CHKINIT
 !
  if (qprint) then
   write(fout,'(5A)') ' TERMINATION INVOKED FROM : (',whoami,').'
@@ -140,7 +141,7 @@ module output
   integer*4 :: level
   character(len=*) :: whoami, msg
 !
-  if (.not.output_initialized) call output_init()
+  __CHKINIT
   if (level.lt.minwarnlev) then
    stat=' FATAL'; l=6
   else
@@ -161,7 +162,7 @@ module output
   integer*8 :: level
   character(len=*) :: whoami, msg
 !
-  if (.not.output_initialized) call output_init()
+  __CHKINIT
   if (level.lt.minwarnlev) then
    stat=' FATAL'; l=6
   else
@@ -227,7 +228,7 @@ module output
   int, optional :: level_
   int :: level
 !
-  if (.not.output_initialized) call output_init()
+  __CHKINIT
 !
   if (qprint) then
    if (present(level_)) then ; level = level_ ; else ; level=defaultmessagelev ; endif
@@ -241,7 +242,7 @@ module output
   character(len=*) :: msg
   integer*4 :: level_
 !
-  if (.not.output_initialized) call output_init()
+  __CHKINIT
 !
   if (qprint) then
    if (level_.le.minmessagelev) write(fout,'(A)') msg(1:len_trim(msg))
@@ -254,7 +255,7 @@ module output
   character(len=*) :: msg
   integer*8 :: level_
 !
-  if (.not.output_initialized) call output_init()
+  if (.not.output_initialized .and. fout.ne.0) call output_init()
 !
   if (qprint) then
    if (level_.le.minmessagelev) write(fout,'(A)') msg(1:len_trim(msg))
@@ -265,7 +266,7 @@ module output
  subroutine plainmessage_(msg)
 ! write message without ay other info.
   character(len=*) :: msg
-  if (.not.output_initialized) call output_init()
+  __CHKINIT
 !
   if (qprint) then
    if (defaultmessagelev.le.minmessagelev) write(fout,'(A)') msg(1:len_trim(msg))
@@ -274,16 +275,24 @@ module output
  end subroutine plainmessage_
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 !
- subroutine output_init(filename)
+ subroutine output_init(filename, fid_)
  character(len=*), optional :: filename
+ __OPAR(fid, int)
  character(len=200) :: fname
- int :: flen
+ int :: flen, i
+ __IAM(OUTPUT_INIT)
  call output_done()
 !
  if (present(filename)) then
   fname=adjustl(filename)
   flen=len_trim(fname)
-  fout=987
+  __PRESENT(fid, 987) ! macro to assign to fout from fout_
+  __ASSERT(fid,>,0)
+  __ASSERT(fid,<,10000) ! maximum unit number
+  do i=1,size(reserved_streams)
+   __ASSERT(fid,/=,reserved_streams(i))
+  enddo
+  fout=fid
   open(unit=fout,file=fname(1:flen),form='FORMATTED',status='UNKNOWN')
  else
   fout=6
@@ -303,25 +312,25 @@ module output
  endif
  end subroutine output_done
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
- subroutine set_minwarnlev4(level) ;	 integer*4 :: level ; if (.not.output_initialized) call output_init()
+ subroutine set_minwarnlev4(level) ;	 integer*4 :: level ; __CHKINIT
   minwarnlev=level  ; warnlev =max(warnlev,minwarnlev); 	end subroutine set_minwarnlev4
- subroutine set_minerrorlev4(level) ; 	 integer*4 :: level ; if (.not.output_initialized) call output_init()
+ subroutine set_minerrorlev4(level) ; 	 integer*4 :: level ; __CHKINIT
   minerrorlev=level ; errorlev=max(errorlev,minerrorlev);	end subroutine set_minerrorlev4
- subroutine set_minmessagelev4(level) ;  integer*4 :: level ; if (.not.output_initialized) call output_init()
+ subroutine set_minmessagelev4(level) ;  integer*4 :: level ; __CHKINIT
   minmessagelev=level ; end subroutine set_minmessagelev4
 !
- subroutine set_minwarnlev8(level) ;	 integer*8 :: level ; if (.not.output_initialized) call output_init()
+ subroutine set_minwarnlev8(level) ;	 integer*8 :: level ; __CHKINIT
   minwarnlev=INT(level)  ; warnlev =max(warnlev,minwarnlev); 	end subroutine set_minwarnlev8
- subroutine set_minerrorlev8(level) ; 	 integer*8 :: level ; if (.not.output_initialized) call output_init()
+ subroutine set_minerrorlev8(level) ; 	 integer*8 :: level ; __CHKINIT
   minerrorlev=INT(level) ; errorlev=max(errorlev,minerrorlev);	end subroutine set_minerrorlev8
- subroutine set_minmessagelev8(level) ;  integer*8 :: level ; if (.not.output_initialized) call output_init()
+ subroutine set_minmessagelev8(level) ;  integer*8 :: level ; __CHKINIT
   minmessagelev=INT(level) ; end subroutine set_minmessagelev8
 !
- subroutine reset_minwarnlev() ; if (.not.output_initialized) call output_init()
+ subroutine reset_minwarnlev() ; __CHKINIT
   minwarnlev=defaultwarnlev ; warnlev =max(warnlev,minwarnlev); end subroutine reset_minwarnlev
- subroutine reset_minerrorlev() ; if (.not.output_initialized) call output_init()
+ subroutine reset_minerrorlev() ; __CHKINIT
   minerrorlev=defaulterrorlev ; errorlev=max(errorlev,minerrorlev);	end subroutine reset_minerrorlev
- subroutine reset_minmessagelev() ; if (.not.output_initialized) call output_init()
+ subroutine reset_minmessagelev() ; __CHKINIT
   minmessagelev=defaultmessagelev ; end subroutine reset_minmessagelev
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  function get_minwarnlev() result(level);	 int :: level ; level=minwarnlev;	end function get_minwarnlev
