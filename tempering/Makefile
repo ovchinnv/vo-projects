@@ -1,22 +1,37 @@
 NAME=tempering
 ROOT=..
 HEADS=tempering.h
-OBJS=tempering_plugin_acemd.o tempering_acemd.o tempering.o griddata.o energy_grid.o
-DEPS=files output parser random
+OBJS= tempering_plugin.o tempering.o griddata.o energy_grid.o
+COBJS=tempering_plugin_acemd.o
 
-LOCALDEFS+=-D__BINDC
+DEPS=files output parser random constants vectors
+
+PYTHONH=-I /usr/include/python3.6m/
+PYTHONINSTALL=/usr/lib/python3.6/site-packages
+LPYTHON=-lpython3.6m
+
+#PYTHONH=-I /usr/include/python2.7/
+#PYTHONINSTALL=/usr/lib/python2.7/site-packages
+#LPYTHON=-lpython2.7
+
+LTCL=-ltcl
+
+SWIGC=swig
+SFLAGS=
+
+LOCALDEFS+=-D__BINDC $(PYTHONH)
 
 include $(ROOT)/Makefile.inc
 
 LOCALMACROS+=-include source.defs
 LOCALDEPS+=source.defs
 
-include MakeACEMD.inc
+include Makefile.inc
 
 $(SOURCES) : $(LOCALDEPS)
 
 tempering_plugin_acemd.o : tempering_plugin_acemd.c aceplug.h
-tempering_acemd.o : tempering.o
+tempering_plugin.o : tempering.o
 tempering.o : energy_grid.o
 energy_grid.o : griddata.o
 

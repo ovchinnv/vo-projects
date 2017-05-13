@@ -44,7 +44,7 @@ aceplug_err_t aceplug_init(struct aceplug_sim_t *s, int argc, char **argkey, cha
 //
  ilen=strlen(inputfile);
  llen=strlen(logfile);
- ierr=tempering_init_from_acemd(inputfile, ilen, logfile, llen);
+ ierr=tempering_init_from_plugin(inputfile, ilen, logfile, llen);
 //
  return (ierr>0) ? ACEPLUG_ERR : ACEPLUG_OK ;
 }
@@ -75,14 +75,14 @@ aceplug_err_t aceplug_endstep(struct aceplug_sim_t *s) {
 #endif
 
 // obtain new temperature from tempering routine
- ierr=tempering_dyna_from_acemd(iteration, pe, current_temperature, &new_temperature);
+ ierr=tempering_dyna_from_plugin(iteration, pe, current_temperature, &new_temperature);
 #ifdef __DEBUG
  printf("# TEMPERING PLUGIN: got new temperature :"); 
  printf("%12.5f\n", new_temperature);
 #endif
 // rescale velocities
 // NOTE : the configuration allows temperature averages to be updated
-// more frequently that temperature evolution;
+// more frequently than temperature evolution;
 // therefore, it is possible that the new temperature will be the same, 
 // in wich case, we do not need to update it in the MD code
  if ( fabs ( new_temperature - current_temperature ) > __CERRTOL ) {
@@ -97,6 +97,6 @@ aceplug_err_t aceplug_endstep(struct aceplug_sim_t *s) {
 //==========================================================
 aceplug_err_t aceplug_terminate(struct aceplug_sim_t *s) {
  printf("# TEMPERING PLUGIN: Finalizing...\n");
- tempering_done_from_acemd();
+ tempering_done_from_plugin();
  return ACEPLUG_OK;
 }

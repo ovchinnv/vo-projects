@@ -13,10 +13,10 @@ CFLAGS =-O3 -fno-math-errno -c -fPIC
 #MPI_HOME=/usr/local/mpich2-intel
 #---GNU
 FC=gfortran
-#FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -Wall  #-fopenmp 
+FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -Wall  #-fopenmp 
 #FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  -Wall  #-fopenmp 
 #FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fcheck=all
-FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno
+#FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno
 #MPI_HOME=/usr/local/mpich2-gnu
 MPI_HOME=/usr/lib/openmpi
 OMP=-D__OMP -fopenmp
@@ -120,7 +120,7 @@ default: $(ROOT)/$(NAME).stamp
 	$(AR) $(AFLAGS) $@ $(LOBJS)
 	file=$@ ; if [ -f $$file ] ; then ln -fs `pwd`/$$file ${ROOT}/lib/$$file; 2>/dev/null; fi
 %.so:   $(OBJS) $(HEADS)
-	$(LD) $(LDFLAGS) -shared $(LOBJS) -o $@
+	$(LD) $(LDFLAGS) -shared $(LOBJS) $(OBJS) $(COBJS) -o $@
 	file=$@ ; if [ -f $$file ] ; then ln -fs `pwd`/$$file ${ROOT}/lib/$$file; 2>/dev/null; fi
 ###############################################################
 # DISTRIBUTION DIRS
@@ -136,7 +136,7 @@ $(ROOT)/$(NAME).stamp:: $(OBJS) $(MODS) $(HEADS) $(DISTRIB)
 	file=$${file%.*}.mod ; if [ -f $$file  ] ; then ln -fs `pwd`/$$file ${ROOT}/include/$$file; fi ;\
 	file=`echo $${file%.*} | tr '[:lower:]' '[:upper:]'`.mod ;\
 	if [ -f $$file  ] ; then ln -fs `pwd`/$$file ${ROOT}/include/$$file; fi ;\
-	done; 
+	done;
 	for file in $(HEADS); do \
 	ln -fs `pwd`/$$file ${ROOT}/include/$$file; \
         done;
@@ -149,10 +149,16 @@ $(ROOT)/$(NAME).stamp:: $(OBJS) $(MODS) $(HEADS) $(DISTRIB)
 	$(FPP) $(FPPFLAGS) $(DEFS) $(LOCALDEFS) $(GLOBALMACROS) $(LOCALMACROS) -P $< > $@
 %.F90:%.ftn $(LOCALDEPS) $(GLOBALDEPS) $(HEADS)
 	sed 's/\([^\#]\)\(\/\/\)/\1\^\^/g' $< | $(FPP) $(FPPFLAGS) $(DEFS) $(LOCALDEFS) -U__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(MSG) $(INCLUDES) -P | sed 's/\^\^/\/\//g' > $@
+%_.F90:%.ftn $(LOCALDEPS) $(GLOBALDEPS) $(HEADS)
+	sed 's/\([^\#]\)\(\/\/\)/\1\^\^/g' $< | $(FPP) $(FPPFLAGS) $(DEFS) $(LOCALDEFS) -D__BINDC -U__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(MSG) $(INCLUDES) -P | sed 's/\^\^/\/\//g' > $@
 %.src:%.ftn $(LOCALDEPS) $(GLOBALDEPS) $(ROOT)/charmm.msg
 	sed 's/\([^\#]\)\(\/\/\)/\1\^\^/g' $< | $(FPP) $(FPPFLAGS) -D__CHARMM -D__CHARMM_VER=$(CHARMM_MAJOR_VERSION) $(GLOBALMACROS) $(LOCALMACROS) $(CHMSG) -P | sed 's/\^\^/\/\//g' > $@
 %.ch:%.H $(LOCALDEPS) $(GLOBALDEPS)
 	$(FPP) $(FPPFLAGS)  -D__CHARMM -D__CHARMM_VER=$(CHARMM_MAJOR_VERSION) $(CHMSG) $(GLOBALMACROS) $(LOCALMACROS) -P $< > $@
+%_tcl.c:%.i
+	$(SWIGC) $(SFLAGS) -tcl -o $@ $<
+%_python.c:%.i
+	$(SWIGC) $(SFLAGS) -python -o $@ $<
 ########################## TEST PROGRAM ######################
 test.F90:test.ftn $(LOCALDEPS) $(GLOBALDEPS) $(ROOT)/test.msg
 	$(FPP) $(FPPFLAGS) $(DEFS) -U__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(TESTMSG) $(DEBUG) -P $< > $@
@@ -195,7 +201,7 @@ libraries: $(ROOT)/$(NAME).stamp
 .SILENT : %.stamp $(DISTRIB) force_look
 #.SILENT : clean
 clean::
-	rm -f *.mod *.a *.so $(ROOT)/$(NAME).stamp $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(EXE) $(HEADS) test.F90 test.dat test.out test.o 
+	rm -f *.mod *.a *.so $(ROOT)/$(NAME).stamp $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(COBJS) $(CBINDOBJS) $(SBINDOBJS) $(DBINDOBJS) $(EXE) $(HEADS) test.F90 test.dat test.out test.o 
 	if [ -f test ] ; then rm -f test ; fi
 	pushd ../ >/dev/null; rm -f $(ROOT)/$(NAME).stamp ; popd >/dev/null
 charmm::$(addsuffix .stamp, $(CHMDEPS))
