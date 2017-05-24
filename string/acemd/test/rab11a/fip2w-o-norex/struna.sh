@@ -98,6 +98,7 @@
   output=$2
   while [ 1 ] ; do
    acemd $config >& $output
+   sleep 2
    qunstable=`tail $output | grep -i unstable | wc -m`
    if [ "$qunstable" -gt "0" ]; then
     echo Simulation became unstable. Repeating this run.

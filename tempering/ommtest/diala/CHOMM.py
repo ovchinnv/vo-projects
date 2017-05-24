@@ -337,6 +337,7 @@ if 1:
  if (adTemp):
   import tempering
   from math import ceil,  sqrt
+  from numpy import array as narray
   dprint("Initializing Adaptive Tempering Plugin with input file '",adTempConfig,"' and output file '",adTempLog,"'");
   tempering.init(adTempConfig, adTempLog)
   adTemperature=temperature; # initial temperature, must match config file
@@ -394,15 +395,15 @@ if 1:
 # compute potential energy
     state=simulation.context.getState(getEnergy=True)
     pener=state.getPotentialEnergy().value_in_unit(u.kilocalories_per_mole);
-    e0=pote(simulation);
-    newAdTemperature=tempering.update(simulation.currentStep, e0, adTemperature);
+    newAdTemperature=tempering.update(simulation.currentStep, pener, adTemperature);
     if (abs(newAdTemperature-adTemperature) > 1.0e-10) :
      state=simulation.context.getState(getVelocities=True)
 #     dprint("Updating thermostat temperature ",adTemperature," --> ",newAdTemperature);
      velocity_scale = sqrt(newAdTemperature/adTemperature);
      adTemperature=newAdTemperature;
      simulation.integrator.setTemperature(adTemperature);
-     new_velocities=[v*velocity_scale for v in state.getVelocities()];
+     velocities=state.getVelocities().value_in_unit(u.nanometers/u.picoseconds);
+     new_velocities=[v*velocity_scale for v in velocities];
      simulation.context.setVelocities(new_velocities);
   else:
    dprint("Running MD simulation for ",nsteps," steps");
@@ -426,5 +427,5 @@ if 1:
  move('output.dcd', outputName+'.dcd');
 #==== finalize tempering plugin
  if (adTemp):
-  dprint("Finalizing adaptive tempering plugin")
+  dprint("Finalizing Adaptive Tempering Plugin")
   tempering.done()

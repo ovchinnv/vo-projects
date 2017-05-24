@@ -50,7 +50,8 @@ pbc=0; # whether periodic boundary conditions are on
 
 adTemp=1; # whether adaptive tempering plugin is active
 adTempFreq=10; # how often to call the plugin
-adTempConfig='diala.temp.in'; # config name for tempering plugin
+#adTempConfig='diala.temp.in'; # config name for tempering plugin
+adTempConfig='adplugin.inp'; # config name for tempering plugin
 adTempLog='diala.temp.out'; # lof name for tempering plugin
 
 mini=0;          # whether to minimize before dynamics
