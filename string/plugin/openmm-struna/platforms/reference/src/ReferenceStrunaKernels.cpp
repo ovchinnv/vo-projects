@@ -63,7 +63,6 @@ ReferenceCalcStrunaForceKernel::~ReferenceCalcStrunaForceKernel() {
         sm_done_plugin();
         free(r);
         free(fr);
-        free(atomlist);
     }
 }
 

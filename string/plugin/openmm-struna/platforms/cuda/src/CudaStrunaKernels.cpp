@@ -112,7 +112,6 @@ CudaCalcStrunaForceKernel::~CudaCalcStrunaForceKernel() {
         sm_done_plugin();
         free(r);
         free(fr);
-        free(atomlist);
     }
     cu.setAsCurrent();
     if (strunaForces != NULL)
