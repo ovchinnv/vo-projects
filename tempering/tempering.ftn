@@ -72,9 +72,9 @@ module _N
 !
 ! for time series (history) output
  int, parameter :: maxhist = 100000 ! size of history array ; this is the largest size that can be stored between outputs 
- int, parameter :: numvar  = 3      ! for now, thermostat temperature and instantaneous energy
- float :: hist(numvar,0:maxhist-1)
- int, parameter :: istep=1, itemp=2, iene=3  ! indices into hist
+ int, parameter :: numhistvar  = 4      ! for now, plugin iteration, thermostat temperature and instantaneous energy, mditeration
+ float :: hist(numhistvar,0:maxhist-1)
+ int, parameter :: istep=1, itemp=2, iene=3, imdstep=4  ! indices into hist
  int :: bhist=0, ehist=-1 ! beginning and final indices into history array
  __PAR(stat_add_freq, int, 10)     ! frequency of storing time series
  __PAR(stat_output_freq, int, 1000)   ! frequency of time series output
@@ -346,9 +346,10 @@ module _N
  end __SUB(initialize)
 
 !======================================
- __SUB(main) (energy,temperature)
+ __SUB(main) (energy,temperature,mditeration_)
  float, intent(in) :: energy
  float, intent(inout) :: temperature ! new temperature (if requested) will be returned in the same variable
+ __OPAR(mditeration,int)
  __IAM(__NM(COMPUTE))
 
 ! check initialization :
@@ -358,6 +359,7 @@ module _N
  endif
 !
  __INC(iteration)
+ __PRESENT(mditeration,izero)
  __DBGOUT('iteration = ', iteration)
 ! check that temperature is consistent
  if ( abs(temperature-temp) .gt. __FERRTOL ) then
@@ -429,6 +431,7 @@ module _N
    hist(istep,ehist) = iteration
    hist(itemp,ehist) = temp
    hist(iene, ehist) = energy
+   hist(imdstep, ehist) = mditeration
   endif
  endif
 !
@@ -437,7 +440,7 @@ module _N
   if __CHKUPDATE(stat_output_freq) then
 !
    __MESSAGE(whoami, ' WRITING TIME SERIES TO FILE ("'//trim(stat_output_file)//'")')
-   call tempering_write_history()
+   call tempering_write_history(present(mditeration_))
 
   endif
  endif
@@ -477,9 +480,10 @@ module _N
 !
  end __SUB(done)
 !======================================
- __SUB(write_history) ()
+ __SUB(write_history) (qmdstep_)
  __IAM(_NM(WRITE_HISTORY))
- int::i
+ __OPAR(qmdstep,bool)
+ int::i, numvar
  character(len=vartaglen) :: fmt
 !
  __DBGOUT('beginning history index : ', bhist)
@@ -491,10 +495,12 @@ module _N
   call files_open(fid, stat_output_file, 'FORMATTED', stat_acc)
   i=bhist
 !
+  numvar=numhistvar
+  if (.not.qmdstep) __INCR(numvar,-1) ! md iterations not supplied so skip this field
 !
   fmt='('//itoa(size(hist,2))//realfmt//')'
   do
-   write(fid,fmt)  hist(:,i)
+   write(fid,fmt)  hist(1:numvar,i)
    if (i.eq.ehist) exit
    __INC(i); if(i.eq.maxhist) i=izero
   enddo
@@ -527,7 +533,7 @@ module _N
  _W 'inverse_temperature_distribution=',trim(inverse_dist)
  _W 'inverse_temperature_distribution_exponent=',inverse_dist_exp, ' # exponent for power-law distribution'
  _W 'inverse_temperature_gridsize=',gridsize,' # number of points used for inverse temperature grid discretization'
- _W 'average_damping_constant=',damping_average,' # constant used in adaptive aeraging (Cg)'
+ _W 'average_damping_constant=',damping_average,' # constant used in adaptive averaging (Cg)'
  _W 'energy_interp_width=',energy_interp_width,' # number of bins on either side of current bin for interpolation'
  _W 'random_seeds=(',random_get_seeds(),') # current seeds from RNG for seamless restart'
 !
