@@ -23,6 +23,11 @@
 #endif
 #define __U(_WHAT) __CONCAT(_WHAT,_U)
 
+#if defined(__SORT_LIST ) && defined(__NEIGHBOR_LIST)
+! neighbor list length
+#// to check a subset of surface atom list
+#define __NEIGHBOR_LIST_LENGTH_MINDIST max(1,min(nsurface, INT(solute_neighbor_mind(i) * neighbor_list_factor) ))
+#endif
 
 module _N
 
@@ -91,8 +96,11 @@ module _N
  __PAR(structure_update_freq, int, ione)         ! frequency of updating coordinates from which the surface is generated
  __PAR(structure_update_memory, float, 0.999d0)  ! memory constant for exponential update
  __PAR(output_freq, int, 1000)                   ! frequency of writing output file
- __PAR(full_sum_freq, int, 60)                   ! frequency of force calculation without density truncation
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
+ __PAR(full_sum_freq, int, 75)                   ! frequency of force calculation without density truncation
                                                  ! doing the full calculation allows all atoms to be sorted
+ __PAR(sort_neighbor_list_freq, int, 10000)      ! frequency of completely sorting the neighbor list
+#endif
  __PAR(restart_file, character(len=vartaglen), 'NONE') ! restart file name
  __PAR(structure_file, character(len=vartaglen),'NONE') ! coordinate file (e.g. PDB) with system information, such as atomic radii
  __PAR(output_file, character(len=vartaglen), 'watershell.restart.txt') ! output file name
@@ -125,8 +133,8 @@ module _N
  float, parameter :: ml_per_angstrom3 = 1d-24
  float, parameter :: gml_per_akma = g_per_amu / ml_per_angstrom3 ! density conversion factor ; note that it is dimensional
  __PAR(density_num_samples, int, 0)    ! number of inst. density samples that make up average
- __PAR(density_max_samples, int, 1000) ! max number of inst. samples to keep in average
- __PAR(density_update_freq, int, 10)   ! how often pressure is updated from volume and mass
+ __PAR(density_max_samples, int, 100) ! max number of inst. samples to keep in average
+ __PAR(density_update_freq, int, 100)   ! how often pressure is updated from volume and mass
 #ifdef __OMP
  integer*1, allocatable, dimension(:,:,:,:), target :: inrho_all_threads ! density array for computing nonbulk solvent volume
 #else
@@ -179,8 +187,12 @@ module _N
  int, pointer :: solute_neighbor_list(:,:) ! for each solvent atom, the solute atoms are sorted in terms of proximity
 #ifdef __NEIGHBOR_LIST
  __PAR(qneighbor_list, bool, .true.) ! whether to use a neighbor list to shorten loops over surface atoms
- int :: neighbor_list_factor ! coefficient used to relate sorting frequency and limit index to loop length
+ float :: neighbor_list_factor ! coefficient used to relate sorting frequency and limit index to loop length
  int, pointer :: solute_neighbor_mind(:) ! for each solvent atom, index of closest solute atom in the mindist algorithm
+ bool :: qneighbor_list_sorted ! flag to ensure initial sorting of neighbor list
+!
+ float, parameter :: neighbor_list_factor_grow = 0.1d0
+ float, parameter :: neighbor_list_factor_shrink = - neighbor_list_factor_grow / 500d0
 !                                        ! also, the largest index of an atom within the cutoff distance for original algorithm
 ! note : should implement a real test of the neighbor list algorithm, e.g. scanning the entire array and comparing with the
 ! short array result
@@ -235,14 +247,19 @@ module _N
  bool, intent(in) :: qper
  type (cell), intent(in), optional :: ucell
 
- character(len=vartaglen) :: keyword, context
+ character(len=vartaglen) :: keyword, context, contexts(2) ! all_context currently holds the input context and the restart file context
+ int :: ictx ! ugly variables for context searching in macro : (ictx: context # ; qctx, whether tag present in context)
+ bool :: qctx
+ int, parameter :: main_context=2, restart_context=1 ! the order serves to provide desired override behavior ; DO NO CHANGE UNLESS YOU KNOW WHAT YOU ARE DOING
  int :: l, ierr
  character(len=maxlinelen) :: line
  float, pointer :: farray(:) => NULL()
  __IAM(__NM(INITIALIZE))
 !
-#define __CONTEXT __STRING(__CTX)
- context=__CONTEXT ;
+ contexts(main_context)=__STRING(__CTX)
+ contexts(restart_context)=__STRING(__RESTARTCTX)
+!
+ context=contexts(main_context)
 #define __DEFAULT
 ! first, check if we have the watershell context present
  if (parser_find_context(__STRING(__CTX)).le.0) then
@@ -274,7 +291,7 @@ module _N
  &  quiet_=.false.)
   call files_close(fid)
 ! now comes a trick : change context name temporarily to process the restart file using the same calls
-  context= __STRING(__RESTARTCTX)
+  context=contexts(restart_context)
 !
  endif ! have restart file
 !
@@ -375,15 +392,17 @@ module _N
 #endif
 !
 #ifdef __DASYSTAT
+#undef __WARNIFMISSING
 ! number of samples in dasystat (we may not need it because the barostat is specified in the input file)
 #define __VAR	density_num_samples
 #define __TAG	__VAR
 #define __NAME	current number of instantaneous density samples
 #include "parser/parser_macro2.src"
+#define __WARNIFMISSING
 #endif
 !
 ! ====== done with (possible) restart file data
- context=__CONTEXT ! reset context if changed
+ context=contexts(main_context) ! reset context if changed
 !
 #ifdef __BAROSTAT
 ! barostat flag :
@@ -623,7 +642,8 @@ module _N
                     __VAR=-(abs(__VAR)) ; \
                     bulk_boundary_contour_value=__RHO(__VAR) ;\
                    endif ! make sure to set to a negative value
-#include "parser/parser_macro2.src"
+! check in all contexts :
+#include "parser/parser_macro3.src"
 #define __MINUSERR
  endif
 #endif
@@ -694,27 +714,37 @@ module _N
 #undef __CHAR
 !
 #undef __WARNIFMISSING
-#if defined(__SORT_LIST) & defined(__NEIGHBOR_LIST)
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
 #define __INT
 #define __VAR	full_sum_freq
 #define __TAG	__VAR
-#define __NAME	frequency of force calculation without density truncation
+#define __NAME	frequency of force calculation without truncation of solvent neighbor list
 #define __DOALWAYS if (__VAR.le.zero) then ;\
                   __WRN(whoami, 'SOLVENT ATOM NEIGHBOR LISTS CANNOT BE USED WITH "'//__STRING(__VAR)//'"=0.') ;\
-                  neighbor_list_factor=ione ;\
+                  neighbor_list_factor=one ;\
                   qneighbor_list=.false. ;\
                  else ;\
-                  neighbor_list_factor = ithree + INT( (__VAR * __VAR) * 2.0d-4); \
+                  neighbor_list_factor = seven + ( (__VAR * __VAR) * 2.0d-4); \
                   if (.not.qneighbor_list) __WRN(whoami, 'NEIGHBOR LIST WILL NOT BE USED BECAUSE "neighbor_list" set to "off"') ;\
                  endif
 #include "parser/parser_macro2.src"
 !#ifdef __DEBUG
 !       __DBGOUT('FULL_SUM_FREQ IS ',full_sum_freq)
-       __DBGOUT('NEIGHBOR_LIST_FACTOR SET TO ',neighbor_list_factor) ! , ithree + INT(full_sum_freq**2 * 2.0d-4)) 
+       __DBGOUT('NEIGHBOR_LIST_FACTOR SET TO ',neighbor_list_factor) ! , seven + (full_sum_freq**2 * 2.0d-4)) 
 !#endif
+!
+#define __VAR	sort_neighbor_list_freq
+#define __TAG	__VAR
+#define __NAME	frequency of sorting solvent atom neighbor lists
+#define __DOIFOK if (__VAR.eq.zero) then ;\
+                  __WRN(whoami, 'WILL NOT SORT SOLVENT ATOM NEIGHBOR LISTS') ;\
+                 endif
+ if (qneighbor_list) then
+#include "parser/parser_macro2.src"
+ endif
+#undef __INT
 #endif
 !
-#undef __INT
 !
 #ifndef __WARNIFMISSING
 #define __WARNIFMISSING
@@ -814,6 +844,7 @@ module _N
  else __GET_MASS(dasystat_masses)
  else __GET_MASS(dasystat_mass)
  endif ! get mass
+ if (.not.dmasses_initialized) __WRN(whoami, 'COULD NOT INITIALIZE DASYSTAT MASSES');
  endif ! dasystat
 #endif
 !
@@ -861,6 +892,7 @@ module _N
    solute_neighbor_list(l,:)=l
   enddo
 #ifdef __NEIGHBOR_LIST
+  qneighbor_list_sorted=.not.qneighbor_list ! if not using qlist, set to true to avoid sorting
   __ALLOC(solute_neighbor_mind(nsolvent))
   solute_neighbor_mind=nsurface ! initialize to last position in the solute neighbor list array
 #endif
@@ -1066,6 +1098,14 @@ __DBGVAR(r_com_sa,1)
  _W 'cutoff_surf_stdev=',cutoff_surf_stdev, ' # distance from center beyond which it is set to zero (units of stdandard deviation)'
  _W 'surf_padding=',surf_padding, ' # scalar padding added to each atom radius'
 !
+#if defined(__SORT_LIST) & defined(__NEIGHBOR_LIST)
+ if (qneighbor_list) then
+  _W 'neighbor_list=on # use a neighbor list for solvent forces'
+ else
+  _W 'neighbor_list=off # do not use a neighbor list for solvent forces'
+ endif
+#endif
+!
 #ifdef __RMFT
 ! need to write out average force (since it is a time average)
  if (remove_net_torque) then
@@ -1082,6 +1122,7 @@ __DBGVAR(r_com_sa,1)
  if (dasystat) then
  _W 'density=',density_ave, '# (units of g/mL)'
  _W 'density_num_samples=',density_num_samples
+ _W 'bulk_boundary_distance=',bulk_boundary_distance, ' # distance from solute to bulk solvent'
  endif
 #endif
 ! write the current reference atoms :
@@ -1196,6 +1237,10 @@ __DBGVAR(r_com_sa,1)
  float, dimension(6) :: __U(rhs)
 #endif
 #endif
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
+ float, allocatable :: distance(:)
+ int :: ierr
+#endif
  int :: i, ii
  __IAM(__NM(main))
 !================================================================
@@ -1207,6 +1252,41 @@ __DBGVAR(r_com_sa,1)
  __INC(iteration)
 ! copy solvent coordinates
  r_solv=r(:,isolvent_atoms)
+! sort neighbor list on first iteration
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
+ if (qneighbor_list.and.sort_neighbor_list_freq.gt.izero) then
+   if (__CHKUPDATE(sort_neighbor_list_freq)) qneighbor_list_sorted=.false.
+ endif ! qneighbor_list
+!
+ if (.not. qneighbor_list_sorted) then
+  __ALLOC(distance(nsurface))
+#ifdef __OMP
+!$omp do schedule(runtime) private(ierr)
+#endif
+  do i=1, nsolvent
+   do ii=1, nsurface
+    distance(ii)=zero
+!
+    d0=r_surf(1,ii)-r_solv(1,i) ! can add periodicity treatment here
+    __INCR(distance(ii),d0*d0)
+!
+    d0=r_surf(2,ii)-r_solv(2,i)
+    __INCR(distance(ii),d0*d0)
+!
+    d0=r_surf(3,ii)-r_solv(3,i)
+    __INCR(distance(ii),d0*d0)
+   enddo
+!  sort neighbor list:
+   call rsort_ind('i',nsurface,distance,solute_neighbor_list(:,i),ierr)
+   solute_neighbor_mind(i)=min(nsurface,2)
+  enddo
+#ifdef __OMP
+!$omp end do
+#endif
+  __DEALL(distance)
+  qneighbor_list_sorted=.true.
+ endif
+#endif
 !
 #ifdef __RMFT
 #ifdef __SIMPLE_NET_FORCE_SURFACE
@@ -1320,35 +1400,33 @@ __DBGVAR(r_com_sa,1)
 ! aa :  this is the most time consuming part of the force calculation ; perhaps we can do it on the GPU ? Or perhaps can regulate cost otherwise ?
   if (qminimum_distance) then
 !
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
    if (full_sum_freq.gt.izero) then
 ! CHKUPDATE false : to truncate sum if running density value exceeds reference
 ! ALSO if qneighbor_list = false, this algorithm will be used, looping over all solute/surface indices
 ! because in that case, the maximum index in solute_neighbor_mdist is nsurface
-    call __NM(compute_mindist_grad)( &
-#ifdef __SORT_LIST
-#ifdef __NEIGHBOR_LIST
- &    (.not.qneighbor_list) .or. &
-#endif
-#endif
- &    (.not.__CHKUPDATE(full_sum_freq))) ! NOTE that it makes no sense to run full sum w/o neighbor sorting, which requires nbr. list !
+    call __NM(compute_mindist_grad)((.not.qneighbor_list) .or. (.not.__CHKUPDATE(full_sum_freq))) 
+! NOTE that it makes no sense to run full sum w/o neighbor sorting, which requires nbr. list !
    else
+#endif
     call __NM(compute_mindist_grad)(.true.) ! always call quit-early version; however, the max. index will be set to nsurface, so traverse full list
-   endif ! full sum
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
+   endif ! full_sum_freq
+#endif
 !
   else ! original density-based calculation
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
    if (full_sum_freq.gt.izero) then
-    call __NM(compute_density_grad)( &
-#ifdef __SORT_LIST
-#ifdef __NEIGHBOR_LIST
- &    (.not.qneighbor_list) .or. &
-#endif
-#endif
+    call __NM(compute_density_grad)((.not.qneighbor_list) .or. (.not.__CHKUPDATE(full_sum_freq))) 
 ! as above for mindist
 ! truncate if running density value exceeds reference
- &    (.not.__CHKUPDATE(full_sum_freq))) 
    else
+#endif
     call __NM(compute_density_grad)(.true.)
+!
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
    endif
+#endif
   endif ! qminimum_distance
  endif ! compute reference surface distance
 !========================== compute contour value ^
@@ -2099,7 +2177,7 @@ __DBGVAR(pressure_ave,1)
         r_surf_minmax(1,:) = minval(r_surf,2) - r_com_sa - (abs(surface_distance)+surface_area_grid_buffer)
         r_surf_minmax(2,:) = maxval(r_surf,2) - r_com_sa + (abs(surface_distance)+surface_area_grid_buffer)
         if (any(abs(r_surf_minmax(2,:) - r_surf_minmax(1,:) - sagrid%lengths).gt.surface_area_grid_recompute_change)) then
-         __MESSAGE(whoami, 'REINITIALIZING SURFACE AREA COMPUTATION GRID.');
+         __MESSAGE(whoami, 'REINITIALIZING VOLUME COMPUTATION GRID.');
          call ugrid_finalize(sagrid)
          call ugrid_initialize(sagrid, 3, r_surf_minmax, (/surface_area_grid_spacing/), adjust_spacings_=.false.)
 !
@@ -2160,8 +2238,8 @@ __DBGVAR(density_ave,1)
 !
 !=========================== evolve/update contour/distance value
   if (distance_update_freq.gt.0) then
-   if __CHKUPDATE(distance_update_freq) then
-!
+! NOTE : in the current code it might happen that we did not yet compute the density (if done infrequently); in that case d<0
+   if (__CHKUPDATE(distance_update_freq) .and. density_ave>zero) then
     d0 = ( density_target - density_ave )
     __INCR(surface_distance, distance_update_step * d0) ! note that surface_distance < 0 in our notation ; so too high p => dist decr.
     surface_contour_value = __RHO(surface_distance)
@@ -2181,6 +2259,7 @@ __DBGVAR(density_ave,1)
   __OUT('Iteration:', iteration)
   __OUT('Target distance to protein:      ', surface_distance)
   __OUT('Current avg. distance to protein:', current_surface_distance)
+  __OUT('Surface energy:                  ', surface_energy)
   __OUT('# Solute atoms used for density: ', nsurface)
   __OUT('# Solvent atoms outside / total: ', nsolvent_outside,'/',nsolvent)
  if (.not. qminimum_distance) then ! not relevant to mindist algorithm
@@ -2313,7 +2392,7 @@ __DBGVAR(solvent_mass_nonbulk,1)
 #ifdef __SORT_LIST
    dr2old=-1.d0 ; ! set to a small number to guarantee that no swap is done on first iteration
 #ifdef __NEIGHBOR_LIST
-   do jj=1,max(1,min(nsurface, solute_neighbor_mind(i) * (min(neighbor_list_factor,2)) ))
+   do jj=1,max(1,min(nsurface, solute_neighbor_mind(i) * (min(INT(neighbor_list_factor),2)) ))
 #else
    do jj=1, nsurface ! inner loop over solute atoms
 #endif
@@ -2502,6 +2581,13 @@ __DBGVAR(solvent_mass_nonbulk,1)
 #ifdef __SORT_LIST
  int :: jj
  float :: dr2old ! squared minimum distance difference from previous iteration
+#if defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+ float :: neighbor_list_length
+ int :: neighbor_list_misses
+#ifdef __OMP
+ int :: __U(neighbor_list_misses)
+#endif
+#endif
 #endif
  float :: rmaxsurf, surface_distance2
 #ifdef __DASYSTAT
@@ -2577,7 +2663,7 @@ __DBGVAR(solvent_mass_nonbulk,1)
 #ifdef __SORT_LIST
    dr2old=-1.d0 ; ! set to a small number to guarantee that no swap is done on first iteration
 #ifdef __NEIGHBOR_LIST
-   do jj=1,max(1,min(nsurface, solute_neighbor_mind(i) * neighbor_list_factor )) ! to check a subset of surface atom list
+   do jj=1, __NEIGHBOR_LIST_LENGTH_MINDIST
 !   do jj=1,max(1,min(nsurface, solute_neighbor_mind(i) ))
 #else
    do jj=1, nsurface ! inner loop over solute atoms ! to check the entire surface atom list
@@ -2640,6 +2726,10 @@ __DBGVAR(solvent_mass_nonbulk,1)
 ! should not do this when multiple threads are running
 !     solute_neighbor_list(jj,i)=solute_neighbor_list(1,i)
 !     solute_neighbor_list(1,i)=j
+#ifdef __NEIGHBOR_LIST
+! if the atom with the minimum distance happens to be farther in index space than the stored index, increase the index :
+     if (jj>solute_neighbor_mind(i)) solute_neighbor_mind(i)=jj-1 ; ! even this might be too aggressive
+#endif
 #endif
     endif
    enddo ! nsurface
@@ -2667,6 +2757,9 @@ __DBGVAR(solvent_mass_nonbulk,1)
 #ifdef __DDEBUG
   __DBGOUT('Called ', whoami,'(full loop) with neighbor_list_factor=',neighbor_list_factor)
 #endif
+#ifdef __NEIGHBOR_LIST_CHECK
+  neighbor_list_misses=0
+#endif
 #endif
 !=====================================================================================
 #ifdef __OMP
@@ -2676,19 +2769,29 @@ __DBGVAR(solvent_mass_nonbulk,1)
 !$omp , bulk_distance2, solvent_mass_nonbulk &
 #endif
 #ifdef __SORT_LIST
-!$OMP , solute_neighbor_list &
+!$omp , solute_neighbor_list &
+#if defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+!$omp , solute_neighbor_mind, neighbor_list_misses &
 #endif
-!$OMP ) &
+#endif
+!$omp ) &
 !$omp private ( rw, i, j, rp, dr, drmin, dr2, dr2min, qforced &
 #ifdef __DASYSTAT
 !$omp , __U(solvent_mass_nonbulk), qbulk &
 #endif
 #ifdef __SORT_LIST
-!$OMP ,dr2old, jj &
+!$omp ,dr2old, jj &
+#if defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+!$omp , __U(neighbor_list_misses), neighbor_list_length &
 #endif
-!$OMP )
+#endif
+!$omp )
 #ifdef __DASYSTAT
  if (dasystat) __U(solvent_mass_nonbulk)=zero
+#endif
+!
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+ __U(neighbor_list_misses)=0
 #endif
 !$omp do schedule(runtime)
 #endif
@@ -2701,6 +2804,10 @@ __DBGVAR(solvent_mass_nonbulk,1)
    dr2min=ilarge
 #ifdef __SORT_LIST
    dr2old=-1.d0 ; ! set to a small number to guarantee that no swap is done on first iteration
+#if defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+   neighbor_list_length = __NEIGHBOR_LIST_LENGTH_MINDIST
+#endif
+!
    do jj=1, nsurface ! inner loop over solute atoms
 !   do jj=nsurface, 1, -1 ! inner loop over solute atoms, starting from the end
     j=solute_neighbor_list(jj,i)
@@ -2770,6 +2877,10 @@ __DBGVAR(solvent_mass_nonbulk,1)
 #endif
     endif
    enddo ! nsurface
+! check for _potential_ neighbor list violations :
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+   if (qforced .and. solute_neighbor_mind(i) > neighbor_list_length ) __INC(__U(neighbor_list_misses)) ! count only if qforced, ok?
+#endif
 #ifdef __DEBUG
 ! write(666,*) i,dr2min, ilarge
 ! close(666)
@@ -2789,12 +2900,31 @@ __DBGVAR(solvent_mass_nonbulk,1)
   __REDUCE(solvent_mass_nonbulk)
  endif
 #endif
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+ __REDUCE(neighbor_list_misses)
+#endif
 !$omp end parallel
 #endif
 #ifdef __DDEBUG
 ! write(666,'(1300(I4,"("I4")"))') (solute_neighbor_mind(i), solute_neighbor_list(solute_neighbor_mind(i),i), i=1,nsolvent)
 ! close(666)
 #endif
+! should we output the violations here ?
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+ if (neighbor_list_misses>0) then
+  if (neighbor_list_misses==1) then
+   __WRN(whoami, 'DETECTED '//itoa(neighbor_list_misses)//' POSSIBLE NEIGHBOR LIST MISS. NEIGHBOR LIST FACTOR IS '//ftoa(neighbor_list_factor))
+  else
+   __WRN(whoami, 'DETECTED '//itoa(neighbor_list_misses)//' POSSIBLE NEIGHBOR LIST MISSES. NEIGHBOR LIST FACTOR IS '//ftoa(neighbor_list_factor))
+  endif
+! increase neighbor_list_factor
+  __INCR(neighbor_list_factor, neighbor_list_factor_grow)
+ else
+  __INCR(neighbor_list_factor, neighbor_list_factor_shrink)
+! decrease neighbor_list_factor
+ endif
+#endif
+!
  endif ! quit_early
 !
  end __SUB(compute_mindist_grad)

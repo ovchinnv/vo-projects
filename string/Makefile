@@ -29,6 +29,7 @@ plugin:all
 
 clean::
 	for d in $(SUBDIRS); do (cd $$d; $(MAKE) clean); done
+	cd plugin; $(MAKE) clean
 	rm -f $(CHARMM_DIR)/*.src 2>/dev/null
 ifneq ($(CHARMM_DIR),.)
 	rm -fr $(CHARMM_DIR) 2>/dev/null

@@ -185,12 +185,12 @@ $(ROOT)/$(NAME).stamp:: $(OBJS) $(MODS) $(HEADS) $(DISTRIB) $(addprefix $(ROOT)/
 ########################## TEST PROGRAM ######################
 test.F90:test.ftn $(LOCALDEPS) $(GLOBALDEPS) $(ROOT)/test.msg
 	$(FPP) $(FPPFLAGS) $(DEFS) -U__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(TESTMSG) $(DEBUG) -P $< > $@
-test :: $(OBJS) test.o force_look
-	$(LD) $(LDFLAGS) test.o $(OBJS) $(LOBJS) $(LIBS) $(MPI_LIBS) $(DEBUG) -o test
+test :: $(TESTOBJS) test.o force_look
+	$(LD) $(LDFLAGS) test.o $(TESTOBJS) $(LOBJS) $(LIBS) $(MPI_LIBS) $(DEBUG) -o test
 	echo "==================================================="
 	echo "Running test :"
 	echo "==================================================="
-	time ./test > test.out 2>&1 ; cat test.out
+	time ./test $(TESTARGS)	> test.out 2>&1 ; cat test.out
 	echo "==================================================="
 	echo
 ######################### OTHER RULES ########################

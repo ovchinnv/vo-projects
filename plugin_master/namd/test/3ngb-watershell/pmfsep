@@ -1,0 +1,187 @@
+#!/bin/bash
+#
+# openmp thread parameters
+export OMP_NUM_THREADS=1
+export OMP_SCHEDULE=static
+export OMP_NESTED=false
+# load utility functions :
+source struna.sh
+source system
+#
+template=template.namd
+stringtemplate=template.dyn
+#
+datadir=data
+dcddir=scratch
+usdir=$datadir
+namdcmd=(namd2.13g +p8);
+#
+mkdir -p $datadir
+mkdir -p $dcddir
+#
+#================ MD configuration parameters :
+cutoff=9
+switchdist=`echo "$cutoff - 0.5 ; quit" | calc`
+hmass=1
+dt=2
+shake=all
+temperature=300
+thermostat=on
+friction=0.1
+restraints=0 # if using string restraints
+restraintfile=$pdbfile
+restraintscale=1
+restraintcol=B
+stringpdb=g120-ab-trunc_sm.pdb
+
+# box sizes for starting from scratch
+# unfortunately, need to have these for ACEMD even w/o PBC
+sizex=128
+sizey=128
+sizez=128
+
+nsteps=30000
+ministeps=100 ; # optional initial minimization
+freq=10000 ;    # output frequency
+#
+# restraint potential parameters :
+kdist=100 ;
+krmsd=5 ;
+fbw1=0.5;
+fbw2=5
+fbw3=0
+#
+# watershell :
+qshell=1 # whether watershell restraints are on
+#
+index=1 # simulation "index"
+#================== string replica parameters
+#
+brep=1  # first window index
+erep=7  # last  window index
+outputbase=pmfsep$index
+
+firstrun=1 ; # index of run ; facilitates restarting
+numrun=2 ;
+#
+#==============================================================================
+#
+#outer loop over number of runs
+lastrun=$((firstrun+numrun-1))
+for irun in `seq $firstrun $lastrun`; do 
+ echo " ===> Run $irun (will quit after $lastrun) "
+ echo " ========================="
+#if [ 0 -eq 1 ]; then
+ for irep in `seq $brep $erep`; do
+# run each window sequentially
+  iprev=$((irep - 1)) # previous window
+# prepare input file from template
+  config=${outputbase}_${irep}
+  output=${config}.out
+  pluginfile=${config}.dyn
+  pluginout=${pluginfile}.out
+  echo -n > $config
+  echo -n > $pluginfile
+#
+  vecs=(`cat cv.vec`)
+  vec1="${vecs[@]:0:3}"
+  vec2="${vecs[@]:3:3}"
+  vec3="${vecs[@]:6:3}"
+  bfgp=1.0 # value of bfactor column to mark gp
+  bfab=2.0 # value of bfactor column to mark antibody
+#
+  irestart=$irep
+# prepare config files
+# different behavior on first run :
+  outputname=${outputbase}_${irep}
+  outputprev=${outputbase}_${iprev}
+  if [ $irun -gt 1 ]; then
+   windowappend=wiap # append to stat files
+   histappend=happ
+   reneappend=reap
+   ministeps=0
+   restartname=$dcddir/$outputname
+  else # first run in this window
+   windowappend="" # do not append to statistics files
+   histappend=""
+   reneappend=""
+   if [ $irep -eq 1 ]; then # this is the first simulation, so start from scratch
+    echo "temperature         @{temperature}">>$config
+# use equilibrated files
+#    restartname=$dcddir/${name}9eq
+   else
+# take restart files from a previous window
+    outputprev=${outputbase}_${iprev}
+    restartname=$dcddir/$outputprev
+   fi
+   irestart=$iprev
+  fi
+  if [ ! -z $restartname ] ; then
+   echo "bincoordinates $restartname.coor">> $config
+   echo "binvelocities  $restartname.vel" >> $config
+   echo "extendedsystem $restartname.xsc" >> $config
+  fi
+# for string method config file
+  cat $stringtemplate >> $pluginfile # use cpp to process includes
+
+  if [ $qshell -eq 1 ]; then
+   watershell_output=watershell${irep}_${irun}.txt
+# determine restart temperature
+   if [ $irun -eq 1 ]; then
+    watershell_restart=NONE
+   else
+    watershell_restart=watershell${irep}_$((irun-1)).txt
+   fi
+  fi
+#========== write tempering config ======================
+
+
+  for var in \
+    stringpdb \
+    datadir usdir bfab bfgp vec1 vec2 vec3 kdist krmsd fbw1 fbw2 fbw3 \
+    windowappend histappend reneappend freq irep irestart \
+    watershell_restart watershell_output nsteps ; do \
+    update $pluginfile $var
+  done
+#exit
+# for MD config file
+  cat $template >> $config
+  update $config sminput $pluginfile
+  update $config smlog $pluginout
+  update $config pme on
+
+  for var in \
+   prmfile psffile pdbfile dt shake cutoff switchdist \
+   pmefreq restraints restraintfile hmass prmfile \
+   restraintscale ministeps nsteps freq temperature \
+   thermostat friction barostat sizex sizey sizez ;
+   do
+    update $config "$var"
+  done
+#
+  update $config outputname "$dcddir\/$outputname"
+# run calculation
+  echo "  ===> Running replica #$irep ..."
+#
+#exit
+  run_namd $config $output ${namdcmd[@]}
+#exit
+####### save dcd file
+  if [ -f output.dcd ]; then 
+   dcdfile=$dcddir/$outputname.dcd
+# overwrite dcd to save space
+#  mv output.dcd $dcddir/$outputname.dcd 
+# append to running dcd
+   if [ ! -f $dcdfile ] || [ $irun -eq 1 ]; then
+    mv -f output.dcd $dcdfile
+   else
+    catdcd -o temp.dcd $dcdfile output.dcd >/dev/null
+    mv -f temp.dcd $dcdfile
+    rm -f output.dcd
+   fi
+  fi
+# ^ save dcd
+ done
+#fi
+#
+done # over all runs
