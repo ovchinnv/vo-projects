@@ -6,7 +6,8 @@
 #define __CBIND use, intrinsic :: iso_c_binding
 !
 module sm_acemd
- use minimal_system
+ use system, only : r, rcomp, m, q, bfactor, occupancy, fr, natom, system_PDB_initialized, system_minimal_initialized, system_PDB_init, system_done
+ use system, f=>fr
  __DEP_OUTPUT, set_minwarnlev, set_minerrorlev, set_minmessagelev
  __DEP_CONST
  __CBIND
@@ -16,10 +17,11 @@ module sm_acemd
  private
 !
  int, parameter :: ftsm_flavor=1, smcv_flavor=2, unknown=-1
- int, save :: sm_flavor = -1
+ int, save :: sm_flavor = unknown
  character(len=9) :: initctx='UNDEFINED', donectx='UNDEFINED'
  bool, save :: defer_init_until_dyna=.false. ! if true, will call initializer after coordinates are available
  bool, save :: initialized=.false.
+ bool, save :: minimal_system=.true. ! a minimal system results when a PDB file is not provided
  int, save :: iteration
  float, save :: sm_energy=zero
  int(__FCINT), save, allocatable, target :: atomlist(:)
@@ -38,7 +40,7 @@ module sm_acemd
 #define __CFUN(__NAME, ...) function __NAME (__VA_ARGS__) bind(c, name=__STRING(__NAME))
 !
 #define _ME sm_init_from_acemd
- __CFUN(_ME, n, mass, charge, inputname, il, outputname, ol, alist, flavorname, fl)
+ __CFUN(_ME, n, mass, charge, inputname, il, outputname, ol, alist)
  __DEP_VECTORS
  __DEP_PARSER
  __DEP_FILES
@@ -51,28 +53,45 @@ module sm_acemd
  use ftsm_util, only : ftsm_compute_atomlist
 !
  int(__FCINT) :: _ME
- int( __FCINT), intent(in), value :: n, il, ol, fl
+ int( __FCINT), intent(in), value :: n, il, ol
  real(__FCFLOAT), intent(in), dimension(n) :: mass, charge
  type(c_ptr), intent(out) :: alist ! send back a list of atom indices, if computable
  type(c_ptr), value, intent(in) :: inputname, outputname
- type(c_ptr), value, intent(in) :: flavorname ! type of string method (ftsm vs. smcv)
 !
  character(len=il), pointer :: ifname
  character(len=ol), pointer :: ofname
- character(len=fl), pointer :: fl_name
-
- int :: i, fid, ierr
+!
+ character(len=vartaglen) :: structurefile, fl_name
+!
+ int :: i, fid, ierr, l
  __IAM(_ME)
  _ME=1
 !
+ call c_f_pointer(inputname, ifname)
  call c_f_pointer(outputname, ofname)
 !
  call output_init(ofname)
-! make sure that the string method flavor is valid
+!==================================================
+! open input file
+ fid=-1
+ call files_open(fid, ifname, 'FORMATTED', 'READ')
+! parse input file
+ call parse_file(fid, &
+#ifdef __PARALLEL
+ & MPI_COMM_NULL, &
+#endif
+ & quiet_=.false.)
+ call files_close(fid)
+!=== output options
+ if (existtag_nocase('minwarnlev'   ,__STRING(__OUTCTX))) call set_minwarnlev   (atoi(getval('minwarnlev',__STRING(__OUTCTX))))
+ if (existtag_nocase('minmessagelev',__STRING(__OUTCTX))) call set_minmessagelev(atoi(getval('minmessagelev',__STRING(__OUTCTX))))
+ if (existtag_nocase('minerrorlev'  ,__STRING(__OUTCTX))) call set_minerrorlev  (atoi(getval('minerrorlev',__STRING(__OUTCTX  ))))
 !=================================================
- call c_f_pointer(flavorname, fl_name)
- call toupper(fl_name)
+! determine the string method flavor :
+!=================================================
+ __GET_OPT_PAR(string_method, fl_name, 'SMCV', maincontext_name);
  i=len_trim(fl_name)
+!
  select case(fl_name(1:i))
   case('FTSM','FTS','FINITE','FINITETEMPERATURE','FINITET','FINITETEMP','FTEMP','FITEMP','FINTEMP','FINITEMP');
    sm_flavor=ftsm_flavor;
@@ -88,58 +107,71 @@ module sm_acemd
    __MESSAGE(whoami, 'UNKNOWN METHOD "'//fl_name(1:i)//'" REQUESTED. ABORT.');
    return
  end select
-!==================================================
- if (n<0) then
-  __WRN(whoami, 'NUMBER OF ATOMS MUST BE POSITIVE (RECEIVED '//itoa(n)//')')
-  return
+! check for structure (PDB) file
+ if (existtag_nocase('structure', initctx)) then
+  structurefile=getval_nocase('structure', initctx);
+  l=len_trim(structurefile)
+  __MESSAGE(whoami, 'READING STRUCTURE FROM FILE "'//structurefile(1:l)//'"');
+  call system_PDB_init(structurefile, 'PDB');
+  system_PDB_initialized=.true.
+! save coordinates in rcomp
+  if (associated(rcomp) .and. associated(r)) rcomp=r
+  minimal_system = .false.
+! check to make sure that ACEMD sent the correct number of atoms
+  if (n.ne.natom) then
+   __WRN(whoami, 'NUMBER OF ACEMD ATOMS ('//itoa(n)//') MUST EQUAL THAT IN THE STRUCTURE FILE ('//itoa(natom)//'). ABORT.')
+   return
+  endif
  else
-  __MESSAGE(whoami, 'INITIALIZING STRING METHOD PLUGIN WITH '//itoa(n)//' ATOMS');
-  allocate(r(3,n), rcomp(3,n), f(3,n), m(n), q(n))
-  minimal_system_natom=n
-  m=mass
-  q=charge
+  call warning(whoami, 'STRUCTURE PDB FILE UNSPECIFIED. ASSUMING A MINIMAL SYSTEM WITH NO TOPOLOGY.',0)
+  minimal_system=.true.
+  if (n<0) then
+   __WRN(whoami, 'NUMBER OF ACEMD ATOMS MUST BE POSITIVE (RECEIVED '//itoa(n)//'). ABORT')
+   return
+  endif
+!
+  __MESSAGE(whoami, 'INITIALIZING STRUNA PLUGIN WITH '//itoa(n)//' ATOMS FROM ACEMD');
+! maintaining coordinate compatibility with dynamol
+! however, not using state variables below, i.e. allocating here
+  allocate(r(3,n), rcomp(3,n), f(3,n), m(n), q(n), bfactor(n), occupancy(n)) ! note transposed dimensions relative to acemd plugin + dynamol
+  natom=n
+  system_minimal_initialized=.true.
   r=__NAN
   rcomp=__NAN
-! open input file
-  call c_f_pointer(inputname, ifname)
-  fid=-1
-  call files_open(fid, ifname, 'FORMATTED', 'READ')
-! parse input file
-  call parse_file(fid, MPI_COMM_NULL, quiet_=.false.)
-  call files_close(fid)
-!=== output options
-  if (existtag_nocase('minwarnlev'   ,__STRING(__OUTCTX))) call set_minwarnlev   (atoi(getval('minwarnlev',__STRING(__OUTCTX))))
-  if (existtag_nocase('minmessagelev',__STRING(__OUTCTX))) call set_minmessagelev(atoi(getval('minmessagelev',__STRING(__OUTCTX))))
-  if (existtag_nocase('minerrorlev'  ,__STRING(__OUTCTX))) call set_minerrorlev  (atoi(getval('minerrorlev',__STRING(__OUTCTX  ))))
-!=== output options
+  bfactor=__NAN
+  occupancy=__NAN
+ endif ! structure file exists
+! currently, mass and charge are passed in:
+ m=mass
+ q=charge
 !
-  __GET_OPT_PAR_B(defer_init_dyna, defer_init_until_dyna, .false., initctx);
+ __GET_OPT_PAR_B(defer_init_dyna, defer_init_until_dyna, .false., initctx);
 !
 ! defer initialization until coordinates are available
-  if ( defer_init_until_dyna ) then 
-   __MESSAGE(whoami, 'WILL DEFER EXECUTION OF INITIALIZATION STACK UNTIL DYNAMICS');
+ if ( defer_init_until_dyna ) then 
+  __MESSAGE(whoami, 'WILL DEFER EXECUTION OF INITIALIZATION STACK UNTIL DYNAMICS');
+ else
+  __MESSAGE(whoami, 'EXECUTING INITIALIZATION STACK');
+  if (noexec(initctx)) then
+   call warning(whoami, 'CONTEXT "'//initctx//'" DOES NOT CONTAIN EXECUTABLE STATEMENTS.', -1);
   else
-   __MESSAGE(whoami, 'EXECUTING INITIALIZATION STACK');
-   if (noexec(initctx)) then
-    call warning(whoami, 'CONTEXT "'//trim(initctx)//'" DOES NOT CONTAIN EXECUTABLE STATEMENTS.', -1);
-   else
-    select case(sm_flavor);
+   select case(sm_flavor);
      case(ftsm_flavor);    call ftsm_exec(initctx)
      case(smcv_flavor);    call smcv_exec(initctx)
      case default ; __WRN(whoami, ' UNKNOWN METHOD REQUESTED.')
-    end select
-   endif
-   call parser_clear_context(initctx)
-   if (fatal_warning()) return
-! compute unique atomlist
-#include "atomlist.def"
-  endif ! defer
+   end select
+  endif
 !
-  initialized=.not.defer_init_until_dyna
-  _ME=0
+  call parser_clear_context(initctx)
+  if (fatal_warning()) return
+! compute atomlist
+#include "../atomlist.def"
+ endif ! defer
 !
- endif ! n<0
-
+ initialized=.not.defer_init_until_dyna
+ iteration=-abs(__NAN)
+ _ME=0
+!
 end function _ME
 #undef _ME
 !===================================================================
@@ -155,8 +187,8 @@ end function _ME
  __DEP_PARSER
 !
  int(C_LONG), value, intent(in) :: iteration_
- real(__FCFLOAT), intent(in), dimension(3, minimal_system_natom) :: r_acemd
- real(C_FLOAT), intent(out), dimension(3, minimal_system_natom) :: f_acemd
+ real(__FCFLOAT), intent(in), dimension(3, natom) :: r_acemd
+ real(C_FLOAT), intent(out), dimension(3, natom) :: f_acemd
  real(__FCFLOAT), intent(out) :: e
  type(c_ptr), intent(out) :: alist ! send back a list of atom indices if smcv not initialized
  int(__FCINT) :: _ME
@@ -194,7 +226,7 @@ end function _ME
    initialized=.true.
 ! now the atom list should be defined -- use it below for forces
 ! compute unique atomlist
-#include "atomlist.def"
+#include "../atomlist.def"
   endif ! not initialized
 !
   f(:,atomlist(2:))=zero ! start from zero force
@@ -244,13 +276,21 @@ end function _ME
   case default ; __WRN(whoami, ' UNKNOWN METHOD REQUESTED.')
  end select
 !
- __FREE(r)
- __FREE(rcomp)
- __FREE(m)
- __FREE(q)
+ call system_done()
+!
+ if (minimal_system) then ! free variables allocated outside of state
+  __FREE(r)
+  __FREE(rcomp)
+  __FREE(f)
+  __FREE(m)
+  __FREE(q)
+  __FREE(bfactor)
+  __FREE(occupancy)
+ endif
 !
  __DEALL(atomlist)
- sm_flavor=-1
+ sm_flavor=unknown
+!
  initialized=.false.
 end subroutine _ME
 !

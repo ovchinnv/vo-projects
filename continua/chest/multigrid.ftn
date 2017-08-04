@@ -22,6 +22,7 @@
  module multigrid
  use datatypes
  use fieldbcdef
+ use, intrinsic :: iso_c_binding
 !
 #ifdef __PARALLEL
  __DEP_MULTICOM
@@ -59,19 +60,32 @@
 !
  int, parameter :: reduce=-1, prolong=-2, done=0; ! this is just notation; currently positive numbers ar assumed to be iterations
 !
+#ifdef __BINDC
+ int, parameter :: nsmoother = 10
+#else
  int, parameter :: nsmoother = 9
+#endif
  character(len=24) :: smoother_names(nsmoother) = &
 #if !defined(__pathf90) && !defined(__pathf77) && !defined(__pathf95) &&!defined(__PATHSCALE)
 &   [character(len=24):: 'JACOBI','GAUSS-SEIDEL','GAUSS-SEIDEL-RB','GAUSS-SEIDEL-UNROLL','GAUSS-SEIDEL-RB-TILED',&
 &                       'GAUSS-SEIDEL-RB-TILED-LM','GAUSS-SEIDEL-REVERSE','JACOBI-TILED-LM', &
-&                       'JACOBI-LM'];
+&                       'JACOBI-LM', &
+#ifdef __BINDC
+&                       'GAUSS-SEIDEL-C'&
+#endif
+& ];
 #else
 &                     (/'JACOBI                  ','GAUSS-SEIDEL            ','GAUSS-SEIDEL-RB         ',&
 &                       'GAUSS-SEIDEL-UNROLL     ','GAUSS-SEIDEL-RB-TILED   ','GAUSS-SEIDEL-RB-TILED-LM',&
-&                       'GAUSS-SEIDEL-REVERSE    ','JACOBI-TILED-LM         ','JACOBI-LM               '/)
+&                       'GAUSS-SEIDEL-REVERSE    ','JACOBI-TILED-LM         ','JACOBI-LM               ',&
+#ifdef __BINDC
+&                       'GAUSS-SEIDEL-C          '&
+#endif
+&/)
 #endif
  int, parameter :: Jacobi_=1, GaussSeidel_=2, GaussSeidelRB_=3, GSUnrollFromMiddle_=4, GaussSeidelRBTiled_=5,&
-&                  GaussSeidelRBTiledLoMem_=6, GaussSeidelReverse_=7, JacobiTiledLomem_=8, JacobiOnTheFly_=9
+&                  GaussSeidelRBTiledLoMem_=6, GaussSeidelReverse_=7, JacobiTiledLomem_=8, JacobiOnTheFly_=9,&
+&                  GaussSeidel_C_=10
  int, save :: smoother, default_smoother=GaussSeidel_
  int, save :: smooth_iterations;
  int, save :: smooth_tilesize;
@@ -106,6 +120,8 @@
  public multigrid_update_coef
  public multigrid_update_bc
  private parse_multigrid_cycle
+!
+ include 'multigrid_c.h'
 !
  contains 
 !*******************************************************************************!
@@ -618,7 +634,11 @@
 !
 ! define multigrid metric arrays: will compute metrics once at all levels in the cpu version since memory tends to be cheaper than flops
 !
+#ifdef __BINDC
+  float, dimension( len3d ), target ::  alle, allw, alls, alln, allb, allf, allo
+#else
   float, dimension( len3d ) ::  alle, allw, alls, alln, allb, allf, allo
+#endif
   float :: res ( (nx-2) * (ny-2) * (nz-2) ), curr_residual, d
   bool :: qres
 !
@@ -818,6 +838,17 @@
 #include "mgutil/multigrid_bc.src"
        enddo
 !***********************************************************************************************
+#ifdef __BINDC
+       case(GaussSeidel_C_);
+!       write(0,*) 'DBG SMOOTH:'
+       do k=1,j
+        call GaussSeidel_C(C_LOC(allp(i3b)),C_LOC(allrhs(i3)),C_LOC(allw(i3)),C_LOC(alle(i3)),C_LOC(alls(i3)),C_LOC(alln(i3)),C_LOC(allf(i3)),C_LOC(allb(i3)),&
+&                          nnx+2,nny+2,nnz+2,omega,i2d)
+! update BC
+#include "mgutil/multigrid_bc.src"
+       enddo
+#endif
+!***********************************************************************************************
        case(GaussSeidelReverse_);
 !       write(0,*) 'DBG SMOOTH:'
        do k=1,j
@@ -858,6 +889,7 @@
        if (unroll_iter.le.-1) then ; k=j ; else ; k=unroll_iter+1 ; endif ! when unroll_iter < 0, attempt to unroll completely
 ! k is the total number of iterations (unroll_iter=0 corresponds to k=1) 
 ! k cannot be greater than j (in case unroll_iter was specified to be too large)
+! ishft looks to like integer division by 2 ?
        k=min(k,j,ishft(nnx-2,-1),ishft(nny-2,-1)); if (.not.q2d) k=min(k,ishft(nnz-2,-1))
        do while (j.gt.0)
 !
@@ -1072,6 +1104,7 @@
 #include "mgutil/GS.src"
 !*****************************************************************************************!
  subroutine compute_fd_coef(w,e,s,n,f,b,o,eps,kappa,odxcen,odxcor,odycen,odycor,odzcen,odzcor,nx,ny,nz,i2d)
+ __DEP_CONST
  __IMPNONE
 ! nx corresponds to the number of inner points 
  int :: nx, ny, nz
@@ -1105,7 +1138,7 @@
 ! write(0,*) odzcen
 ! write(0,*) '*******'
 ! 
- epscor(:,:ny,:nz)=0.5d0*(eps(2:,2:ny+1,2:nz+1)+eps(:nx+1,2:ny+1,2:nz+1));
+ epscor(:,:ny,:nz)=half*(eps(2:,2:ny+1,2:nz+1)+eps(:nx+1,2:ny+1,2:nz+1));
 !
  do i=1,nx
   ip=i+1
@@ -1115,7 +1148,7 @@
 !
 ! y-metrics:
 ! compute epsilon at y cell boundary
- epscor(:nx,:,:nz)=0.5d0*(eps(2:nx+1,2:,2:nz+1)+eps(2:nx+1,:ny+1,2:nz+1));
+ epscor(:nx,:,:nz)=half*(eps(2:nx+1,2:,2:nz+1)+eps(2:nx+1,:ny+1,2:nz+1));
 !
  do j=1,ny
   jp=j+1
@@ -1126,14 +1159,14 @@
 ! z-metrics:
 ! compute epsilon at z cell boundary
  if (i2d.eq.0) then
-  epscor(:nx,:ny,:)=0.5d0*(eps(2:nx+1,2:ny+1,2:)+eps(2:nx+1,2:ny+1,:nz+1));
+  epscor(:nx,:ny,:)=half*(eps(2:nx+1,2:ny+1,2:)+eps(2:nx+1,2:ny+1,:nz+1));
  else
 ! nothing to do for 2D
  endif
 ! a single statement:
-! epscor(:nx,:ny,:)=0.5d0*(eps(2:nx+1,2:ny+1,2:nz+2-i2d)+eps(2:nx+1,2:ny+1,1+i2d:nz+1));
+! epscor(:nx,:ny,:)=half*(eps(2:nx+1,2:ny+1,2:nz+2-i2d)+eps(2:nx+1,2:ny+1,1+i2d:nz+1));
 !
- f=0d0; b=0d0; ! initialize in case they are never used (2D)
+ f=zero; b=zero; ! initialize in case they are never used (2D)
 !
  do k=1,nz-i2d ! will not be executed in 2D
   kp=k+1
@@ -1143,7 +1176,7 @@
 !
  o=-(w+e+s+n+b+f)+kappa ;
 ! invert metrics
- oo=1d0/o;
+ oo=one/o;
  w=w*oo;  e=e*oo;  s=s*oo;  n=n*oo;  f=f*oo;  b=b*oo
 !
 ! aa
@@ -1162,6 +1195,7 @@
 #ifdef __OBSOLETE
 !
  subroutine compute_fd_coef2d(w,e,s,n,o,eps,kappa,odxcen,odxcor,odycen,odycor,nx,ny)
+ __DEP_CONST
  __IMPNONE
 ! nx corresponds to the number of inner points 
 ! note: am also normalizing rhs by o here: remember to multiply when computing residual !
@@ -1177,7 +1211,7 @@
 !
 ! x-metrics:
 ! compute epsilon at x cell boundary
- epscor(2:nx,1:ny)=0.5d0*(eps(2:nx,:)+eps(1:nx-1,:));
+ epscor(2:nx,1:ny)=half * (eps(2:nx,:)+eps(1:nx-1,:));
  epscor(1,1:ny)   =       eps(1,:);
  epscor(nx+1,1:ny)=       eps(nx,:);
 !
@@ -1189,7 +1223,7 @@
 !
 ! y-metrics:
 ! compute epsilon at y cell boundary
- epscor(1:nx,2:ny)=0.5d0*(eps(:,2:ny)+eps(:,1:ny-1));
+ epscor(1:nx,2:ny)=half * (eps(:,2:ny)+eps(:,1:ny-1));
  epscor(1:nx,1)   =       eps(:,1);
  epscor(1:nx,ny+1)=       eps(:,ny);
 !

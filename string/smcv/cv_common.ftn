@@ -182,7 +182,7 @@ __CHARMM_ONLY##IF STRINGM
  private _MSGBUF
       type (cv_base), public, save :: cv
 !
-      int, public :: max_cv_common=200
+      int, public :: max_cv_common=5000
       int, parameter, public :: max_hist_base=1000
 !
       bool, public, save ::     cv_common_initialized=.false.,            &
@@ -414,8 +414,8 @@ __CHARMM_ONLY##IF STRINGM
          if (gamma.gt.zero) then
           cv%gamma(j)=one/gamma; ! disallow zero
          else
-          __WRN(whoami,'NONPOSITIVE GAMMA SPECIFIED. WILL RESET TO 1.00.')
-          cv%gamma(j)=one;
+          __WRN(whoami,'NONPOSITIVE GAMMA SPECIFIED. SETTING TO INFINITY (NO DIFFUSION).')
+          cv%gamma(j)=zero;
          endif
         else
          cv%gamma(j)=one;
@@ -663,7 +663,11 @@ __MPI_ONLY     &        mpifloat, MPI_SUM, MPI_COMM_STRNG, ierror) ! use M inver
          if (qraw) then ! raw data
           read(abs(iunit),*) cv%weight(1:cv%num_cv) ! only root reads
          else ! human-readable restart
-          if (present(iunit)) call parse_file(abs(iunit), MPI_COMM_NULL, quiet_=.true.)
+          if (present(iunit)) call parse_file(abs(iunit),&
+#ifdef __PARALLEL
+     &      MPI_COMM_NULL,&
+#endif
+     &      quiet_=.true.)
           __GET_OPT_PAR_B(weights_initialized,weights_initialized,.true., __MYCTX)
           if (.not.weights_initialized) then
            __WRN(whoami, 'RESTART FILE REPORTS UNINITIALIZED CV WEIGHTS.');
@@ -1058,6 +1062,7 @@ __CHARMM_ONLY##ENDIF
 !    (-)forces acting on the CV ( computed from approximate FE gradient i.e. running average of the force; see smcv_master, addhist):
        cv%r(1:cv%num_cv,forces) = cv%k(1:cv%num_cv) * cv%r(1:cv%num_cv,frunave)
 !    compute free energy ( uses cv%r(:,forces) )
+!    note that the FE below will be meaningless for TAMD (SD evolution at finite temp = BD)
        call cv_common_compute_fe_fd()
 !    add fe to the fe running average
        call cv_common_update_fe_ave()
@@ -1076,7 +1081,7 @@ __CHARMM_ONLY##ENDIF
 #endif
 !
          __INCR(cv%r(i,main),      sqrt ( two*cv%gamma(i)*cv%temperature(i)*kboltz*delt ) * normal_deviate(1)) ! diffusion if T>0
-        endif ! temperature > 0
+        endif ! temperature > 0 ; NOTE that boundary conditions on the CV will be applied in cv_common_apply_bc
 !
         if (cv%type(i).eq.angle_com.or.cv%type(i).eq.anglvec) cv%r(i,main)=abs(cv%r(i,main))
        enddo
@@ -1830,7 +1835,11 @@ __CHARMM_ONLY##ENDIF
         int :: nstring
         int :: nstring_, num_cv_, fixed_0_bc_, fixed_1_bc_
 !
-        if (present(ifile)) call parse_file(abs(ifile), MPI_COMM_NULL) ! parse locally
+        if (present(ifile)) call parse_file(abs(ifile) &
+#ifdef __PARALLEL
+     &       , MPI_COMM_NULL &
+#endif
+     &     ) ! parse locally
 ! some basic checks/warnings
         qerror=.false.
         __GETPAR(nstring,i)
@@ -1895,7 +1904,11 @@ __CHARMM_ONLY##ENDIF
        else 
         __PRESENT(replica,ME_STRNG); if (replica.eq.__INAN) replica=ME_STRNG
 ! fire up the parser, using null communicator for local execution on each replica
-        if (present(iunit)) call parse_file(abs(iunit), MPI_COMM_NULL) ! parse locally
+        if (present(iunit)) call parse_file(abs(iunit) &
+#ifdef __PARALLEL
+     &        , MPI_COMM_NULL &
+#endif
+     &        ) ! parse locally
         qerror=cv_common_check_header() ! not yet sure what to do with qerror
 ! read actual coordinates
         keyword='CV'//trim(itoa(replica))//'_' ; l=len_trim(keyword);
@@ -1975,7 +1988,11 @@ __CHARMM_ONLY##ENDIF
          enddo
         else ! human-readable restart file
 ! parse file
-         if (present(iunit)) call parse_file(abs(iunit), MPI_COMM_NULL) ! parse locally
+         if (present(iunit)) call parse_file(abs(iunit) &
+#ifdef __PARALLEL
+     &    , MPI_COMM_NULL &
+#endif
+     &    ) ! parse locally
 ! some basic checks/warnings
          qerror=cv_common_check_header()
          __GETPAR(nstring,i)
@@ -2289,7 +2306,8 @@ __CHARMM_ONLY##ENDIF
 !
        if (i.gt.0.and.i.le.cv%num_cv) then
         if (gamma.le.zero) then
-          __WRN(whoami,' NONPOSITIVE FRICTION VALUE SPECIFIED. NOTHING DONE.')
+          __WRN(whoami,' NONPOSITIVE FRICTION VALUE SPECIFIED. SETTING TO INFINITY (NO DIFFUSION).')
+         cv%gamma(i)=zero
         else
          cv%gamma(i)=one/gamma
         endif
@@ -3539,7 +3557,11 @@ __MPI_ONLY     &                  MPI_COMM_STRNG,ierror)
         else ! human-readable restart file
           if (qlocal) then
 !write(100+ME_STRNG, *) ifile, qlocal ; close(100+ME_STRNG) ;
-           if (present(ifile)) call parse_file(abs(ifile), MPI_COMM_NULL, quiet_=.true.)
+           if (present(ifile)) call parse_file(abs(ifile), &
+#ifdef __PARALLEL
+     &           MPI_COMM_NULL,&
+#endif
+     &            quiet_=.true.)
            __GETPAR(nstring,i) ! number of string replicas in file
            __GET_OPT_PAR_B(M_initialized,M_initialized,.true., __MYCTX)
            if (.not.M_initialized) then
@@ -3566,7 +3588,11 @@ __MPI_ONLY     &                  MPI_COMM_STRNG,ierror)
            enddo ! k
 !
           elseif (ME_STRNG.eq.0) then ! .not.qlocal
-           if (present(ifile)) call parse_file(abs(ifile), MPI_COMM_NULL, quiet_=.true.)
+           if (present(ifile)) call parse_file(abs(ifile), &
+#ifdef __PARALLEL
+     &          MPI_COMM_NULL,&
+#endif
+     &          quiet_=.true.)
 ! need to check replica
            __GETPAR(nstring,i) ! number of string replicas in file
            if (nstring_.le.0) then

@@ -1,7 +1,21 @@
 LIB=libstruna_acemd.so
 LIBS+=$(LIB)
 LINKOBJS=\
- constants.o\
+ atompar.o \
+ bondpar.o \
+ anglpar.o \
+ dihepar.o \
+ tlist.o \
+ bonds.o \
+ angles.o \
+ dihedrals.o \
+ pdbio.o \
+ charmmio.o \
+ chestio.o \
+ corio.o \
+ freeio.o \
+ plot3dio.o \
+ constants.o \
  output.o \
  parser.o \
  cmd.o prm.o \
@@ -55,8 +69,18 @@ LINKOBJS=\
  splines.o \
  rng.o clcg.o \
  mpi_compat_stub.o \
- sm_plugin_acemd.o \
- sm_acemd.o
+ system.o \
+ psf.o \
+ ch_param.o \
+ mol_formats.o \
+ smcv_check_set.o \
+ psfatom.o \
+ state.o \
+ fieldbcdef.o \
+ formats.o \
+ stats.o \
+ util.o
+
 
 default : acemd
 acemd : $(LIB)

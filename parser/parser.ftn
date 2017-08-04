@@ -41,13 +41,15 @@
       character, parameter :: comment(4) = (/'*','!','#','%'/)
       character, parameter :: nextline(1)=(/hyphen/)
       character, parameter :: equals(1) = (/'='/)
+      character, parameter :: gt='>';
+      character, parameter :: lt='<';
       character, parameter :: vector_open(2)=(/'(','['/)
       character, parameter :: vector_close(2)=(/')',']'/)
       character, parameter :: context_open(1)=(/'{'/)
       character, parameter :: context_close(1)=(/'}'/)
       character, parameter :: string_open(1)=(/'"'/)
       character, parameter :: string_close(1)=(/'"'/) ! do not have to be the same -- see code below
-      character(len=200), parameter :: allowed=upper//lower//digits//decimal//underscore//hyphen//slash//tilde//colon//plus
+      character(len=200), parameter :: allowed=upper//lower//digits//decimal//underscore//hyphen//slash//tilde//colon//plus//gt//lt
 #ifdef __STRING_SERIAL
       character(len=2), parameter :: exec_start=':'
 #else
@@ -508,9 +510,9 @@ __CHARMM_ONLY##ENDIF
        bool :: qcontinue ! flag that is set when a line continuation symbol is found, which forces read of a new line w/o change of state
 !
        integer :: ioerr
-       int :: l=0, ltag=0, lval=0, lexec=0
-       character(len=2*maxlinelen) :: cmdline
-       character(len=vartaglen) :: tag, val, exec
+       int :: l=0, ltag=0, lval=0, lexec=0, linenum=0
+       character(len=maxlinelen) :: cmdline, exec
+       character(len=vartaglen) :: tag, val
        character(len=contextnamelen), pointer :: contextname
 !
        allowed_len=len_trim(allowed)
@@ -554,6 +556,8 @@ __CHARMM_ONLY##ENDIF
         read(fid,'(A)',IOSTAT=ioerr) cmdline ! if running in parallel, then only the root node is passed a valid handle
 #endif
 !
+        __INC(linenum)
+!
         if (ioerr.eq.0) then
 #ifdef __PARALLEL
 __CHARMM_ONLY##IF PARALLEL
@@ -566,7 +570,7 @@ __CHARMM_ONLY##ENDIF
          l=len_trim(cmdline)
 !   write(0,*) cmdline(1:l)
 ! add comment character to know when to stop below
-         if (l.lt.2*maxlinelen) l=l+1
+         if (l.lt.maxlinelen) l=l+1
          cmdline(l:l)='*'   ! note the difference between lowercase "L" (here) and "one" (below)
          if (any(comment.eq.cmdline(1:1))) l=1 ! skip lines that are comments
 !
@@ -605,13 +609,13 @@ __CHARMM_ONLY##ENDIF
              qerror=.true.; exit 
             elseif (qval) then
              if (lval.eq.0) then
-              __WRN3(whoami, 'Missing value for parameter "'//tag(1:ltag)//'". Skipping line',0)
+              __WRN3(whoami, 'Missing value for parameter "'//tag(1:ltag)//'". Skipping line',-1)
               qerror=.true.; exit 
              elseif (qvector) then
-              __WRN3(whoami, 'Missing closing bracket for vector parameter "'//tag(1:ltag)//'". Skipping line',0)
+              __WRN3(whoami, 'Missing closing bracket for vector parameter "'//tag(1:ltag)//'". Skipping line',-1)
               qerror=.true.; exit 
              elseif (qstring) then
-              __WRN3(whoami, 'Missing termination character for string parameter "'//tag(1:ltag)//'". Skipping line',0)
+              __WRN3(whoami, 'Missing termination character for string parameter "'//tag(1:ltag)//'". Skipping line',-1)
               qerror=.true.; exit 
              else ! store tag and val
               if(qloud) __MESSAGE(whoami, tag(1:ltag)//' <= '//val(1:lval))
@@ -623,7 +627,7 @@ __CHARMM_ONLY##ENDIF
             elseif (qexec) then
              if (lexec.eq.0) then
               contextname=>context%context_name(context%current)
-              __WRN3(whoami, 'Empty command line in context "'//contextname(1:len_trim(contextname))//'". Skipping line',0)
+              __WRN3(whoami, 'Empty command line in context "'//contextname(1:len_trim(contextname))//'". Skipping line',-1)
               qerror=.true.; exit 
              else ! store command
 ! remove trailing space
@@ -647,7 +651,7 @@ __CHARMM_ONLY##ENDIF
 !write(0,*) cmdline(i:l), qtag, qval, qstring ! aa
 !
             if ((qtag.and.ltag.gt.0).or.qeq) then
-             __WRN3(whoami, 'Unexpected string character while processing parameter "'//tag(1:ltag)//'".  Skipping line',0)
+             __WRN3(whoami, 'Unexpected string character while processing parameter "'//tag(1:ltag)//'".  Skipping line',-1)
              qerror=.true. ; exit
 !
             elseif (qtag.and.(ltag.eq.0)) then
@@ -658,7 +662,7 @@ __CHARMM_ONLY##ENDIF
              lexec=lexec+1; exec(lexec:lexec)=c
 !
             elseif (qvector) then
-             __WRN3(whoami, 'Unexpected string character while processing vector parameter "'//tag(1:ltag)//'"  Skipping line',0)
+             __WRN3(whoami, 'Unexpected string character while processing vector parameter "'//tag(1:ltag)//'"  Skipping line',-1)
              qerror=.true. ; exit
 !
             elseif (qval) then ! the only acceptable occurrence
@@ -669,7 +673,7 @@ __CHARMM_ONLY##ENDIF
 !     (the convention is that a vector value must be separated from a subsequent tag)
                c=cmdline(i+1:i+1)
                if ( (i.lt.l) .and. (all(space.ne.c)) .and. (all(comment.ne.c))) then 
-                __WRN3(whoami, 'Error reading string value for parameter "'//tag(1:ltag)//'". Skipping line.',0)
+                __WRN3(whoami, 'Error reading string value for parameter "'//tag(1:ltag)//'". Skipping line.',-1)
                 qerror=.true.; exit 
 !     otherwise, attempt to add tag/value pair
                else
@@ -679,7 +683,7 @@ __CHARMM_ONLY##ENDIF
 !                endif
                 call adjustleft(val(1:lval)); lval=len_trim(val(1:lval));
                 if (lval.eq.0) then
-                 __WRN3(whoami, 'Missing string value for parameter "'//tag(1:ltag)//'". Skipping line.',0)
+                 __WRN3(whoami, 'Missing string value for parameter "'//tag(1:ltag)//'". Skipping line.',-1)
                  qerror=.true.; exit 
                 else ! add pair
                  call adjustleft(val(1:lval)); lval=len_trim(val(1:lval));
@@ -695,17 +699,17 @@ __CHARMM_ONLY##ENDIF
                 qval=.false.
                endif ! (i.lt.l)
               else ! c=string_open
-               __WRN3(whoami, 'Unexpected string opening character while processing string parameter "'//tag(1:ltag)//'"  Skipping line',0)
+               __WRN3(whoami, 'Unexpected string opening character while processing string parameter "'//tag(1:ltag)//'"  Skipping line',-1)
               endif ! c=string_close
              else ! not qstring, so start reading a new string
               if (any(string_open.eq.c)) then
                qstring=.true. ! reading a string now
               else ! not qstring
-               __WRN3(whoami, 'Unexpected string termination character while processing parameter "'//tag(1:ltag)//'"  Skipping line',0)
+               __WRN3(whoami, 'Unexpected string termination character while processing parameter "'//tag(1:ltag)//'"  Skipping line',-1)
               endif
              endif ! qstring
             else ! should not be here !
-             __WRN3(whoami, 'Unexpected character encountered (please report this internal error). Abort.',-1)
+             __WRN3(whoami, 'Unexpected character encountered (please report this internal error).',-1)
              qerror=.true. ; exit
             endif
 !=================================================================================
@@ -725,7 +729,7 @@ __CHARMM_ONLY##ENDIF
               qval=.false.
               qtag=.true.
               if (lval.eq.0) then
-               __WRN3(whoami, 'Missing value for parameter "'//tag(1:ltag)//'". Skipping line',0)
+               __WRN3(whoami, 'Missing value for parameter "'//tag(1:ltag)//'". Skipping line',-1)
                qerror=.true.; exit 
               else ! store tag and val
                if(qloud) __MESSAGE(whoami, tag(1:ltag)//' <= '//val(1:lval))
@@ -748,7 +752,7 @@ __CHARMM_ONLY##ENDIF
             if (qtag) then
              qtag=.false.
              if (ltag.eq.0) then
-              __WRN3(whoami, 'Missing parameter name. Skipping line',0)
+              __WRN3(whoami, 'Missing parameter name. Skipping line',-1)
               qerror=.true.; exit 
              endif
 !
@@ -771,10 +775,10 @@ __CHARMM_ONLY##ENDIF
               __INC(lval); val(lval:lval)='='
 !write(0,*) '= inside string ; tag= ',tag(1:ltag), '; val(so far)= ', val(1:lval)
              elseif (lval.eq.0) then
-              __WRN3(whoami, 'Missing value for parameter "'//tag(1:ltag)//'". Skipping line',0)
+              __WRN3(whoami, 'Missing value for parameter "'//tag(1:ltag)//'". Skipping line',-1)
               qerror=.true.; exit 
              elseif (qvector) then
-              __WRN3(whoami, 'Missing closing bracket for vector parameter "'//tag(1:ltag)//'". Skipping line',0)
+              __WRN3(whoami, 'Missing closing bracket for vector parameter "'//tag(1:ltag)//'". Skipping line',-1)
               qerror=.true.; exit 
              else ! store tag and val (despite the misplaced '=' sign ; leave that for next cycle)
               call adjustleft(val(1:lval)); lval=len_trim(val(1:lval));
@@ -799,7 +803,7 @@ __CHARMM_ONLY##ENDIF
              __INC(lval) ; val(lval:lval)=c;
 !    check if already inside a context (currently nesting is not supported)
             elseif (qcontext) then
-             __WRN3(whoami, 'Unexpected open brace while processing parameter "'//tag(1:ltag)//'".',0)
+             __WRN3(whoami, 'Unexpected open brace while processing parameter "'//tag(1:ltag)//'".',-1)
              __WRN(whoami, 'Nested contexts are not allowed. Skipping line.')
              qerror=.true.; exit
 !
@@ -825,7 +829,7 @@ __CHARMM_ONLY##ENDIF
                l=len_trim(cmdline)
                i=0
               else ! context name not allowed
-               __WRN3(whoami, 'Context name "'//tag(1:ltag)//'" is not allowed. Skipping line.',0)
+               __WRN3(whoami, 'Context name "'//tag(1:ltag)//'" is not allowed. Skipping line.',-1)
                qerror=.true.; exit 
               endif ! tag .ne. maincontext_name
              else
@@ -834,7 +838,7 @@ __CHARMM_ONLY##ENDIF
              endif ! ltag
 !
             else
-             __WRN3(whoami, 'Unexpected open brace while processing parameter "'//tag(1:ltag)//'". Skipping line.',0)
+             __WRN3(whoami, 'Unexpected open brace while processing parameter "'//tag(1:ltag)//'". Skipping line.',-1)
              qerror=.true.; exit
             endif ! qcontext
 !===========================================================================================
@@ -842,7 +846,7 @@ __CHARMM_ONLY##ENDIF
             if (qstring) then ! allowed
              __INC(lval) ; val(lval:lval)=c;
             elseif (.not. qcontext) then ! make sure that there was an open brace
-             __WRN3(whoami, 'Encountered a close brace without a matching open brace. Skipping line.',0)
+             __WRN3(whoami, 'Encountered a close brace without a matching open brace. Skipping line.',-1)
              qerror=.true.; exit
             elseif (qtag.and.ltag.eq.0) then   ! if expecting a new tag
              if(qloud) __MESSAGE(whoami, bigline//' Returning to main context.')
@@ -878,7 +882,7 @@ __CHARMM_ONLY##ENDIF
             elseif (qexec) then
              if (lexec.le.0) then
               contextname=>context%context_name(context%current)
-              __WRN3(whoami, 'Unexpected close brace while reading command in context "'//contextname(1:len_trim(contextname))//'". Skipping line',0)
+              __WRN3(whoami, 'Unexpected close brace while reading command in context "'//contextname(1:len_trim(contextname))//'". Skipping line',-1)
               qerror=.true.; exit 
              else ! store command
 ! remove trailing space
@@ -900,7 +904,7 @@ __CHARMM_ONLY##ENDIF
              endif
 !
             else
-             __WRN3(whoami, 'Unexpected close brace while processing parameter "'//tag(1:ltag)//'". Skipping line.',0)
+             __WRN3(whoami, 'Unexpected close brace while processing parameter "'//tag(1:ltag)//'". Skipping line.',-1)
              qerror=.true.; exit
             endif ! qcontext
 !************************************** VECTOR DATA *****************************************
@@ -908,14 +912,14 @@ __CHARMM_ONLY##ENDIF
             if (qstring) then ! allowed
              __INC(lval) ; val(lval:lval)=c;
             elseif (qtag) then ! opening bracket not allowed
-             __WRN3(whoami, 'Unexpected opening bracket when processing parameter "'//tag(1:ltag)//'". Skipping line.',0)
+             __WRN3(whoami, 'Unexpected opening bracket when processing parameter "'//tag(1:ltag)//'". Skipping line.',-1)
              qerror=.true.; exit
             elseif (qeq) then
-             __WRN3(whoami, 'Unexpected opening bracket when processing parameter "'//tag(1:ltag)//'". Skipping line.',0)
+             __WRN3(whoami, 'Unexpected opening bracket when processing parameter "'//tag(1:ltag)//'". Skipping line.',-1)
              qerror=.true.; exit 
             elseif (qval) then
              if (qvector) then ! already read one bracket 
-              __WRN3(whoami,'Unexpected opening bracket when processing vector parameter "'//tag(1:ltag)//'". Skipping line.',0)
+              __WRN3(whoami,'Unexpected opening bracket when processing vector parameter "'//tag(1:ltag)//'". Skipping line.',-1)
              qerror=.true.; exit
              else
               qvector=.true. ! the only legitimate occurrence
@@ -931,11 +935,11 @@ __CHARMM_ONLY##ENDIF
              __INC(lval) ; val(lval:lval)=c;
 !      write(0,*) '**', qtag, qeq, qval, qvector, tag, ltag, val, lval; !aa
             elseif (qtag) then ! closing bracket not allowed
-             __WRN3(whoami, 'Unexpected closing bracket when processing parameter "'//tag(1:ltag)//'". Skipping line.',0)
+             __WRN3(whoami, 'Unexpected closing bracket when processing parameter "'//tag(1:ltag)//'". Skipping line.',-1)
 !              write(0,*) cmdline(i:l) ! aa
              qerror=.true.; exit
             elseif (qeq) then
-             __WRN3(whoami, 'Unexpected closing bracket when processing parameter "'//tag(1:ltag)//'". Skipping line.',0)
+             __WRN3(whoami, 'Unexpected closing bracket when processing parameter "'//tag(1:ltag)//'". Skipping line.',-1)
              qerror=.true.; exit 
             elseif (qval) then
              qvector=.false. ! the only legitimate occurrence
@@ -943,17 +947,17 @@ __CHARMM_ONLY##ENDIF
 !     (the convention is that a vector value must be separated from a subsequent tag)
              c=cmdline(i+1:i+1)
              if ( (i.lt.l) .and. (all(space.ne.c)) .and. (all(comment.ne.c))) then 
-              __WRN3(whoami, 'Error reading vector value for parameter "'//tag(1:ltag)//'". Skipping line.',0)
+              __WRN3(whoami, 'Error reading vector value for parameter "'//tag(1:ltag)//'". Skipping line.',-1)
               qerror=.true.; exit 
 !     otherwise, attempt to add tag/value pair
              else
               if (lval.eq.0) then
-               __WRN3(whoami, 'Missing vector value for parameter "'//tag(1:ltag)//'". Skipping line.',0)
+               __WRN3(whoami, 'Missing vector value for parameter "'//tag(1:ltag)//'". Skipping line.',-1)
                qerror=.true.; exit 
               endif
               call adjustleft(val(1:lval)); lval=len_trim(val(1:lval));
               if (lval.eq.0) then
-               __WRN3(whoami, 'Missing vector value for parameter "'//tag(1:ltag)//'". Skipping line.',0)
+               __WRN3(whoami, 'Missing vector value for parameter "'//tag(1:ltag)//'". Skipping line.',-1)
                qerror=.true.; exit 
               else ! add pair
                call adjustleft(val(1:lval)); lval=len_trim(val(1:lval));
@@ -973,7 +977,7 @@ __CHARMM_ONLY##ENDIF
              lexec=lexec+1; exec(lexec:lexec)=c
 !
             else ! no input mode (qtag/qeq/qval/qexec) : this should never happen
-             __WRN3(whoami, 'Misplaced closing bracket in input. Skipping line.',0)
+             __WRN3(whoami, 'Misplaced closing bracket in input. Skipping line.',-1)
              qerror=.true.; exit
             endif 
 !=============================================================================================
@@ -1002,17 +1006,17 @@ __CHARMM_ONLY##ENDIF
             if (qtag) then ! reading a tag
              if (all(lower2(1:26).ne.c).and.all(upper2(1:26).ne.c)) then
               if (ltag.eq.0) then 
-               __WRN3(whoami, 'Parameter names must start with a letter. Skipping line.',0)
+               __WRN3(whoami, 'Parameter names must start with a letter. Skipping line.',-1)
                qerror=.true.; exit
               elseif (all(digits2(1:10).ne.c).and.underscore.ne.c) then
-               __WRN3(whoami, 'Illegal character in parameter name. Skipping line.',0)
+               __WRN3(whoami, 'Illegal character "'//c//'" in parameter name. Skipping line #'//itoa(linenum)//'.',-1)
                qerror=.true.; exit
               endif
              endif
              ltag=ltag+1; tag(ltag:ltag)=c
 !
             elseif (qeq) then
-             __WRN3(whoami, 'Missing value for parameter "'//tag(1:ltag)//'". Skipping line.',0)
+             __WRN3(whoami, 'Missing value for parameter "'//tag(1:ltag)//'". Skipping line.',-1)
              qerror=.true.; exit 
 !
             elseif (qval) then
@@ -1029,7 +1033,7 @@ __CHARMM_ONLY##ENDIF
            elseif (qstring) then ! character is not allowed except in a string, where we currently allow anything
              __INC(lval); val(lval:lval)=c
            else
-             __WRN3(whoami, 'Unrecognized character "'//c//'". Skipping line.',0)
+             __WRN3(whoami, 'Unrecognized character "'//c//'". Skipping line.',-1)
              exit 
            endif ! character loop
           enddo chars ! while l.gt.1
@@ -1040,7 +1044,7 @@ __CHARMM_ONLY##ENDIF
 !
 !    check to make sure that the file did not end while a context was being read
        if (qcontext) then 
-        __WRN3(whoami, 'File ended while inside a context. Your input may be incomplete.',0)
+        __WRN3(whoami, 'File ended while inside a context. Your input may be incomplete.',-1)
         qerror=.true.
         if(qloud) __MESSAGE(whoami, 'Returning to main context.') ; 
         j=parser_context(maincontext_name)
@@ -1054,7 +1058,7 @@ __CHARMM_ONLY##IF PARALLEL
 __CHARMM_ONLY##ENDIF
 #endif
        if (qerror) then
-         __WRN3(whoami, 'Error(s) found in input.',0)
+         __WRN3(whoami, 'Error(s) found in input.',-1)
        else
          if(qloud) __MESSAGE(whoami, 'Input file read.')
        endif
@@ -1168,7 +1172,7 @@ __CHARMM_ONLY##ENDIF
        do j=l,1,-1
         where(digits2.eq.b(j:j)); flag=1 ; elsewhere; flag=0 ; endwhere; k=sum(maxloc(flag))-1
         if (all(flag.eq.0)) then 
-         __WRN3(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO INTEGER.',0)
+         __WRN3(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO INTEGER.',-1)
          i=missing; sgn=1;
          exit
         else
@@ -1210,7 +1214,7 @@ __CHARMM_ONLY##ENDIF
        do j=l,1,-1
         where(digits2.eq.b(j:j)); flag=1 ; elsewhere; flag=0 ; endwhere; k=sum(maxloc(flag))-1
         if (all(flag.eq.0)) then 
-         __WRN3(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO INTEGER.',0)
+         __WRN3(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO INTEGER.',-1)
          i=missing; sgn=1;
          exit
         else
@@ -1251,7 +1255,7 @@ __CHARMM_ONLY##ENDIF
        do j=l,1,-1
         where(digits2.eq.b(j:j)); flag=1 ; elsewhere; flag=0 ; endwhere; k=sum(maxloc(flag))-1
         if (all(flag.eq.0)) then 
-         __WRN3(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO INTEGER.',0)
+         __WRN3(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO INTEGER.',-1)
          i=missing; sgn=1;
          exit
         else
@@ -1324,7 +1328,7 @@ __CHARMM_ONLY##ENDIF
        do j=l,1,-1
         if (b(j:j).eq.decimal) then
          if (fraction) then ! two decimal points are invalid
-          __WRN3(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO REAL.',0)
+          __WRN3(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO REAL.',-1)
           f=missing; sgn=1;
           exit
          else
@@ -1337,7 +1341,7 @@ __CHARMM_ONLY##ENDIF
         else
          where(digits2.eq.b(j:j)); flag=1 ; elsewhere; flag=0 ; endwhere; k=sum(maxloc(flag))-1
          if (all(flag.eq.0)) then 
-          __WRN3(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO REAL.',0)
+          __WRN3(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO REAL.',-1)
           f=missing; sgn=1;
           exit
          else
@@ -1360,7 +1364,7 @@ __CHARMM_ONLY##ENDIF
        if (present(invalid)) then ; missing=invalid ; else ; missing=-99999. ; endif
        read(a,*,iostat=ierror) atof
        if (ierror.ne.0) then
-        __WRN3(whoami, 'ERROR CONVERTING STRING "'//trim(a)//'" TO REAL.',0)
+        __WRN3(whoami, 'ERROR CONVERTING STRING "'//trim(a)//'" TO REAL.',-1)
         atof=missing
        endif
        end function atof
@@ -1439,7 +1443,7 @@ __CHARMM_ONLY##ENDIF
         case('false', '.false.', '.FALSE.', 'FALSE', 'NO', 'OFF', 'no', 'off', 'n', 'N', 'F', 'f');
          atol=.false.
         case default
-         __ERR3(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO BOOLEAN.',0)
+         __ERR3(whoami, 'ERROR CONVERTING STRING "'//b(1:l)//'" TO BOOLEAN.',-1)
         atol=.false.
        end select
 !
