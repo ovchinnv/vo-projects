@@ -351,7 +351,7 @@
 ! compute metrics 'on the fly'
 ! 8/15/17 : recode from GSRBTiled, rather than debug
 ! describe below what the bug was :
- use constants, only : itwo
+ use constants, only : itwo, half, one
  implicit none
  int :: nx, ny, nz
  float :: dt
@@ -373,7 +373,8 @@
  int :: tilesize                   ! conceptually, might be related to CPU cache size
  int :: tilex, tx, ty, tz, ntx, nty, ntz, remainder  ! sizes do not include ghost cells
  float, allocatable, dimension(:,:,:) :: e1, w1, s1, n1, o1, p1, rhs1, kappa1, eps1
- float :: d
+ float, allocatable, dimension(:) :: odxcen1, odxcor1, odycen1, odycor1
+ float :: d, ee, ww, ss, nn
 !
  q2d=i2d.ne.0
  nnx=nx-2; nny=ny-2; nnz=nz-2;
@@ -384,23 +385,23 @@
  tilesize=min(max(tilesize,4),ntot) ! tile should not be larger than number of points
 !
 !===================== compute metrics
- epscorx(:,:nny,:nnz)=0.5d0*(eps(2:,2:nny+1,2:nnz+1)+eps(:nnx+1,2:nny+1,2:nnz+1));
- do i=1,nnx
-  ip=i+1
-  w(i,:,:)=odxcor(i)*odxcen(i) *epscorx(i, :nny,:nnz)
-  e(i,:,:)=odxcor(i)*odxcen(ip)*epscorx(ip,:nny,:nnz)
- enddo
- epscory(:nnx,:,:nnz)=0.5d0*(eps(2:nnx+1,2:,2:nnz+1)+eps(2:nnx+1,:nny+1,2:nnz+1));
- do j=1,nny
-  jp=j+1
-  s(:,j,:)=odycor(j)*odycen(j) *epscory(:nnx,j, :nnz)
-  n(:,j,:)=odycor(j)*odycen(jp)*epscory(:nnx,jp,:nnz)
- enddo
+! epscorx(:,:nny,:nnz)=0.5d0*(eps(2:,2:nny+1,2:nnz+1)+eps(:nnx+1,2:nny+1,2:nnz+1));
+! do i=1,nnx
+!  ip=i+1
+!  w(i,:,:)=odxcor(i)*odxcen(i) *epscorx(i, :nny,:nnz)
+!  e(i,:,:)=odxcor(i)*odxcen(ip)*epscorx(ip,:nny,:nnz)
+! enddo
+! epscory(:nnx,:,:nnz)=0.5d0*(eps(2:nnx+1,2:,2:nnz+1)+eps(2:nnx+1,:nny+1,2:nnz+1));
+! do j=1,nny
+!  jp=j+1
+!  s(:,j,:)=odycor(j)*odycen(j) *epscory(:nnx,j, :nnz)
+!  n(:,j,:)=odycor(j)*odycen(jp)*epscory(:nnx,jp,:nnz)
+! enddo
 !
- o=-(w+e+s+n)+kappa ;
+! o=-(w+e+s+n)+kappa ;
 ! invert metrics
- o=1d0/o;
- w=w*o;  e=e*o;  s=s*o;  n=n*o;
+! o=1d0/o;
+! w=w*o;  e=e*o;  s=s*o;  n=n*o;
 !====================
  if (q2d) then
 ! determine tile dimensions (reuse some variables)
@@ -422,32 +423,66 @@
 ! write(0,*) tx, ty, tx*ty, (nnx/im) + min(1,mod(nnx,im)), (nny/jm) + min(1,mod(nny,jm))
 ! allocate data, now that tile size is known
   allocate(w1(tx,ty,1),e1(tx,ty,1),s1(tx,ty,1),n1(tx,ty,1),rhs1(tx,ty,1),p1(tx+2,ty+2,1))
-  allocate(kappa1(tx,ty,1))
+  allocate(kappa1(tx,ty,1), eps1(tx+2,ty+2,1))
+  allocate(odxcor1(tx), odxcen1(tx+1))
+  allocate(odycor1(ty), odycen1(ty+1))
 !
 ! slide tile over all points and perform RB relaxation within each tile
   k=2 ! 2D
   km=k-1
   jj=1; ! jj runs from 1 to ny-2, corresponding to jm in the smoother loop below
   do while (jj.le.nny)  ; nty=min(ty,nny-jj+1); ii=1
+!  copy y-metric :
+   jm=jj; do j=1,nty ; odycor1(j)=odycor(jm) ; odycen1(j)=odycen(jm) ; __INC(jm) ; enddo ; odycen1(nty+1)=odycen(jm+1) 
+
    do while (ii.le.nnx) ; ntx=min(tx,nnx-ii+1); ! number of elements to read
-!aa
 ! write(0,*) ii, jj
-! populate tile
+!  copy x-metric :
+    im=ii; do i=1,ntx ; odxcor1(i)=odxcor(im) ; odxcen1(i)=odxcen(im) ; __INC(im) ; enddo ; odxcen1(ntx+1)=odxcen(im+1) 
+! populate tile -- split into parts for development/debugging
+! populate tile (1)
+
+    jm=jj;
+    do j=1,nty; im=ii;
+     do i=1,ntx
+      rhs1(i,j,1)  =rhs(im,jm,km);
+      kappa1(i,j,1)=kappa(im,jm,km);
+      p1(i,j,1)    =p(im,jm,k)
+      eps1(i,j,1)  =eps(im,jm,k)
+      __INC(im)
+     enddo ; ! i
+!
+     p1(ntx+1,j,1)=p(im,jm,k)  ; eps1(ntx+1,j,1)=p(im,jm,k); __INC(im)     ! remaining boundary points
+     p1(ntx+2,j,1)=p(im,jm,k)  ; eps1(ntx+2,j,1)=eps(im,jm,k)
+     jm=jm+1;
+    enddo ! j
+! remaining boundary points
+    do j=nty+1,nty+2; im=ii;
+     do i=1,ntx+2
+      p1(i,j,1)=p(im,jm,k); eps1(i,j,1)=eps(im,jm,k); __INC(im);
+     enddo
+     __INC(jm) 
+    enddo
+
+! populate tile (2)
     jm=jj;
     do j=1,nty; im=ii;
      do i=1,ntx
 !      w1(i,j,1)=w(im,jm,km);
-      w1(i,j,1)=odxcor(im)*odxcen(im)*epscorx(im,jm,km)
+!      w1(i,j,1)=odxcor(im)*odxcen(im)*epscorx(im,jm,km)
+!      w1(i,j,1)=odxcor1(i)*odxcen1(i)*epscorx(im,jm,km)
+      w1(i,j,1)=odxcor1(i)*odxcen1(i) * half * ( eps1(i,j,1)+eps1(i+1,j,1) )
 !      e1(i,j,1)=e(im,jm,km);
-      e1(i,j,1)=odxcor(im)*odxcen(im+1)*epscorx(im+1,jm,km)
+!      e1(i,j,1)=odxcor(im)*odxcen(im+1)*epscorx(im+1,jm,km)
+!      e1(i,j,1)=odxcor1(i)*odxcen1(i+1)*epscorx(im+1,jm,km)
+      e1(i,j,1)=odxcor1(i)*odxcen1(i+1) * half * ( eps1(i+1,j,1)+eps1(i+2,j,1) )
 !      s1(i,j,1)=s(im,jm,km);
-      s1(i,j,1)=odycor(jm)*odycen(jm)*epscory(im,jm,km)
+!      s1(i,j,1)=odycor(jm)*odycen(jm)*epscory(im,jm,km)
+!      s1(i,j,1)=odycor1(j)*odycen1(j)*epscory(im,jm,km)
+      s1(i,j,1)=odycor1(j)*odycen1(j) * half * ( eps1(i,j,1)+eps1(i,j+1,1) )
 !      n1(i,j,1)=n(im,jm,km);
-      n1(i,j,1)=odycor(jm)*odycen(jm+1)*epscory(im,jm+1,km)
-!
-      rhs1(i,j,1)=rhs(im,jm,km);
-      kappa1(i,j,1)=kappa(im,jm,km);
-      p1(i,j,1)=p(im,jm,k)
+!      n1(i,j,1)=odycor(jm)*odycen(jm+1)*epscory(im,jm+1,km)
+      n1(i,j,1)=odycor1(j)*odycen1(j+1) * half * ( eps1(i,j+1,1)+eps1(i,j+2,1) )
 !
       d=-(w1(i,j,1)+e1(i,j,1)+s1(i,j,1)+n1(i,j,1))+kappa1(i,j,1);
       d=1d0/d;
@@ -456,7 +491,7 @@
       __SCALE(s1(i,j,1),d)
       __SCALE(n1(i,j,1),d)
 
-      im=im+1;          
+      __INC(im)
      enddo ; ! i
 !
      p1(ntx+1,j,1)=p(im,jm,k); im=im+1     ! remaining boundary points
@@ -474,16 +509,38 @@
 ! black:
     do j=2,nty+1;               jm=j-1; offset=mod(j,itwo)
      do i=2+offset,ntx+1,2;     im=i-1;
-      p1(i,j,1)=p1(i,j,1) - dt * (w1(im,jm,1)*p1(im,j,1) + e1(im,jm,1)*p1(i+1,j,1) +&
-                                  s1(im,jm,1)*p1(i,jm,1) + n1(im,jm,1)*p1(i,j+1,1) +&
-                                  p1(i,j,1) - rhs1(im,jm,1) )
+!      p1(i,j,1)=p1(i,j,1) - dt * (w1(im,jm,1)*p1(im,j,1) + e1(im,jm,1)*p1(i+1,j,1) +&
+!                                  s1(im,jm,1)*p1(i,jm,1) + n1(im,jm,1)*p1(i,j+1,1) +&
+!                                  p1(i,j,1) - rhs1(im,jm,1) )
+      ww=odxcor1(i)*odxcen1(i)   * half * ( eps1(i,j,1)+eps1(i+1,j,1) )
+      ee=odxcor1(i)*odxcen1(i+1) * half * ( eps1(i+1,j,1)+eps1(i+2,j,1) )
+      ss=odycor1(j)*odycen1(j)   * half * ( eps1(i,j,1)+eps1(i,j+1,1) )
+      nn=odycor1(j)*odycen1(j+1) * half * ( eps1(i,j+1,1)+eps1(i,j+2,1) )
+      d=-(ww+ee+ss+nn)+kappa1(i,j,1);
+      d=1d0/d;
+      __SCALE(ww,d)
+      __SCALE(ee,d)
+      __SCALE(ss,d)
+      __SCALE(nn,d)
+      p1(i,j,1)=p1(i,j,1) - dt * (ww*p1(im,j,1) + ee*p1(i+1,j,1) + ss*p1(i,jm,1) + nn*p1(i,j+1,1) + p1(i,j,1) - rhs1(im,jm,1) )
     enddo ; enddo ;
 ! red:
     do j=2,nty+1;               jm=j-1; offset=mod(j,itwo)
      do i=3-offset,ntx+1,2;     im=i-1;
-      p1(i,j,1)=p1(i,j,1) - dt * (w1(im,jm,1)*p1(im,j,1) + e1(im,jm,1)*p1(i+1,j,1) +&
-                                  s1(im,jm,1)*p1(i,jm,1) + n1(im,jm,1)*p1(i,j+1,1) +&
-                                  p1(i,j,1) - rhs1(im,jm,1) )
+!      p1(i,j,1)=p1(i,j,1) - dt * (w1(im,jm,1)*p1(im,j,1) + e1(im,jm,1)*p1(i+1,j,1) +&
+!                                  s1(im,jm,1)*p1(i,jm,1) + n1(im,jm,1)*p1(i,j+1,1) +&
+!                                  p1(i,j,1) - rhs1(im,jm,1) )
+      ww=odxcor1(i)*odxcen1(i)   * half * ( eps1(i,j,1)+eps1(i+1,j,1) )
+      ee=odxcor1(i)*odxcen1(i+1) * half * ( eps1(i+1,j,1)+eps1(i+2,j,1) )
+      ss=odycor1(j)*odycen1(j)   * half * ( eps1(i,j,1)+eps1(i,j+1,1) )
+      nn=odycor1(j)*odycen1(j+1) * half * ( eps1(i,j+1,1)+eps1(i,j+2,1) )
+      d=-(ww+ee+ss+nn)+kappa1(i,j,1);
+      d=1d0/d;
+      __SCALE(ww,d)
+      __SCALE(ee,d)
+      __SCALE(ss,d)
+      __SCALE(nn,d)
+      p1(i,j,1)=p1(i,j,1) - dt * (ww*p1(im,j,1) + ee*p1(i+1,j,1) + ss*p1(i,jm,1) + nn*p1(i,j+1,1) + p1(i,j,1) - rhs1(im,jm,1) )
     enddo ; enddo ;
 !
 !************************************************************************************************
