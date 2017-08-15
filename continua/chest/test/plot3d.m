@@ -29,11 +29,11 @@ ny2=floor(dat(2));
 if (q3d)
  nz=floor(grd(3));
  nz2=floor(dat(3));
- i=4; i2=8;
+ i=4; i2=4;
 else
  nz=1;
  nz2=1; 
- i=3; i2=7;
+ i=4; i2=3;
 end
 %
 if ( (nx~=nx2) || (ny~=ny2) || (nz~=nz2) )
@@ -45,12 +45,15 @@ end
 if (q3d)
 else
 % grid
- x=reshape(grd(i:nx*ny+i-1),  nx,ny); xx=x(:,1);
- y=reshape(grd(nx*ny+i:end),nx,ny); yy=y(1,:);
+% x=reshape(grd(i:nx*ny+i-1),  nx,ny); xx=x(:,1); % in case the grid is full
+% y=reshape(grd(nx*ny+i:end),nx,ny); yy=y(1,:);
+ x=grd(i:nx+i-1);
+ y=grd(nx+i:nx+i+ny-1);
 % 
  d=reshape(dat(i2:nx*ny+i2-1), nx,ny);
 end
 
-pcolor(x,y,d); shading flat; colorbar; box on
+%pcolor(x,y,d); shading flat; colorbar; box on
+meshc(x,y,d); shading flat; colorbar; box on
 
 
