@@ -68,7 +68,6 @@
 !
  end subroutine Jacobi
 !**********************************************************************************************************************!
-! EXPERIMENTAL (now, very slow) ----------- !!!!!!!!!!!!!!!!!!!!
  subroutine JacobiOnTheFly(p,rhs,eps,kappa,odxcen,odxcor,odycen,odycor,odzcen,odzcor,nx,ny,nz,dt,i2d)
 ! compute metrics 'on the fly'
  use constants, only : one, half
@@ -170,8 +169,10 @@
  end subroutine JacobiOnTheFly
 !**********************************************************************************************************************!
  subroutine JacobiTiledLoMem(p,rhs,eps,kappa,odxcen,odxcor,odycen,odycor,odzcen,odzcor,nx,ny,nz,dt,ts,i2d)
-! conceptual GPU template 
+! conceptual GPU template
 ! compute metrics 'on the fly'
+! note that, currently, the global array tile-by-tile; i.e. this not a true Jacobi, in which the global array
+! would be updated after an full smoothing cycle over all points ; more of a Jacobi/GS hybrid
  use constants, only : one, third
  implicit none
  int :: nx, ny, nz
@@ -229,7 +230,7 @@ ji_loop:&
   k=2 ! 2D
   km=k-1
   jj=1;
-write(0,*) "TILES:",tx, ty ! aa
+!write(0,*) "TILES:",tx, ty ! aa
   do while (jj.le.nny)  ; nty=min(ty,nny-jj+1); ii=1
 ! local y-metrics
    odycen1(1:nty+1)=odycen(jj:jj+nty);   odycor1(1:nty)=odycor(jj:jj+nty-1); ! center-to-center metric has extra element
@@ -242,25 +243,24 @@ write(0,*) "TILES:",tx, ty ! aa
     jm=jj
     do j=1,nty; im=ii;
      do i=1,ntx
-      rhs1(i,j,1)=rhs(im,jm,km);   eps1(i,j,1)=eps(im,jm,km);   kappa1(i,j,1)=kappa(im,jm,km);   p1(i,j,1)=p(im,jm,k)
-      im=im+1;
+      rhs1(i,j,1)=rhs(im,jm,km);   eps1(i,j,1)=eps(im,jm,k);   kappa1(i,j,1)=kappa(im,jm,km);   p1(i,j,1)=p(im,jm,k)
+      __INC(im)
      enddo ; ! i
 ! : last inner point and ghost point
      do i=ntx+1, ntx+2; 
-      p1(i,j,1)=p(im,jm,k); eps1(i,j,1)=eps(im,jm,k);       ! remaining boundary points 
-      im=im+1
+      p1(i,j,1)=p(im,jm,k); eps1(i,j,1)=eps(im,jm,k);       ! remaining boundary points
+      __INC(im)
      enddo ; ! i
-     jm=jm+1;
+     __INC(jm)
     enddo ! j
 ! : bottom inner points
-! epsilon: bottom ghost points
+! p & epsilon: last inner point and ghost point in j-direction
     do j=nty+1, nty+2 ; im=ii;
      do i=1,ntx+2
       p1(i,j,1)=p(im,jm,k); eps1(i,j,1)=eps(im,jm,k);
-      im=im+1;
+      __INC(im)
      enddo ;
-     jm=jm+1;
-! p: bottom ghost points
+     __INC(jm)
     enddo ! j
 !************************************************************************************************
 ! smooth within tile (iteration involves local data only)
@@ -284,7 +284,7 @@ write(0,*) "TILES:",tx, ty ! aa
       q1(i,j,1)=p1(i,j,1) - dt * ( p1(i,j,1) &
 &                                  + o*( w*p1(im,j,1) + e*p1(i+1,j,1) + s*p1(i,jm,1) + n*p1(i,j+1,1) ) &
 &                                  - rhs1(im,jm,1) )
-!  NOTE: rhs above has been divided by o, which means that o is already known; 
+!  NOTE: rhs above has been divided by o, which means that o is already known;
 !  this routine is _just a test of computing metrics on-the-fly vs. memory access_
      enddo ; enddo ; ! i,j 
 !************************************************************************************************
@@ -335,7 +335,8 @@ write(0,*) "TILES:",tx, ty ! aa
   kk=1
   do while (kk.le.nnz)   ; ntz=min(tz,nnz-kk+1); jj=1
 ! local z-metrics
-   odzcen1(1:ntz+1)=odzcen(kk:kk+ntz);   odzcor1(1:ntz)=odzcor(kk:kk+ntz-1); ! center-to-center metric has extra element
+   odzcen1(1:ntz+1)=odzcen(kk:kk+ntz);   odzcor1(1:ntz)=odzcor(kk:kk+ntz-1); ! vectorized faster
+!   km=kk ; do k=1,ntz; odzcen1(k)=odzcen(km); odzcor1(k)=odzcor(km); __INC(km) ; enddo ; odzcen1(ntz+1)=odzcen(km); ! center-to-center metric has extra element
    do while (jj.le.nny)  ; nty=min(ty,nny-jj+1); ii=1
 ! local y-metrics
     odycen1(1:nty+1)=odycen(jj:jj+nty);   odycor1(1:nty)=odycor(jj:jj+nty-1); 
@@ -345,33 +346,42 @@ write(0,*) "TILES:",tx, ty ! aa
 ! populate tile
 !*********************************************************************************************************************
      km=kk
-     do k=1,ntz; jm=jj;
-      do j=1,nty; im=ii;
-       do i=1,ntx ! all inner points below
-        rhs1(i,j,k)=rhs(im,jm,km);  eps1(i,j,k)=eps(im,jm,km);  kappa1(i,j,k)=kappa(im,jm,km);  p1(i,j,k)=p(im,jm,km)
-        im=im+1;
-       enddo ; ! i
-! the remaining eps- and p-points are ghost points
-! : last inner point and right ghost point
-       do i=ntx+1,ntx+2 ; eps1(i,j,k)=eps(im,jm,km) ; p1(i,j,k)=p(im,jm,km) ; im=im+1; enddo ; ! remaining inner and boundary points
-       jm=jm+1;
-      enddo ! j
+! vectorized faster with optimization flags
+     rhs1  =rhs  (ii:ii+ntx-1,jj:jj+nty-1,kk:kk+ntz-1)
+     kappa1=kappa(ii:ii+ntx-1,jj:jj+nty-1,kk:kk+ntz-1)
+     eps1  =eps  (ii:ii+ntx+1,jj:jj+nty+1,kk:kk+ntz+1)
+     p1    =p    (ii:ii+ntx+1,jj:jj+nty+1,kk:kk+ntz+1)
+!     q1=p1
+!     goto 999
 !
-      do j=nty+1, nty+2; im=ii; 
-       do i=1,ntx+2 ; eps1(i,j,k)=eps(im,jm,km) ; p1(i,j,k)=p(im,jm,km) ; im=im+1; enddo ; ! remaining inner and boundary points
-       jm=jm+1 
-      enddo ! j
-      km=km+1
-     enddo ! k
+!     do k=1,ntz; jm=jj;
+!      do j=1,nty; im=ii;
+!       do i=1,ntx ! all inner points below
+!        rhs1(i,j,k)=rhs(im,jm,km);  eps1(i,j,k)=eps(im,jm,km);  kappa1(i,j,k)=kappa(im,jm,km);  p1(i,j,k)=p(im,jm,km)
+!        im=im+1;
+!       enddo ; ! i
+!! the remaining eps- and p-points are ghost points
+!! : last inner point and right ghost point
+!       do i=ntx+1,ntx+2 ; eps1(i,j,k)=eps(im,jm,km) ; p1(i,j,k)=p(im,jm,km) ; im=im+1; enddo ; ! remaining inner and boundary points
+!       jm=jm+1;
+!      enddo ! j
 !
-     do k=ntz+1, ntz+2; jm=jj;
-      do j=1,nty+2; im=ii;
-       do i=1,ntx+2 ; eps1(i,j,k)=eps(im,jm,km) ; p1  (i,j,k)=p(im,jm,km) ; im=im+1; enddo ;
-       jm=jm+1;
-      enddo ! j
-      km=km+1
-     enddo ! k
+!      do j=nty+1, nty+2; im=ii; 
+!       do i=1,ntx+2 ; eps1(i,j,k)=eps(im,jm,km) ; p1(i,j,k)=p(im,jm,km) ; im=im+1; enddo ; ! remaining inner and boundary points
+!       jm=jm+1 
+!      enddo ! j
+!      km=km+1
+!     enddo ! k
 !
+!     do k=ntz+1, ntz+2; jm=jj;
+!      do j=1,nty+2; im=ii;
+!       do i=1,ntx+2 ; eps1(i,j,k)=eps(im,jm,km) ; p1  (i,j,k)=p(im,jm,km) ; im=im+1; enddo ;
+!       jm=jm+1;
+!      enddo ! j
+!      km=km+1
+!     enddo ! k
+!
+! 999  continue
 !****************************************************************************************************************
 ! smooth within tile (iteration involves local data only)
 !****************************************************************************************************************
@@ -408,6 +418,11 @@ write(0,*) "TILES:",tx, ty ! aa
 #endif
 !************************************************************************************************
 ! put solution back into global array (inner points only)
+!    vectorized -- slower than loops
+!     p(ii+1:ii+ntx,jj+1:jj+nty,kk+1:kk+ntz)=q1(2:ntx+1,2:nty+1,2:ntz+1);
+!     p(ii:ii+ntx+1,jj:jj+nty+1,kk:kk+ntz+1)=q1;
+!     goto 888
+!
      km=kk+1
      do k=2,ntz+1; jm=jj+1;  do j=2,nty+1; im=ii+1; do i=2,ntx+1
                                                      p(im,jm,km)=q1(i,j,k); 
@@ -418,6 +433,7 @@ write(0,*) "TILES:",tx, ty ! aa
       km=km+1
      enddo
 !
+! 888  continue
 ! shift tile
      ii=ii+tx
     enddo    ! ii

@@ -14,14 +14,16 @@ echo " *************************************************************************
 echo " (test3d-1) "
 echo " Test case for solving 3D Poisson equation using CHES" 
 echo " Laplacian U  = f"
-echo " U = ( 1 - exp (-${a} * x) ) * cos (2 * pi * ${m} * y) * sin (2 * pi * ${n} * z) ; Dirichlet boundary conditions"
+echo " U = ( 1 - exp (-${a} * x) ) * cos (2 * pi * ${m} * y) * sin (2 * pi * ${n} * z) ; "
+echo " Dirichlet boundary conditions assigned on the boundary"
+echo " Jacobi smoother with step (omega) = 0.93 "
 echo " *********************************************************************************************"
 #
 #
 nx=98; ny=98; nz=98;
-xstretch=1.0; x0=0; x1=1
-ystretch=1.0; y0=0; y1=2
-zstretch=1.0; z0=0; z1=1.5
+xstretch=1.01; x0=0; x1=1
+ystretch=1.015; y0=0; y1=2
+zstretch=1.02; z0=0; z1=1.5
 #
 #
 echo " Generating test data..."
@@ -177,16 +179,18 @@ $FC $FFLAGS $DEFS test.F90 -o test ; ./test; rm -f test;
 #
 echo " Preparing input file..."
 echo "
+
 continuum {
 #Size
  nx=${nx}; ny=${ny}; nz=${nz}
 
 #Grid
+
  xgrid=exp; xstretch=${xstretch}; x0=${x0}; x1=${x1}
  ygrid=exp; ystretch=${ystretch}; y0=${y0}; y1=${y1}
  zgrid=exp; zstretch=${zstretch}; z0=${z0}; z1=${z1}
 
-#Output options
+#Continuum output options
  output_format=plot3d
  output_mode=text
  gridoutput=xyz_test.xyz
@@ -200,7 +204,7 @@ multicom {
 }
 
 ches {
-#Boundary conditions
+# BC
  phi_bcx0=dirichlet; phi_bcx0_file=xbc0_test.dat
  phi_bcx1=dirichlet; phi_bcx1_file=xbc1_test.dat
  phi_bcy0=dirichlet; phi_bcy0_file=ybc0_test.dat
@@ -208,7 +212,8 @@ ches {
  phi_bcz0=dirichlet; phi_bcz0_file=zbc0_test.dat
  phi_bcz1=dirichlet; phi_bcz1_file=zbc1_test.dat
 
-# initial 3D data
+#Initial 3D data
+
  epsinit=constant   ; epsconst=1.
  kappainit=constant ; kappaconst=0.
  rhsinit=file       ; rhsfile=rhs_test.dat ;  rhs_mode=text ; rhs_format=chest
@@ -227,21 +232,22 @@ ches {
  exec:solve
  exec:output
  exec:done
-}
+} ! ches
 
 multigrid {
- multigrid_maximum_cycles=25
- multigrid_smooth_iterations=2
+# multigrid solver parameters
+ multigrid_maximum_cycles=35
+ multigrid_smooth_iterations=6
  multigrid_maximum_levels=20
- multigrid_smoother=Gauss-Seidel
+ multigrid_smoother=Jacobi
+ multigrid_residual=1e-4 # for shorter running times
+ multigrid_smoother=Jacobi-Tiled-LM
+# multigrid_compute_ini_residual=no
+# multigrid_skip_convergence_test=1
 # multigrid_smoother_unroll=-1
- multigrid_residual=1e-5 # can set low because the discretization error dominates
- multigrid_omega=1.2
- multigrid_compute_ini_residual=no
- multigrid_skip_convergence_test=2  % cycles to skip before testing for convergence
+ multigrid_omega=0.985
 }
 
-multicom { exec: set ches 1 }
 " > test.dat
 if !([ -L ches ]); then
 ln -s ../ches .
@@ -324,7 +330,7 @@ if [ `echo "${i[0]} > $griderr" | bc` -eq 1 ]; then
  echo " TEST FAILED";
  test_passed=0
 else
- ermax=0.01; # ad-hoc criterion
+ ermax=0.06; # ad-hoc criterion
  echo " The maximum absolute error is "${i[1]}" at grid point ["${i[2]}","${i[3]}","${i[4]}"]"
  echo " Comparing with maximum allowed error ("$ermax")"
  if [ `echo "${i[1]} < $ermax" | bc` -eq 1 ]; then
