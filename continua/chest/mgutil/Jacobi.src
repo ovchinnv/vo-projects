@@ -71,7 +71,7 @@
 ! EXPERIMENTAL (now, very slow) ----------- !!!!!!!!!!!!!!!!!!!!
  subroutine JacobiOnTheFly(p,rhs,eps,kappa,odxcen,odxcor,odycen,odycor,odzcen,odzcor,nx,ny,nz,dt,i2d)
 ! compute metrics 'on the fly'
- use constants, only : one
+ use constants, only : one, half
  implicit none
  int :: nx, ny, nz
  int1 :: i2d
@@ -79,9 +79,9 @@
  float :: odxcen(nx-1), odxcor(nx-2)
  float :: odycen(ny-1), odycor(ny-2)
  float :: odzcen(nz-1-i2d-i2d), odzcor(nz-2-i2d) ! 3D/2D
- float, dimension(nx,ny,nz) :: p &
+ float, dimension(nx,ny,nz) :: p, eps &
 &                             ,q ! temporary array
- float, dimension(nx-2,ny-2,nz-2) :: rhs, eps, kappa
+ float, dimension(nx-2,ny-2,nz-2) :: rhs, kappa
  float :: w, e, s, n, f, b, o
  float :: pw, pe, po, d
 
@@ -92,12 +92,34 @@
  nnx=nx-2; nny=ny-2; nnz=nz-2;
  nxp=nnx+1; nyp=nny+1; nzp=nnz+1;
 
-! if (i2d.eq.1) then
+!write(0,*) nz
+ if (i2d.eq.1) then
+   k=2; km=k-1;
+   do j=2,nyp;     jm=j-1;      po=p(2,j,k); pw=p(1,j,k);
+    do i=2,nxp;    im=i-1;
+     pe=p(i+1,j,k)
+! compute metrics
+     w = odxcor(im)*odxcen(im)*(eps(i,j,k)+eps(im ,j,  k  )) ! beware of the 0.5 factor
+     e = odxcor(im)*odxcen(i )*(eps(i,j,k)+eps(i+1,j,  k  ))
+     s = odycor(jm)*odycen(jm)*(eps(i,j,k)+eps(i,  jm, k  ))
+     n = odycor(jm)*odycen(j )*(eps(i,j,k)+eps(i,  j+1,k  ))
+     o = -half*(w+e+s+n) + kappa(im,jm,km) ; o=half/o; ! missing 0.5 above
 
-! else ! 3D
+     q(i,j,k)=po        - dt * (  po +               &
+&                                 o*( w*pw +         &
+&                                     e*pe +         &
+&                                     s*p(i,jm,k) +  &
+&                                     n*p(i,j+1,k)   &
+&                                   )                &
+&                                    -rhs(im,jm,km)   )
+      pw=po; po=pe;
+    enddo ; enddo ! i,j
+!#else
+
+ else ! 3D
 !#ifdef __SAVEP
 ! prefactor quarter instead of half if metrics are doubled (see below) 
- d = 0.25d0 * dt / (maxval(odxcor)**2+maxval(odycor)**2+maxval(odzcor)**2)
+! d = 0.25d0 * dt / (maxval(odxcor)**2+maxval(odycor)**2+maxval(odzcor)**2)
 !write(0,*)"------------ ",d
 !##################################################################################
   do k=2,nzp;      km=k-1;
@@ -105,38 +127,39 @@
     do i=2,nxp;    im=i-1;
      pe=p(i+1,j,k)
 ! compute metrics
-     w = odxcor(im)*odxcen(im)*(eps(im,jm,km)+eps(max(im-1,1),jm,         km         )) ! beware of the 0.5 factor
-     e = odxcor(im)*odxcen(i )*(eps(im,jm,km)+eps(min(i,nnx), jm,         km         ))
-     s = odycor(jm)*odycen(jm)*(eps(im,jm,km)+eps(im,         max(jm-1,1),km         ))
-     n = odycor(jm)*odycen(j )*(eps(im,jm,km)+eps(im,         min(j,nny), km         ))
-     f = odzcor(km)*odzcen(km)*(eps(im,jm,km)+eps(im,         jm,         max(km-1,1)))
-     b = odzcor(km)*odzcen(k )*(eps(im,jm,km)+eps(im,         jm,         min(k,nnz) ))
-     o = -(w+e+s+n+f+b) + 2d0 * kappa(im,jm,km) ;! o=one/o; ! add twice kappa if missing 0.5 above
+     w = odxcor(im)*odxcen(im)*(eps(i,j,k)+eps(im ,j,  k  )) ! beware of the 0.5 factor
+     e = odxcor(im)*odxcen(i )*(eps(i,j,k)+eps(i+1,j,  k  ))
+     s = odycor(jm)*odycen(jm)*(eps(i,j,k)+eps(i,  jm, k  ))
+     n = odycor(jm)*odycen(j )*(eps(i,j,k)+eps(i,  j+1,k  ))
+     f = odzcor(km)*odzcen(km)*(eps(i,j,k)+eps(i,  j,  km ))
+     b = odzcor(km)*odzcen(k )*(eps(i,j,k)+eps(i,  j,  k+1))
+     o = -half*(w+e+s+n+f+b) + kappa(im,jm,km) ; o=half/o; ! missing 0.5 above
 
-!write(0,*) d*o
+!write(0,*) odzcor, size(odzcor)
+!write(0,*) odzcen, size(odzcen)
 !stop
 
-     q(i,j,k)=po      + d* (o*(po-rhs(im,jm,km))+&
-&                                     w*pw +         &
-&                                     e*pe +         &
-&                                     s*p(i,jm,k) +  &
-&                                     n*p(i,j+1,k) + &
-&                                     f*p(i,j,km) +  &
-&                                     b*p(i,j,k+1)   &
-&                                   )
-!     q(i,j,k)=po        - dt * (  po +               &
-!&                                 o*( w*pw +         &
+!     q(i,j,k)=po      + d* (o*(po-rhs(im,jm,km))+&
+!&                                     w*pw +         &
 !&                                     e*pe +         &
 !&                                     s*p(i,jm,k) +  &
 !&                                     n*p(i,j+1,k) + &
 !&                                     f*p(i,j,km) +  &
 !&                                     b*p(i,j,k+1)   &
-!&                                   )                &
-!&                                    -rhs(im,jm,km)    )
+!&                                   )
+     q(i,j,k)=po        - dt * (  po +               &
+&                                 o*( w*pw +         &
+&                                     e*pe +         &
+&                                     s*p(i,jm,k) +  &
+&                                     n*p(i,j+1,k) + &
+&                                     f*p(i,j,km) +  &
+&                                     b*p(i,j,k+1)   &
+&                                   )                &
+&                                    -rhs(im,jm,km)   )
       pw=po; po=pe;
      enddo ; enddo ; enddo ! i,j,k 
 !#else
-! endif ! i2d
+ endif ! i2d
 !##################################################################################
 #ifdef __VECCOPY
   p=q
