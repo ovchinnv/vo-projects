@@ -22,7 +22,9 @@
  module multigrid
  use datatypes
  use fieldbcdef
+#ifdef __BINDC
  use, intrinsic :: iso_c_binding
+#endif
 !
 #ifdef __PARALLEL
  __DEP_MULTICOM
@@ -49,6 +51,10 @@
  float, pointer, save, dimension(:) :: dxall, dyall, dzall, odxall, odyall, odzall, & ! arrays that hold all metrics
                                        allp, alleps, allkappa, allrhs,& ! arrays that hold coefficients, sources, and solution
                                        alleast, allwest, allsouth, allnorth, allfront, allback ! arrays that store boundary conditions
+#ifdef __CUDA
+! CUDA arrays: NOTE that these are _device_ pointers ; they are ONLY addressible from the device
+ type(C_PTR) :: CUdxall, CUdyall, CUdzall, CUallp, CUalleps, CUallkappa, CUallrhs, CUalleast, CUallwest, CUallsouth, CUallnorth, CUallfront, CUallback
+#endif
 !
  float, pointer, save, dimension(:,:) :: bc_wgt
 !
@@ -450,6 +456,29 @@
 !
   call multigrid_update_coef(.true., .true., .true., .true.);
 !
+#ifdef __CUDA
+! Init CUDA ARRAYS
+  call AllocDevMem_C(CUdxall, dxlen, CUdyall, dylen, CUdzall, dzlen, CUallp, CUalleps, len3Dbc, CUallkappa, CUallrhs, len3D, &
+&  CUalleast, CUallwest, len2Dyz, CUallnorth, CUallsouth, len2Dxz, CUallback, CUallfront, len2Dxy)
+! copy data from host to device
+! metrics:
+  __COPY_HOST_DEVICE(dxall)
+  __COPY_HOST_DEVICE(dyall)
+  __COPY_HOST_DEVICE(dzall)
+!3D arrays
+  __COPY_HOST_DEVICE(allp)
+  __COPY_HOST_DEVICE(alleps)
+  __COPY_HOST_DEVICE(allkappa)
+  __COPY_HOST_DEVICE(allrhs)
+! BC arrays
+  __COPY_HOST_DEVICE(alleast)
+  __COPY_HOST_DEVICE(allwest)
+  __COPY_HOST_DEVICE(allnorth)
+  __COPY_HOST_DEVICE(allsouth)
+  __COPY_HOST_DEVICE(allback)
+  __COPY_HOST_DEVICE(allfront)
+#endif // CUDA
+!
   if (.not.fatal_warning(__COMM)) multigrid_initialized=.true.
 !
   end subroutine multigrid_init
@@ -466,8 +495,14 @@
    do i=1,numbc ; nullify(bcs(i)%d) ; enddo
    bc_type=undefined
    multigrid_initialized=.false.
+!
+#ifdef __CUDA
+! Init CUDA ARRAYS
+   call FreeDevMem_C(CUdxall, CUdyall, CUdzall, CUallp, CUalleps, CUallkappa, CUallrhs, &
+&   CUalleast, CUallwest, CUallnorth, CUallsouth, CUallback, CUallfront)
+#endif
   endif
-!  
+!
   end subroutine multigrid_done
 !*****************************************************************************************************
 ! this routine handles both 2 and 3 dimensions; however, nz has to be equal to 3 for the 2D case to work
