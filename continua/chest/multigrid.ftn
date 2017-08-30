@@ -117,6 +117,10 @@
  int :: mgtimer, smoothtimer
  float :: coarsen_time=zero, refine_time=zero, smooth_time=zero, residual_time=zero, bc_time=zero
  float :: mgtime=-1d0
+#ifdef __CUDA
+ int :: cumemtimer ! keeps track of time to perform operations that involve GPU global memor
+ float :: cumem_time=zero
+#endif
 #endif
 !
  public multigrid_init
@@ -458,6 +462,9 @@
 !
 #ifdef __CUDA
  __CUDBG('allocating cuda arrays')
+#ifdef __TIMER
+  cumemtimer=timer_start();
+#endif
 ! Init CUDA ARRAYS
 ! metrics:
   __ALLOC_DEV_MEM(dxall)
@@ -475,8 +482,14 @@
   __ALLOC_DEV_MEM(allsouth)
   __ALLOC_DEV_MEM(allback)
   __ALLOC_DEV_MEM(allfront)
+#ifdef __TIMER
+  __INCR(cumem_time,timer_stamp(cumemtimer));
+#endif
  __CUDBG('copying data from host to device')
 ! copy data from host to device
+#ifdef __TIMER
+  mgtime=timer_stamp(cumemtimer)
+#endif
 ! metrics:
   __COPY_HOST_DEVICE(dxall)
   __COPY_HOST_DEVICE(dyall)
@@ -493,6 +506,9 @@
   __COPY_HOST_DEVICE(allsouth)
   __COPY_HOST_DEVICE(allback)
   __COPY_HOST_DEVICE(allfront)
+#ifdef __TIMER
+  __INCR(cumem_time,timer_stamp(cumemtimer));
+#endif
 #endif // CUDA
 !
   if (.not.fatal_warning(__COMM)) multigrid_initialized=.true.
@@ -517,6 +533,9 @@
 #ifdef __CUDA
 ! Free CUDA ARRAYS
  __CUDBG('free cuda arrays')
+#ifdef __TIMER
+  mgtime=timer_stamp(cumemtimer)
+#endif
 ! metrics:
   __FREE_DEV_MEM(dxall)
   __FREE_DEV_MEM(dyall)
@@ -533,6 +552,8 @@
   __FREE_DEV_MEM(allsouth)
   __FREE_DEV_MEM(allback)
   __FREE_DEV_MEM(allfront)
+#if __TIMER
+  __INCR(cumem_time,timer_stamp(cumemtimer));
 #endif
   endif
 !
@@ -767,14 +788,14 @@
 #include "mgutil/multigrid_bc.src"
 ! compute initial residual
 ! note: def below causes extra divisions in the residual calculation
-#define __RNORM /allo(i) 
+#define __RNORM /allo(i)
   if (compute_initial_residual) then
 #ifdef __TIMER
  mgtime=timer_stamp(mgtimer)
 #endif
    call residual(res, allp, allrhs, allw, alle, alls, alln, allf, allb, allo, nx, ny, nz, q2d); qres=.false.;
 #ifdef __TIMER
- residual_time=residual_time+timer_elapsed(mgtimer)
+ __INCR(residual_time,timer_elapsed(mgtimer))
 #endif
 ! define residual normalization (could be made different for subsequent calls)
 #include "mgutil/mg_resout.src"
@@ -818,7 +839,7 @@
       if (qres) then
        call residual(res,allp(i3b),allrhs(i3),allw(i3),alle(i3),alls(i3),alln(i3),allf(i3),allb(i3),allo(i3),nnx+2,nny+2,nnz+2,q2d)
 #ifdef __TIMER
- residual_time=residual_time+timer_stamp(mgtimer) 
+ __INCR(residual_time,timer_stamp(mgtimer))
 #endif
       endif ! qres
 ! update indices (some of these updates are not necessary in this version of subroutine)
@@ -838,10 +859,10 @@
 ! initialize solution (to 0, are there other sensible options?)
       call fzero(allp(i3b),nnx+2,nny+2,nnz+2)
 ! update bc (note that the bc update should be unnecessary in most cases, since we begin from an initial solution of zero)
-      level=level+1
+      __INC(level)
 !
 #ifdef __TIMER
- coarsen_time=coarsen_time+timer_elapsed(mgtimer) 
+ __INCR(coarsen_time,timer_elapsed(mgtimer))
 #endif
 #include "mgutil/multigrid_bc.src"
 !***********************************************************************************************
@@ -863,7 +884,7 @@
 ! update bc
       level=level-1
 #ifdef __TIMER
- refine_time=refine_time+timer_elapsed(mgtimer) 
+ __INCR(refine_time,timer_elapsed(mgtimer))
 #endif
 #include "mgutil/multigrid_bc.src"
 !***********************************************************************************************
@@ -981,7 +1002,7 @@
 #undef __INSIDESMOOTHER
 #endif
 #ifdef __TIMER
- smooth_time=smooth_time+timer_elapsed(smoothtimer) 
+ __INCR(smooth_time,timer_elapsed(smoothtimer))
 #endif
 !***********************************************************************************************
     end select
@@ -998,7 +1019,7 @@
 #endif
    call residual(res,allp,allrhs,allw,alle,alls,alln,allf,allb,allo,nx,ny,nz,q2d); qres=.false.; ! false means residual is already known
 #ifdef __TIMER
- residual_time=residual_time+timer_stamp(mgtimer) 
+ __INCR(residual_time,timer_stamp(mgtimer))
 #endif
 #include "mgutil/mg_resout.src"
    endif
@@ -1016,6 +1037,10 @@
  call message(whoami,'Smoothing time (s)  : '//ftoa(smooth_time))
  call message(whoami,'Residual time (s)   : '//ftoa(residual_time))
  call message(whoami,'BC time (s)         : '//ftoa(bc_time))
+#ifdef __TIMER
+ call message(whoami,'CUDA Memory time (s): '//ftoa(cumem_time))
+ call timer_erase(cumemtimer)
+#endif
  call message(whoami,'Other time (s)      : '//ftoa(mgtime-coarsen_time-refine_time-smooth_time-residual_time-bc_time))
  call message(whoami,'===============================================')
  call timer_erase(mgtimer)
