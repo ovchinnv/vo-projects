@@ -1,15 +1,11 @@
 interface
- subroutine GaussSeidel_C(p,rhs,w,e,s,n,f,b,nx,ny,nz,dt,i2d) bind(c,name='GaussSeidel_C')
- use, intrinsic :: iso_c_binding
- __IMPNONE
- __FCINT, VALUE :: nx, ny, nz
- __FCFLOAT, VALUE :: dt
- TYPE (C_PTR), VALUE :: p
- TYPE (C_PTR), VALUE :: rhs,w,e,s,n,f,b
- int(C_INT8_T), VALUE :: i2d
- end subroutine GaussSeidel_C
 
-#ifdef __CUDA
+ subroutine matmul_cuda(devM,devN,devP,my,mx,nx) bind(c,name='matmul_cuda')
+ use, intrinsic :: iso_c_binding
+ implicit none
+ integer, VALUE :: my,mx,nx
+ type(C_PTR), VALUE :: devM, devN, devP
+ end subroutine matmul_cuda
 
  subroutine AllocDevMem_C(devpp, len) bind(c,name='AllocDevMem')
  use, intrinsic :: iso_c_binding
@@ -21,7 +17,7 @@ interface
  subroutine CopyHostToDevice_C(hostp, devp, len) bind(c,name='CopyHostToDevice')
  use, intrinsic :: iso_c_binding
  __IMPNONE
- __FCFLOAT, dimension(len) :: hostp
+ __FCFLOAT :: hostp(len)
  type(C_PTR), VALUE :: devp
  __FCINT, VALUE :: len
  end subroutine CopyHostToDevice_C
@@ -29,7 +25,8 @@ interface
  subroutine CopyDeviceToHost_C(hostp, devp, len) bind(c,name='CopyDeviceToHost')
  use, intrinsic :: iso_c_binding
  __IMPNONE
- __FCFLOAT, dimension(len) :: hostp
+ __FCFLOAT, dimension(len) :: hostp ! this type of addressing does not work
+! type(C_PTR), VALUE :: hostp
  type(C_PTR), VALUE :: devp
  __FCINT, VALUE :: len
  end subroutine CopyDeviceToHost_C
@@ -39,7 +36,5 @@ interface
  __IMPNONE
  type(C_PTR) :: devp
  end subroutine FreeDevMem_C
-
-#endif //CUDA
 
 end interface
