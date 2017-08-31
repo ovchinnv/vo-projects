@@ -40,6 +40,30 @@ interface
  type(C_PTR) :: devp
  end subroutine FreeDevMem_C
 
+ subroutine GaussSeidel_Cuda(CUallp,CUallrhs,CUalleps,CUallkappa,CUdxall,CUdyall,CUdzall,i3b,i3,i1,j1,k1,nx,ny,nz,omega,i2d) bind(c,name='GaussSeidel_Cuda')
+ use, intrinsic :: iso_c_binding
+ __IMPNONE
+ type(C_PTR), VALUE :: CUallp, CUallrhs, CUalleps, CUallkappa, CUdxall, CUdyall, CUdzall
+ __FCINT, VALUE :: i3b, i3 ! indices into data arrays (with and without ghostpoint layer, resp.)
+ __FCINT, VALUE :: i1, j1, k1 ! indices into metric arrays
+ __FCINT, VALUE :: nx, ny, nz ! array dimensions, incl. ghost points
+ __FCFLOAT, VALUE :: omega ! overrelaxation parameter
+ int(C_INT8_T), VALUE :: i2d
+ end subroutine GaussSeidel_Cuda
+ 
+ subroutine ApplyBC_Cuda(CUallp,CUallwest,CUalleast,CUallnorth,CUallsouth,CUallfront,CUallback,i3b,i2,j2,k2,nx,ny,nz,bc_type,bc_wgt,i2d) bind(c,name='ApplyBC_Cuda')
+ use, intrinsic :: iso_c_binding
+ __IMPNONE
+ type(C_PTR), VALUE :: CUallp,CUallwest,CUalleast,CUallnorth,CUallsouth,CUallfront,CUallback
+ __FCINT, VALUE :: i3b ! index into data arrays (with ghostpoint layer)
+ __FCINT, VALUE :: i2, j2, k2 ! indices into boundary condition
+ __FCINT, VALUE :: nx, ny, nz ! array dimensions, incl. ghost points
+ __FCINT, dimension(6) :: bc_type ! boundary condition codes
+ __FCFLOAT, dimension(6) :: bc_wgt ! boundary condition values at current level only
+ int(C_INT8_T), VALUE :: i2d
+ end subroutine ApplyBC_Cuda
+
+
 #endif //CUDA
 
 end interface

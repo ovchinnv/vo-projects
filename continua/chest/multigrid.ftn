@@ -54,6 +54,7 @@
 #ifdef __CUDA
 ! CUDA arrays: NOTE that these are _device_ pointers ; they are ONLY addressible from the device
  type(C_PTR) :: CUdxall, CUdyall, CUdzall, CUallp, CUalleps, CUallkappa, CUallrhs, CUalleast, CUallwest, CUallsouth, CUallnorth, CUallfront, CUallback
+ bool, save :: qusecuda=.false.;
 #endif
 !
  float, pointer, save, dimension(:,:) :: bc_wgt
@@ -66,18 +67,25 @@
 !
  int, parameter :: reduce=-1, prolong=-2, done=0; ! this is just notation; currently positive numbers ar assumed to be iterations
 !
+ int, parameter :: nsmoother = &
 #ifdef __BINDC
- int, parameter :: nsmoother = 10
+#ifdef __CUDA
+&                             11
 #else
- int, parameter :: nsmoother = 9
+&                             10
+#endif
+#else 
+&                             9
 #endif
  character(len=24) :: smoother_names(nsmoother) = &
 #if !defined(__pathf90) && !defined(__pathf77) && !defined(__pathf95) &&!defined(__PATHSCALE)
 &   [character(len=24):: 'JACOBI','GAUSS-SEIDEL','GAUSS-SEIDEL-RB','GAUSS-SEIDEL-UNROLL','GAUSS-SEIDEL-RB-TILED',&
-&                       'GAUSS-SEIDEL-RB-TILED-LM','GAUSS-SEIDEL-REVERSE','JACOBI-TILED-LM', &
-&                       'JACOBI-LM', &
+&                       'GAUSS-SEIDEL-RB-TILED-LM','GAUSS-SEIDEL-REVERSE','JACOBI-TILED-LM', 'JACOBI-LM' &
 #ifdef __BINDC
-&                       'GAUSS-SEIDEL-C'&
+&                       ,'GAUSS-SEIDEL-C'&
+#ifdef __CUDA
+&                       ,'GAUSS-SEIDEL-CUDA'&
+#endif
 #endif
 & ];
 #else
@@ -85,13 +93,16 @@
 &                       'GAUSS-SEIDEL-UNROLL     ','GAUSS-SEIDEL-RB-TILED   ','GAUSS-SEIDEL-RB-TILED-LM',&
 &                       'GAUSS-SEIDEL-REVERSE    ','JACOBI-TILED-LM         ','JACOBI-LM               ',&
 #ifdef __BINDC
-&                       'GAUSS-SEIDEL-C          '&
+&                       ,'GAUSS-SEIDEL-C          '&
+#ifdef __CUDA
+&                       ,'GAUSS-SEIDEL-CUDA       '&
+#endif
 #endif
 &/)
 #endif
  int, parameter :: Jacobi_=1, GaussSeidel_=2, GaussSeidelRB_=3, GSUnrollFromMiddle_=4, GaussSeidelRBTiled_=5,&
 &                  GaussSeidelRBTiledLoMem_=6, GaussSeidelReverse_=7, JacobiTiledLomem_=8, JacobiOnTheFly_=9,&
-&                  GaussSeidel_C_=10
+&                  GaussSeidel_C_=10, GaussSeidel_Cuda_=11
  int, save :: smoother, default_smoother=GaussSeidel_
  int, save :: smooth_iterations;
  int, save :: smooth_tilesize;
@@ -461,6 +472,12 @@
   call multigrid_update_coef(.true., .true., .true., .true.);
 !
 #ifdef __CUDA
+! decide whether we are using CUDA
+ qusecuda=(smoother .eq. GaussSeidel_Cuda_) .or. &
+! insert other conditions here
+& .false.
+!
+ if (qusecuda) then
  __CUDBG('allocating cuda arrays')
 #ifdef __TIMER
   cumemtimer=timer_start();
@@ -509,7 +526,8 @@
 #ifdef __TIMER
   __INCR(cumem_time,timer_stamp(cumemtimer));
 #endif
-#endif // CUDA
+ endif ! qusecuda
+#endif /* CUDA */
 !
   if (.not.fatal_warning(__COMM)) multigrid_initialized=.true.
 !
@@ -531,31 +549,34 @@
    multigrid_initialized=.false.
 !
 #ifdef __CUDA
+   if (qusecuda) then
 ! Free CUDA ARRAYS
- __CUDBG('free cuda arrays')
+    __CUDBG('free cuda arrays')
 #ifdef __TIMER
-  mgtime=timer_stamp(cumemtimer)
+    mgtime=timer_stamp(cumemtimer)
 #endif
 ! metrics:
-  __FREE_DEV_MEM(dxall)
-  __FREE_DEV_MEM(dyall)
-  __FREE_DEV_MEM(dzall)
+    __FREE_DEV_MEM(dxall)
+    __FREE_DEV_MEM(dyall)
+    __FREE_DEV_MEM(dzall)
 !3D arrays
-  __FREE_DEV_MEM(allp)
-  __FREE_DEV_MEM(alleps)
-  __FREE_DEV_MEM(allkappa)
-  __FREE_DEV_MEM(allrhs)
+    __FREE_DEV_MEM(allp)
+    __FREE_DEV_MEM(alleps)
+    __FREE_DEV_MEM(allkappa)
+    __FREE_DEV_MEM(allrhs)
 ! BC arrays
-  __FREE_DEV_MEM(alleast)
-  __FREE_DEV_MEM(allwest)
-  __FREE_DEV_MEM(allnorth)
-  __FREE_DEV_MEM(allsouth)
-  __FREE_DEV_MEM(allback)
-  __FREE_DEV_MEM(allfront)
+    __FREE_DEV_MEM(alleast)
+    __FREE_DEV_MEM(allwest)
+    __FREE_DEV_MEM(allnorth)
+    __FREE_DEV_MEM(allsouth)
+    __FREE_DEV_MEM(allback)
+    __FREE_DEV_MEM(allfront)
 #if __TIMER
-  __INCR(cumem_time,timer_stamp(cumemtimer));
-#endif
-  endif
+    __INCR(cumem_time,timer_stamp(cumemtimer));
+#endif /*  __TIMER */
+#endif /*  __CUDA */
+   endif ! qusecuda
+  endif ! intiialized
 !
   end subroutine multigrid_done
 !*****************************************************************************************************
@@ -936,7 +957,14 @@
 ! update BC
 #include "mgutil/multigrid_bc.src"
        enddo
-#endif
+#ifdef __CUDA
+       case(GaussSeidel_Cuda_);
+       do k=1,j
+        call GaussSeidel_Cuda(CUallp,CUallrhs,CUalleps,CUallkappa,CUdxall,CUdyall,CUdzall,i3b,i3,i1,j1,k1,nnx+2,nny+2,nnz+2,omega,i2d)
+        call ApplyBC_Cuda(CUallp,CUallwest,CUalleast,CUallnorth,CUallsouth,CUallfront,CUallback,i3b,i2,j2,k2,nnx+2,nny+2,nnz+2,bc_type,bc_wgt(:,level),i2d)
+       enddo
+#endif /* __CUDA */
+#endif /* __BINDC */
 !***********************************************************************************************
        case(GaussSeidelReverse_);
 !       write(0,*) 'DBG SMOOTH:'
@@ -1010,13 +1038,24 @@
     qres=.true. ! true means that the residual must be recomputed (b/c arrays were modified in the cycle)
    enddo ! end of cycle
 ! compute residual (update bc first)
-! NOTE: the residual calculation below is strictly for the purpose of output; 
+! NOTE: the residual calculation below is strictly for the purpose of output;
 !       we could check less frequently and save a little time
 !***********************************************
    if (icycle.gt.convergence_skip_cycles) then
+! check whether the solution is on the GPU
+#ifdef __CUDA
 #ifdef __TIMER
+ if (qusecuda) mgtime=timer_stamp(cumemtimer)
+#endif /*  __TIMER */
+ if (qusecuda)&
+&  call CopyDeviceToHost_C(allp, CUallp, nx*ny*nz) ; ! note that we are copying _ONLY_ the outer grid layer because we are outside of the cycle ; this may change
+#endif /*  CUDA */
+#ifdef __TIMER
+#ifdef __CUDA
+ if (qusecuda) __INCR(cumem_time, timer_stamp(cumemtimer))
+#endif /*  __CUDA  */
  mgtime=timer_stamp(mgtimer)
-#endif
+#endif /*  __TIMER */
    call residual(res,allp,allrhs,allw,alle,alls,alln,allf,allb,allo,nx,ny,nz,q2d); qres=.false.; ! false means residual is already known
 #ifdef __TIMER
  __INCR(residual_time,timer_stamp(mgtimer))
@@ -1037,9 +1076,11 @@
  call message(whoami,'Smoothing time (s)  : '//ftoa(smooth_time))
  call message(whoami,'Residual time (s)   : '//ftoa(residual_time))
  call message(whoami,'BC time (s)         : '//ftoa(bc_time))
-#ifdef __TIMER
- call message(whoami,'CUDA Memory time (s): '//ftoa(cumem_time))
- call timer_erase(cumemtimer)
+#ifdef __CUDA
+ if (qusecuda) then
+  call message(whoami,'CUDA Memory time (s): '//ftoa(cumem_time))
+  call timer_erase(cumemtimer)
+ endif
 #endif
  call message(whoami,'Other time (s)      : '//ftoa(mgtime-coarsen_time-refine_time-smooth_time-residual_time-bc_time))
  call message(whoami,'===============================================')
