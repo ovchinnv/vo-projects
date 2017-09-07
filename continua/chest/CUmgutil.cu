@@ -25,6 +25,15 @@ extern "C" void CopyDeviceToHost(__CFLOAT *hostp, __CUFLOAT *devp, __CINT n){
 extern "C" void GaussSeidel_Cuda(__CUFLOAT *devp, __CUFLOAT *devrhs, __CUFLOAT *deveps, __CUFLOAT *devkappa, __CUFLOAT *devdx, __CUFLOAT *devdy, __CUFLOAT *devdz,
                                  __CINT i3b, __CINT i3, __CINT i1, __CINT j1, __CINT k1, __CINT nx, __CINT ny, __CINT nz, __CFLOAT dt, int8_t i2d) {
 
+ int nnx=nx-2; // inner points
+ int nny=ny-2;
+//
+ if (!i2d) {
+  dim3 block(_BSIZE_X, _BSIZE_Y);
+  dim3 grid( nnx / (_SX*_BSIZE_X) + ( nnx % (_SX*_BSIZE_X) > 0 ), nny / (_SY*_BSIZE_Y) + ( nnx % (_SY*_BSIZE_Y) > 0 ));
+//
+  Gauss_Seidel_Cuda_3D<<<grid, block>>>(devp, devrhs, deveps, devkappa, devdx, devdy, devdz, i3b, i3, i1, j1, k1, nx, ny, nz, dt);
+ }
 }
 
 extern "C" void ApplyBC_Cuda(__CUFLOAT *devp, __CUFLOAT *devbcw, __CUFLOAT *devbce, __CUFLOAT *devbcn, __CUFLOAT *devbcs, __CUFLOAT *devbcf, __CUFLOAT *devbcb,
