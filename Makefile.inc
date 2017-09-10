@@ -5,8 +5,8 @@ CFLAGS =-O3 -fno-math-errno -c -fPIC
 #CFLAGS =-O0 -g -fno-math-errno -c -fPIC
 #
 # NVIDIA CUDA COMPILER ######
-NVCC=nvcc -ccbin $(CC)
-NVCCFLAGS=-O3 -m32 -Xcompiler -mfloat-abi=hard -gencode arch=compute_32,code=sm_32 --use_fast_math -c
+NVCC=nvcc
+NVCCFLAGS=-O3 -m32 -Xcompiler -mfloat-abi=hard -gencode arch=compute_32,code=sm_32 -ccbin $(CC) --use_fast_math -c
 CUINCLUDES+=-I/usr/local/cuda/samples/common/inc
 #############################
 #---INTEL

@@ -19,7 +19,7 @@ chest : $(EXE)
 
 ches.o :  multigrid.o
 multigrid.o : mgutil.o CUmgutil.o $(HEADS)
-CUmgutil.o : mgutil/mgkernels.cu
+CUmgutil.o : mgutil/mgkernels.cu mgutil/bckernels.cu
 multigrid.F90: mgutil/multigrid_bc.src $(ROOT)/parser/parser_macro1.src mgutil/mg_resout.src \
                mgutil/GS.src mgutil/Jacobi.src mgutil/residual.src mgutil/coarsen.src mgutil/refine.src\
                state/bcutil/bc_util.src

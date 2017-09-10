@@ -1,6 +1,8 @@
 
 #include <helper_cuda.h>
 #include "mgkernels.cu"
+#include "bckernels.cu"
+
 
 extern "C" void AllocDevMem(__CUFLOAT **p, __CINT n) {
 // note that p is a double pointer, so that we do not have to take its address
@@ -21,22 +23,80 @@ extern "C" void CopyHostToDevice(__CFLOAT *hostp, __CUFLOAT *devp, __CINT n){
 extern "C" void CopyDeviceToHost(__CFLOAT *hostp, __CUFLOAT *devp, __CINT n){
  checkCudaErrors(cudaMemcpy(hostp, devp, sizeof(__CUFLOAT)*n, cudaMemcpyDeviceToHost));
 }
-
-extern "C" void GaussSeidel_Cuda(__CUFLOAT *devp, __CUFLOAT *devrhs, __CUFLOAT *deveps, __CUFLOAT *devkappa, __CUFLOAT *devdx, __CUFLOAT *devdy, __CUFLOAT *devdz,
-                                 __CINT i3b, __CINT i3, __CINT i1, __CINT j1, __CINT k1, __CINT nx, __CINT ny, __CINT nz, __CFLOAT dt, int8_t i2d) {
+//=========================================================================================================================================================================//
+#define _NBLK(N,n) (N)/(n) + ( (N) % (n) > 0 )
+extern "C" void GaussSeidel_Cuda(__CUFLOAT *devp, __CUFLOAT *devrhs, __CUFLOAT *deveps, __CUFLOAT *devkappa, __CUFLOAT *devoodx, __CUFLOAT *devoody, __CUFLOAT *devoodz,
+                                 const __CINT i3b, const __CINT i3, const __CINT i1, const __CINT j1, const __CINT k1, const __CINT nx, const __CINT ny, const __CINT nz, 
+                                 const __CFLOAT dt, const int8_t i2d) {
 
  int nnx=nx-2; // inner points
  int nny=ny-2;
 //
  if (!i2d) {
   dim3 block(_BSIZE_X, _BSIZE_Y);
-  dim3 grid( nnx / (_SX*_BSIZE_X) + ( nnx % (_SX*_BSIZE_X) > 0 ), nny / (_SY*_BSIZE_Y) + ( nnx % (_SY*_BSIZE_Y) > 0 ));
+//  dim3 grid( nnx / (_SX*_BSIZE_X) + ( nnx % (_SX*_BSIZE_X) > 0 ), nny / (_SY*_BSIZE_Y) + ( nnx % (_SY*_BSIZE_Y) > 0 ));
+  dim3 grid( _NBLK(nnx,_SX*_BSIZE_X) , _NBLK(nny,_SY*_BSIZE_Y));
 //
-  Gauss_Seidel_Cuda_3D<<<grid, block>>>(devp, devrhs, deveps, devkappa, devdx, devdy, devdz, i3b, i3, i1, j1, k1, nx, ny, nz, dt);
+  Gauss_Seidel_Cuda_3D<<<grid, block>>>(devp, devrhs, deveps, devkappa, devoodx, devoody, devoodz, i3b, i3, i1, j1, k1, nx, ny, nz, dt, _REDBLACK);
+//  Gauss_Seidel_Cuda_3D<<<grid, block>>>(devp, devrhs, deveps, devkappa, devoodx, devoody, devoodz, i3b, i3, i1, j1, k1, nx, ny, nz, dt, _RED);
+//  Gauss_Seidel_Cuda_3D<<<grid, block>>>(devp, devrhs, deveps, devkappa, devoodx, devoody, devoodz, i3b, i3, i1, j1, k1, nx, ny, nz, dt, _BLACK);
  }
 }
 
-extern "C" void ApplyBC_Cuda(__CUFLOAT *devp, __CUFLOAT *devbcw, __CUFLOAT *devbce, __CUFLOAT *devbcn, __CUFLOAT *devbcs, __CUFLOAT *devbcf, __CUFLOAT *devbcb,
-                                 __CINT i3b, __CINT i2, __CINT j2, __CINT k2, __CINT nx, __CINT ny, __CINT nz, __CINT *bc_type, __CFLOAT *bc_wgt, int8_t i2d) {
+extern "C" const int bcwest, bceast, bcnorth, bcsouth, bcback, bcfront ; // from FORTRAN
 
+extern "C" void ApplyBC_Cuda(__CUFLOAT *devp, __CUFLOAT *devbcw, __CUFLOAT *devbce, __CUFLOAT *devbcn, __CUFLOAT *devbcs, __CUFLOAT *devbcf, __CUFLOAT *devbcb,
+                             const __CINT i3b, const __CINT i2, const __CINT j2, const __CINT k2, const __CINT nx, const __CINT ny, const __CINT nz, 
+                             __CINT *bc_type, __CFLOAT *bc_wgt, const int8_t i2d) {
+
+ int nnx=nx-2; // inner points
+ int nny=ny-2;
+ int nnz=nz-2;
+ dim3 block, grid ;
+ if (!i2d) {
+// x
+  block.x=1;
+  block.y=_BCDIM_Y;
+  block.z=_BCDIM_Z;
+  grid.x =1;
+  grid.y =_NBLK(nny,_BCDIM_Y);
+  grid.z =_NBLK(nnz,_BCDIM_Z);
+//
+  Apply_BC_Cuda_3D<<<grid, block>>>(devp, devbcw, i3b, i2, nx, ny, nz, bcwest, bc_type[bcwest-1], bc_wgt[bcwest-1]);
+  Apply_BC_Cuda_3D<<<grid, block>>>(devp, devbce, i3b, i2, nx, ny, nz, bceast, bc_type[bceast-1], bc_wgt[bceast-1]);
+// y
+  block.x=_BCDIM_X;
+  block.y=1;
+//  block.z=_BCDIM_Z;
+  grid.x =_NBLK(nnx,_BCDIM_X);
+  grid.y =1;
+//  grid.z =_NBLK(nnz,_BCDIM_Z);
+//
+  Apply_BC_Cuda_3D<<<grid, block>>>(devp, devbcn, i3b, j2, nx, ny, nz, bcnorth, bc_type[bcnorth-1], bc_wgt[bcnorth-1]);
+  Apply_BC_Cuda_3D<<<grid, block>>>(devp, devbcs, i3b, j2, nx, ny, nz, bcsouth, bc_type[bcsouth-1], bc_wgt[bcsouth-1]);
+// z
+//  block.x=_BCDIM_X;
+  block.y=_BCDIM_Y;
+  block.z=1;
+//  grid.x =_NBLK(nnx,_BCDIM_X);
+  grid.y =_NBLK(nny,_BCDIM_Y);
+  grid.z =1;
+//
+  Apply_BC_Cuda_3D<<<grid, block>>>(devp, devbcf, i3b, k2, nx, ny, nz, bcfront, bc_type[bcfront-1], bc_wgt[bcfront-1]);
+  Apply_BC_Cuda_3D<<<grid, block>>>(devp, devbcb, i3b, k2, nx, ny, nz, bcback,  bc_type[bcback-1],  bc_wgt[bcback-1]);
+ }
+/* translated from fortran  code
+  call apply_bc_dnp(allp(i3b),allwest (i2),nnx, nny, nnz, west,  bc_type(west),  bc_wgt(west,level),  q2d)
+  call apply_bc_dnp(allp(i3b),alleast (i2),nnx, nny, nnz, east,  bc_type(east),  bc_wgt(east,level),  q2d)
+  call apply_bc_dnp(allp(i3b),allsouth(j2),nnx, nny, nnz, south, bc_type(south), bc_wgt(south,level), q2d) 
+  call apply_bc_dnp(allp(i3b),allnorth(j2),nnx, nny, nnz, north, bc_type(north), bc_wgt(north,level), q2d)
+  if (.not.q2d) then 
+   call apply_bc_dnp(allp(i3b),allfront(k2),nnx, nny, nnz, front, bc_type(front), bc_wgt(front,level), q2d)
+   call apply_bc_dnp(allp(i3b),allback (k2),nnx, nny, nnz, back,  bc_type(back),  bc_wgt(back,level),  q2d)
+  endif
+*/
 }
+
+
+
+

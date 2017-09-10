@@ -2,10 +2,10 @@
 % close all
 
 
-q3d=false;
+q3d=true;
 ascii=true;
 
-gridname='xy_test.xyz';
+gridname='xyz_test.xyz';
 dataname='solution.dat';
 
 if ~exist('read')
@@ -29,7 +29,7 @@ ny2=floor(dat(2));
 if (q3d)
  nz=floor(grd(3));
  nz2=floor(dat(3));
- i=4; i2=4;
+ i=4; i2=8;
 else
  nz=1;
  nz2=1; 
@@ -43,6 +43,13 @@ end
 %
 %
 if (q3d)
+% grid
+% in case the grid is full as in plot3d
+ x=grd(i:nx+i-1);
+ y=grd(nx*ny*nz+i:nx:nx*ny*nz+nx*ny+i-1);
+ z=grd(2*nx*ny*nz+i:ny*ny:end);
+%
+ d=reshape(dat(i2:nx*ny*nz+i2-1), nx,ny,nz);
 else
 % grid
 % x=reshape(grd(i:nx*ny+i-1),  nx,ny); xx=x(:,1); % in case the grid is full
@@ -53,7 +60,10 @@ else
  d=reshape(dat(i2:nx*ny+i2-1), nx,ny);
 end
 
-%pcolor(x,y,d); shading flat; colorbar; box on
-meshc(x,y,d); shading flat; colorbar; box on
+% show slice
+kz=84;
+mesh(x,y,d(:,:,94)); shading flat; colorbar; box on
+%pcolor(x,y,d(:,:,94)); shading flat; colorbar; box on
+%meshc(x,y,d); shading flat; colorbar; box on
 
 

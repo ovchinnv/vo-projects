@@ -53,7 +53,7 @@
                                        alleast, allwest, allsouth, allnorth, allfront, allback ! arrays that store boundary conditions
 #ifdef __CUDA
 ! CUDA arrays: NOTE that these are _device_ pointers ; they are ONLY addressible from the device
- type(C_PTR) :: CUdxall, CUdyall, CUdzall, CUallp, CUalleps, CUallkappa, CUallrhs, CUalleast, CUallwest, CUallsouth, CUallnorth, CUallfront, CUallback
+ type(C_PTR) :: CUodxall, CUodyall, CUodzall, CUallp, CUalleps, CUallkappa, CUallrhs, CUalleast, CUallwest, CUallsouth, CUallnorth, CUallfront, CUallback
  bool, save :: qusecuda=.false.;
 #endif
 !
@@ -430,7 +430,7 @@
 !   write(0,*) '***********'
 !   write(0,*) dyall-dzall
 !
-  odxall=1d0/dxall; odyall=1d0/dyall; odzall=1d0/dzall;
+  odxall=one/dxall; odyall=one/dyall; odzall=one/dzall;
 !
   deallocate(x0,y0,z0,x1,y1,z1,dx0,dy0,dz0)
 !*************************************** FINISHED WITH METRICS *******************************/
@@ -484,9 +484,9 @@
 #endif
 ! Init CUDA ARRAYS
 ! metrics:
-  __ALLOC_DEV_MEM(dxall)
-  __ALLOC_DEV_MEM(dyall)
-  __ALLOC_DEV_MEM(dzall)
+  __ALLOC_DEV_MEM(odxall)
+  __ALLOC_DEV_MEM(odyall)
+  __ALLOC_DEV_MEM(odzall)
 !3D arrays
   __ALLOC_DEV_MEM(allp)
   __ALLOC_DEV_MEM(alleps)
@@ -508,14 +508,17 @@
   mgtime=timer_stamp(cumemtimer)
 #endif
 ! metrics:
-  __COPY_HOST_DEVICE(dxall)
-  __COPY_HOST_DEVICE(dyall)
-  __COPY_HOST_DEVICE(dzall)
+  __COPY_HOST_DEVICE(odxall)
+  __COPY_HOST_DEVICE(odyall)
+  __COPY_HOST_DEVICE(odzall)
 !3D arrays
-  __COPY_HOST_DEVICE(allp)
+!  __COPY_HOST_DEVICE(allp)
+  call CopyHostToDevice_C(allp, CUallp, nx*ny*nz) ! should only need to copy the finest grid
   __COPY_HOST_DEVICE(alleps)
   __COPY_HOST_DEVICE(allkappa)
-  __COPY_HOST_DEVICE(allrhs)
+! NOTE : NOT SCALING RHS BY o METRIC HERE ! THIS IS A DIFFERENCE BETWEEN CPU AND CUDA VERSIONS
+!  __COPY_HOST_DEVICE(allrhs)
+  call CopyHostToDevice_C(allrhs, CUallrhs, (nx-2)*(ny-2)*(nz-2)) ! should only need to copy the finest grid
 ! BC arrays
   __COPY_HOST_DEVICE(alleast)
   __COPY_HOST_DEVICE(allwest)
@@ -556,9 +559,9 @@
     mgtime=timer_stamp(cumemtimer)
 #endif
 ! metrics:
-    __FREE_DEV_MEM(dxall)
-    __FREE_DEV_MEM(dyall)
-    __FREE_DEV_MEM(dzall)
+    __FREE_DEV_MEM(odxall)
+    __FREE_DEV_MEM(odyall)
+    __FREE_DEV_MEM(odzall)
 !3D arrays
     __FREE_DEV_MEM(allp)
     __FREE_DEV_MEM(alleps)
@@ -632,7 +635,7 @@
 !  interpolate: 
    if (update_kappa) call coarsen(allkappa(iold), allkappa(inew),nnx,nny,nnz, i2d, 0)
 !
-   if (update_eps) then 
+   if (update_eps) then
 !write(0,*) 'attemp to coarsen eps at l',l, ioldb, inewb
     call coarsen(alleps(ioldb),  alleps(inewb), nnx,nny,nnz, i2d, 1) ! boundary offset
 !write(0,*) 'eps coarsened at l',l
@@ -801,8 +804,11 @@
   i3=1;  i3b=1;
 !
 ! scale rhs by o metric
-  nall=nnx*nny*nnz
+  nall=nnx*nny*nnz ; 
   do k=i3, i3-1+nall; allrhs(k)=allrhs(k)/allo(k); enddo
+!#ifdef __CUDA
+!  if (qusecuda) call CopyHostToDevice_C(allrhs, CUallrhs, (nx-2)*(ny-2)*(nz-2)) ! copy scaled rhs (finest grid only)
+!#endif
   icycle=0;
 ! update bc
   level=1
@@ -960,8 +966,8 @@
 #ifdef __CUDA
        case(GaussSeidel_Cuda_);
        do k=1,j
-        call GaussSeidel_Cuda(CUallp,CUallrhs,CUalleps,CUallkappa,CUdxall,CUdyall,CUdzall,i3b,i3,i1,j1,k1,nnx+2,nny+2,nnz+2,omega,i2d)
-!        call ApplyBC_Cuda(CUallp,CUallwest,CUalleast,CUallnorth,CUallsouth,CUallfront,CUallback,i3b,i2,j2,k2,nnx+2,nny+2,nnz+2,bc_type,bc_wgt(:,level),i2d)
+        call GaussSeidel_Cuda(CUallp,CUallrhs,CUalleps,CUallkappa,CUodxall,CUodyall,CUodzall,i3b,i3,i1,j1,k1,nnx+2,nny+2,nnz+2,omega,i2d)
+        call ApplyBC_Cuda(CUallp,CUallwest,CUalleast,CUallnorth,CUallsouth,CUallfront,CUallback,i3b,i2,j2,k2,nnx+2,nny+2,nnz+2,bc_type,bc_wgt(:,level),i2d)
        enddo
 #endif /* __CUDA */
 #endif /* __BINDC */
@@ -1047,8 +1053,10 @@
 #ifdef __TIMER
  if (qusecuda) mgtime=timer_stamp(cumemtimer)
 #endif /*  __TIMER */
- if (qusecuda)&
-&  call CopyDeviceToHost_C(allp, CUallp, nx*ny*nz) ; ! note that we are copying _ONLY_ the outer grid layer because we are outside of the cycle ; this may change
+ if (qusecuda) then
+  __CUDBG('copying solution from device to host')
+  call CopyDeviceToHost_C(allp, CUallp, nx*ny*nz) ; ! note that we are copying _ONLY_ the outer grid layer because we are outside of the cycle ; this may change
+ endif
 #endif /*  CUDA */
 #ifdef __TIMER
 #ifdef __CUDA

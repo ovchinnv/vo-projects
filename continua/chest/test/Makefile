@@ -39,7 +39,7 @@ SCRATCH=\
 	test.F90\
 	compare.F90
 
-all : print $(TESTS)
+#all : print $(TESTS)
 $(TESTS) : force_look
 	if [ ! -f ../ches ]; then ln -s ../../driver/muphen ../ches ; fi
 	./$@ "$(FC)" "$(FFLAGS)" "$(DEFS)">& $@.out ; echo " $@ : " `grep " TEST " $@.out`

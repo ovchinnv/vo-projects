@@ -1,5 +1,5 @@
-#define qred   (which==_RED   || which==_REDBLACK)
-#define qblack (which==_BLACK || which==_REDBLACK)
+#define qred   1 //(which==_RED   || which==_REDBLACK)
+#define qblack 1 //(which==_BLACK || which==_REDBLACK)
 
 
 // Red-Black Gauss Seidel CUDA kernel
@@ -34,6 +34,7 @@
 //registers 17 + 7 = 22
  float w, e, s, n, b, f, o ;// FD stencil coefficients
 //registers 22 + 1 = 23
+ int ind, indl ;// index
 // index maps : NOTE that they are zero-based (not one-based as in FORTRAN)
 // global memory:
 #define IOG(i,j,k)  ( i3b - 1 + (k)*(nx*ny)       + (j)*(nx)   + (i) )
@@ -42,11 +43,17 @@
 #define IOL(i,j)  ((j)*(_SX*_BSIZE_X+2) + (i))
 #define IIL(i,j)  ((j)*(_SX*_BSIZE_X)   + (i))
 
- pfront0=devp[IOG(ix+tx+1,iy+1,0)] ; efront0=deveps[IOG(ix+tx+1,iy+1,0)];       // red
- pfront1=devp[IOG(ix+tx+2,iy+1,0)] ; efront1=deveps[IOG(ix+tx+2,iy+1,0)];       // black
+ ind=IOG(ix+tx+1,iy+1,0) ;
+ pfront0=devp[ind]   ; efront0=deveps[ind];       // red
 
- pcur0=devp[IOG(ix+tx+1,iy+1,1)] ; ecur0=deveps[IOG(ix+tx+1,iy+1,1)];
- pcur1=devp[IOG(ix+tx+2,iy+1,1)] ; ecur1=deveps[IOG(ix+tx+2,iy+1,1)];
+ ind++; ;
+ pfront1=devp[ind]   ; efront1=deveps[ind];       // black
+
+ ind=IOG(ix+tx+1,iy+1,1) ;
+ pcur0=devp[ind] ; ecur0=deveps[ind];
+
+ ind++;
+ pcur1=devp[ind] ; ecur1=deveps[ind];
 
 // read metrics
 // note that it may be better to read all metrics into registers
@@ -98,10 +105,11 @@
  for (int k=1 ; k<nz-1 ; k++) {
 // might not be optimal due to striped access:
 // populate slice
-  p   [ IOL(2*tx+1,ty+1) ] = pcur0;
-  p   [ IOL(2*tx+2,ty+1) ] = pcur1;
-  eps [ IOL(2*tx+1,ty+1) ] = ecur0;
-  eps [ IOL(2*tx+2,ty+1) ] = ecur1;
+  ind=IOL(2*tx+1,ty+1);
+  p   [ind] = pcur0;
+  eps [ind] = ecur0;
+  p   [++ind] = pcur1;
+  eps [ind] = ecur1;
 // update z-metric (registers) ; might convert to shmem
   oodzcenback=devoodz[k];
   oodzcor=devoodz[k-1+nz-1];
@@ -143,53 +151,55 @@
   kappa [ IIL(tx,         ty) ] = devkappa [ IIG(ix,         iy,k-1) ];
   kappa [ IIL(tx+_BSIZE_X,ty) ] = devkappa [ IIG(ix+_BSIZE_X,iy,k-1) ];
 // load next p & eps slices
-  pback0 = devp[IOG(ix+tx+1,iy+1,k+1)] ; eback0 = deveps[IOG(ix+tx+1,iy+1,k+1)];    // red
-  pback1 = devp[IOG(ix+tx+2,iy+1,k+1)] ; eback1 = deveps[IOG(ix+tx+2,iy+1,k+1)];    // black
+  ind=IOG(ix+tx+1,iy+1,k+1) ;
+  pback0 = devp[ind] ; eback0 = deveps[ind];    // red
+  ind++;
+  pback1 = devp[ind] ; eback1 = deveps[ind];    // black
 
 // compute new value for p
 // (1) red
-  if (qred){
+  ind=IOG(ix+tx+1,iy+1,k) ;
+  indl=IOL(2*tx+1,   ty+1) ;
+//  if (qred){
   __syncthreads();
-  w = ( eps[IOL(2*tx,   ty+1)] + ecur0 ) * ( oodxcor[2*tx] * oodxcen[2*tx] );
-  e = ( eps[IOL(2*tx+2, ty+1)] + ecur0 ) * ( oodxcor[2*tx] * oodxcen[2*tx+1] );
-  s = ( eps[IOL(2*tx+1, ty)]   + ecur0 ) * ( oodycor[ty] * oodycen[ty] );
-  n = ( eps[IOL(2*tx+1, ty+2)] + ecur0 ) * ( oodycor[ty] * oodycen[ty+1] );
-  f = ( efront0 + ecur0 )                * ( oodzcor * oodzcenfront );
-  b = ( eback0  + ecur0 )                * ( oodzcor * oodzcenback );
+  w = ( eps[indl-1] + ecur0 ) * ( oodxcor[2*tx] * oodxcen[2*tx] );
+  e = ( eps[indl+1] + ecur0 ) * ( oodxcor[2*tx] * oodxcen[2*tx+1] );
+  s = ( eps[indl-(_SX*_BSIZE_X+2)] + ecur0 ) * ( oodycor[ty] * oodycen[ty] );
+  n = ( eps[indl+(_SX*_BSIZE_X+2)] + ecur0 ) * ( oodycor[ty] * oodycen[ty+1] );
+  f = ( efront0 + ecur0 )              * ( oodzcor * oodzcenfront );
+  b = ( eback0  + ecur0 )              * ( oodzcor * oodzcenback );
   o = - 0.5 * ( w + e + s + n + b + f ) + kappa[IIL(2*tx,ty)];
   o = 0.5 / o;
 // NOTE : RHS is not scaled by o in the CUDA kernels (at least not yet) ; this is a difference from CPU implementation
 //  pcur0 -= dt * ( pcur0 + o * ( w*p[IOL(2*tx,ty+1)] + e*p[IOL(2*tx+2,ty+1)] + s*p[IOL(2*tx+1,ty)] + n*p[IOL(2*tx+1,ty+2)] + f*pfront[0] + b*pback0 - 2.0f*rhs[IIL(2*tx,ty)] ) );
-  pcur0 -= dt * ( pcur0 + o * ( w*p[IOL(2*tx,ty+1)] + e*p[IOL(2*tx+2,ty+1)] + s*p[IOL(2*tx+1,ty)] + n*p[IOL(2*tx+1,ty+2)] + f*pfront0 + b*pback0
-//                              ) - rhs[IIL(2*tx,ty)] );
-                                  -2.0f*rhs[IIL(2*tx,ty)] ) );
+  pcur0 -= dt * ( pcur0 + o * ( w*p[indl-1] + e*p[indl+1] + s*p[indl-(_SX*_BSIZE_X+2)] + n*p[indl+(_SX*_BSIZE_X+2)] + f*pfront0 + b*pback0  ) - rhs[IIL(2*tx,ty)] );
 // upload to device :
-  devp[IOG(ix+tx+1,iy+1,k)]=pcur0;
-  if (qblack)
-   p[IOL(2*tx+1,ty+1)] = pcur0; // upload back to shmem
-  }
-  if (qblack) {
+  devp[ind]=pcur0;
+//  if (qblack)
+   p[indl] = pcur0; // upload back to shmem
+//  }
+//  if (qblack) {
 // (2) black
+  ind++;
+  indl++;
   __syncthreads();
-  w = ( eps[IOL(2*tx+1, ty+1)] + ecur1 ) * ( oodxcor[2*tx+1] * oodxcen[2*tx+1] );
-  e = ( eps[IOL(2*tx+3, ty+1)] + ecur1 ) * ( oodxcor[2*tx+1] * oodxcen[2*tx+2] );
-  s = ( eps[IOL(2*tx+2, ty)]   + ecur1 ) * ( oodycor[ty]   * oodycen[ty] );
-  n = ( eps[IOL(2*tx+2, ty+2)] + ecur1 ) * ( oodycor[ty]   * oodycen[ty+1] );
-  f = ( efront1 + ecur1 )                * ( oodzcor * oodzcenfront );
-  b = ( eback1  + ecur1 )                * ( oodzcor * oodzcenback );
+  w = ( eps[indl-1] + ecur1 ) * ( oodxcor[2*tx+1] * oodxcen[2*tx+1] );
+  e = ( eps[indl+1] + ecur1 ) * ( oodxcor[2*tx+1] * oodxcen[2*tx+2] );
+  s = ( eps[indl-(_SX*_BSIZE_X+2)] + ecur1 ) * ( oodycor[ty]   * oodycen[ty] );
+  n = ( eps[indl+(_SX*_BSIZE_X+2)] + ecur1 ) * ( oodycor[ty]   * oodycen[ty+1] );
+  f = ( efront1 + ecur1 )              * ( oodzcor * oodzcenfront );
+  b = ( eback1  + ecur1 )              * ( oodzcor * oodzcenback );
   o = - 0.5 * ( w + e + s + n + b + f ) + kappa[IIL(2*tx+1,ty)];
   o = 0.5 / o;
 //  pcur1 -= dt * ( pcur1 + d * ( w*p[IOL(2*tx+1,ty+1)] + e*p[IOL(2*tx+3,ty+1)] + s*p[IOL(2*tx+2,ty)] + n * p[IOL(2*tx+2,ty+2)] + b*pbot[1] + f*ptop[1] - rhs[IIL(2*tx+1,ty)] ))
 // upload to device
-//  devp[IOG(ix+tx+2,iy+1,k)]= pcur1 - dt * ( pcur1 + o * ( w*p[IOL(2*tx+1,ty+1)] + e*p[IOL(2*tx+3,ty+1)] + s*p[IOL(2*tx+2,ty)] + n*p[IOL(2*tx+2,ty+2)] + f*pfront[1] + b*pback1
+//  devp[ind]= pcur1 - dt * ( pcur1 + o * ( w*p[IOL(2*tx+1,ty+1)] + e*p[IOL(2*tx+3,ty+1)] + s*p[IOL(2*tx+2,ty)] + n*p[IOL(2*tx+2,ty+2)] + f*pfront[1] + b*pback1
 //                                             - 2.0f*rhs[IIL(2*tx+1,ty)] ) );
-  devp[IOG(ix+tx+2,iy+1,k)]= pcur1 - dt * ( pcur1 + o * ( w*p[IOL(2*tx+1,ty+1)] + e*p[IOL(2*tx+3,ty+1)] + s*p[IOL(2*tx+2,ty)] + n*p[IOL(2*tx+2,ty+2)] + f*pfront1 + b*pback1
-//                                                         ) - rhs[IIL(2*tx+1,ty)] );
-                                                             - 2.0f*rhs[IIL(2*tx+1,ty)] ) ); // if rhs is not scaled by o
+  devp[ind]= pcur1 - dt * ( pcur1 + o * ( w*p[indl-1] + e*p[indl+1] + s*p[indl-(_SX*_BSIZE_X+2)] + n*p[indl+(_SX*_BSIZE_X+2)] + f*pfront1 + b*pback1  ) - rhs[IIL(2*tx+1,ty)] );
+  __syncthreads() ; // This is needed but I do not know why !
 // no need to upload to shmem because we are done with this slice
 //  devp[IOG(ix+2,iy+1,k)]=pcur1;
-  }
-  __syncthreads() ; // this is needed but I do not know why !
+//  }
 // move forward in z-direction
   pfront0=pcur0;  efront0=ecur0;
   pcur0  =pback0; ecur0  =eback0;
