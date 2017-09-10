@@ -81,7 +81,7 @@
   oodycor[ty+_BSIZE_Y*tx]     = devoody[j1 - 1 + ny-1 + iy + _BSIZE_Y*tx];
  }
 //
-// __syncthreads(); // need dxcor/dycor updated
+ __syncthreads(); // need dxcor/dycor updated
 // z - metric
  oodzcenfront=devoodz[0];
 // single missing elements in dxcen & dycen (assuming _SX = 2)
@@ -94,16 +94,15 @@
    oodycen[_BSIZE_Y] = 2.0 / ( 1.0/oodycor[_BSIZE_Y-1]+1.0/oodycor[_BSIZE_Y-(_SY<2)] ); // ( _SY<2 ) avoids static memory check warnings
   }
 //
-//  if (_SX<2) {  // read from gmem
-   oodxcen[_BSIZE_X] = devoodx[i1 - 1 + (ix - tx) + _BSIZE_X];
-//  } else {
-//   oodxcen[_BSIZE_X] = 2.0 / ( 1.0/oodxcor[_BSIZE_X-1]+1.0/oodxcor[_BSIZE_X-(_SX<2)] );
-//  }
+  if (_SX<2) {  // read from gmem
+//   oodxcen[_BSIZE_X] = devoodx[i1 - 1 + (ix - tx) + _BSIZE_X];
+  } else {
+   oodxcen[_BSIZE_X] = 2.0 / ( 1.0/oodxcor[_BSIZE_X-1]+1.0/oodxcor[_BSIZE_X-(_SX<2)] );
+  }
  }
 //
 // loop over all z-slices
  for (int k=1 ; k<nz-1 ; k++) {
- __syncthreads(); // This is necessary but I do not know why, since there are no thread-dependend memory access reads between here and the next syncthreads
 // might not be optimal due to striped access:
 // populate slice
   ind=IOL(2*tx+1,ty+1);
@@ -206,6 +205,7 @@
   devp[ind]=pcur[_DX];
 //   p[indl] = pcur[_DX]; // upload back to shmem
 //  }
+  __syncthreads(); // This is necessary but I do not know why, since there are no thread-dependend memory access reads between here and the next syncthreads !
 // move forward in z-direction
   pfront[0]=pcur[0];  efront[0]=ecur[0];
   pcur[0]  =pback[0]; ecur[0]  =eback[0];

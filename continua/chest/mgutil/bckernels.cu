@@ -99,7 +99,7 @@
         } else if (bctype==bcperiodic ) {
          dk*=(nz-2);     dj*=(ny-2);    di*=(nx-2); // wrap around
 //         uval=devu[IOG(ix+ib+di,iy+jb+dj,iz+kb+dk)];
-//         devu[IOG(ix+ib,iy+jb,iz+kb)] = uval ;
+         devu[IOG(ix+ib,iy+jb,iz+kb)] = uval ;
 //***************************
       } // bctype
 //***********************************************************************************
