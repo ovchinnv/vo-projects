@@ -104,11 +104,17 @@
       } // bctype
 //***********************************************************************************
 //      __syncthreads(); // should not be needed
+#undef gval
+#undef uval
  }
 
 
 //combined 2-bc kernel
+#ifndef __BCTEX
  __global__ void  Apply_BC_Cuda_3Dx2(__CUFLOAT *devu, __CUFLOAT *devg, __CUFLOAT *devg2, const __CINT i3b, const __CINT ind2, const __CINT nx, const __CINT ny, const __CINT nz,
+#else
+ __global__ void  Apply_BC_Cuda_3Dx2(__CUFLOAT *devu, const __CINT i3b, const __CINT ind2, const __CINT nx, const __CINT ny, const __CINT nz,
+#endif
                                    const __CINT boundary, const __CINT boundary2, const __CINT bctype, const __CINT bctype2, const __CFLOAT wgt, const __CUFLOAT wgt2) {
 // translated from FORTRAN apply_bc_dnp
 // g has inner points only ; u of course has ghost points
@@ -125,6 +131,9 @@
       int ib, ie, jb, je, kb, ke ;
       int di, dj, dk ;
       int dir ;
+#ifdef __BCTEX
+      float gval = 0.f;
+#endif
 //
 //    preset indices: zero-based rather than one-based as in FORTRAN
 //
@@ -135,33 +144,44 @@
       if (boundary==bcleft) {
 
          ib--; ie=ib; di=+1; dj=0; dk=0; dir=di;
-
+#ifdef __BCTEX
+         gval=tex1Dfetch(texbcw, I2D(ix,iy,iz,ie-ib+1,je-jb+1,ke-kb+1));
+#endif
         } else if (boundary==bcright) {
 
          ie++; ib=ie; di=-1; dj=0; dk=0; dir=di;
-
+#ifdef __BCTEX
+         gval=tex1Dfetch(texbce, I2D(ix,iy,iz,ie-ib+1,je-jb+1,ke-kb+1));
+#endif
         } else if (boundary==bcbottom) {
 
          jb--; je=jb; dj=+1; di=0; dk=0; dir=dj;
-
+#ifdef __BCTEX
+         gval=tex1Dfetch(texbcs, I2D(ix,iy,iz,ie-ib+1,je-jb+1,ke-kb+1));
+#endif
         } else if (boundary==bctop) {
 
          je++; jb=je; dj=-1; di=0; dk=0; dir=dj;
-
+#ifdef __BCTEX
+         gval=tex1Dfetch(texbcn, I2D(ix,iy,iz,ie-ib+1,je-jb+1,ke-kb+1));
+#endif
         } else if (boundary==bcfront) {
 
          kb--; ke=kb; dk=+1; di=0; dj=0; dir=dk;
-
+#ifdef __BCTEX
+         gval=tex1Dfetch(texbcf, I2D(ix,iy,iz,ie-ib+1,je-jb+1,ke-kb+1));
+#endif
         } else if (boundary==bcback) {
 
          ke++; kb=ke; dk=-1; di=0; dj=0; dir=dk;
-
-        } else {
-
-         ke=0; // set invalid indices so that no loops are executed; better than early return
+#ifdef __BCTEX
+         gval=tex1Dfetch(texbcb, I2D(ix,iy,iz,ie-ib+1,je-jb+1,ke-kb+1));
+#endif
       }
 //************************************
+#ifndef __BCTEX
 #define         gval devg[I2D(ix,iy,iz,ie-ib+1,je-jb+1,ke-kb+1)]
+#endif
 #define         uval devu[IOG(ix+ib+di,iy+jb+dj,iz+kb+dk)]
       if (bctype==bcdirichlet || bctype==bcdirichletg) {
          devu[IOG(ix+ib,iy+jb,iz+kb)] = uval + wgt * (gval - uval);
@@ -183,34 +203,48 @@
       if (boundary2==bcleft) {
 
          ib--; ie=ib; di=+1; dj=0; dk=0; dir=di;
-
+#ifdef __BCTEX
+         gval=tex1Dfetch(texbcw, I2D(ix,iy,iz,ie-ib+1,je-jb+1,ke-kb+1));
+#endif
         } else if (boundary2==bcright) {
 
          ie++; ib=ie; di=-1; dj=0; dk=0; dir=di;
-
+#ifdef __BCTEX
+         gval=tex1Dfetch(texbce, I2D(ix,iy,iz,ie-ib+1,je-jb+1,ke-kb+1));
+#endif
         } else if (boundary2==bcbottom) {
 
          jb--; je=jb; dj=+1; di=0; dk=0; dir=dj;
-
+#ifdef __BCTEX
+         gval=tex1Dfetch(texbcs, I2D(ix,iy,iz,ie-ib+1,je-jb+1,ke-kb+1));
+#endif
         } else if (boundary2==bctop) {
 
          je++; jb=je; dj=-1; di=0; dk=0; dir=dj;
-
+#ifdef __BCTEX
+         gval=tex1Dfetch(texbcn, I2D(ix,iy,iz,ie-ib+1,je-jb+1,ke-kb+1));
+#endif
         } else if (boundary2==bcfront) {
 
          kb--; ke=kb; dk=+1; di=0; dj=0; dir=dk;
-
+#ifdef __BCTEX
+         gval=tex1Dfetch(texbcf, I2D(ix,iy,iz,ie-ib+1,je-jb+1,ke-kb+1));
+#endif
         } else if (boundary2==bcback) {
 
          ke++; kb=ke; dk=-1; di=0; dj=0; dir=dk;
-
+#ifdef __BCTEX
+         gval=tex1Dfetch(texbcb, I2D(ix,iy,iz,ie-ib+1,je-jb+1,ke-kb+1));
+#endif
         } else {
 
-         ke=0; // set invalid indices so that no loops are executed; better than early return
+         gval=0.f;
       }
 //************************************
-#undef          gval
+#ifndef __BCTEX
+#undef gval
 #define         gval devg2[I2D(ix,iy,iz,ie-ib+1,je-jb+1,ke-kb+1)]
+#endif
       if (bctype2==bcdirichlet || bctype2==bcdirichletg) {
          devu[IOG(ix+ib,iy+jb,iz+kb)] = uval + wgt2 * (gval - uval);
 //***************************

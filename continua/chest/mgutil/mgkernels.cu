@@ -9,10 +9,13 @@
 
 // NOTE : for GS Red/Black read twice as many locations as there are threads, since the update will invilve two passes with half the memory accessed
 // 2D local sh/mem arrays
- __shared__ float p    [ ( _SX * _BSIZE_X + 2 ) * ( _SY * _BSIZE_Y + 2 ) ];
- __shared__ float rhs  [ ( _SX * _BSIZE_X     ) * ( _SY * _BSIZE_Y     ) ];
- __shared__ float eps  [ ( _SX * _BSIZE_X + 2 ) * ( _SY * _BSIZE_Y + 2 ) ];
- __shared__ float kappa[ ( _SX * _BSIZE_X     ) * ( _SY * _BSIZE_Y     ) ];
+#define __VOLATILE volatile
+ __VOLATILE __shared__ float p    [ ( _SX * _BSIZE_X + 2 ) * ( _SY * _BSIZE_Y + 2 ) ];
+#undef __VOLATILE
+#define __VOLATILE
+ __VOLATILE __shared__ float rhs  [ ( _SX * _BSIZE_X     ) * ( _SY * _BSIZE_Y     ) ];
+ __VOLATILE __shared__ float eps  [ ( _SX * _BSIZE_X + 2 ) * ( _SY * _BSIZE_Y + 2 ) ];
+ __VOLATILE __shared__ float kappa[ ( _SX * _BSIZE_X     ) * ( _SY * _BSIZE_Y     ) ];
 // registers -- 12
 // NOTE : tiles are shfted from "front" to "back"
  float pback[2], pfront[2], pcur[2]; // solution z-points ; 2 for red/black
@@ -81,9 +84,9 @@
   oodycor[ty+_BSIZE_Y*tx]     = devoody[j1 - 1 + ny-1 + iy + _BSIZE_Y*tx];
  }
 //
-// __syncthreads(); // need dxcor/dycor updated
 // z - metric
- oodzcenfront=devoodz[0];
+ oodzcenfront=devoodz[k1 - 1];
+ __syncthreads(); // need dxcor/dycor updated
 // single missing elements in dxcen & dycen (assuming _SX = 2)
 // NOTE : it might be better to prefetch z metrics into a shmem array;
  if ( !( (bool)ty || (bool)tx ) ) { // first (0th) thread reads
@@ -103,7 +106,7 @@
 //
 // loop over all z-slices
  for (int k=1 ; k<nz-1 ; k++) {
- __syncthreads(); // This is necessary but I do not know why, since there are no thread-dependend memory access reads between here and the next syncthreads
+  __syncthreads(); // This is necessary but I do not know why, since there are no thread-dependend memory access reads between here and the next syncthreads
 // might not be optimal due to striped access:
 // populate slice
   ind=IOL(2*tx+1,ty+1);
@@ -112,8 +115,8 @@
   p   [++ind] = pcur[1];
   eps [ind] = ecur[1];
 // update z-metric (registers) ; might convert to shmem
-  oodzcenback=devoodz[k];
-  oodzcor=devoodz[k-1+nz-1];
+  oodzcenback=devoodz[k1 - 1 + k];
+  oodzcor=devoodz[k1 - 1 + k - 1 + (nz-1) ];
 // load ghost points
 // there is enough work for 4*tx and 2*ty threads for y and x B/C, respectively
 // naive approach :

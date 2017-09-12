@@ -40,6 +40,18 @@ interface
  type(C_PTR) :: devp
  end subroutine FreeDevMem_C
 
+ subroutine BindTextures_C(bcw, bce, bcs, bcn, bcb, bcf, sx, sy, sz) bind(c,name='BindTextures')
+ use, intrinsic :: iso_c_binding
+ __IMPNONE
+ type(C_PTR), VALUE :: bcw, bce, bcs, bcn, bcb, bcf
+ __FCINT, VALUE :: sx, sy, sz
+ end subroutine BindTextures_C
+
+ subroutine UnbindTextures_C() bind(c,name='UnbindTextures')
+ use, intrinsic :: iso_c_binding
+ __IMPNONE
+ end subroutine UnbindTextures_C
+
  subroutine GaussSeidel_Cuda(CUallp,CUallrhs,CUalleps,CUallkappa,CUdxall,CUdyall,CUdzall,i3b,i3,i1,j1,k1,nx,ny,nz,omega,i2d) bind(c,name='GaussSeidel_Cuda')
  use, intrinsic :: iso_c_binding
  __IMPNONE

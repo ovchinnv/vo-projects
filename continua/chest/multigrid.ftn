@@ -53,7 +53,7 @@
                                        alleast, allwest, allsouth, allnorth, allfront, allback ! arrays that store boundary conditions
 #ifdef __CUDA
 ! CUDA arrays: NOTE that these are _device_ pointers ; they are ONLY addressible from the device
- type(C_PTR) :: CUodxall, CUodyall, CUodzall, CUallp, CUalleps, CUallkappa, CUallrhs, CUalleast, CUallwest, CUallsouth, CUallnorth, CUallfront, CUallback
+ type(C_PTR) :: CUodxall, CUodyall, CUodzall, CUres, CUallp, CUalleps, CUallkappa, CUallrhs, CUalleast, CUallwest, CUallsouth, CUallnorth, CUallfront, CUallback
  bool, save :: qusecuda=.false.;
 #endif
 !
@@ -488,6 +488,7 @@
   __ALLOC_DEV_MEM(odyall)
   __ALLOC_DEV_MEM(odzall)
 !3D arrays
+  __ALLOC_DEV_MEM(res)
   __ALLOC_DEV_MEM(allp)
   __ALLOC_DEV_MEM(alleps)
   __ALLOC_DEV_MEM(allkappa)
@@ -513,7 +514,7 @@
   __COPY_HOST_DEVICE(odzall)
 !3D arrays
 !  __COPY_HOST_DEVICE(allp)
-  call CopyHostToDevice_C(allp, CUallp, nx*ny*nz) ! should only need to copy the finest grid
+  call CopyHostToDevice_C(allp, CUallp, nx*ny*nz) ! should only need to copy the finest grid data
   __COPY_HOST_DEVICE(alleps)
   __COPY_HOST_DEVICE(allkappa)
 ! NOTE : NOT SCALING RHS BY o METRIC HERE ! THIS IS A DIFFERENCE BETWEEN CPU AND CUDA VERSIONS
@@ -526,6 +527,10 @@
   __COPY_HOST_DEVICE(allsouth)
   __COPY_HOST_DEVICE(allback)
   __COPY_HOST_DEVICE(allfront)
+#ifdef __BCTEX
+!  not needed
+!  call BindTextures_C(CUallwest, CUalleast, CUallsouth, CUallnorth, CUallback, CUallfront, len2Dyz, len2Dxz, len2Dxy);
+#endif
 #ifdef __TIMER
   __INCR(cumem_time,timer_stamp(cumemtimer));
 #endif
@@ -563,11 +568,16 @@
     __FREE_DEV_MEM(odyall)
     __FREE_DEV_MEM(odzall)
 !3D arrays
+    __FREE_DEV_MEM(res)
     __FREE_DEV_MEM(allp)
     __FREE_DEV_MEM(alleps)
     __FREE_DEV_MEM(allkappa)
     __FREE_DEV_MEM(allrhs)
 ! BC arrays
+#ifdef __BCTEX
+! not needed
+!  call UnbindTextures_C()
+#endif
     __FREE_DEV_MEM(alleast)
     __FREE_DEV_MEM(allwest)
     __FREE_DEV_MEM(allnorth)
@@ -1078,7 +1088,16 @@
 #endif /*  __CUDA  */
  mgtime=timer_stamp(mgtimer)
 #endif /*  __TIMER */
+#ifdef __CUDA
+ if (qusecuda) then
+   call Residual_Cuda(CUres,CUallp,CUallrhs,CUalleps,CUallkappa,CUodxall,CUodyall,CUodzall,i3b,i3,i1,j1,k1,nnx+2,nny+2,nnz+2,i2d)
+ else
+#endif
    call residual(res,allp,allrhs,allw,alle,alls,alln,allf,allb,allo,nx,ny,nz,q2d); qres=.false.; ! false means residual is already known
+#ifdef __CUDA
+ endif
+#endif
+ qres=.false.; ! false means residual is already known
 #ifdef __TIMER
  __INCR(residual_time,timer_stamp(mgtimer))
 #endif
