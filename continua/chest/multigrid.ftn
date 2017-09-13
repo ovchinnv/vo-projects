@@ -487,8 +487,6 @@
   __ALLOC_DEV_MEM(odxall)
   __ALLOC_DEV_MEM(odyall)
   __ALLOC_DEV_MEM(odzall)
-!3D arrays
-  __ALLOC_DEV_MEM(res)
   __ALLOC_DEV_MEM(allp)
   __ALLOC_DEV_MEM(alleps)
   __ALLOC_DEV_MEM(allkappa)
@@ -527,9 +525,8 @@
   __COPY_HOST_DEVICE(allsouth)
   __COPY_HOST_DEVICE(allback)
   __COPY_HOST_DEVICE(allfront)
-#ifdef __BCTEX
-!  not needed
-!  call BindTextures_C(CUallwest, CUalleast, CUallsouth, CUallnorth, CUallback, CUallfront, len2Dyz, len2Dxz, len2Dxy);
+#if defined(__BCTEX) || defined(__MGTEX)
+  call BindTextures_C(CUallrhs, CUallkappa, CUalleps, CUallwest, CUalleast, CUallsouth, CUallnorth, CUallback, CUallfront, len3D, len3Dbc, len2Dyz, len2Dxz, len2Dxy);
 #endif
 #ifdef __TIMER
   __INCR(cumem_time,timer_stamp(cumemtimer));
@@ -568,15 +565,13 @@
     __FREE_DEV_MEM(odyall)
     __FREE_DEV_MEM(odzall)
 !3D arrays
-    __FREE_DEV_MEM(res)
     __FREE_DEV_MEM(allp)
     __FREE_DEV_MEM(alleps)
     __FREE_DEV_MEM(allkappa)
     __FREE_DEV_MEM(allrhs)
 ! BC arrays
-#ifdef __BCTEX
-! not needed
-!  call UnbindTextures_C()
+#if defined(__BCTEX) || defined(__MGTEX)
+  call UnbindTextures_C()
 #endif
     __FREE_DEV_MEM(alleast)
     __FREE_DEV_MEM(allwest)
@@ -779,6 +774,17 @@
    return
   endif
 !
+#ifdef __CUDA
+  if (qusecuda) then
+#ifdef __TIMER
+  mgtime=timer_stamp(cumemtimer)
+#endif
+   __ALLOC_DEV_MEM(res)
+#ifdef __TIMER
+  __INCR(cumem_time, timer_stamp(cumemtimer))
+#endif
+  endif
+#endif
 ! allocate multigrid arrays  
 !  allocate(  allw(len3D),  alle(len3D),  alls(len3D),  alln(len3D),  allb(len3D),  allf(len3D),  allo(len3D)  )
 ! populate multigrid arrays 
@@ -1073,21 +1079,21 @@
 !***********************************************
    if (icycle.gt.convergence_skip_cycles) then
 ! check whether the solution is on the GPU
-#ifdef __CUDA
-#ifdef __TIMER
- if (qusecuda) mgtime=timer_stamp(cumemtimer)
-#endif /*  __TIMER */
- if (qusecuda) then
-  __CUDBG('copying solution from device to host')
-  call CopyDeviceToHost_C(allp, CUallp, nx*ny*nz) ; ! note that we are copying _ONLY_ the outer grid layer because we are outside of the cycle ; this may change
- endif
-#endif /*  CUDA */
-#ifdef __TIMER
-#ifdef __CUDA
- if (qusecuda) __INCR(cumem_time, timer_stamp(cumemtimer))
-#endif /*  __CUDA  */
- mgtime=timer_stamp(mgtimer)
-#endif /*  __TIMER */
+!#ifdef __CUDA
+!#ifdef __TIMER
+! if (qusecuda) mgtime=timer_stamp(cumemtimer)
+!#endif /*  __TIMER */
+! if (qusecuda) then
+!  __CUDBG('copying solution from device to host')
+!  call CopyDeviceToHost_C(allp, CUallp, nx*ny*nz) ; ! note that we are copying _ONLY_ the outer grid layer because we are outside of the cycle ; this may change
+! endif
+!#endif /*  CUDA */
+!#ifdef __TIMER
+!#ifdef __CUDA
+! if (qusecuda) __INCR(cumem_time, timer_stamp(cumemtimer))
+!#endif /*  __CUDA  */
+! mgtime=timer_stamp(mgtimer)
+!#endif /*  __TIMER */
 #ifdef __CUDA
  if (qusecuda) then
    call Residual_Cuda(CUres,CUallp,CUallrhs,CUalleps,CUallkappa,CUodxall,CUodyall,CUodzall,i3b,i3,i1,j1,k1,nnx+2,nny+2,nnz+2,i2d)
@@ -1134,6 +1140,19 @@
 ! open(666,file='resf.dat',form='unformatted') ; write(666) res; close(666)
 ! open(666,file='p.dat',form='unformatted') ; write(666) p; close(666)
 ! open(666,file='p.dat',form='formatted') ; write(666,*) p(:,:,2); close(666)
+!
+! free cuda residual array
+#ifdef __CUDA
+  if (qusecuda) then
+#ifdef __TIMER
+  mgtime=timer_stamp(cumemtimer)
+#endif
+   __ALLOC_DEV_MEM(res)
+#ifdef __TIMER
+  __INCR(cumem_time, timer_stamp(cumemtimer))
+#endif
+  endif
+#endif
 !
  end subroutine multigrid_solve
 !*****************************************************************************************!

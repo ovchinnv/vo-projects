@@ -40,11 +40,11 @@ interface
  type(C_PTR) :: devp
  end subroutine FreeDevMem_C
 
- subroutine BindTextures_C(bcw, bce, bcs, bcn, bcb, bcf, sx, sy, sz) bind(c,name='BindTextures')
+ subroutine BindTextures_C(rhs, kappa, eps, bcw, bce, bcs, bcn, bcb, bcf, len3d, len3dbc, sx, sy, sz) bind(c,name='BindTextures')
  use, intrinsic :: iso_c_binding
  __IMPNONE
- type(C_PTR), VALUE :: bcw, bce, bcs, bcn, bcb, bcf
- __FCINT, VALUE :: sx, sy, sz
+ type(C_PTR), VALUE :: rhs, kappa, eps, bcw, bce, bcs, bcn, bcb, bcf
+ __FCINT, VALUE :: len3d, len3dbc, sx, sy, sz
  end subroutine BindTextures_C
 
  subroutine UnbindTextures_C() bind(c,name='UnbindTextures')
@@ -62,6 +62,16 @@ interface
  __FCFLOAT, VALUE :: omega ! overrelaxation parameter
  int(C_INT8_T), VALUE :: i2d
  end subroutine GaussSeidel_Cuda
+
+ subroutine Residual_Cuda(CUres,CUallp,CUallrhs,CUalleps,CUallkappa,CUdxall,CUdyall,CUdzall,i3b,i3,i1,j1,k1,nx,ny,nz,i2d) bind(c,name='Residual_Cuda')
+ use, intrinsic :: iso_c_binding
+ __IMPNONE
+ type(C_PTR), VALUE :: CUres, CUallp, CUallrhs, CUalleps, CUallkappa, CUdxall, CUdyall, CUdzall
+ __FCINT, VALUE :: i3b, i3 ! indices into data arrays (with and without ghostpoint layer, resp.)
+ __FCINT, VALUE :: i1, j1, k1 ! indices into metric arrays
+ __FCINT, VALUE :: nx, ny, nz ! array dimensions, incl. ghost points
+ int(C_INT8_T), VALUE :: i2d
+ end subroutine Residual_Cuda
  
  subroutine ApplyBC_Cuda(CUallp,CUallwest,CUalleast,CUallnorth,CUallsouth,CUallfront,CUallback,i3b,i2,j2,k2,nx,ny,nz,bc_type,bc_wgt,i2d) bind(c,name='ApplyBC_Cuda')
  use, intrinsic :: iso_c_binding

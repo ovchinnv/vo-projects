@@ -1,5 +1,22 @@
- __global__ void Residual_Cuda_3D(__CUFLOAT *res, __CUFLOAT *devp, __CUFLOAT *devrhs, __CUFLOAT *deveps, __CUFLOAT *devkappa, __CUFLOAT *devoodx, __CUFLOAT *devoody, __CUFLOAT *devoodz,
-                        const __CINT i3b, const __CINT i3, const __CINT i1, const __CINT j1, const __CINT k1, const __CINT nx, const __CINT ny, const __CINT nz) {
+ __global__ void Residual_Cuda_3D(__CUFLOAT *res, 
+#ifndef __MGTEX
+ __CUFLOAT *devp, __CUFLOAT *devrhs, __CUFLOAT *deveps, __CUFLOAT *devkappa, 
+#endif
+ __CUFLOAT *devoodx, __CUFLOAT *devoody, __CUFLOAT *devoodz,
+ const __CINT i3b, const __CINT i3, const __CINT i1, const __CINT j1, const __CINT k1, const __CINT nx, const __CINT ny, const __CINT nz) {
+
+#ifdef __MGTEX
+//use texture addressing
+#define devp(_IND) tex1Dfetch(texp,_IND)
+#define deveps(_IND) tex1Dfetch(texeps,_IND)
+#define devrhs(_IND) tex1Dfetch(texrhs,_IND)
+#define devkappa(_IND) tex1Dfetch(texkappa,_IND)
+#else
+#define devp(_IND) devp[_IND]
+#define deveps(_IND) deveps[_IND]
+#define devrhs(_IND) devrhs[_IND]
+#define devkappa(_IND) devkappa[_IND]
+#endif
 
 // this kernel is based on the GS kernel, except that there is no red/black partition
 // 2D local sh/mem arrays
@@ -36,10 +53,10 @@
 #define IIL(i,j)  ((j)*( _BSIZE_X)   + (i))
 
  ind=IOG(ix+tx+1,iy+1,0) ;
- pfront[0]=devp[ind]   ; efront[0]=deveps[ind];
+ pfront[0]=devp(ind)   ; efront[0]=deveps(ind);
 
  ind=IOG(ix+tx+1,iy+1,1) ;
- pcur[0]=devp[ind] ; ecur[0]=deveps[ind];
+ pcur[0]=devp(ind) ; ecur[0]=deveps(ind);
 
 // read metrics
 //x
@@ -68,18 +85,18 @@
   oodzcor=devoodz[k1 - 1 + k - 1 + (nz-1)];
 //
   if (ty < 2) { // BC in y direction
-   p  [IOL(tx+1, (ty%2)*(_BSIZE_Y+1))] = devp  [IOG(ix+1, iy-ty+(ty%2)*(_BSIZE_Y+1), k)]; // subtract ty to get first tile coordinate
-   eps[IOL(tx+1, (ty%2)*(_BSIZE_Y+1))] = deveps[IOG(ix+1, iy-ty+(ty%2)*(_BSIZE_Y+1), k)];
+   p  [IOL(tx+1, (ty%2)*(_BSIZE_Y+1))] = devp  (IOG(ix+1, iy-ty+(ty%2)*(_BSIZE_Y+1), k)); // subtract ty to get first tile coordinate
+   eps[IOL(tx+1, (ty%2)*(_BSIZE_Y+1))] = deveps(IOG(ix+1, iy-ty+(ty%2)*(_BSIZE_Y+1), k));
   }
   if (tx < 2) {
-   p  [IOL((_BSIZE_X+1)*(tx%2), ty+1)] = devp  [IOG(ix-tx+(_BSIZE_X+1)*(tx%2), iy+1, k)];
-   eps[IOL((_BSIZE_X+1)*(tx%2), ty+1)] = deveps[IOG(ix-tx+(_BSIZE_X+1)*(tx%2), iy+1, k)];
+   p  [IOL((_BSIZE_X+1)*(tx%2), ty+1)] = devp  (IOG(ix-tx+(_BSIZE_X+1)*(tx%2), iy+1, k));
+   eps[IOL((_BSIZE_X+1)*(tx%2), ty+1)] = deveps(IOG(ix-tx+(_BSIZE_X+1)*(tx%2), iy+1, k));
   }
 
 //
 // load next p & eps slices
   ind=IOG(ix+1,iy+1,k+1) ;
-  pback[0] = devp[ind] ; eback[0] = deveps[ind];
+  pback[0] = devp(ind) ; eback[0] = deveps(ind);
 // compute residual
   ind=IIG(ix,iy,k-1) ;
   indl=IOL(tx+1,ty+1) ;
@@ -90,11 +107,11 @@
   n = ( eps[indl+(_BSIZE_X+2)] + ecur[0] ) * ( oodycor[ty] * oodycen[ty+1] );
   f = ( efront[0] + ecur[0] )              * ( oodzcor * oodzcenfront );
   b = ( eback[0]  + ecur[0] )              * ( oodzcor * oodzcenback );
-  o = - 0.5 * ( w + e + s + n + b + f ) + devkappa[ind];
+  o = - 0.5 * ( w + e + s + n + b + f ) + devkappa(ind);
   o = 0.5 / o;
   res[ind] = - o * ( w*p[indl-1] + e*p[indl+1] + s*p[indl-(_BSIZE_X+2)] + n*p[indl+(_BSIZE_X+2)] + f*pfront[0] + b*pback[0]
 //                              ) + devrhs[ind]; // RHS o-weighted
-                              - 2.0 * devrhs[ind] ); //RHS not weighted
+                              - 2.0 * devrhs(ind) ); //RHS not weighted
 // move forward in z-direction
   pfront[0]=pcur[0];  efront[0]=ecur[0];
   pcur[0]  =pback[0]; ecur[0]  =eback[0];

@@ -3,9 +3,24 @@
 
 
 // Red-Black Gauss Seidel CUDA kernel
+#ifndef __MGTEX
  __global__ void Gauss_Seidel_Cuda_3D(__CUFLOAT *devp, __CUFLOAT *devrhs, __CUFLOAT *deveps, __CUFLOAT *devkappa, __CUFLOAT *devoodx, __CUFLOAT *devoody, __CUFLOAT *devoodz,
+#else
+ __global__ void Gauss_Seidel_Cuda_3D(__CUFLOAT *devp, __CUFLOAT *devoodx, __CUFLOAT *devoody, __CUFLOAT *devoodz,
+#endif
                         const __CINT i3b, const __CINT i3, const __CINT i1, const __CINT j1, const __CINT k1, const __CINT nx, const __CINT ny, const __CINT nz, const __CFLOAT dt, 
                         const int which) {
+
+#ifdef __MGTEX
+//use texture addressing
+#define deveps(_IND) tex1Dfetch(texeps,_IND)
+#define devrhs(_IND) tex1Dfetch(texrhs,_IND)
+#define devkappa(_IND) tex1Dfetch(texkappa,_IND)
+#else
+#define deveps(_IND) deveps[_IND]
+#define devrhs(_IND) devrhs[_IND]
+#define devkappa(_IND) devkappa[_IND]
+#endif
 
 // NOTE : for GS Red/Black read twice as many locations as there are threads, since the update will invilve two passes with half the memory accessed
 // 2D local sh/mem arrays
@@ -32,12 +47,12 @@
 #define ty threadIdx.y
 // NOTE that the code was written with the assumption the _SX=2, _SY=1 ; other values may not work yet
 // registers 15 + 2=17
- int ix = _SX*(blockIdx.x * _BSIZE_X) + tx;
- int iy = _SY*(blockIdx.y * _BSIZE_Y) + ty;
+ unsigned int ix = _SX*(blockIdx.x * _BSIZE_X) + tx;
+ unsigned int iy = _SY*(blockIdx.y * _BSIZE_Y) + ty;
 //registers 17 + 7 = 22
  float w, e, s, n, b, f, o ;// FD stencil coefficients
 //registers 22 + 1 = 23
- int ind, indl ;// indices
+ unsigned int ind, indl ;// indices
 // index maps : NOTE that they are zero-based (not one-based as in FORTRAN)
 // global memory:
 #define IOG(i,j,k)  ( i3b - 1 + (k)*(nx*ny)       + (j)*(nx)   + (i) )
@@ -47,16 +62,16 @@
 #define IIL(i,j)  ((j)*(_SX*_BSIZE_X)   + (i))
 
  ind=IOG(ix+tx+1,iy+1,0) ;
- pfront[0]=devp[ind]   ; efront[0]=deveps[ind];       // red
+ pfront[0]=devp[ind]   ; efront[0]=deveps(ind);       // red
 
  ind++;
- pfront[1]=devp[ind]   ; efront[1]=deveps[ind];       // black
+ pfront[1]=devp[ind]   ; efront[1]=deveps(ind);       // black
 
  ind=IOG(ix+tx+1,iy+1,1) ;
- pcur[0]=devp[ind] ; ecur[0]=deveps[ind];
+ pcur[0]=devp[ind] ; ecur[0]=deveps(ind);
 
  ind++;
- pcur[1]=devp[ind] ; ecur[1]=deveps[ind];
+ pcur[1]=devp[ind] ; ecur[1]=deveps(ind);
 
 // read metrics
 // note that it may be better to read all metrics into registers
@@ -105,7 +120,7 @@
  }
 //
 // loop over all z-slices
- for (int k=1 ; k<nz-1 ; k++) {
+ for (unsigned int k=1 ; k<nz-1 ; k++) {
   __syncthreads(); // This is necessary but I do not know why, since there are no thread-dependend memory access reads between here and the next syncthreads
 // might not be optimal due to striped access:
 // populate slice
@@ -139,26 +154,26 @@
 // ...
   if (ty < 4) { // BC in y direction
    p  [IOL(tx+1+_BSIZE_X*(ty%2), (ty/2)*(_BSIZE_Y+1))] = devp  [IOG(ix+1+_BSIZE_X*(ty%2), iy-ty+(ty/2)*(_BSIZE_Y+1), k)]; // subtract ty to get first tile coordinate
-   eps[IOL(tx+1+_BSIZE_X*(ty%2), (ty/2)*(_BSIZE_Y+1))] = deveps[IOG(ix+1+_BSIZE_X*(ty%2), iy-ty+(ty/2)*(_BSIZE_Y+1), k)];
+   eps[IOL(tx+1+_BSIZE_X*(ty%2), (ty/2)*(_BSIZE_Y+1))] = deveps(IOG(ix+1+_BSIZE_X*(ty%2), iy-ty+(ty/2)*(_BSIZE_Y+1), k));
   }
   if (tx < 2) {
    p  [IOL((_SX*_BSIZE_X+1)*(tx%2), ty+1)] = devp  [IOG(ix-tx+(_SX*_BSIZE_X+1)*(tx%2), iy+1, k)];
-   eps[IOL((_SX*_BSIZE_X+1)*(tx%2), ty+1)] = deveps[IOG(ix-tx+(_SX*_BSIZE_X+1)*(tx%2), iy+1, k)];
+   eps[IOL((_SX*_BSIZE_X+1)*(tx%2), ty+1)] = deveps(IOG(ix-tx+(_SX*_BSIZE_X+1)*(tx%2), iy+1, k));
   }
 
 //
 //  rhs [ IIL(2*tx  ,ty) ] = devrhs [ IIG(ix,  iy,k-1) ];
 //  rhs [ IIL(2*tx+1,ty) ] = devrhs [ IIG(ix+1,iy,k-1) ];
-  rhs   [ IIL(tx,ty) ]          = devrhs   [ IIG(ix,         iy,k-1) ];
-  rhs   [ IIL(tx+_BSIZE_X,ty) ] = devrhs   [ IIG(ix+_BSIZE_X,iy,k-1) ];
+  rhs   [ IIL(tx,ty) ]          = devrhs   ( IIG(ix,         iy,k-1) );
+  rhs   [ IIL(tx+_BSIZE_X,ty) ] = devrhs   ( IIG(ix+_BSIZE_X,iy,k-1) );
 //
-  kappa [ IIL(tx,         ty) ] = devkappa [ IIG(ix,         iy,k-1) ];
-  kappa [ IIL(tx+_BSIZE_X,ty) ] = devkappa [ IIG(ix+_BSIZE_X,iy,k-1) ];
+  kappa [ IIL(tx,         ty) ] = devkappa ( IIG(ix,         iy,k-1) );
+  kappa [ IIL(tx+_BSIZE_X,ty) ] = devkappa ( IIG(ix+_BSIZE_X,iy,k-1) );
 // load next p & eps slices
   ind=IOG(ix+tx+1,iy+1,k+1) ;
-  pback[0] = devp[ind] ; eback[0] = deveps[ind];    // red
+  pback[0] = devp[ind] ; eback[0] = deveps(ind);    // red
   ind++;
-  pback[1] = devp[ind] ; eback[1] = deveps[ind];    // black
+  pback[1] = devp[ind] ; eback[1] = deveps(ind);    // black
 
 // compute new value for p
 // (1) red
