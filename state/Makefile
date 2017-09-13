@@ -3,6 +3,8 @@ OBJS=fieldbcdef.o datatypes.o state.o
 NAME=state
 DEPS=output constants parser continua/io multicom
 
+LOCALDEFS+=-D__BINDC
+
 include $(ROOT)/Makefile.inc
 
 datatypes.o: fieldbcdef.o

@@ -3,6 +3,14 @@ SHELL=/bin/sh
 CC=gcc
 CFLAGS =-O3 -fno-math-errno -c -fPIC
 #CFLAGS =-O0 -g -fno-math-errno -c -fPIC
+#
+# NVIDIA CUDA COMPILER ######
+NVCC=nvcc
+NVCCFLAGS=-O3 -m32 -Xcompiler -mfloat-abi=hard -gencode arch=compute_32,code=sm_32 -ccbin $(CC) --use_fast_math -c
+#NVCCFLAGS=-O3 -m32 -Xcompiler -mfloat-abi=hard -gencode arch=compute_32,code=sm_32 -ccbin $(CC) --prec-div=false --ftz=true --prec-sqrt=false -c
+
+CUINCLUDES+=-I/usr/local/cuda/samples/common/inc
+#############################
 #---INTEL
 #FC=ifort
 #FFLAGS=-O2 -c
@@ -39,7 +47,7 @@ DEFS+=-Dint=integer -Dfloat=real*8 -Dbool=logical -Dmpiint=MPI_INTEGER -Dmpifloa
      -Dmpibool=MPI_LOGICAL -Dint1=integer\(kind=KIND\(\'a\'\)\) -D__RCOMP -D__DMOL -D__CHES -D__EDDIE -D__$(FORTRAN_COMPILER) \
      -Dint4mpi=integer -D__TIMER #-D__PARALLEL #-D__DEBUG -D__PATHSCALE #-Dint4mpi="integer(KIND=MPI_INTEGER_KIND)" 
 
-STRING_FLAGS=-D__STRING_SERIAL -D__ACEMD -D__NAMD $(OMP)
+#STRING_FLAGS=-D__STRING_SERIAL -D__ACEMD -D__NAMD $(OMP)
 DEFS+=$(STRING_FLAGS)
 
 LOCALDEFS+=-D__SINGLE # single-procision hack
@@ -56,7 +64,8 @@ LD=$(FC)
 LDFLAGS=-dynamic -Bdynamic $(LOMP) -Wl,-z,defs # to list unresolved symbols during linking
 #LDFLAGS=-static -ipa
 
-#EXTRA_LIBS+=-lgfortran
+# extra libs for linking fortran and cuda objects together using c/nvcc/gfortran as linker front ends
+EXTRA_LIBS+=-L/usr/local/cuda/lib -lcudart -lcuda -lgfortran -lstdc++ -lgcc -lm
 # extra libs for ifort
 #EXTRA_LIBS+=-lirc -limf -lifcore -ldl
 #
@@ -81,7 +90,9 @@ MPI_LIBS=-L $(MPI_HOME) -L $(MPI_HOME)/lib -lpthread -lmpi -lmpi_f90 -lmpi_f77 #
 MPI_LIBS=-L $(MPI_HOME) -lmpi -lmpi_mpifh -lmpi_usempif08  # newer openmpi w/ F08
 #MPI_INCLUDE=
 #MPI_LIBS=
-
+# NO MODIFICATIONS SHOULD BE NECESSARY BELOW THIS LINE
+#####################################################################################################################
+#
 INCLUDES+=-I $(ROOT)/include
 LIBS+=-L $(ROOT)/lib
 LIBS+=$(EXTRA_LIBS)
@@ -101,7 +112,7 @@ FPPFLAGS = -P -C -I $(ROOT) -nostdinc # -nostdinc : avoid including files automa
 DEBUG = -g
 
 .SUFFIXES:
-.SUFFIXES: .o .F90 .a .so .H .h .c .f .F .stamp
+.SUFFIXES: .o .F90 .a .so .H .h .c .cu .f .F .stamp
 
 all : default
 default: $(ROOT)/$(NAME).stamp
@@ -110,6 +121,8 @@ default: $(ROOT)/$(NAME).stamp
 	$(FC) $(FFLAGS) $(DEFS) $(PIC) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $< -o $@
 %.o:%.c $(CLIBDEPS) $(HEADS)
 	$(CC) $(LOCALDEFS) $(CFLAGS) $(PIC) $(LOCALMACROS) $< -o $@
+%.o:%.cu $(HEADS)
+	$(NVCC) $(NVCCFLAGS) $(LOCALDEFS) $(CUINCLUDES) $(LOCALMACROS) $< -o $@
 %.o:%.F90 $(LIBDEPS)
 	$(FC) $(FFLAGS) $(DEFS) $(PIC) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $< -o $@
 %.mod:%.F90 $(LIBDEPS)

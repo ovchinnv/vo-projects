@@ -1,6 +1,6 @@
 ROOT=../..
 COMMON=..
-OBJS=multigrid.o ches.o mgutil.o
+OBJS=multigrid.o ches.o mgutil.o CUmgutil.o
 HEADS=multigrid_c.h
 NAME=continua/chest
 SUBDIRS=
@@ -9,7 +9,8 @@ DEPS=output parser constants files timer multicom vectors continua/objects conti
 LOCALDEPS=macro1.def macro2.def setcomm.def
 LOCALDEPS+=source.defs
 LOCALMACROS+=-include source.defs
-LOCALDEFS+=-D__BINDC
+LOCALDEFS+=-D__BINDC -D__CUDA
+CUINCLUDES+=-I mgutil
 
 include $(COMMON)/Makefile.inc
 include $(ROOT)/Makefile.inc
@@ -17,7 +18,8 @@ include $(ROOT)/Makefile.inc
 chest : $(EXE)
 
 ches.o :  multigrid.o
-multigrid.o : mgutil.o $(HEADS)
+multigrid.o : mgutil.o CUmgutil.o $(HEADS)
+CUmgutil.o : mgutil/mgkernels.cu mgutil/bckernels.cu
 multigrid.F90: mgutil/multigrid_bc.src $(ROOT)/parser/parser_macro1.src mgutil/mg_resout.src \
                mgutil/GS.src mgutil/Jacobi.src mgutil/residual.src mgutil/coarsen.src mgutil/refine.src\
                state/bcutil/bc_util.src
