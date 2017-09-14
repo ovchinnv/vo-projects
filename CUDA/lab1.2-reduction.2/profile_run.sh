@@ -1,0 +1,8 @@
+#!/bin/sh
+
+CUDA_PROFILE=1
+export CUDA_PROFILE
+CUDA_PROFILE_CONFIG=profile_config
+export CUDA_PROFILE_CONFIG
+
+$*
