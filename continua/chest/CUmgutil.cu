@@ -85,32 +85,60 @@ extern "C" void UnbindTextures() {
 #define _NBLK(N,n) (N)/(n) + ( (N) % (n) > 0 )
 extern "C" void Residual_Cuda(__CUFLOAT *devres, __CUFLOAT *devp, __CUFLOAT *devrhs, __CUFLOAT *deveps, __CUFLOAT *devkappa, __CUFLOAT *devoodx, __CUFLOAT *devoody, __CUFLOAT *devoodz,
                               const __CINT i3b, const __CINT i3, const __CINT i1, const __CINT j1, const __CINT k1, const __CINT nx, const __CINT ny, const __CINT nz, 
-                              const int8_t i2d) {
+                              const int8_t i2d, const __CINT qmaxres, const __CINT qresnorm, __CFLOAT *maxres, __CINT *imax) {
  int nnx=nx-2; // inner points
  int nny=ny-2;
 #ifdef __MGTEX
  int nnz=nz-2;
 #endif
+  float  *restile = NULL, *drestile = NULL; // host and device, respectively
+  __CINT *imaxtile = NULL, *dimaxtile = NULL;
 //
  if (!i2d) {
   dim3 block(_BSIZE_X, _BSIZE_Y);
   dim3 grid( _NBLK(nnx,_BSIZE_X) , _NBLK(nny,_BSIZE_Y));
 //
+  if (qmaxres) { // allocate memory
+   checkCudaErrors(cudaMalloc(&drestile, grid.x * grid.y *sizeof(__CUFLOAT)));
+   checkCudaErrors(cudaMalloc(&dimaxtile, grid.x * grid.y *sizeof(__CINT)));
+   restile  = (__CUFLOAT *) malloc(grid.x * grid.y *sizeof(__CUFLOAT));
+   imaxtile = (__CINT *)    malloc(grid.x * grid.y *sizeof(__CINT));
+  }
+//
 #ifndef __MGTEX
-  Residual_Cuda_3D<<<grid, block>>>(devres, devp, devrhs, deveps, devkappa, devoodx, devoody, devoodz, i3b, i3, i1, j1, k1, nx, ny, nz);
+  Residual_Cuda_3D<<<grid, block>>>(devres, devp, devrhs, deveps, devkappa, devoodx, devoody, devoodz, i3b, i3, i1, j1, k1, nx, ny, nz, qmaxres, qresnorm, drestile, dimaxtile);
 #else
   checkCudaErrors(cudaBindTexture(NULL, texrhs, devrhs, (i3-1+nnx*nny*nnz)*sizeof(float)));
   checkCudaErrors(cudaBindTexture(NULL, texkappa, devkappa, (i3-1+nnx*nny*nnz)*sizeof(float)));
   checkCudaErrors(cudaBindTexture(NULL, texp, devp, (i3b-1+nx*ny*nz)*sizeof(float)));
   checkCudaErrors(cudaBindTexture(NULL, texeps, deveps, (i3b-1+nx*ny*nz)*sizeof(float)));
 //
-  Residual_Cuda_3D<<<grid, block>>>(devres, devoodx, devoody, devoodz, i3b, i3, i1, j1, k1, nx, ny, nz);
+  Residual_Cuda_3D<<<grid, block>>>(devres, devoodx, devoody, devoodz, i3b, i3, i1, j1, k1, nx, ny, nz, qmaxres, qresnorm, drestile, dimaxtile);
 //
   checkCudaErrors(cudaUnbindTexture(texrhs));
   checkCudaErrors(cudaUnbindTexture(texkappa));
   checkCudaErrors(cudaUnbindTexture(texp));
   checkCudaErrors(cudaUnbindTexture(texeps));
 #endif
+  if (qmaxres) { // copy tile residuals to main memory and find the maximum
+   checkCudaErrors(cudaMemcpy(restile, drestile, grid.x * grid.y * sizeof(__CUFLOAT), cudaMemcpyDeviceToHost));
+   checkCudaErrors(cudaMemcpy(imaxtile, dimaxtile, grid.x * grid.y *sizeof(__CINT), cudaMemcpyDeviceToHost)); // maybe combine into restile ?
+//
+   maxres[0]=restile[0];
+   imax[0]=imaxtile[0];
+//
+   for (unsigned int i=1 ; i < grid.x * grid.y ; i++) {
+    if (maxres[0]<restile[i]) {
+     maxres[0]=restile[i];
+     imax[0]=imaxtile[i];
+    } //if
+   } //for
+//
+   free(restile);
+   free(imaxtile);
+   cudaFree(drestile);
+   cudaFree(dimaxtile);
+  }
  }
 }
 

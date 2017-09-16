@@ -1,7 +1,7 @@
 #ifdef __TEX
 #define in( _I ) tex1Dfetch(tex_reduce, _I )
 #else
-#define in( _I ) in[ _I ] 
+#define in( _I ) in[ _I ]
 #endif
 
 // this is the best kernel for the chromnebook
@@ -12,15 +12,16 @@
   unsigned int stride = 2*_BDIM*gridDim.x;
 //
   __shared__ volatile float local[_BDIM]; // necessary to avoid shmem=>register optimization, to avoid syncthreads within warp
-  local[tx]=(__CTYPE)0;
+  local[tx]=(__CTYPE)_REDINI; // initializer
 //
 // serial part
   while (ix<n-_BDIM){
-   local[tx]+=in(ix)+in(ix+_BDIM);
+   _REDOP(local[tx],local[tx],in(ix));
+   _REDOP(local[tx],local[tx],in(ix+_BDIM));
    ix+=stride;
   }
   while (ix<n){
-   local[tx]+=in(ix);
+   _REDOP(local[tx],local[tx],in(ix));
    ix+=stride;
   }
 //  local[tx]=v;
@@ -28,7 +29,7 @@
 //parallel part:
 
 // loop only if the block size is beyond a certain size
-#define _REDUCE(_STEP) if (tx<_STEP) local[tx] += local[tx + _STEP] ; __syncthreads();
+#define _REDUCE(_STEP) if (tx<_STEP) _REDOP(local[tx],local[tx],local[tx + _STEP]) ; __syncthreads();
 #if _BDIM>=1024
   for (unsigned int step=_BDIM>>1 ; step > 256 ; step>>=1) {
    _REDUCE(step)
@@ -44,7 +45,7 @@
   _REDUCE(64)
 #endif
 #undef _REDUCE
-#define _REDUCE(_STEP) local[tx] += local[tx + _STEP] ;
+#define _REDUCE(_STEP) _REDOP(local[tx],local[tx],local[tx + _STEP]) ;
   if (tx<32) {
 #if _BDIM >= 64
    _REDUCE(32)

@@ -1,3 +1,16 @@
+
+//reduction operations
+//addition :
+#define _ADD(A,B,C) A=(B)+(C)
+// maximum
+#define _MAX(A,B,C) A=(((B)>(C)) ? (B) : (C)) ;
+// minimum
+#define _MIN(A,B,C) A=(((C)>(B)) ? (B) : (C)) ;
+//others here
+
+#define _REDOP(A,B,C) _MIN(A,B,C)
+#define _REDINI INFINITY // initial value for accumulator
+
 #ifdef __TEX
  texture<__CTYPE> tex_reduce; // may not work for types other than float
 #endif
@@ -54,12 +67,9 @@ extern "C" void reduction_c(__CTYPE *A, int n, __CTYPE *val) {
 //
 // compute final value
 //
-#define _FMT "%12.5f\n"
-#define _FMT "%5d\n"
-  *val=0.f ; for (int i=0;i<numblk;i++) { *val+=redA[i] ;}//  printf(_FMT,redA[i]);}
-  printf(_FMT,*val);
+  *val=(__CTYPE)_REDINI ; for (int i=0;i<numblk;i++) { _REDOP(*val,*val,redA[i]);}//  printf(_FMT,redA[i]);}
+  printf("_FMT",*val);
 // free device memory
   cudaFree(devA);
   cudaFree(devAout);
-
 }

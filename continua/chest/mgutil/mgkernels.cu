@@ -22,7 +22,7 @@
 #define devkappa(_IND) devkappa[_IND]
 #endif
 
-// NOTE : for GS Red/Black read twice as many locations as there are threads, since the update will invilve two passes with half the memory accessed
+// NOTE : for GS Red/Black read twice as many locations as there are threads, since the update will involve two passes with half the memory accessed
 // 2D local sh/mem arrays
 #define __VOLATILE volatile
  __VOLATILE __shared__ float p    [ ( _SX * _BSIZE_X + 2 ) * ( _SY * _BSIZE_Y + 2 ) ];
@@ -171,9 +171,9 @@
   kappa [ IIL(tx+_BSIZE_X,ty) ] = devkappa ( IIG(ix+_BSIZE_X,iy,k-1) );
 // load next p & eps slices
   ind=IOG(ix+tx+1,iy+1,k+1) ;
-  pback[0] = devp[ind] ; eback[0] = deveps(ind);    // red
+  pback[0] = devp[ind] ; eback[0] = deveps(ind);
   ind++;
-  pback[1] = devp[ind] ; eback[1] = deveps(ind);    // black
+  pback[1] = devp[ind] ; eback[1] = deveps(ind);
 
 // compute new value for p
 // (1) red
@@ -237,3 +237,5 @@
 #undef IIG
 #undef IOL
 #undef IIL
+#undef __VOLATILE
+#undef _DX

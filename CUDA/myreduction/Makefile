@@ -9,8 +9,8 @@ NVCC=nvcc -ccbin $(CC)
 NVCCFLAGS=-O2 -m32 -Xcompiler -mfloat-abi=hard -gencode arch=compute_32,code=sm_32 --use_fast_math
 HEADS=kernel.cu
 LD=$(FC)
-#DEFS+=-D__FTYPE=real*4 -D__CTYPE=float
-DEFS+=-D__FTYPE=integer -D__CTYPE=int
+DEFS+=-D__FTYPE=real*4 -D__CTYPE=float -D_FMT="%12.5f\n"
+#DEFS+=-D__FTYPE=integer -D__CTYPE=int
 #DEFS+=-D__TEX
 #LD=$(NVCC)
 #LD=$(CC)
