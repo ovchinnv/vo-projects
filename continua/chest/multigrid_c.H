@@ -63,16 +63,20 @@ interface
  int(C_INT8_T), VALUE :: i2d
  end subroutine GaussSeidel_Cuda
 
- subroutine Residual_Cuda(CUres,CUallp,CUallrhs,CUalleps,CUallkappa,CUdxall,CUdyall,CUdzall,i3b,i3,i1,j1,k1,nx,ny,nz,i2d) bind(c,name='Residual_Cuda')
+ subroutine Residual_Cuda(CUres,CUallp,CUallrhs,CUalleps,CUallkappa,CUdxall,CUdyall,CUdzall,i3b,i3,i1,j1,k1,nx,ny,nz,i2d,qmaxres,qresnorm,curr_residual,imax) bind(c,name='Residual_Cuda')
  use, intrinsic :: iso_c_binding
  __IMPNONE
  type(C_PTR), VALUE :: CUres, CUallp, CUallrhs, CUalleps, CUallkappa, CUdxall, CUdyall, CUdzall
  __FCINT, VALUE :: i3b, i3 ! indices into data arrays (with and without ghostpoint layer, resp.)
  __FCINT, VALUE :: i1, j1, k1 ! indices into metric arrays
  __FCINT, VALUE :: nx, ny, nz ! array dimensions, incl. ghost points
+ __FCFLOAT, intent(in) :: curr_residual
+ __FCINT, intent(in) :: imax
+ __FCINT, VALUE :: qmaxres ! whether to compute maximum residual
+ __FCINT, VALUE :: qresnorm ! whether to normalize the residual by central coefficient (o)
  int(C_INT8_T), VALUE :: i2d
  end subroutine Residual_Cuda
- 
+
  subroutine ApplyBC_Cuda(CUallp,CUallwest,CUalleast,CUallnorth,CUallsouth,CUallfront,CUallback,i3b,i2,j2,k2,nx,ny,nz,bc_type,bc_wgt,i2d) bind(c,name='ApplyBC_Cuda')
  use, intrinsic :: iso_c_binding
  __IMPNONE

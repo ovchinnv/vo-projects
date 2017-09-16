@@ -759,6 +759,9 @@
 #endif
   float :: res ( (nx-2) * (ny-2) * (nz-2) ), curr_residual, d
   bool :: qres
+#ifdef __CUDA
+  int qmaxres ! whether to compute maximum residual
+#endif
 !
 !  interface
 !   subroutine apply_bc(u,g,nnx,nny,nnz,boundary,bctype)
@@ -831,7 +834,12 @@
 #include "mgutil/multigrid_bc.src"
 ! compute initial residual
 ! note: def below causes extra divisions in the residual calculation
+#//whether to normalize the residual
+#define _QRESNORM 1
+#ifdef _QRESNORM
 #define __RNORM /allo(i)
+#endif
+!
   if (compute_initial_residual) then
 #ifdef __TIMER
  mgtime=timer_stamp(mgtimer)
@@ -1096,10 +1104,11 @@
 !#endif /*  __TIMER */
 #ifdef __CUDA
  if (qusecuda) then
-   call Residual_Cuda(CUres,CUallp,CUallrhs,CUalleps,CUallkappa,CUodxall,CUodyall,CUodzall,i3b,i3,i1,j1,k1,nnx+2,nny+2,nnz+2,i2d)
+   qmaxres=1 ! whether to compute maximum residual
+   call Residual_Cuda(CUres,CUallp,CUallrhs,CUalleps,CUallkappa,CUodxall,CUodyall,CUodzall,i3b,i3,i1,j1,k1,nnx+2,nny+2,nnz+2,i2d,qmaxres,_QRESNORM,curr_residual,imax)
  else
 #endif
-   call residual(res,allp,allrhs,allw,alle,alls,alln,allf,allb,allo,nx,ny,nz,q2d); qres=.false.; ! false means residual is already known
+   call residual(res,allp,allrhs,allw,alle,alls,alln,allf,allb,allo,nx,ny,nz,q2d)
 #ifdef __CUDA
  endif
 #endif
@@ -1107,6 +1116,7 @@
 #ifdef __TIMER
  __INCR(residual_time,timer_stamp(mgtimer))
 #endif
+!
 #include "mgutil/mg_resout.src"
    endif
 !***********************************************
