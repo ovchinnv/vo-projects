@@ -91,18 +91,22 @@ extern "C" void Residual_Cuda(__CUFLOAT *devres, __CUFLOAT *devp, __CUFLOAT *dev
 #ifdef __MGTEX
  int nnz=nz-2;
 #endif
-  float  *restile = NULL, *drestile = NULL; // host and device, respectively
-  __CINT *imaxtile = NULL, *dimaxtile = NULL;
+ int nblk ;
+ float datasize ;
+ float  *restile = NULL, *drestile = NULL; // host and device, respectively
+ __CINT *imaxtile = NULL, *dimaxtile = NULL;
 //
  if (!i2d) {
   dim3 block(_BSIZE_X, _BSIZE_Y);
   dim3 grid( _NBLK(nnx,_SX*_BSIZE_X) , _NBLK(nny,_SY*_BSIZE_Y));
+  nblk = grid.x * grid.y ;
+  datasize = nblk * ( sizeof(__CFLOAT) + sizeof(__CINT) ) ;
 //
-  if (qmaxres) { // allocate memory
-   checkCudaErrors(cudaMalloc(&drestile, grid.x * grid.y *sizeof(__CUFLOAT)));
-   checkCudaErrors(cudaMalloc(&dimaxtile, grid.x * grid.y *sizeof(__CINT)));
-   restile  = (__CUFLOAT *) malloc(grid.x * grid.y *sizeof(__CUFLOAT));
-   imaxtile = (__CINT *)    malloc(grid.x * grid.y *sizeof(__CINT));
+  if (qmaxres) { // allocate memory --  combine allocations for value and index
+   checkCudaErrors(cudaMalloc(&drestile, datasize));
+   dimaxtile = (__CINT *) drestile + nblk;
+   restile  = (__CFLOAT *) malloc(datasize);
+   imaxtile = (__CINT *)  restile + nblk;
   }
 //
 #ifndef __MGTEX
@@ -121,13 +125,12 @@ extern "C" void Residual_Cuda(__CUFLOAT *devres, __CUFLOAT *devp, __CUFLOAT *dev
   checkCudaErrors(cudaUnbindTexture(texeps));
 #endif
   if (qmaxres) { // copy tile residuals to main memory and find the maximum
-   checkCudaErrors(cudaMemcpy(restile, drestile, grid.x * grid.y * sizeof(__CUFLOAT), cudaMemcpyDeviceToHost));
-   checkCudaErrors(cudaMemcpy(imaxtile, dimaxtile, grid.x * grid.y *sizeof(__CINT), cudaMemcpyDeviceToHost)); // maybe combine into restile ?
+   checkCudaErrors(cudaMemcpy(restile, drestile, datasize, cudaMemcpyDeviceToHost));
 //
    maxres[0]=restile[0];
    imax[0]=imaxtile[0];
 //
-   for (unsigned int i=1 ; i < grid.x * grid.y ; i++) {
+   for (unsigned int i=1 ; i < nblk ; i++) {
     if (maxres[0]<restile[i]) {
      maxres[0]=restile[i];
      imax[0]=imaxtile[i];
@@ -135,9 +138,7 @@ extern "C" void Residual_Cuda(__CUFLOAT *devres, __CUFLOAT *devp, __CUFLOAT *dev
    } //for
 //
    free(restile);
-   free(imaxtile);
    cudaFree(drestile);
-   cudaFree(dimaxtile);
   } // qmaxres
  }
 }
