@@ -7,6 +7,8 @@
  __CUFLOAT *maxres, __CINT *imax) {
 
 //based on the GS kernel
+//NOTE : I am loading two adjacent tiles (in red/black fashion, as for GS, but this is not necessary
+// because there is no particular update order that needs to be enforced ; might rewrite kernel to use one tile
 
 #ifdef __MGTEX
 //use texture addressing
@@ -101,8 +103,8 @@
 // initialize local maximum residual arrays
  if (qmaxres) {
   indl=IIL(2*tx,ty);
-  res[indl]=INFINITY; resind[indl]=-1;
-  res[++indl]=INFINITY; resind[indl]=-1;
+  res[indl]  =-INFINITY; resind[indl]=-1;
+  res[++indl]=-INFINITY; resind[indl]=-1;
  }
 //
 // loop over all z-slices
@@ -137,16 +139,17 @@
 // compute residual for two adjacent points
 // NOTE that the two residual points are not interdependent (unlike in the p update case)
 // thus, we can define DX in arbitrary order (i.e. not in alternating fashion, as required for GS/RB update)
+#//define _DX (ty%2)
 #define _DX 0
-  ind=IIG(ix+tx+_DX,iy,k-1) ;
-  indl=IOL(2*tx+1+_DX,ty+1) ;
+  ind=IIG(ix+tx+_DX,iy,k-1) ; // inner global index
+  indl=IOL(2*tx+1+_DX,ty+1) ; // outer local index -- used for p
   __syncthreads();
 
   //prefetch
   rhs[_DX]    =devrhs(ind);
+  kappa[_DX]  =devkappa(ind);
   rhs[1-_DX]  =devrhs(ind+1-_DX);
-  kappa[_DX]  =devkappa(_DX);
-  kappa[1-_DX]=devkappa(1-_DX);
+  kappa[1-_DX]=devkappa(ind+1-_DX);
 
   w = ( eps[indl-1] + ecur[_DX] ) * ( oodxcor[2*tx+_DX] * oodxcen[2*tx+_DX] );
   e = ( eps[indl+1] + ecur[_DX] ) * ( oodxcor[2*tx+_DX] * oodxcen[2*tx+1+_DX] );
@@ -155,32 +158,35 @@
   f = ( efront[_DX] + ecur[_DX] )              * ( oodzcor * oodzcenfront );
   b = ( eback[_DX]  + ecur[_DX] )              * ( oodzcor * oodzcenback );
   o = - ( w + e + s + n + b + f ) + 2.0 * kappa[_DX];
+// note that o (and other metrics) are twice what they should be ; this is accounted for explicitly below
 // reuse register e
 #define residual e
 //RHS o-weighted
-// e =        - 0.5 * ( o * ( pcur[_DX] - devrhs[ind] ) + w*p[indl-1] + e*p[indl+1] + s*p[indl-(_BSIZE_X+2)] + n*p[indl+(_BSIZE_X+2)] + f*pfront[_DX] + b*pback[_DX] );
+// e =        - 0.5 * ( o * ( pcur[_DX] - devrhs[ind] ) + w*p[indl-1] + e*p[indl+1] + s*p[indl-(_SX*_BSIZE_X+2)] + n*p[indl+(_SX*_BSIZE_X+2)] + f*pfront[_DX] + b*pback[_DX] );
 //RHS not weighted
-  residual = rhs[_DX] - 0.5 * ( o * pcur[_DX]                   + w*p[indl-1] + e*p[indl+1] + s*p[indl-(_BSIZE_X+2)] + n*p[indl+(_BSIZE_X+2)] + f*pfront[_DX] + b*pback[_DX] );
-  devres[ind] = residual; // upload to device
-// -- update max residual
+  residual = rhs[_DX] - 0.5 * ( o * pcur[_DX] + w*p[indl-1] + e*p[indl+1] + s*p[indl-(_SX*_BSIZE_X+2)] + n*p[indl+(_SX*_BSIZE_X+2)] + f*pfront[_DX] + b*pback[_DX] );
+  devres[ind-i3+1] = residual; // upload to device ; note that the residual array always starts at zero offset ; hence the subtraction of i3
+// -- update max residual and index ; note that the index stored is the inner global index (per mg_resout.src)
 #define __UPDATE_RES \
   if (qmaxres) { \
    if (qresnorm) { \
-    e=fabs(residual)/o; \
+    residual=fabs(2.0f*residual/(o)); \
    } else { \
     residual=fabs(residual); \
    } \
    if (res[IIL(2*tx+_DX,ty)] < residual) { \
     res   [IIL(2*tx+_DX,ty)] = residual ;\
-    resind[IIL(2*tx+_DX,ty)] = IOG(ix+tx+1+_DX,iy+1,k+1) ; \
+    resind[IIL(2*tx+_DX,ty)] = ind - i3 + 1 ; \
    } \
   }
 
   __UPDATE_RES
 
 #undef _DX
+#//define _DX (1-ty%2)
 #define _DX 1
 
+  ind=IIG(ix+tx+_DX,iy,k-1) ; // inner global index
   indl=IOL(2*tx+1+_DX,ty+1) ;
 
   w = ( eps[indl-1] + ecur[_DX] ) * ( oodxcor[2*tx+_DX] * oodxcen[2*tx+_DX] );
@@ -191,10 +197,10 @@
   b = ( eback[_DX]  + ecur[_DX] )              * ( oodzcor * oodzcenback );
   o = - ( w + e + s + n + b + f ) + 2.0 * kappa[_DX]; // note the extra factor of two here
 //RHS o-weighted
-// residual =        - 0.5 * ( o * ( pcur[_DX] - devrhs[IIG(ix+tx+_DX,iy,k-1)] ) + w*p[indl-1] + e*p[indl+1] + s*p[indl-(_BSIZE_X+2)] + n*p[indl+(_BSIZE_X+2)] + f*pfront[_DX] + b*pback[_DX] );
+// residual =  - 0.5 * ( o * ( pcur[_DX] - devrhs[IIG(ix+tx+_DX,iy,k-1)] ) + w*p[indl-1] + e*p[indl+1] + s*p[indl-(_SX*_BSIZE_X+2)] + n*p[indl+(_SX*_BSIZE_X+2)] + f*pfront[_DX] + b*pback[_DX] );
 //RHS not weighted
-  residual = rhs[_DX] - 0.5 * ( o * pcur[_DX]                   + w*p[indl-1] + e*p[indl+1] + s*p[indl-(_BSIZE_X+2)] + n*p[indl+(_BSIZE_X+2)] + f*pfront[_DX] + b*pback[_DX] );
-  devres[IIG(ix+tx+_DX,iy,k-1)] = residual; // upload to device
+  residual = rhs[_DX] - 0.5 * ( o * pcur[_DX] + w*p[indl-1] + e*p[indl+1] + s*p[indl-(_SX*_BSIZE_X+2)] + n*p[indl+(_SX*_BSIZE_X+2)] + f*pfront[_DX] + b*pback[_DX] );
+  devres[ind-i3+1] = residual; // upload to device
 // -- update max residual
   __UPDATE_RES
 // move forward in z-direction
@@ -232,7 +238,7 @@
 //
   if (tx==0 & ty==0 ) {
    maxres[ blockIdx.y * gridDim.x + blockIdx.x ]=res[0];
-   resind[ blockIdx.y * gridDim.x + blockIdx.x ]=resind[0];
+   imax  [ blockIdx.y * gridDim.x + blockIdx.x ]=resind[0];
   } // 0th thread
  } // maxres
 } // residual

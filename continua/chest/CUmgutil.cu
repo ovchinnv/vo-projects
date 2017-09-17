@@ -96,7 +96,7 @@ extern "C" void Residual_Cuda(__CUFLOAT *devres, __CUFLOAT *devp, __CUFLOAT *dev
 //
  if (!i2d) {
   dim3 block(_BSIZE_X, _BSIZE_Y);
-  dim3 grid( _NBLK(nnx,_BSIZE_X) , _NBLK(nny,_BSIZE_Y));
+  dim3 grid( _NBLK(nnx,_SX*_BSIZE_X) , _NBLK(nny,_SY*_BSIZE_Y));
 //
   if (qmaxres) { // allocate memory
    checkCudaErrors(cudaMalloc(&drestile, grid.x * grid.y *sizeof(__CUFLOAT)));
@@ -138,7 +138,7 @@ extern "C" void Residual_Cuda(__CUFLOAT *devres, __CUFLOAT *devp, __CUFLOAT *dev
    free(imaxtile);
    cudaFree(drestile);
    cudaFree(dimaxtile);
-  }
+  } // qmaxres
  }
 }
 
