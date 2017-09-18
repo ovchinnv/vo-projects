@@ -23,6 +23,7 @@
 #include "bckernels.cu"
 #include "residual.cu"
 #include "coarsen.cu"
+#include "refine.cu"
 
 
 extern "C" void AllocDevMem(__CUFLOAT **p, __CINT n) {
@@ -157,11 +158,30 @@ extern "C" void Coarsen_Cuda(__CUFLOAT *fine, __CUFLOAT *coarse, const __CINT i3
   dim3 block(_BCRSE_X, _BCRSE_Y, _BCRSE_Z);
   dim3 grid( _NBLK(nnx,_BCRSE_X), _NBLK(nny,_BCRSE_Y), _NBLK(nnz,_BCRSE_Z));
 #ifndef __MGTEX
-  Coarsen_Cuda_3D<<<grid,block>>>(fine,coarse, i3, nnx, nny, nnz, ibc);
+  Coarsen_Cuda_3D<<<grid,block>>>(fine, coarse, i3, nnx, nny, nnz, ibc);
 #else
   checkCudaErrors(cudaBindTexture(NULL, texfine, fine, (nx+2*ibc)*(ny+2*ibc)*(nz+2*ibc)*sizeof(float)));
   Coarsen_Cuda_3D<<<grid,block>>>(coarse, i3, nnx, nny, nnz, ibc);
   checkCudaErrors(cudaUnbindTexture(texfine));
+#endif
+ } //i2d
+}
+//=========================================================================================================================================================================//
+extern "C" void Refine_Cuda(__CUFLOAT *fine, __CUFLOAT *coarse, const __CINT i3f, const __CINT i3c, const __CINT nx, const __CINT ny, const __CINT nz, const int8_t i2d) {
+// NOTE that the dimensions passed in correspond to the fine grid
+ int nnx=nx/2; // coarse grid points (INNER GRID)
+ int nny=ny/2;
+ int nnz=nz/(2-i2d);
+//
+ if (!i2d) {
+  dim3 block(_BCRSE_X, _BCRSE_Y, _BCRSE_Z);
+  dim3 grid( _NBLK(nnx,_BCRSE_X), _NBLK(nny,_BCRSE_Y), _NBLK(nnz,_BCRSE_Z));
+#ifndef __MGTEX
+  Refine_Cuda_3D<<<grid,block>>>(fine, coarse, i3f, i3c, nnx, nny, nnz);
+#else
+  checkCudaErrors(cudaBindTexture(NULL, texcoarse, coarse, (nnx+2)*(nny+2)*(nnz+2)*sizeof(float)));
+  Refine_Cuda_3D<<<grid,block>>>(coarse, i3f, i3c, nnx, nny, nnz);
+  checkCudaErrors(cudaUnbindTexture(texcoarse));
 #endif
  } //i2d
 }

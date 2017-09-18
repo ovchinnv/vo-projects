@@ -78,15 +78,24 @@ interface
  int(C_INT8_T), VALUE :: i2d
  end subroutine Residual_Cuda
 
- subroutine Coarsen_Cuda(CUres,CUallrhs,i3,nx,ny,nz,i2d,ibc) bind(c,name='Coarsen_Cuda')
+ subroutine Coarsen_Cuda(CUfine,CUcoarse,i3,nx,ny,nz,i2d,ibc) bind(c,name='Coarsen_Cuda')
  use, intrinsic :: iso_c_binding
  __IMPNONE
- type(C_PTR), VALUE :: CUres, CUallrhs
+ type(C_PTR), VALUE :: CUfine, CUcoarse
  __FCINT, VALUE :: i3 ! index into rhs array
- __FCINT, VALUE :: nx, ny, nz ! array dimensions, incl. ghost points
+ __FCINT, VALUE :: nx, ny, nz ! fine array dimensions, _not_ incl. ghost points
  int(C_INT8_T), VALUE :: i2d
- __FCINT, VALUE :: ibc ! whether arrays include ghostpoints
+ __FCINT, VALUE :: ibc ! whether arrays include ghostpoints (notwithstanding the inner dimensions nx/ny/nz)
  end subroutine Coarsen_Cuda
+
+ subroutine Refine_Cuda(CUfine,CUcoarse,i3f,i3c,nx,ny,nz,i2d) bind(c,name='Refine_Cuda')
+ use, intrinsic :: iso_c_binding
+ __IMPNONE
+ type(C_PTR), VALUE :: CUfine, CUcoarse
+ __FCINT, VALUE :: i3f, i3c ! indices into fine and coarse arrays, respectively
+ __FCINT, VALUE :: nx, ny, nz ! fine array dimensions, _not_ incl. ghost points
+ int(C_INT8_T), VALUE :: i2d
+ end subroutine Refine_Cuda
 
  subroutine ApplyBC_Cuda(CUallp,CUallwest,CUalleast,CUallnorth,CUallsouth,CUallfront,CUallback,i3b,i2,j2,k2,nx,ny,nz,bc_type,bc_wgt,i2d) bind(c,name='ApplyBC_Cuda')
  use, intrinsic :: iso_c_binding
