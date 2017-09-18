@@ -9,7 +9,7 @@
  __global__ void Gauss_Seidel_Cuda_3D(__CUFLOAT *devp, __CUFLOAT *devoodx, __CUFLOAT *devoody, __CUFLOAT *devoodz,
 #endif
                         const __CINT i3b, const __CINT i3, const __CINT i1, const __CINT j1, const __CINT k1, const __CINT nx, const __CINT ny, const __CINT nz, const __CFLOAT dt, 
-                        const int which) {
+                        const int which, const bool qpinitzero) {
 
 #ifdef __MGTEX
 //use texture addressing
@@ -61,11 +61,15 @@
 #define IOL(i,j)  ((j)*(_SX*_BSIZE_X+2) + (i))
 #define IIL(i,j)  ((j)*(_SX*_BSIZE_X)   + (i))
 
+#define devp (qpinitzero) ? 0.0 : devp
+
  ind=IOG(ix+tx+1,iy+1,0) ;
- pfront[0]=devp[ind]   ; efront[0]=deveps(ind);       // red
+ pfront[0]=devp[ind];
+ efront[0]=deveps(ind);       // red
 
  ind++;
- pfront[1]=devp[ind]   ; efront[1]=deveps(ind);       // black
+ pfront[1]=devp[ind]; 
+ efront[1]=deveps(ind);       // black
 
  ind=IOG(ix+tx+1,iy+1,1) ;
  pcur[0]=devp[ind] ; ecur[0]=deveps(ind);
@@ -174,6 +178,8 @@
   pback[0] = devp[ind] ; eback[0] = deveps(ind);
   ind++;
   pback[1] = devp[ind] ; eback[1] = deveps(ind);
+//
+#undef devp //for normal assignments
 
 // compute new value for p
 // (1) red

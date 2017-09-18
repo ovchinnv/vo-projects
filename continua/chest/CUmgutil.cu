@@ -13,6 +13,8 @@
  texture<float> texrhs;
  texture<float> texeps;
  texture<float> texkappa;
+ texture<float> texfine;
+ texture<float> texcoarse;
 //
 #endif
 
@@ -20,6 +22,7 @@
 #include "mgkernels.cu"
 #include "bckernels.cu"
 #include "residual.cu"
+#include "coarsen.cu"
 
 
 extern "C" void AllocDevMem(__CUFLOAT **p, __CINT n) {
@@ -91,18 +94,22 @@ extern "C" void Residual_Cuda(__CUFLOAT *devres, __CUFLOAT *devp, __CUFLOAT *dev
 #ifdef __MGTEX
  int nnz=nz-2;
 #endif
-  float  *restile = NULL, *drestile = NULL; // host and device, respectively
-  __CINT *imaxtile = NULL, *dimaxtile = NULL;
+ int nblk ;
+ float datasize ;
+ float  *restile = NULL, *drestile = NULL; // host and device, respectively
+ __CINT *imaxtile = NULL, *dimaxtile = NULL;
 //
  if (!i2d) {
   dim3 block(_BSIZE_X, _BSIZE_Y);
-  dim3 grid( _NBLK(nnx,_BSIZE_X) , _NBLK(nny,_BSIZE_Y));
+  dim3 grid( _NBLK(nnx,_SX*_BSIZE_X) , _NBLK(nny,_SY*_BSIZE_Y));
+  nblk = grid.x * grid.y ;
+  datasize = nblk * ( sizeof(__CFLOAT) + sizeof(__CINT) ) ;
 //
-  if (qmaxres) { // allocate memory
-   checkCudaErrors(cudaMalloc(&drestile, grid.x * grid.y *sizeof(__CUFLOAT)));
-   checkCudaErrors(cudaMalloc(&dimaxtile, grid.x * grid.y *sizeof(__CINT)));
-   restile  = (__CUFLOAT *) malloc(grid.x * grid.y *sizeof(__CUFLOAT));
-   imaxtile = (__CINT *)    malloc(grid.x * grid.y *sizeof(__CINT));
+  if (qmaxres) { // allocate memory --  combine allocations for value and index
+   checkCudaErrors(cudaMalloc(&drestile, datasize));
+   dimaxtile = (__CINT *) drestile + nblk;
+   restile  = (__CFLOAT *) malloc(datasize);
+   imaxtile = (__CINT *)  restile + nblk;
   }
 //
 #ifndef __MGTEX
@@ -121,13 +128,12 @@ extern "C" void Residual_Cuda(__CUFLOAT *devres, __CUFLOAT *devp, __CUFLOAT *dev
   checkCudaErrors(cudaUnbindTexture(texeps));
 #endif
   if (qmaxres) { // copy tile residuals to main memory and find the maximum
-   checkCudaErrors(cudaMemcpy(restile, drestile, grid.x * grid.y * sizeof(__CUFLOAT), cudaMemcpyDeviceToHost));
-   checkCudaErrors(cudaMemcpy(imaxtile, dimaxtile, grid.x * grid.y *sizeof(__CINT), cudaMemcpyDeviceToHost)); // maybe combine into restile ?
+   checkCudaErrors(cudaMemcpy(restile, drestile, datasize, cudaMemcpyDeviceToHost));
 //
    maxres[0]=restile[0];
    imax[0]=imaxtile[0];
 //
-   for (unsigned int i=1 ; i < grid.x * grid.y ; i++) {
+   for (unsigned int i=1 ; i < nblk ; i++) {
     if (maxres[0]<restile[i]) {
      maxres[0]=restile[i];
      imax[0]=imaxtile[i];
@@ -135,17 +141,35 @@ extern "C" void Residual_Cuda(__CUFLOAT *devres, __CUFLOAT *devp, __CUFLOAT *dev
    } //for
 //
    free(restile);
-   free(imaxtile);
    cudaFree(drestile);
-   cudaFree(dimaxtile);
-  }
+  } // qmaxres
  }
 }
 
+//=========================================================================================================================================================================//
+extern "C" void Coarsen_Cuda(__CUFLOAT *fine, __CUFLOAT *coarse, const __CINT i3, const __CINT nx, const __CINT ny, const __CINT nz, const int8_t i2d, const __CINT ibc) {
+// NOTE that the dimensions passed in correspond to the fine grid
+ int nnx=nx/2; // coarse grid points (INNER GRID)
+ int nny=ny/2;
+ int nnz=nz/(2-i2d);
+//
+ if (!i2d) {
+  dim3 block(_BCRSE_X, _BCRSE_Y, _BCRSE_Z);
+  dim3 grid( _NBLK(nnx,_BCRSE_X), _NBLK(nny,_BCRSE_Y), _NBLK(nnz,_BCRSE_Z));
+#ifndef __MGTEX
+  Coarsen_Cuda_3D<<<grid,block>>>(fine,coarse, i3, nnx, nny, nnz, ibc);
+#else
+  checkCudaErrors(cudaBindTexture(NULL, texfine, fine, (nx+2*ibc)*(ny+2*ibc)*(nz+2*ibc)*sizeof(float)));
+  Coarsen_Cuda_3D<<<grid,block>>>(coarse, i3, nnx, nny, nnz, ibc);
+  checkCudaErrors(cudaUnbindTexture(texfine));
+#endif
+ } //i2d
+}
 
+//=========================================================================================================================================================================//
 extern "C" void GaussSeidel_Cuda(__CUFLOAT *devp, __CUFLOAT *devrhs, __CUFLOAT *deveps, __CUFLOAT *devkappa, __CUFLOAT *devoodx, __CUFLOAT *devoody, __CUFLOAT *devoodz,
                                  const __CINT i3b, const __CINT i3, const __CINT i1, const __CINT j1, const __CINT k1, const __CINT nx, const __CINT ny, const __CINT nz, 
-                                 const __CFLOAT dt, const int8_t i2d) {
+                                 const __CFLOAT dt, const int8_t i2d, int8_t *qpinitzero) {
 
  int nnx=nx-2; // inner points
  int nny=ny-2;
@@ -159,13 +183,13 @@ extern "C" void GaussSeidel_Cuda(__CUFLOAT *devp, __CUFLOAT *devrhs, __CUFLOAT *
   dim3 grid( _NBLK(nnx,_SX*_BSIZE_X) , _NBLK(nny,_SY*_BSIZE_Y));
 //
 #ifndef __MGTEX
-  Gauss_Seidel_Cuda_3D<<<grid, block>>>(devp, devrhs, deveps, devkappa, devoodx, devoody, devoodz, i3b, i3, i1, j1, k1, nx, ny, nz, dt, _REDBLACK);
+  Gauss_Seidel_Cuda_3D<<<grid, block>>>(devp, devrhs, deveps, devkappa, devoodx, devoody, devoodz, i3b, i3, i1, j1, k1, nx, ny, nz, dt, _REDBLACK, *qpinitzero);
 #else
   checkCudaErrors(cudaBindTexture(NULL, texrhs, devrhs, (i3-1+nnx*nny*nnz)*sizeof(float)));
   checkCudaErrors(cudaBindTexture(NULL, texkappa, devkappa, (i3-1+nnx*nny*nnz)*sizeof(float)));
   checkCudaErrors(cudaBindTexture(NULL, texeps, deveps, (i3b-1+nx*ny*nz)*sizeof(float)));
 //
-  Gauss_Seidel_Cuda_3D<<<grid, block>>>(devp, devoodx, devoody, devoodz, i3b, i3, i1, j1, k1, nx, ny, nz, dt, _REDBLACK);
+  Gauss_Seidel_Cuda_3D<<<grid, block>>>(devp, devoodx, devoody, devoodz, i3b, i3, i1, j1, k1, nx, ny, nz, dt, _REDBLACK, *qpinitzero);
 //
   checkCudaErrors(cudaUnbindTexture(texrhs));
   checkCudaErrors(cudaUnbindTexture(texkappa));
@@ -173,6 +197,7 @@ extern "C" void GaussSeidel_Cuda(__CUFLOAT *devp, __CUFLOAT *devrhs, __CUFLOAT *
 #endif
 //  Gauss_Seidel_Cuda_3D<<<grid, block>>>(devp, devrhs, deveps, devkappa, devoodx, devoody, devoodz, i3b, i3, i1, j1, k1, nx, ny, nz, dt, _RED);
 //  Gauss_Seidel_Cuda_3D<<<grid, block>>>(devp, devrhs, deveps, devkappa, devoodx, devoody, devoodz, i3b, i3, i1, j1, k1, nx, ny, nz, dt, _BLACK);
+  *qpinitzero=0;
  }
 }
 

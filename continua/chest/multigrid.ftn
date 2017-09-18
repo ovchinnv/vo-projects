@@ -39,6 +39,10 @@
 !
  bool, public :: multigrid_initialized=.false.
 !
+#ifdef __CUDA
+ int, parameter :: CUnxmin=16, CUnymin=16, CUnzmin=16 ! will need to experiment with minimal grid parameters, however, anticipate that they should be large,
+                                                      ! because overhead of cuda kernels would probably remain significant for small grids
+#endif
  int, parameter :: nxmin=3, nymin=3, nzmin=3 ! minimum allowed number of inner points
  int, save :: maxlev                         ! maximum number of allowed levels (user defined)
  int, parameter :: default_maxlev=1000
@@ -55,6 +59,7 @@
 ! CUDA arrays: NOTE that these are _device_ pointers ; they are ONLY addressible from the device
  type(C_PTR) :: CUodxall, CUodyall, CUodzall, CUres, CUallp, CUalleps, CUallkappa, CUallrhs, CUalleast, CUallwest, CUallsouth, CUallnorth, CUallfront, CUallback
  bool, save :: qusecuda=.false.;
+ int1 :: qpinitzero=0;
 #endif
 !
  float, pointer, save, dimension(:,:) :: bc_wgt
@@ -517,7 +522,7 @@
   __COPY_HOST_DEVICE(allkappa)
 ! NOTE : NOT SCALING RHS BY o METRIC HERE ! THIS IS A DIFFERENCE BETWEEN CPU AND CUDA VERSIONS
 !  __COPY_HOST_DEVICE(allrhs)
-  call CopyHostToDevice_C(allrhs, CUallrhs, (nx-2)*(ny-2)*(nz-2)) ! should only need to copy the finest grid
+  call CopyHostToDevice_C(allrhs, CUallrhs, nnx*nny*nnz) ! should only need to copy the finest grid
 ! BC arrays
   __COPY_HOST_DEVICE(alleast)
   __COPY_HOST_DEVICE(allwest)
@@ -836,15 +841,29 @@
 ! note: def below causes extra divisions in the residual calculation
 #//whether to normalize the residual
 #define _QRESNORM 1
-#ifdef _QRESNORM
+#if (_QRESNORM==1)
 #define __RNORM /allo(i)
+#else
+#define __RNORM
 #endif
 !
   if (compute_initial_residual) then
 #ifdef __TIMER
  mgtime=timer_stamp(mgtimer)
 #endif
-   call residual(res, allp, allrhs, allw, alle, alls, alln, allf, allb, allo, nx, ny, nz, q2d); qres=.false.;
+#ifdef __CUDA
+ if (qusecuda) then
+! compute residual within a cuda kernel
+   qmaxres=1 ! whether to compute maximum residual
+   call Residual_Cuda(CUres,CUallp,CUallrhs,CUalleps,CUallkappa,CUodxall,CUodyall,CUodzall,i3b,i3,i1,j1,k1,nnx+2,nny+2,nnz+2,i2d,qmaxres,_QRESNORM,curr_residual,imax)
+   __INC(imax) ; ! change to Fortran indexing convention
+ else
+#endif
+   call residual(res, allp, allrhs, allw, alle, alls, alln, allf, allb, allo, nx, ny, nz, q2d)
+#ifdef __CUDA
+ endif !qusecuda
+#endif
+ qres=.false.
 #ifdef __TIMER
  __INCR(residual_time,timer_elapsed(mgtimer))
 #endif
@@ -888,7 +907,17 @@
  mgtime=timer_stamp(mgtimer)
 #endif
       if (qres) then
-       call residual(res,allp(i3b),allrhs(i3),allw(i3),alle(i3),alls(i3),alln(i3),allf(i3),allb(i3),allo(i3),nnx+2,nny+2,nnz+2,q2d)
+#ifdef __CUDA
+       if (qusecuda) then
+        qmaxres=0;
+        call Residual_Cuda(CUres,CUallp,CUallrhs,CUalleps,CUallkappa,CUodxall,CUodyall,CUodzall,i3b,i3,i1,j1,k1,nnx+2,nny+2,nnz+2,i2d,qmaxres,_QRESNORM,curr_residual,imax)
+        __INC(imax) ; ! change to Fortran indexing convention
+       else
+#endif
+        call residual(res,allp(i3b),allrhs(i3),allw(i3),alle(i3),alls(i3),alln(i3),allf(i3),allb(i3),allo(i3),nnx+2,nny+2,nnz+2,q2d)
+#ifdef __CUDA
+       endif
+#endif
 #ifdef __TIMER
  __INCR(residual_time,timer_stamp(mgtimer))
 #endif
@@ -900,15 +929,34 @@
 ! 3D offsets
       i3=i3+nnx*nny*nnz;  i3b=i3b+(nnx+2)*(nny+2)*(nnz+2);
 ! inerpolate
-      call coarsen(res, allrhs(i3), nnx, nny, nnz, i2d, 0)
+#ifdef __CUDA
+      if (qusecuda) then ! note that this flag is not optimal, because it is set iff the CUDA GS-smoother is requested
+                         ! i.e., suppose we want to run a CPU smoother, with interpolation/coarsening done with CUDA ? Practically, that would be a stupid idea,
+                         ! but technically, it could be useful; at this point, such things are not supported; maybe in the future
+       call Coarsen_Cuda(CUres, CUallrhs, i3, nnx, nny, nnz, i2d, 0)
+      else
+#endif
+       call coarsen(res, allrhs(i3), nnx, nny, nnz, i2d, 0)
+#ifdef __CUDA
+      endif ! qusecuda
+#endif
 ! switch to coarse grid lengths
       nnx=nnx/2; nny=nny/2; nnz=nnz/(2-i2d); ! 3D/2D
 !        write(0,*) size(allrhs), i3+(nnx)*(nny)*(nnz) - 1 ! aa
 !        write(0,*) size(allp), i3b+(nnx+2)*(nny+2)*(nnz+2) - 1 ! aa
-! scale new rhs by o metric
-      do k=i3, i3-1+nnx*nny*nnz; allrhs(k)=allrhs(k)/allo(k); enddo
+!
 ! initialize solution (to 0, are there other sensible options?)
-      call fzero(allp(i3b),nnx+2,nny+2,nnz+2)
+#ifdef __CUDA
+      if (qusecuda) then
+       qpinitzero=1 ! flag to initialize solution p to zero in the next smoothing kernel
+      else
+#endif
+       call fzero(allp(i3b),nnx+2,nny+2,nnz+2)
+! also scale new RHS by o metric, only if running on CPU
+       do k=i3, i3-1+nnx*nny*nnz; allrhs(k)=allrhs(k)/allo(k); enddo
+#ifdef __CUDA
+      endif
+#endif
 ! update bc (note that the bc update should be unnecessary in most cases, since we begin from an initial solution of zero)
       __INC(level)
 !
@@ -989,23 +1037,13 @@
        enddo
 #ifdef __CUDA
        case(GaussSeidel_Cuda_);
+!      qpinitzero=1
        do k=1,j
-        call GaussSeidel_Cuda(CUallp,CUallrhs,CUalleps,CUallkappa,CUodxall,CUodyall,CUodzall,i3b,i3,i1,j1,k1,nnx+2,nny+2,nnz+2,omega,i2d)
-! to subtract BC time from smoother time
-#ifdef __TIMER
- mgtime=timer_stamp(mgtimer)
-#endif
-        call ApplyBC_Cuda(CUallp,CUallwest,CUalleast,CUallnorth,CUallsouth,CUallfront,CUallback,i3b,i2,j2,k2,nnx+2,nny+2,nnz+2,bc_type,bc_wgt(:,level),i2d)
-#ifdef __TIMER
-#ifdef __INSIDESMOOTHER
- smooth_time=smooth_time+bc_time ! subtract the BC time from smoother time
-#endif
- __INCR(bc_time, timer_elapsed(mgtimer))
-#ifdef __INSIDESMOOTHER
- smooth_time=smooth_time-bc_time
-#endif
-#endif
-
+!       write(0,*) 'p init zero :', qpinitzero
+        call GaussSeidel_Cuda(CUallp,CUallrhs,CUalleps,CUallkappa,CUodxall,CUodyall,CUodzall,i3b,i3,i1,j1,k1,nnx+2,nny+2,nnz+2,omega,i2d,qpinitzero)
+!       write(0,*) 'p init zero :', qpinitzero
+! update BC
+#include "mgutil/multigrid_bc.src"
        enddo
 #endif /* __CUDA */
 #endif /* __BINDC */
@@ -1086,41 +1124,26 @@
 !       we could check less frequently and save a little time
 !***********************************************
    if (icycle.gt.convergence_skip_cycles) then
-! check whether the solution is on the GPU
-!#ifdef __CUDA
-!#ifdef __TIMER
-! if (qusecuda) mgtime=timer_stamp(cumemtimer)
-!#endif /*  __TIMER */
-! if (qusecuda) then
-!  __CUDBG('copying solution from device to host')
-!  call CopyDeviceToHost_C(allp, CUallp, nx*ny*nz) ; ! note that we are copying _ONLY_ the outer grid layer because we are outside of the cycle ; this may change
-! endif
-!#endif /*  CUDA */
-!#ifdef __TIMER
-!#ifdef __CUDA
-! if (qusecuda) __INCR(cumem_time, timer_stamp(cumemtimer))
-!#endif /*  __CUDA  */
-! mgtime=timer_stamp(mgtimer)
-!#endif /*  __TIMER */
 #ifdef __CUDA
- if (qusecuda) then
-   qmaxres=1 ! whether to compute maximum residual
-   call Residual_Cuda(CUres,CUallp,CUallrhs,CUalleps,CUallkappa,CUodxall,CUodyall,CUodzall,i3b,i3,i1,j1,k1,nnx+2,nny+2,nnz+2,i2d,qmaxres,_QRESNORM,curr_residual,imax)
- else
+    if (qusecuda) then
+     qmaxres=1 ! whether to compute maximum residual
+     call Residual_Cuda(CUres,CUallp,CUallrhs,CUalleps,CUallkappa,CUodxall,CUodyall,CUodzall,i3b,i3,i1,j1,k1,nnx+2,nny+2,nnz+2,i2d,qmaxres,_QRESNORM,curr_residual,imax)
+     __INC(imax) ; ! change to Fortran indexing convention
+    else
 #endif
-   call residual(res,allp,allrhs,allw,alle,alls,alln,allf,allb,allo,nx,ny,nz,q2d)
+     call residual(res,allp,allrhs,allw,alle,alls,alln,allf,allb,allo,nx,ny,nz,q2d)
 #ifdef __CUDA
- endif
+    endif
 #endif
- qres=.false.; ! false means residual is already known
+    qres=.false.; ! false means residual is already known
 #ifdef __TIMER
- __INCR(residual_time,timer_stamp(mgtimer))
+    __INCR(residual_time,timer_stamp(mgtimer))
 #endif
 !
 #include "mgutil/mg_resout.src"
-   endif
+   endif ! icycle
 !***********************************************
-   icycle=icycle+1
+   __INC(icycle)
   enddo ! while not solved
 !
 #ifdef __TIMER
@@ -1157,7 +1180,7 @@
 #ifdef __TIMER
   mgtime=timer_stamp(cumemtimer)
 #endif
-   __ALLOC_DEV_MEM(res)
+   __FREE_DEV_MEM(res)
 #ifdef __TIMER
   __INCR(cumem_time, timer_stamp(cumemtimer))
 #endif
