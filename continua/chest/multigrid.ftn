@@ -39,6 +39,10 @@
 !
  bool, public :: multigrid_initialized=.false.
 !
+#ifdef __CUDA
+ int, parameter :: CUnxmin=16, CUnymin=16, CUnzmin=16 ! will need to experiment with minimal grid parameters, however, anticipate that they should be large,
+                                                      ! because overhead of cuda kernels would probably remain significant for small grids
+#endif
  int, parameter :: nxmin=3, nymin=3, nzmin=3 ! minimum allowed number of inner points
  int, save :: maxlev                         ! maximum number of allowed levels (user defined)
  int, parameter :: default_maxlev=1000
@@ -55,6 +59,7 @@
 ! CUDA arrays: NOTE that these are _device_ pointers ; they are ONLY addressible from the device
  type(C_PTR) :: CUodxall, CUodyall, CUodzall, CUres, CUallp, CUalleps, CUallkappa, CUallrhs, CUalleast, CUallwest, CUallsouth, CUallnorth, CUallfront, CUallback
  bool, save :: qusecuda=.false.;
+ int1 :: qpinitzero=0;
 #endif
 !
  float, pointer, save, dimension(:,:) :: bc_wgt
@@ -902,7 +907,17 @@
  mgtime=timer_stamp(mgtimer)
 #endif
       if (qres) then
-       call residual(res,allp(i3b),allrhs(i3),allw(i3),alle(i3),alls(i3),alln(i3),allf(i3),allb(i3),allo(i3),nnx+2,nny+2,nnz+2,q2d)
+#ifdef __CUDA
+       if (qusecuda) then
+        qmaxres=0;
+        call Residual_Cuda(CUres,CUallp,CUallrhs,CUalleps,CUallkappa,CUodxall,CUodyall,CUodzall,i3b,i3,i1,j1,k1,nnx+2,nny+2,nnz+2,i2d,qmaxres,_QRESNORM,curr_residual,imax)
+        __INC(imax) ; ! change to Fortran indexing convention
+       else
+#endif
+        call residual(res,allp(i3b),allrhs(i3),allw(i3),alle(i3),alls(i3),alln(i3),allf(i3),allb(i3),allo(i3),nnx+2,nny+2,nnz+2,q2d)
+#ifdef __CUDA
+       endif
+#endif
 #ifdef __TIMER
  __INCR(residual_time,timer_stamp(mgtimer))
 #endif
@@ -914,15 +929,34 @@
 ! 3D offsets
       i3=i3+nnx*nny*nnz;  i3b=i3b+(nnx+2)*(nny+2)*(nnz+2);
 ! inerpolate
-      call coarsen(res, allrhs(i3), nnx, nny, nnz, i2d, 0)
+#ifdef __CUDA
+      if (qusecuda) then ! note that this flag is not optimal, because it is set iff the CUDA GS-smoother is requested
+                         ! i.e., suppose we want to run a CPU smoother, with interpolation/coarsening done with CUDA ? Practically, that would be a stupid idea,
+                         ! but technically, it could be useful; at this point, such things are not supported; maybe in the future
+       call Coarsen_Cuda(CUres, CUallrhs, i3, nnx, nny, nnz, i2d, 0)
+      else
+#endif
+       call coarsen(res, allrhs(i3), nnx, nny, nnz, i2d, 0)
+#ifdef __CUDA
+      endif ! qusecuda
+#endif
 ! switch to coarse grid lengths
       nnx=nnx/2; nny=nny/2; nnz=nnz/(2-i2d); ! 3D/2D
 !        write(0,*) size(allrhs), i3+(nnx)*(nny)*(nnz) - 1 ! aa
 !        write(0,*) size(allp), i3b+(nnx+2)*(nny+2)*(nnz+2) - 1 ! aa
-! scale new rhs by o metric
-      do k=i3, i3-1+nnx*nny*nnz; allrhs(k)=allrhs(k)/allo(k); enddo
+!
 ! initialize solution (to 0, are there other sensible options?)
-      call fzero(allp(i3b),nnx+2,nny+2,nnz+2)
+#ifdef __CUDA
+      if (qusecuda) then
+       qpinitzero=1 ! flag to initialize solution p to zero in the next smoothing kernel
+      else
+#endif
+       call fzero(allp(i3b),nnx+2,nny+2,nnz+2)
+! also scale new RHS by o metric, only if running on CPU
+       do k=i3, i3-1+nnx*nny*nnz; allrhs(k)=allrhs(k)/allo(k); enddo
+#ifdef __CUDA
+      endif
+#endif
 ! update bc (note that the bc update should be unnecessary in most cases, since we begin from an initial solution of zero)
       __INC(level)
 !
@@ -1003,8 +1037,11 @@
        enddo
 #ifdef __CUDA
        case(GaussSeidel_Cuda_);
+!      qpinitzero=1
        do k=1,j
-        call GaussSeidel_Cuda(CUallp,CUallrhs,CUalleps,CUallkappa,CUodxall,CUodyall,CUodzall,i3b,i3,i1,j1,k1,nnx+2,nny+2,nnz+2,omega,i2d)
+!       write(0,*) 'p init zero :', qpinitzero
+        call GaussSeidel_Cuda(CUallp,CUallrhs,CUalleps,CUallkappa,CUodxall,CUodyall,CUodzall,i3b,i3,i1,j1,k1,nnx+2,nny+2,nnz+2,omega,i2d,qpinitzero)
+!       write(0,*) 'p init zero :', qpinitzero
 ! update BC
 #include "mgutil/multigrid_bc.src"
        enddo
@@ -1106,7 +1143,7 @@
 #include "mgutil/mg_resout.src"
    endif ! icycle
 !***********************************************
-   _INC(icycle)
+   __INC(icycle)
   enddo ! while not solved
 !
 #ifdef __TIMER

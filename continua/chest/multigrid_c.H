@@ -52,7 +52,7 @@ interface
  __IMPNONE
  end subroutine UnbindTextures_C
 
- subroutine GaussSeidel_Cuda(CUallp,CUallrhs,CUalleps,CUallkappa,CUdxall,CUdyall,CUdzall,i3b,i3,i1,j1,k1,nx,ny,nz,omega,i2d) bind(c,name='GaussSeidel_Cuda')
+ subroutine GaussSeidel_Cuda(CUallp,CUallrhs,CUalleps,CUallkappa,CUdxall,CUdyall,CUdzall,i3b,i3,i1,j1,k1,nx,ny,nz,omega,i2d,qpinitzero) bind(c,name='GaussSeidel_Cuda')
  use, intrinsic :: iso_c_binding
  __IMPNONE
  type(C_PTR), VALUE :: CUallp, CUallrhs, CUalleps, CUallkappa, CUdxall, CUdyall, CUdzall
@@ -60,7 +60,8 @@ interface
  __FCINT, VALUE :: i1, j1, k1 ! indices into metric arrays
  __FCINT, VALUE :: nx, ny, nz ! array dimensions, incl. ghost points
  __FCFLOAT, VALUE :: omega ! overrelaxation parameter
- int(C_INT8_T), VALUE :: i2d
+ int(C_INT8_T), VALUE :: i2d ! whether this is a 2D calculation
+ int(C_INT8_T) :: qpinitzero ! whether to initialize solution to zero
  end subroutine GaussSeidel_Cuda
 
  subroutine Residual_Cuda(CUres,CUallp,CUallrhs,CUalleps,CUallkappa,CUdxall,CUdyall,CUdzall,i3b,i3,i1,j1,k1,nx,ny,nz,i2d,qmaxres,qresnorm,curr_residual,imax) bind(c,name='Residual_Cuda')
@@ -76,6 +77,16 @@ interface
  __FCINT, VALUE :: qresnorm ! whether to normalize the residual by central coefficient (o)
  int(C_INT8_T), VALUE :: i2d
  end subroutine Residual_Cuda
+
+ subroutine Coarsen_Cuda(CUres,CUallrhs,i3,nx,ny,nz,i2d,ibc) bind(c,name='Coarsen_Cuda')
+ use, intrinsic :: iso_c_binding
+ __IMPNONE
+ type(C_PTR), VALUE :: CUres, CUallrhs
+ __FCINT, VALUE :: i3 ! index into rhs array
+ __FCINT, VALUE :: nx, ny, nz ! array dimensions, incl. ghost points
+ int(C_INT8_T), VALUE :: i2d
+ __FCINT, VALUE :: ibc ! whether arrays include ghostpoints
+ end subroutine Coarsen_Cuda
 
  subroutine ApplyBC_Cuda(CUallp,CUallwest,CUalleast,CUallnorth,CUallsouth,CUallfront,CUallback,i3b,i2,j2,k2,nx,ny,nz,bc_type,bc_wgt,i2d) bind(c,name='ApplyBC_Cuda')
  use, intrinsic :: iso_c_binding
