@@ -180,7 +180,7 @@ extern "C" void Refine_Cuda(__CUFLOAT *fine, __CUFLOAT *coarse, const __CINT i3f
   Refine_Cuda_3D<<<grid,block>>>(fine, coarse, i3f, i3c, nnx, nny, nnz);
 #else
   checkCudaErrors(cudaBindTexture(NULL, texcoarse, coarse, (nnx+2)*(nny+2)*(nnz+2)*sizeof(float)));
-  Refine_Cuda_3D<<<grid,block>>>(coarse, i3f, i3c, nnx, nny, nnz);
+  Refine_Cuda_3D<<<grid,block>>>(fine, i3f, i3c, nnx, nny, nnz);
   checkCudaErrors(cudaUnbindTexture(texcoarse));
 #endif
  } //i2d
