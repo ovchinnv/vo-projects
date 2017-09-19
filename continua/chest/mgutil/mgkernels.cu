@@ -47,6 +47,8 @@
 #define ty threadIdx.y
 // NOTE that the code was written with the assumption the _SX=2, _SY=1 ; other values may not work yet
 // registers 15 + 2=17
+//#define ix  (_SX*(blockIdx.x * _BSIZE_X) + tx)
+//#define iy  (_SY*(blockIdx.y * _BSIZE_Y) + ty)
  unsigned int ix = _SX*(blockIdx.x * _BSIZE_X) + tx;
  unsigned int iy = _SY*(blockIdx.y * _BSIZE_Y) + ty;
 //registers 17 + 7 = 22
@@ -245,3 +247,5 @@
 #undef IIL
 #undef __VOLATILE
 #undef _DX
+#undef ix
+#undef iy

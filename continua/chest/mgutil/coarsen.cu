@@ -32,3 +32,16 @@
                                         fine( IDF(ixf, iyf, izf+1)) + fine( IDF(ixf+1, iyf, izf+1)) + fine( IDF(ixf+1, iyf+1, izf+1)) + fine( IDF(ixf, iyf+1, izf+1)) ) ;
 
 }
+#undef tx
+#undef ty
+#undef tz
+#undef IDC
+#undef IDF
+#undef fine
+#undef ixc
+#undef iyc
+#undef izc
+#undef ixf
+#undef iyf
+#undef izf
+
