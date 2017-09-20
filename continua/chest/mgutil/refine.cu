@@ -29,7 +29,7 @@
 // load coarse points into local tiles, similarly in spirit to GS kernel
 //
 #define __VOLATILE
-#define tilesize ( ( _BRFNE_X + 2 ) * ( _BRFNE_Y + 2 ) )
+#define tilesize ( ( ntx + 2 ) * ( nty + 2 ) )
  __VOLATILE __shared__ float  clocal[ 2 * tilesize ];
  float *cfront = clocal ;
  float *cback  = cfront + tilesize ;
@@ -47,7 +47,7 @@
 //note that the nnx/y/z are the coarse lengths; hence factors of two below
 #define IDF(i,j,k)  ( i3f - 1 + (k)*4*(nnx+1)*(nny+1) + (j)*2*(nnx+1) + (i) )
 //local memory:
-#define IOL(i,j)  ((j)*(_BRFNE_X+2) + (i))
+#define IOL(i,j)  ((j)*(ntx+2) + (i))
 //
 #define cfront(i,j) cfront[IOL(i,j)]
 #define cback(i,j) cback[IOL(i,j)]
@@ -55,21 +55,21 @@
 
 #ifdef __MGTEX
 #define coarse(i,j,k) tex1Dfetch(texcoarse,IDC(i,j,k));
-#else 
+#else
 #define coarse(i,j,k) coarse[IDC(i,j,k)]
 #endif
 // unsigned int ind, indl;
 // loop over all z-slices, including first row (k=-1)
 //
- for (int k=-1 ; k<=nnz ; k++) { 
+ for (int k=-1 ; k<=nnz ; k++) {
 // load next coarse row
   cback(tx+1,ty+1)=coarse(ixc+1,iyc+1,k+1);
 // load additional boundary points
   if (ty < 2) { // BC in y-direction
-   cback( tx+1, (nty+1)*ty) = coarse(ixc+1, iyc + (nty+1)*ty, k+1);
+   cback( tx+1, (nty+1)*ty) = coarse(ixc+1, iyc - ty + (nty+1)*ty, k+1); // could absorb lone ty, but this way consistent with x-bc below
   }
   if (tx < 2) { // BC in x-direction
-   cback( (ntx+1)*(tx%2), ty+1) = coarse(ixc + (ntx+1)*(tx%2), iyc+1, k+1);
+   cback( (ntx+1)*(tx%2), ty+1) = coarse(ixc - tx + (ntx+1)*(tx%2), iyc+1, k+1);
   }
 
 // populate corners either by interpolation (boundary corners) or by extra reads from device
@@ -78,7 +78,7 @@
 
   if ( ((tx==0) || (tx==ntx-1) || (ixc==nnx-1) ) && ((ty==0) || (ty==nty-1) || (iyc==nny-1))) {
 #define dx  (1-2*(bool)(tx))
-#define dy  (1-2*(bool)(tx))
+#define dy  (1-2*(bool)(ty))
    cback(tx+1-dx,ty+1-dy)=coarse(ixc+1-dx, iyc+1-dy, k+1) ; // read from device (possibly wrong values)
 #undef dx
 #undef dy
@@ -126,15 +126,16 @@
 //
 // perform the actual interpolation, uploading directly to device :
 #define izf 2*k
-  fine(ixf+1,iyf+1,izf+1) += (cwsf + (cesf + cwnf + cwsb)*three + (cenf + cesb + cwnb)*nine + cenb*twentyseven);
-  fine(ixf,  iyf+1,izf+1) += (cesf + (cwsf + cenf + cesb)*three + (cwnf + cwsb + cenb)*nine + cwnb*twentyseven);
-  fine(ixf+1,iyf,  izf+1) += (cwnf + (cenf + cwsf + cwnb)*three + (cesf + cenb + cwsb)*nine + cesb*twentyseven);
-  fine(ixf,  iyf,  izf+1) += (cenf + (cwnf + cesf + cenb)*three + (cwsf + cwnb + cesb)*nine + cwsb*twentyseven);
 //
   fine(ixf+1,iyf+1,izf)   += (cwsb + (cesb + cwnb + cwsf)*three + (cenb + cesf + cwnf)*nine + cenf*twentyseven);
   fine(ixf,  iyf+1,izf)   += (cesb + (cwsb + cenb + cesf)*three + (cwnb + cwsf + cenf)*nine + cwnf*twentyseven);
   fine(ixf+1,iyf,  izf)   += (cwnb + (cenb + cwsb + cwnf)*three + (cesb + cenf + cwsf)*nine + cesf*twentyseven);
   fine(ixf,  iyf,  izf)   += (cenb + (cwnb + cesb + cenf)*three + (cwsb + cwnf + cesf)*nine + cwsf*twentyseven);
+//
+  fine(ixf+1,iyf+1,izf+1) += (cwsf + (cesf + cwnf + cwsb)*three + (cenf + cesb + cwnb)*nine + cenb*twentyseven);
+  fine(ixf,  iyf+1,izf+1) += (cesf + (cwsf + cenf + cesb)*three + (cwnf + cwsb + cenb)*nine + cwnb*twentyseven);
+  fine(ixf+1,iyf,  izf+1) += (cwnf + (cenf + cwsf + cwnb)*three + (cesf + cenb + cwsb)*nine + cesb*twentyseven);
+  fine(ixf,  iyf,  izf+1) += (cenf + (cwnf + cesf + cenb)*three + (cwsf + cwnb + cesb)*nine + cwsb*twentyseven);
 //
  }
 }

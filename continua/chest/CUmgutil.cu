@@ -174,8 +174,8 @@ extern "C" void Refine_Cuda(__CUFLOAT *fine, __CUFLOAT *coarse, const __CINT i3f
  int nnz=nz/(2-i2d);
 //
  if (!i2d) {
-  dim3 block(_BCRSE_X, _BCRSE_Y, _BCRSE_Z);
-  dim3 grid( _NBLK(nnx,_BCRSE_X), _NBLK(nny,_BCRSE_Y), _NBLK(nnz,_BCRSE_Z));
+  dim3 block(_BRFNE_X, _BRFNE_Y);
+  dim3 grid(_NBLK(nnx,_BRFNE_X), _NBLK(nny,_BRFNE_Y));
 #ifndef __MGTEX
   Refine_Cuda_3D<<<grid,block>>>(fine, coarse, i3f, i3c, nnx, nny, nnz);
 #else
