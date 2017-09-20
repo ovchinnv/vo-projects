@@ -15,9 +15,9 @@
 #define ty threadIdx.y
 #define tz threadIdx.z
 
-#define ixc (blockIdx.x * _BCRSE_X + tx )
-#define iyc (blockIdx.y * _BCRSE_Y + ty )
-#define izc (blockIdx.z * _BCRSE_Z + tz )
+#define ixc (blockIdx.x * blockDim.x + tx )
+#define iyc (blockIdx.y * blockDim.y + ty )
+#define izc (blockIdx.z * blockDim.z + tz )
 
 #define ixf (ixc<<1)
 #define iyf (iyc<<1)
