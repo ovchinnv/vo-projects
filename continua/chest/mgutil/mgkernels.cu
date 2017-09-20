@@ -1,5 +1,12 @@
 #define qred   1 //(which==_RED   || which==_REDBLACK)
 #define qblack 1 //(which==_BLACK || which==_REDBLACK)
+// index maps : NOTE that they are zero-based (not one-based as in FORTRAN)
+// global memory:
+#define IOG(i,j,k)  ( i3b - 1 + (k)*(nx*ny)       + (j)*(nx)   + (i) )
+#define IIG(i,j,k)  ( i3  - 1 + (k)*(nx-2)*(ny-2) + (j)*(nx-2) + (i) )
+//local memory:
+#define IOL(i,j)  ((j)*(_SX*ntx+2) + (i))
+#define IIL(i,j)  ((j)*(_SX*ntx)   + (i))
 
 
 // Red-Black Gauss Seidel CUDA kernel
@@ -24,30 +31,80 @@
 
 #define tx threadIdx.x
 #define ty threadIdx.y
-//#define ntx _BSIZE_X
-//#define nty _BSIZE_Y
+// whether to use dynamically allocated shared memory
+#ifdef __DSHMEM
 #define ntx blockDim.x
 #define nty blockDim.y
-
+#else
+#define ntx _BSIZE_X
+#define nty _BSIZE_Y
+#endif
 
 // NOTE : for GS Red/Black read twice as many locations as there are threads, since the update will involve two passes with half the memory accessed
+
+
+#define sizep      (( _SX * ntx + 2 ) * ( _SY * nty + 2 ))
+#define sizeeps    sizep
+#define sizerhs    (( _SX * ntx     ) * ( _SY * nty     ))
+#define sizekappa  sizerhs
+#define sizedxcen  (_SX * ntx + 1)
+#define sizedxcor  (_SX * ntx)
+#define sizedycen  (_SY * nty + 1)
+#define sizedycor  (_SY * nty)
+
+#ifndef __DSHMEM
 // 2D local sh/mem arrays
 #define __VOLATILE volatile
- __VOLATILE __shared__ float p    [ ( _SX * ntx + 2 ) * ( _SY * nty + 2 ) ];
+ __VOLATILE __shared__ float p    [ sizep ];
 #undef __VOLATILE
 #define __VOLATILE
- __VOLATILE __shared__ float rhs  [ ( _SX * ntx     ) * ( _SY * nty     ) ];
- __VOLATILE __shared__ float eps  [ ( _SX * ntx + 2 ) * ( _SY * nty + 2 ) ];
- __VOLATILE __shared__ float kappa[ ( _SX * ntx     ) * ( _SY * nty     ) ];
+ __VOLATILE __shared__ float rhs  [ sizerhs ];
+ __VOLATILE __shared__ float eps  [ sizeeps ];
+ __VOLATILE __shared__ float kappa[ sizekappa ];
+// 1D local shmem metrics
+ __shared__ float oodxcen [ sizedxcen ];
+ __shared__ float oodxcor [ sizedxcor ];
+ __shared__ float oodycen [ sizedycen ];
+ __shared__ float oodycor [ sizedycor ];
+
+#define p(i)       p[i]
+#define eps(i)     eps[i]
+#define rhs(i)     rhs[i]
+#define kappa(i)   kappa[i]
+#define oodxcen(i) oodxcen[i]
+#define oodycen(i) oodycen[i]
+#define oodxcor(i) oodxcor[i]
+#define oodycor(i) oodycor[i]
+
+#else
+#define __VOLATILE
+ extern __VOLATILE __shared__ float local[];
+// array offsets below
+/* does this waste registers ?
+ float * p =   local ;
+ float * eps = p + sizep ;
+ float * rhs = eps + sizeeps ;
+ float * kappa = rhs + sizerhs ;
+ float * oodxcen = kappa + sizekappa ;
+ float * oodxcor = oodxcen + sizedxcen ;
+ float * oodycen = oodxcor + sizedxcor ;
+ float * oodycor = oodycen + sizedycen ;
+/*/
+#define p(i)        local[i]
+#define eps(i)      local[i+sizep]
+#define rhs(i)      local[i+sizep+sizeeps]
+#define kappa(i)    local[i+sizep+sizeeps+sizerhs]
+#define oodxcen(i)  local[i+sizep+sizeeps+sizerhs+sizekappa]
+#define oodxcor(i)  local[i+sizep+sizeeps+sizerhs+sizekappa+sizedxcen]
+#define oodycen(i)  local[i+sizep+sizeeps+sizerhs+sizekappa+sizedxcen+sizedxcor]
+#define oodycor(i)  local[i+sizep+sizeeps+sizerhs+sizekappa+sizedxcen+sizedxcor+sizedycen]
+//*/
+#endif
+
 // registers -- 12
 // NOTE : tiles are shfted from "front" to "back"
  float pback[2], pfront[2], pcur[2]; // solution z-points ; 2 for red/black
  float eback[2], efront[2], ecur[2]; // epsilon z-points
-// 1D local shmem metrics
- __shared__ float oodxcen [ _SX * ntx + 1 ];
- __shared__ float oodxcor [ _SX * ntx ];
- __shared__ float oodycen [ _SY * nty + 1 ];
- __shared__ float oodycor [ _SY * nty ];
 //registers 12 + 3 = 15
  float oodzcor, oodzcenfront, oodzcenback ;
 // NOTE that the code was written with the assumption the _SX=2, _SY=1 ; other values may not work yet
@@ -60,13 +117,6 @@
  float w, e, s, n, b, f, o ;// FD stencil coefficients
 //registers 22 + 1 = 23
  unsigned int ind, indl ;// indices
-// index maps : NOTE that they are zero-based (not one-based as in FORTRAN)
-// global memory:
-#define IOG(i,j,k)  ( i3b - 1 + (k)*(nx*ny)       + (j)*(nx)   + (i) )
-#define IIG(i,j,k)  ( i3  - 1 + (k)*(nx-2)*(ny-2) + (j)*(nx-2) + (i) )
-//local memory:
-#define IOL(i,j)  ((j)*(_SX*ntx+2) + (i))
-#define IIL(i,j)  ((j)*(_SX*ntx)   + (i))
 
 #define devp (qpinitzero) ? 0.0 : devp
 
@@ -94,20 +144,20 @@
 // center metric ; NOTE that the center metric is larger, of size 2*ntx+1 ; we read two blocks of size ntx from each end ; skip one in the middle; then compute it
 //  dxcen[ix]         = devdx[i1 - 1 + ix] ; // first half of tile
 //  dxcen[ix+_BSIZE+1]= devdx[i1 - 1 + ix +_BSIZE+1] ; // second half of tile
-  oodxcen[tx+ntx*ty+(ty>0) ] = devoodx[i1 - 1 + ix + ntx*ty+(ty>0)];
+  oodxcen(tx+ntx*ty+(ty>0) ) = devoodx[i1 - 1 + ix + ntx*ty+(ty>0)];
 // corner metric
 //  dxcor[ix] = devdx[i1 - 1 + nx-1 + ix ];                   // first  x-half of tile
 //  dxcor[ix+ntx] = devdx[i1 - 1 + nx-1 + ix +ntx]; // second x-half of tile
 // in one shot, assuming threIdx.y<2 :
-  oodxcor[tx+ntx*ty] = devoodx[i1 - 1 + (nx-1) + ix + ntx*ty];
+  oodxcor(tx+ntx*ty) = devoodx[i1 - 1 + (nx-1) + ix + ntx*ty];
  }
 // NOTE that if we know that tx=ty we can use a single if clause to read both metrics
 // y-metrics
  if (tx < _SY) {
 // center
-  oodycen[ty+nty*tx+(tx>0)] = devoody[j1 - 1 + iy + nty*tx+(tx>0)];
+  oodycen(ty+nty*tx+(tx>0)) = devoody[j1 - 1 + iy + nty*tx+(tx>0)];
 // corner
-  oodycor[ty+nty*tx]     = devoody[j1 - 1 + ny-1 + iy + nty*tx];
+  oodycor(ty+nty*tx)     = devoody[j1 - 1 + ny-1 + iy + nty*tx];
  }
 //
 // z - metric
@@ -118,15 +168,15 @@
  if ( !( (bool)ty || (bool)tx ) ) { // first (0th) thread reads
 // deal with y-metric first, since it will usually require global mem read.
   if (_SY<2) { // read from gmem
-   oodycen[nty] = devoody[j1 - 1 + (iy - ty) + nty];
+   oodycen(nty) = devoody[j1 - 1 + (iy - ty) + nty];
   } else {
-   oodycen[nty] = 2.0 / ( 1.0/oodycor[nty-1]+1.0/oodycor[nty-(_SY<2)] ); // ( _SY<2 ) avoids static memory check warnings
+   oodycen(nty) = 2.0 / ( 1.0/oodycor(nty-1)+1.0/oodycor(nty-(_SY<2)) ); // ( _SY<2 ) avoids static memory check warnings
   }
 //
 //  if (_SX<2) {  // read from gmem
-   oodxcen[ntx] = devoodx[i1 - 1 + (ix - tx) + ntx];
+   oodxcen(ntx) = devoodx[i1 - 1 + (ix - tx) + ntx];
 //  } else {
-//   oodxcen[ntx] = 2.0 / ( 1.0/oodxcor[ntx-1]+1.0/oodxcor[ntx-(_SX<2)] );
+//   oodxcen(ntx) = 2.0 / ( 1.0/oodxcor(ntx-1)+1.0/oodxcor(ntx-(_SX<2)) );
 //  }
  }
 //
@@ -136,10 +186,11 @@
 // might not be optimal due to striped access:
 // populate slice
   ind=IOL(2*tx+1,ty+1);
-  p   [ind] = pcur[0];
-  eps [ind] = ecur[0];
-  p   [++ind] = pcur[1];
-  eps [ind] = ecur[1];
+  p   (ind) = pcur[0];
+  eps (ind) = ecur[0];
+  ind++;
+  p   (ind) = pcur[1];
+  eps (ind) = ecur[1];
 // update z-metric (registers) ; might convert to shmem
   oodzcenback=devoodz[k1 - 1 + k];
   oodzcor=devoodz[k1 - 1 + k - 1 + (nz-1) ];
@@ -164,22 +215,22 @@
 // same for y-rows -- omitted here
 // ...
   if (ty < 4) { // BC in y direction
-   p  [IOL(tx+1+ntx*(ty%2), (ty/2)*(nty+1))] = devp  [IOG(ix+1+ntx*(ty%2), iy-ty+(ty/2)*(nty+1), k)]; // subtract ty to get first tile coordinate
-   eps[IOL(tx+1+ntx*(ty%2), (ty/2)*(nty+1))] = deveps(IOG(ix+1+ntx*(ty%2), iy-ty+(ty/2)*(nty+1), k));
+   p  (IOL(tx+1+ntx*(ty%2), (ty/2)*(nty+1))) = devp  [IOG(ix+1+ntx*(ty%2), iy-ty+(ty/2)*(nty+1), k)]; // subtract ty to get first tile coordinate
+   eps(IOL(tx+1+ntx*(ty%2), (ty/2)*(nty+1))) = deveps(IOG(ix+1+ntx*(ty%2), iy-ty+(ty/2)*(nty+1), k));
   }
   if (tx < 2) {
-   p  [IOL((_SX*ntx+1)*(tx%2), ty+1)] = devp  [IOG(ix-tx+(_SX*ntx+1)*(tx%2), iy+1, k)];
-   eps[IOL((_SX*ntx+1)*(tx%2), ty+1)] = deveps(IOG(ix-tx+(_SX*ntx+1)*(tx%2), iy+1, k));
+   p  (IOL((_SX*ntx+1)*(tx%2), ty+1)) = devp  [IOG(ix-tx+(_SX*ntx+1)*(tx%2), iy+1, k)];
+   eps(IOL((_SX*ntx+1)*(tx%2), ty+1)) = deveps(IOG(ix-tx+(_SX*ntx+1)*(tx%2), iy+1, k));
   }
 
 //
-//  rhs [ IIL(2*tx  ,ty) ] = devrhs [ IIG(ix,  iy,k-1) ];
-//  rhs [ IIL(2*tx+1,ty) ] = devrhs [ IIG(ix+1,iy,k-1) ];
-  rhs   [ IIL(tx,ty) ]          = devrhs   ( IIG(ix,         iy,k-1) );
-  rhs   [ IIL(tx+ntx,ty) ] = devrhs   ( IIG(ix+ntx,iy,k-1) );
+//  rhs ( IIL(2*tx  ,ty) ) = devrhs [ IIG(ix,  iy,k-1) ];
+//  rhs ( IIL(2*tx+1,ty) ) = devrhs [ IIG(ix+1,iy,k-1) ];
+  rhs   ( IIL(tx,ty) )     = devrhs   ( IIG(ix,    iy,k-1) );
+  rhs   ( IIL(tx+ntx,ty) ) = devrhs   ( IIG(ix+ntx,iy,k-1) );
 //
-  kappa [ IIL(tx,         ty) ] = devkappa ( IIG(ix,         iy,k-1) );
-  kappa [ IIL(tx+ntx,ty) ] = devkappa ( IIG(ix+ntx,iy,k-1) );
+  kappa ( IIL(tx,    ty) ) = devkappa ( IIG(ix,         iy,k-1) );
+  kappa ( IIL(tx+ntx,ty) ) = devkappa ( IIG(ix+ntx,iy,k-1) );
 // load next p & eps slices
   ind=IOG(ix+tx+1,iy+1,k+1) ;
   pback[0] = devp[ind] ; eback[0] = deveps(ind);
@@ -196,22 +247,22 @@
   indl=IOL(2*tx+1+_DX,ty+1) ;
 //  if (qred){
   __syncthreads();
-  w = ( eps[indl-1] + ecur[_DX] ) * ( oodxcor[2*tx+_DX] * oodxcen[2*tx+_DX] );
-  e = ( eps[indl+1] + ecur[_DX] ) * ( oodxcor[2*tx+_DX] * oodxcen[2*tx+1+_DX] );
-  s = ( eps[indl-(_SX*ntx+2)] + ecur[_DX] ) * ( oodycor[ty] * oodycen[ty] );
-  n = ( eps[indl+(_SX*ntx+2)] + ecur[_DX] ) * ( oodycor[ty] * oodycen[ty+1] );
+  w = ( eps(indl-1) + ecur[_DX] ) * ( oodxcor(2*tx+_DX) * oodxcen(2*tx+_DX) );
+  e = ( eps(indl+1) + ecur[_DX] ) * ( oodxcor(2*tx+_DX) * oodxcen(2*tx+1+_DX) );
+  s = ( eps(indl-(_SX*ntx+2)) + ecur[_DX] ) * ( oodycor(ty) * oodycen(ty) );
+  n = ( eps(indl+(_SX*ntx+2)) + ecur[_DX] ) * ( oodycor(ty) * oodycen(ty+1) );
   f = ( efront[_DX] + ecur[_DX] )              * ( oodzcor * oodzcenfront );
   b = ( eback[_DX]  + ecur[_DX] )              * ( oodzcor * oodzcenback );
-  o = - 0.5 * ( w + e + s + n + b + f ) + kappa[IIL(2*tx+_DX,ty)];
+  o = - 0.5 * ( w + e + s + n + b + f ) + kappa(IIL(2*tx+_DX,ty));
   o = 0.5 / o;
-//  pcur0 -= dt * ( pcur0 + o * ( w*p[IOL(2*tx,ty+1)] + e*p[IOL(2*tx+2,ty+1)] + s*p[IOL(2*tx+1,ty)] + n*p[IOL(2*tx+1,ty+2)] + f*pfront[0] + b*pback0 - 2.0f*rhs[IIL(2*tx,ty)] ) );
-  pcur[_DX] -= dt * ( pcur[_DX] + o * ( w*p[indl-1] + e*p[indl+1] + s*p[indl-(_SX*ntx+2)] + n*p[indl+(_SX*ntx+2)] + f*pfront[_DX] + b*pback[_DX]
-//                              ) - rhs[IIL(2*tx+_DX,ty)] ); // RHS o-weighted
-                              - 2.0 * rhs[IIL(2*tx+_DX,ty)] ) );
+//  pcur0 -= dt * ( pcur0 + o * ( w*p(IOL(2*tx,ty+1)) + e*p(IOL(2*tx+2,ty+1)) + s*p(IOL(2*tx+1,ty)) + n*p(IOL(2*tx+1,ty+2)) + f*pfront[0] + b*pback0 - 2.0f*rhs(IIL(2*tx,ty)) ) );
+  pcur[_DX] -= dt * ( pcur[_DX] + o * ( w*p(indl-1) + e*p(indl+1) + s*p(indl-(_SX*ntx+2)) + n*p(indl+(_SX*ntx+2)) + f*pfront[_DX] + b*pback[_DX]
+//                              ) - rhs(IIL(2*tx+_DX,ty)) ); // RHS o-weighted
+                              - 2.0 * rhs(IIL(2*tx+_DX,ty)) ) );
 // upload to device :
   devp[ind]=pcur[_DX];
 //  if (qblack)
-   p[indl] = pcur[_DX]; // upload back to shmem
+   p(indl) = pcur[_DX]; // upload back to shmem
 //  }
 //  if (qblack) {
 // (2) black
@@ -221,18 +272,18 @@
   ind=IOG(ix+tx+1+_DX,iy+1,k) ;
   indl=IOL(2*tx+1+_DX,ty+1) ;
   __syncthreads();
-  w = ( eps[indl-1] + ecur[_DX] ) * ( oodxcor[2*tx+_DX] * oodxcen[2*tx+_DX] );
-  e = ( eps[indl+1] + ecur[_DX] ) * ( oodxcor[2*tx+_DX] * oodxcen[2*tx+1+_DX] );
-  s = ( eps[indl-(_SX*ntx+2)] + ecur[_DX] ) * ( oodycor[ty] * oodycen[ty] );
-  n = ( eps[indl+(_SX*ntx+2)] + ecur[_DX] ) * ( oodycor[ty] * oodycen[ty+1] );
+  w = ( eps(indl-1) + ecur[_DX] ) * ( oodxcor(2*tx+_DX) * oodxcen(2*tx+_DX) );
+  e = ( eps(indl+1) + ecur[_DX] ) * ( oodxcor(2*tx+_DX) * oodxcen(2*tx+1+_DX) );
+  s = ( eps(indl-(_SX*ntx+2)) + ecur[_DX] ) * ( oodycor(ty) * oodycen(ty) );
+  n = ( eps(indl+(_SX*ntx+2)) + ecur[_DX] ) * ( oodycor(ty) * oodycen(ty+1) );
   f = ( efront[_DX] + ecur[_DX] )              * ( oodzcor * oodzcenfront );
   b = ( eback[_DX]  + ecur[_DX] )              * ( oodzcor * oodzcenback );
-  o = - 0.5 * ( w + e + s + n + b + f ) + kappa[IIL(2*tx+_DX,ty)];
+  o = - 0.5 * ( w + e + s + n + b + f ) + kappa(IIL(2*tx+_DX,ty));
   o = 0.5 / o;
-//  pcur0 -= dt * ( pcur0 + o * ( w*p[IOL(2*tx,ty+1)] + e*p[IOL(2*tx+2,ty+1)] + s*p[IOL(2*tx+1,ty)] + n*p[IOL(2*tx+1,ty+2)] + f*pfront[0] + b*pback0 - 2.0f*rhs[IIL(2*tx,ty)] ) );
-  pcur[_DX] -= dt * ( pcur[_DX] + o * ( w*p[indl-1] + e*p[indl+1] + s*p[indl-(_SX*ntx+2)] + n*p[indl+(_SX*ntx+2)] + f*pfront[_DX] + b*pback[_DX]
-//                              ) - rhs[IIL(2*tx+_DX,ty)] ); // RHS o-weighted
-                              - 2.0 * rhs[IIL(2*tx+_DX,ty)] ) );
+//  pcur0 -= dt * ( pcur0 + o * ( w*p(IOL(2*tx,ty+1)) + e*p(IOL(2*tx+2,ty+1)) + s*p(IOL(2*tx+1,ty)) + n*p(IOL(2*tx+1,ty+2)) + f*pfront[0] + b*pback0 - 2.0f*rhs(IIL(2*tx,ty)) ) );
+  pcur[_DX] -= dt * ( pcur[_DX] + o * ( w*p(indl-1) + e*p(indl+1) + s*p(indl-(_SX*ntx+2)) + n*p(indl+(_SX*ntx+2)) + f*pfront[_DX] + b*pback[_DX]
+//                              ) - rhs(IIL(2*tx+_DX,ty)) ); // RHS o-weighted
+                              - 2.0 * rhs(IIL(2*tx+_DX,ty)) ) );
 // upload to device :
   devp[ind]=pcur[_DX];
 //   p[indl] = pcur[_DX]; // upload back to shmem
@@ -258,3 +309,21 @@
 #undef ty
 #undef ntx
 #undef nty
+#undef devp
+
+#undef sizep
+#undef sizeeps
+#undef sizerhs
+#undef sizekappa
+#undef sizedxcen
+#undef sizedxcor
+#undef sizedycen
+#undef sizedycor
+#undef p
+#undef eps
+#undef kappa
+#undef rhs
+#undef oodxcen
+#undef oodxcor
+#undef oodycen
+#undef oodycor

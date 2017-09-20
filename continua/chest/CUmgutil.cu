@@ -198,18 +198,38 @@ extern "C" void GaussSeidel_Cuda(__CUFLOAT *devp, __CUFLOAT *devrhs, __CUFLOAT *
 #endif
 //
  if (!i2d) {
-  dim3 block(_BSIZE_X, _BSIZE_Y);
 //  dim3 grid( nnx / (_SX*_BSIZE_X) + ( nnx % (_SX*_BSIZE_X) > 0 ), nny / (_SY*_BSIZE_Y) + ( nnx % (_SY*_BSIZE_Y) > 0 ));
-  dim3 grid( _NBLK(nnx,_SX*_BSIZE_X) , _NBLK(nny,_SY*_BSIZE_Y));
 //
+#ifdef __DSHMEM
+// compute block size based on the array sizes
+  dim3 block(_BSIZE_X, _BSIZE_Y);
+
+#define ntx block.x
+#define nty block.y
+#define sizep      (( _SX * ntx + 2 ) * ( _SY * nty + 2 ))
+#define sizeeps    sizep
+#define sizerhs    (( _SX * ntx     ) * ( _SY * nty     ))
+#define sizekappa  sizerhs
+#define sizedxcen  (_SX * ntx + 1)
+#define sizedxcor  (_SX * ntx)
+#define sizedycen  (_SY * nty + 1)
+#define sizedycor  (_SY * nty)
+#define _SHMEMSIZE sizeof(float)*(sizep + sizeeps + sizerhs + sizekappa + sizedxcen + sizedxcor + sizedycen + sizedycor)
+// unsigned int shmemsize = _SHMEMSIZE ;
+#else
+  dim3 block(_BSIZE_X, _BSIZE_Y); // static block size
+#define _SHMEMSIZE 0
+#endif
+  dim3 grid( _NBLK(nnx,_SX*_BSIZE_X) , _NBLK(nny,_SY*_BSIZE_Y));
+
 #ifndef __MGTEX
-  Gauss_Seidel_Cuda_3D<<<grid, block>>>(devp, devrhs, deveps, devkappa, devoodx, devoody, devoodz, i3b, i3, i1, j1, k1, nx, ny, nz, dt, _REDBLACK, *qpinitzero);
+  Gauss_Seidel_Cuda_3D<<<grid, block, _SHMEMSIZE>>>(devp, devrhs, deveps, devkappa, devoodx, devoody, devoodz, i3b, i3, i1, j1, k1, nx, ny, nz, dt, _REDBLACK, *qpinitzero);
 #else
   checkCudaErrors(cudaBindTexture(NULL, texrhs, devrhs, (i3-1+nnx*nny*nnz)*sizeof(float)));
   checkCudaErrors(cudaBindTexture(NULL, texkappa, devkappa, (i3-1+nnx*nny*nnz)*sizeof(float)));
   checkCudaErrors(cudaBindTexture(NULL, texeps, deveps, (i3b-1+nx*ny*nz)*sizeof(float)));
 //
-  Gauss_Seidel_Cuda_3D<<<grid, block>>>(devp, devoodx, devoody, devoodz, i3b, i3, i1, j1, k1, nx, ny, nz, dt, _REDBLACK, *qpinitzero);
+  Gauss_Seidel_Cuda_3D<<<grid, block, _SHMEMSIZE>>>(devp, devoodx, devoody, devoodz, i3b, i3, i1, j1, k1, nx, ny, nz, dt, _REDBLACK, *qpinitzero);
 //
   checkCudaErrors(cudaUnbindTexture(texrhs));
   checkCudaErrors(cudaUnbindTexture(texkappa));
@@ -219,6 +239,7 @@ extern "C" void GaussSeidel_Cuda(__CUFLOAT *devp, __CUFLOAT *devrhs, __CUFLOAT *
 //  Gauss_Seidel_Cuda_3D<<<grid, block>>>(devp, devrhs, deveps, devkappa, devoodx, devoody, devoodz, i3b, i3, i1, j1, k1, nx, ny, nz, dt, _BLACK);
   *qpinitzero=0;
  }
+#undef _SHMEMSIZE
 }
 
 extern "C" const int bcwest, bceast, bcnorth, bcsouth, bcback, bcfront ; // from FORTRAN
