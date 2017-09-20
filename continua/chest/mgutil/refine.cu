@@ -62,6 +62,7 @@
 // loop over all z-slices, including first row (k=-1)
 //
  for (int k=-1 ; k<=nnz ; k++) {
+//  __syncthreads(); // should not be needed
 // load next coarse row
   cback(tx+1,ty+1)=coarse(ixc+1,iyc+1,k+1);
 // load additional boundary points
@@ -85,7 +86,7 @@
    if (qedgeblock) { // obtain values at grid edge by interpolation
 #define dx  (1-2*(bool)(ixc))
 #define dy  (1-2*(bool)(iyc))
-    cback(tx+1-dx,ty+1-dy) = cback(tx+1-dx,ty+1) + cback(tx+1,ty+1-dy) - cback(tx+1,ty+1) ; // treat four possible corner points togetherOR
+    cback(tx+1-dx,ty+1-dy) = cback(tx+1-dx,ty+1) + cback(tx+1,ty+1-dy) - cback(tx+1,ty+1) ; // treat four possible corner points together
 //    cback(0,0) = cback(1,0) + cback(0,1) - cback(1,1)
    }
   }
@@ -126,7 +127,7 @@
 //
 // perform the actual interpolation, uploading directly to device :
 #define izf 2*k
-//
+
   fine(ixf+1,iyf+1,izf)   += (cwsb + (cesb + cwnb + cwsf)*three + (cenb + cesf + cwnf)*nine + cenf*twentyseven);
   fine(ixf,  iyf+1,izf)   += (cesb + (cwsb + cenb + cesf)*three + (cwnb + cwsf + cenf)*nine + cwnf*twentyseven);
   fine(ixf+1,iyf,  izf)   += (cwnb + (cenb + cwsb + cwnf)*three + (cesb + cenf + cwsf)*nine + cesf*twentyseven);
@@ -142,6 +143,8 @@
 
 #undef tx
 #undef ty
+#undef bx
+#undef by
 #undef __VOLATILE
 #undef IOL
 #undef IDC

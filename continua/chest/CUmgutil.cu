@@ -1,3 +1,5 @@
+#define _MAX(B,C) (((B)>(C)) ? (B) : (C))
+#define _MIN(B,C) (((C)>(B)) ? (B) : (C))
 
 #ifdef __BCTEX
 // declare textures
@@ -19,6 +21,7 @@
 #endif
 
 #include <helper_cuda.h>
+#include <stdio.h>
 #include "mgkernels.cu"
 #include "bckernels.cu"
 #include "residual.cu"
@@ -101,9 +104,36 @@ extern "C" void Residual_Cuda(__CUFLOAT *devres, __CUFLOAT *devp, __CUFLOAT *dev
  __CINT *imaxtile = NULL, *dimaxtile = NULL;
 //
  if (!i2d) {
-  dim3 block(_BSIZE_X, _BSIZE_Y);
-  dim3 grid( _NBLK(nnx,_SX*_BSIZE_X) , _NBLK(nny,_SY*_BSIZE_Y));
+#ifdef __DSHMEM
+// compute block size based on the array sizes
+  unsigned int bx;
+  unsigned int by;
+  bx=4 ; // this will be 2 x the block size (see GS kernsl)
+  by=4 ;
+  while ( (bx < nnx) && (bx < 2*_BSIZE_X) && !(nnx % 2*bx)) bx<<=1 ;
+  while ( (by < nny) && (by <   _BSIZE_Y) && !(nny % 2*by)) by<<=1 ;
+#define _BX (bx>>1)
+#define _BY by
+
+#define ntx block.x
+#define nty block.y
+#define sizep      (( _SX * ntx + 2 ) * ( _SY * nty + 2 ))
+#define sizeeps    sizep
+#define sizeres    (( _SX * ntx     ) * ( _SY * nty     ))
+#define sizedxcen  (_SX * ntx + 1)
+#define sizedxcor  (_SX * ntx)
+#define sizedycen  (_SY * nty + 1)
+#define sizedycor  (_SY * nty)
+#define _SHMEMSIZE sizeof(float)*(sizep + sizeeps + sizeres + sizeres + sizedxcen + sizedxcor + sizedycen + sizedycor)
+#else
+#define _BX _BSIZE_X
+#define _BY _BSIZE_Y
+#define _SHMEMSIZE 0
+#endif
+  dim3 block(_BX, _BY);
+  dim3 grid( _NBLK(nnx,_SX*_BX) , _NBLK(nny,_SY*_BY));
   nblk = grid.x * grid.y ;
+//
   datasize = nblk * ( sizeof(__CFLOAT) + sizeof(__CINT) ) ;
 //
   if (qmaxres) { // allocate memory --  combine allocations for value and index
@@ -114,14 +144,14 @@ extern "C" void Residual_Cuda(__CUFLOAT *devres, __CUFLOAT *devp, __CUFLOAT *dev
   }
 //
 #ifndef __MGTEX
-  Residual_Cuda_3D<<<grid, block>>>(devres, devp, devrhs, deveps, devkappa, devoodx, devoody, devoodz, i3b, i3, i1, j1, k1, nx, ny, nz, qmaxres, qresnorm, drestile, dimaxtile);
+  Residual_Cuda_3D<<<grid,block,_SHMEMSIZE>>>(devres, devp, devrhs, deveps, devkappa, devoodx, devoody, devoodz, i3b, i3, i1, j1, k1, nx, ny, nz, qmaxres, qresnorm, drestile, dimaxtile);
 #else
   checkCudaErrors(cudaBindTexture(NULL, texrhs, devrhs, (i3-1+nnx*nny*nnz)*sizeof(float)));
   checkCudaErrors(cudaBindTexture(NULL, texkappa, devkappa, (i3-1+nnx*nny*nnz)*sizeof(float)));
   checkCudaErrors(cudaBindTexture(NULL, texp, devp, (i3b-1+nx*ny*nz)*sizeof(float)));
   checkCudaErrors(cudaBindTexture(NULL, texeps, deveps, (i3b-1+nx*ny*nz)*sizeof(float)));
 //
-  Residual_Cuda_3D<<<grid, block>>>(devres, devoodx, devoody, devoodz, i3b, i3, i1, j1, k1, nx, ny, nz, qmaxres, qresnorm, drestile, dimaxtile);
+  Residual_Cuda_3D<<<grid,block,_SHMEMSIZE>>>(devres, devoodx, devoody, devoodz, i3b, i3, i1, j1, k1, nx, ny, nz, qmaxres, qresnorm, drestile, dimaxtile);
 //
   checkCudaErrors(cudaUnbindTexture(texrhs));
   checkCudaErrors(cudaUnbindTexture(texkappa));
@@ -145,6 +175,7 @@ extern "C" void Residual_Cuda(__CUFLOAT *devres, __CUFLOAT *devp, __CUFLOAT *dev
    cudaFree(drestile);
   } // qmaxres
  }
+#undef _SHMEMSIZE
 }
 
 //=========================================================================================================================================================================//
@@ -202,7 +233,14 @@ extern "C" void GaussSeidel_Cuda(__CUFLOAT *devp, __CUFLOAT *devrhs, __CUFLOAT *
 //
 #ifdef __DSHMEM
 // compute block size based on the array sizes
-  dim3 block(_BSIZE_X, _BSIZE_Y);
+  unsigned int bx;
+  unsigned int by;
+  bx=4 ; // this will be 2 x the block size (see GS kernsl)
+  by=4 ;
+  while ( (bx < nnx) && (bx < 2*_BSIZE_X) && !(nnx % 2*bx)) bx<<=1 ;
+  while ( (by < nny) && (by <   _BSIZE_Y) && !(nny % 2*by)) by<<=1 ;
+#define _BX (bx>>1)
+#define _BY by
 
 #define ntx block.x
 #define nty block.y
@@ -215,12 +253,13 @@ extern "C" void GaussSeidel_Cuda(__CUFLOAT *devp, __CUFLOAT *devrhs, __CUFLOAT *
 #define sizedycen  (_SY * nty + 1)
 #define sizedycor  (_SY * nty)
 #define _SHMEMSIZE sizeof(float)*(sizep + sizeeps + sizerhs + sizekappa + sizedxcen + sizedxcor + sizedycen + sizedycor)
-// unsigned int shmemsize = _SHMEMSIZE ;
 #else
-  dim3 block(_BSIZE_X, _BSIZE_Y); // static block size
+#define _BX _BSIZE_X
+#define _BY _BSIZE_Y
 #define _SHMEMSIZE 0
 #endif
-  dim3 grid( _NBLK(nnx,_SX*_BSIZE_X) , _NBLK(nny,_SY*_BSIZE_Y));
+  dim3 block(_BX, _BY); // static block size
+  dim3 grid( _NBLK(nnx,_SX*_BX) , _NBLK(nny,_SY*_BY));
 
 #ifndef __MGTEX
   Gauss_Seidel_Cuda_3D<<<grid, block, _SHMEMSIZE>>>(devp, devrhs, deveps, devkappa, devoodx, devoody, devoodz, i3b, i3, i1, j1, k1, nx, ny, nz, dt, _REDBLACK, *qpinitzero);

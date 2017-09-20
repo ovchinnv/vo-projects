@@ -42,7 +42,6 @@
 
 // NOTE : for GS Red/Black read twice as many locations as there are threads, since the update will involve two passes with half the memory accessed
 
-
 #define sizep      (( _SX * ntx + 2 ) * ( _SY * nty + 2 ))
 #define sizeeps    sizep
 #define sizerhs    (( _SX * ntx     ) * ( _SY * nty     ))
