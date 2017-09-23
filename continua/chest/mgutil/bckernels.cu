@@ -115,7 +115,7 @@
 #else
  __global__ void  Apply_BC_Cuda_3Dx2(__CUFLOAT *devu, const __CINT i3b, const __CINT ind2, const __CINT nx, const __CINT ny, const __CINT nz,
 #endif
-                                   const __CINT boundary, const __CINT boundary2, const __CINT bctype, const __CINT bctype2, const __CFLOAT wgt, const __CUFLOAT wgt2) {
+                                   const __CINT boundary, const __CINT boundary2, const __CINT bctype, const __CINT bctype2, const __CFLOAT wgt, const __CUFLOAT wgt2, const int8_t qpinitzero){
 // translated from FORTRAN apply_bc_dnp
 // g has inner points only ; u of course has ghost points
 // this version applies BC to two OPPOSING sides simultaneously ; user is responsible for passing in the correct boundaries
@@ -182,9 +182,10 @@
 #ifndef __BCTEX
 #define         gval devg[I2D(ix,iy,iz,ie-ib+1,je-jb+1,ke-kb+1)]
 #endif
-#define         uval devu[IOG(ix+ib+di,iy+jb+dj,iz+kb+dk)]
+#define         uval ((qpinitzero) ? (0.f) : devu[IOG(ix+ib+di,iy+jb+dj,iz+kb+dk)])
       if (bctype==bcdirichlet || bctype==bcdirichletg) {
-         devu[IOG(ix+ib,iy+jb,iz+kb)] = uval + wgt * (gval - uval);
+//         devu[IOG(ix+ib,iy+jb,iz+kb)] = uval + wgt * (gval - uval);
+         devu[IOG(ix+ib,iy+jb,iz+kb)] = (1.0 - wgt2) * uval + wgt2 * gval;
 //***************************
         } else if (bctype==bcneumann || bctype==bcneumanng) {
          devu[IOG(ix+ib,iy+jb,iz+kb)] = uval - dir * wgt * gval;
@@ -246,7 +247,8 @@
 #define         gval devg2[I2D(ix,iy,iz,ie-ib+1,je-jb+1,ke-kb+1)]
 #endif
       if (bctype2==bcdirichlet || bctype2==bcdirichletg) {
-         devu[IOG(ix+ib,iy+jb,iz+kb)] = uval + wgt2 * (gval - uval);
+//         devu[IOG(ix+ib,iy+jb,iz+kb)] = uval + wgt2 * (gval - uval);
+         devu[IOG(ix+ib,iy+jb,iz+kb)] = (1.0 - wgt2) * uval + wgt2 * gval;
 //***************************
         } else if (bctype2==bcneumann || bctype2==bcneumanng) {
          devu[IOG(ix+ib,iy+jb,iz+kb)] = uval - dir * wgt2 * gval;
@@ -274,3 +276,5 @@
 #undef bcperiodic
 #undef bcdirichletg
 #undef bcneumanng
+#undef devu
+#undef uval

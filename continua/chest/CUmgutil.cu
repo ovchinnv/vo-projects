@@ -34,6 +34,8 @@ extern "C" void AllocDevMem(__CUFLOAT **p, __CINT n) {
 // not sure everything is done correctly
 // cudaMalloc(&p, n*sizeof(__CUFLOAT));
  checkCudaErrors(cudaMalloc(p, n*sizeof(__CUFLOAT)));
+// checkCudaErrors(cudaMemset(*p, 0, sizeof(float)));
+//
 }
 
 extern "C" void FreeDevMem(__CUFLOAT **p) {
@@ -47,6 +49,10 @@ extern "C" void CopyHostToDevice(__CFLOAT *hostp, __CUFLOAT *devp, __CINT n){
 
 extern "C" void CopyDeviceToHost(__CFLOAT *hostp, __CUFLOAT *devp, __CINT n){
  checkCudaErrors(cudaMemcpy(hostp, devp, sizeof(__CUFLOAT)*n, cudaMemcpyDeviceToHost));
+}
+
+extern "C" void InitDevMem(__CUFLOAT **devp, __CINT i3b, __CINT v, __CINT n) { // note that every byte of devp will be set to v
+ checkCudaErrors(cudaMemset( *devp + i3b - 1, v, n*sizeof(__CUFLOAT)));
 }
 
 extern "C" void BindTextures( __CFLOAT *devrhs, __CFLOAT *devkappa, __CFLOAT *deveps,
@@ -106,13 +112,10 @@ extern "C" void Residual_Cuda(__CUFLOAT *devres, __CUFLOAT *devp, __CUFLOAT *dev
  if (!i2d) {
 #ifdef __DSHMEM
 // compute block size based on the array sizes
-  unsigned int bx;
-  unsigned int by;
-  bx=4 ; // this will be 2 x the block size (see GS kernsl)
-  by=4 ;
-  while ( (bx < nnx) && (bx < 2*_BSIZE_X) && !(nnx % 2*bx)) bx<<=1 ;
-  while ( (by < nny) && (by <   _BSIZE_Y) && !(nny % 2*by)) by<<=1 ;
-#define _BX (bx>>1)
+// same code as for GS kernel below
+  unsigned int bx=4 ; while ( ( (_SX*bx) <= nnx) && (bx <= _BGSMAX_X) && !(nnx % (_SX*bx))) { bx<<=1; }; bx>>=1;
+  unsigned int by=4 ; while ( ( (_SY*by) <= nny) && (by <= _BGSMAX_Y) && !(nny % (_SY*by))) { by<<=1; }; by>>=1;
+#define _BX bx
 #define _BY by
 
 #define ntx block.x
@@ -126,8 +129,8 @@ extern "C" void Residual_Cuda(__CUFLOAT *devres, __CUFLOAT *devp, __CUFLOAT *dev
 #define sizedycor  (_SY * nty)
 #define _SHMEMSIZE sizeof(float)*(sizep + sizeeps + sizeres + sizeres + sizedxcen + sizedxcor + sizedycen + sizedycor)
 #else
-#define _BX _BSIZE_X
-#define _BY _BSIZE_Y
+#define _BX _BGSMAX_X
+#define _BY _BGSMAX_Y
 #define _SHMEMSIZE 0
 #endif
   dim3 block(_BX, _BY);
@@ -176,6 +179,8 @@ extern "C" void Residual_Cuda(__CUFLOAT *devres, __CUFLOAT *devp, __CUFLOAT *dev
   } // qmaxres
  }
 #undef _SHMEMSIZE
+#undef _BX
+#undef _BY
 }
 
 //=========================================================================================================================================================================//
@@ -200,6 +205,7 @@ extern "C" void Coarsen_Cuda(__CUFLOAT *fine, __CUFLOAT *coarse, const __CINT i3
 //=========================================================================================================================================================================//
 extern "C" void Refine_Cuda(__CUFLOAT *fine, __CUFLOAT *coarse, const __CINT i3f, const __CINT i3c, const __CINT nx, const __CINT ny, const __CINT nz, const int8_t i2d) {
 // NOTE that the dimensions passed in correspond to the fine grid
+//
  int nnx=nx/2; // coarse grid points (INNER GRID)
  int nny=ny/2;
  int nnz=nz/(2-i2d);
@@ -207,13 +213,16 @@ extern "C" void Refine_Cuda(__CUFLOAT *fine, __CUFLOAT *coarse, const __CINT i3f
  if (!i2d) {
   dim3 block(_BRFNE_X, _BRFNE_Y);
   dim3 grid(_NBLK(nnx,_BRFNE_X), _NBLK(nny,_BRFNE_Y));
-#ifndef __MGTEX
+//#ifndef __MGTEX
   Refine_Cuda_3D<<<grid,block>>>(fine, coarse, i3f, i3c, nnx, nny, nnz);
-#else
-  checkCudaErrors(cudaBindTexture(NULL, texcoarse, coarse, (nnx+2)*(nny+2)*(nnz+2)*sizeof(float)));
-  Refine_Cuda_3D<<<grid,block>>>(fine, i3f, i3c, nnx, nny, nnz);
-  checkCudaErrors(cudaUnbindTexture(texcoarse));
-#endif
+//#else
+//  size_t coarse_byte_offset = sizeof(__CUFLOAT)*(i3c-1) ;
+// note : texture memory needs to be aligned, which cannot be guaranteed here
+//  checkCudaErrors(cudaBindTexture(NULL, texcoarse, coarse+i3c-1, (nnx+2)*(nny+2)*(nnz+2)*sizeof(float))); // this does not work
+//  checkCudaErrors(cudaBindTexture(&coarse_byte_offset, texcoarse, coarse + i3c-1, (nnx+2)*(nny+2)*(nnz+2)*sizeof(float))); // this does not work
+//  Refine_Cuda_3D<<<grid,block>>>(fine, i3f, i3c, nnx, nny, nnz);
+//  checkCudaErrors(cudaUnbindTexture(texcoarse));
+//#endif
  } //i2d
 }
 
@@ -227,19 +236,16 @@ extern "C" void GaussSeidel_Cuda(__CUFLOAT *devp, __CUFLOAT *devrhs, __CUFLOAT *
 #ifdef __MGTEX
  int nnz=nz-2;
 #endif
+//printf("2D calculation ? %1u\n",i2d);
 //
  if (!i2d) {
 //  dim3 grid( nnx / (_SX*_BSIZE_X) + ( nnx % (_SX*_BSIZE_X) > 0 ), nny / (_SY*_BSIZE_Y) + ( nnx % (_SY*_BSIZE_Y) > 0 ));
 //
 #ifdef __DSHMEM
 // compute block size based on the array sizes
-  unsigned int bx;
-  unsigned int by;
-  bx=4 ; // this will be 2 x the block size (see GS kernsl)
-  by=4 ;
-  while ( (bx < nnx) && (bx < 2*_BSIZE_X) && !(nnx % 2*bx)) bx<<=1 ;
-  while ( (by < nny) && (by <   _BSIZE_Y) && !(nny % 2*by)) by<<=1 ;
-#define _BX (bx>>1)
+  unsigned int bx=4 ; while ( ( (_SX*bx) <= nnx) && (bx <= _BGSMAX_X) && !(nnx % (_SX*bx))) { bx<<=1; }; bx>>=1;
+  unsigned int by=4 ; while ( ( (_SY*by) <= nny) && (by <= _BGSMAX_Y) && !(nny % (_SY*by))) { by<<=1; }; by>>=1;
+#define _BX bx
 #define _BY by
 
 #define ntx block.x
@@ -254,16 +260,18 @@ extern "C" void GaussSeidel_Cuda(__CUFLOAT *devp, __CUFLOAT *devrhs, __CUFLOAT *
 #define sizedycor  (_SY * nty)
 #define _SHMEMSIZE sizeof(float)*(sizep + sizeeps + sizerhs + sizekappa + sizedxcen + sizedxcor + sizedycen + sizedycor)
 #else
-#define _BX _BSIZE_X
-#define _BY _BSIZE_Y
+#define _BX _BGSMAX_X
+#define _BY _BGSMAX_Y
 #define _SHMEMSIZE 0
 #endif
   dim3 block(_BX, _BY); // static block size
   dim3 grid( _NBLK(nnx,_SX*_BX) , _NBLK(nny,_SY*_BY));
 
+//printf("calling GS-CUDA-3D with the %5d x %5d block grid\n",_BX,_BY);
 #ifndef __MGTEX
   Gauss_Seidel_Cuda_3D<<<grid, block, _SHMEMSIZE>>>(devp, devrhs, deveps, devkappa, devoodx, devoody, devoodz, i3b, i3, i1, j1, k1, nx, ny, nz, dt, _REDBLACK, *qpinitzero);
 #else
+// note that the code below binds the array fron the beginning ; might want to only bind the current level data
   checkCudaErrors(cudaBindTexture(NULL, texrhs, devrhs, (i3-1+nnx*nny*nnz)*sizeof(float)));
   checkCudaErrors(cudaBindTexture(NULL, texkappa, devkappa, (i3-1+nnx*nny*nnz)*sizeof(float)));
   checkCudaErrors(cudaBindTexture(NULL, texeps, deveps, (i3b-1+nx*ny*nz)*sizeof(float)));
@@ -276,31 +284,32 @@ extern "C" void GaussSeidel_Cuda(__CUFLOAT *devp, __CUFLOAT *devrhs, __CUFLOAT *
 #endif
 //  Gauss_Seidel_Cuda_3D<<<grid, block>>>(devp, devrhs, deveps, devkappa, devoodx, devoody, devoodz, i3b, i3, i1, j1, k1, nx, ny, nz, dt, _RED);
 //  Gauss_Seidel_Cuda_3D<<<grid, block>>>(devp, devrhs, deveps, devkappa, devoodx, devoody, devoodz, i3b, i3, i1, j1, k1, nx, ny, nz, dt, _BLACK);
-  *qpinitzero=0;
  }
 #undef _SHMEMSIZE
+ *qpinitzero=0; // this is essential -- needed so that we do not restart from zero every time
 }
 
 extern "C" const int bcwest, bceast, bcnorth, bcsouth, bcback, bcfront ; // from FORTRAN
 
 extern "C" void ApplyBC_Cuda(__CUFLOAT *devp, __CUFLOAT *devbcw, __CUFLOAT *devbce, __CUFLOAT *devbcn, __CUFLOAT *devbcs, __CUFLOAT *devbcf, __CUFLOAT *devbcb,
                              const __CINT i3b, const __CINT i2, const __CINT j2, const __CINT k2, const __CINT nx, const __CINT ny, const __CINT nz, 
-                             __CINT *bc_type, __CFLOAT *bc_wgt, const int8_t i2d) {
+                             __CINT *bc_type, __CFLOAT *bc_wgt, const int8_t i2d, const int8_t qpinitzero) {
  int nnx=nx-2; // inner points
  int nny=ny-2;
  int nnz=nz-2;
+
+// bool qpinitzero =0 ; // DEBUG
 
 #ifdef __BCTEX
 //bind to textures
  checkCudaErrors(cudaBindTexture(NULL, texbcw, devbcw, (i2-1+nny*nnz)*sizeof(float)));
  checkCudaErrors(cudaBindTexture(NULL, texbce, devbce, (i2-1+nny*nnz)*sizeof(float)));
  checkCudaErrors(cudaBindTexture(NULL, texbcs, devbcs, (j2-1+nnx*nnz)*sizeof(float)));
- checkCudaErrors(cudaBindTexture(NULL, texbcn, devbcn, (j2-1+nnx*nnx)*sizeof(float)));
+ checkCudaErrors(cudaBindTexture(NULL, texbcn, devbcn, (j2-1+nnx*nnz)*sizeof(float)));
  checkCudaErrors(cudaBindTexture(NULL, texbcf, devbcf, (k2-1+nnx*nny)*sizeof(float)));
  checkCudaErrors(cudaBindTexture(NULL, texbcb, devbcb, (k2-1+nnx*nny)*sizeof(float)));
 //
 #endif
-
 
  dim3 block, grid ;
  if (!i2d) {
@@ -314,12 +323,13 @@ extern "C" void ApplyBC_Cuda(__CUFLOAT *devp, __CUFLOAT *devbcw, __CUFLOAT *devb
 //
 //  Apply_BC_Cuda_3D<<<grid, block>>>(devp, devbcw, i3b, i2, nx, ny, nz, bcwest, bc_type[bcwest-1], bc_wgt[bcwest-1]);
 //  Apply_BC_Cuda_3D<<<grid, block>>>(devp, devbce, i3b, i2, nx, ny, nz, bceast, bc_type[bceast-1], bc_wgt[bceast-1]);
+// printf(" pinitzero %1d\n",qpinitzero);
 #ifndef __BCTEX
-  Apply_BC_Cuda_3Dx2<<<grid, block>>>(devp, devbcw, devbce, i3b, i2, nx, ny, nz, bcwest, bceast, bc_type[bcwest-1], bc_type[bceast-1], bc_wgt[bcwest-1], bc_wgt[bceast-1]);
+  Apply_BC_Cuda_3Dx2<<<grid, block>>>(devp, devbcw, devbce, i3b, i2, nx, ny, nz, bcwest, bceast, bc_type[bcwest-1], bc_type[bceast-1], bc_wgt[bcwest-1], bc_wgt[bceast-1], qpinitzero);
 #else
 //  checkCudaErrors(cudaBindTexture(NULL, texbc1, devbcw, (i2-1+nny*nnz)*sizeof(float)));
 //  checkCudaErrors(cudaBindTexture(NULL, texbc2, devbce, (i2-1+nny*nnz)*sizeof(float)));
-  Apply_BC_Cuda_3Dx2<<<grid, block>>>(devp, i3b, i2, nx, ny, nz, bcwest, bceast, bc_type[bcwest-1], bc_type[bceast-1], bc_wgt[bcwest-1], bc_wgt[bceast-1]);
+  Apply_BC_Cuda_3Dx2<<<grid, block>>>(devp, i3b, i2, nx, ny, nz, bcwest, bceast, bc_type[bcwest-1], bc_type[bceast-1], bc_wgt[bcwest-1], bc_wgt[bceast-1], qpinitzero);
 //  checkCudaErrors(cudaUnbindTexture(texbc1));
 //  checkCudaErrors(cudaUnbindTexture(texbc2));
 #endif
@@ -333,13 +343,12 @@ extern "C" void ApplyBC_Cuda(__CUFLOAT *devp, __CUFLOAT *devbcw, __CUFLOAT *devb
 //
 //  Apply_BC_Cuda_3D<<<grid, block>>>(devp, devbcn, i3b, j2, nx, ny, nz, bcnorth, bc_type[bcnorth-1], bc_wgt[bcnorth-1]);
 //  Apply_BC_Cuda_3D<<<grid, block>>>(devp, devbcs, i3b, j2, nx, ny, nz, bcsouth, bc_type[bcsouth-1], bc_wgt[bcsouth-1]);
-
 #ifndef __BCTEX
-  Apply_BC_Cuda_3Dx2<<<grid, block>>>(devp, devbcn, devbcs, i3b, j2, nx, ny, nz, bcnorth, bcsouth, bc_type[bcnorth-1], bc_type[bcsouth-1], bc_wgt[bcnorth-1], bc_wgt[bcsouth-1]);
+  Apply_BC_Cuda_3Dx2<<<grid, block>>>(devp, devbcn, devbcs, i3b, j2, nx, ny, nz, bcnorth, bcsouth, bc_type[bcnorth-1], bc_type[bcsouth-1], bc_wgt[bcnorth-1], bc_wgt[bcsouth-1], qpinitzero);
 #else
 //  checkCudaErrors(cudaBindTexture(NULL, texbc1, devbcs, (j2-1+nnx*nnz)*sizeof(float)));
 //  checkCudaErrors(cudaBindTexture(NULL, texbc2, devbcn, (j2-1+nnx*nnx)*sizeof(float)));
-  Apply_BC_Cuda_3Dx2<<<grid, block>>>(devp, i3b, j2, nx, ny, nz, bcnorth, bcsouth, bc_type[bcnorth-1], bc_type[bcsouth-1], bc_wgt[bcnorth-1], bc_wgt[bcsouth-1]);
+  Apply_BC_Cuda_3Dx2<<<grid, block>>>(devp, i3b, j2, nx, ny, nz, bcnorth, bcsouth, bc_type[bcnorth-1], bc_type[bcsouth-1], bc_wgt[bcnorth-1], bc_wgt[bcsouth-1], qpinitzero);
 //  checkCudaErrors(cudaUnbindTexture(texbc1));
 //  checkCudaErrors(cudaUnbindTexture(texbc2));
 #endif
@@ -354,11 +363,11 @@ extern "C" void ApplyBC_Cuda(__CUFLOAT *devp, __CUFLOAT *devbcw, __CUFLOAT *devb
 //  Apply_BC_Cuda_3D<<<grid, block>>>(devp, devbcf, i3b, k2, nx, ny, nz, bcfront, bc_type[bcfront-1], bc_wgt[bcfront-1]);
 //  Apply_BC_Cuda_3D<<<grid, block>>>(devp, devbcb, i3b, k2, nx, ny, nz, bcback,  bc_type[bcback-1],  bc_wgt[bcback-1]);
 #ifndef __BCTEX
-  Apply_BC_Cuda_3Dx2<<<grid, block>>>(devp, devbcf, devbcb, i3b, k2, nx, ny, nz, bcfront, bcback, bc_type[bcfront-1], bc_type[bcback-1], bc_wgt[bcfront-1], bc_wgt[bcback-1]);
+  Apply_BC_Cuda_3Dx2<<<grid, block>>>(devp, devbcf, devbcb, i3b, k2, nx, ny, nz, bcfront, bcback, bc_type[bcfront-1], bc_type[bcback-1], bc_wgt[bcfront-1], bc_wgt[bcback-1], qpinitzero);
 #else
 //  checkCudaErrors(cudaBindTexture(NULL, texbc1, devbcf, (k2-1+nnx*nny)*sizeof(float)));
 //  checkCudaErrors(cudaBindTexture(NULL, texbc2, devbcb, (k2-1+nnx*nny)*sizeof(float)));
-  Apply_BC_Cuda_3Dx2<<<grid, block>>>(devp, i3b, k2, nx, ny, nz, bcfront, bcback, bc_type[bcfront-1], bc_type[bcback-1], bc_wgt[bcfront-1], bc_wgt[bcback-1]);
+  Apply_BC_Cuda_3Dx2<<<grid, block>>>(devp, i3b, k2, nx, ny, nz, bcfront, bcback, bc_type[bcfront-1], bc_type[bcback-1], bc_wgt[bcfront-1], bc_wgt[bcback-1], qpinitzero);
 //  checkCudaErrors(cudaUnbindTexture(texbc1));
 //  checkCudaErrors(cudaUnbindTexture(texbc2));
 #endif
