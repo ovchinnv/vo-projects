@@ -1,16 +1,17 @@
+// NOTE : cannot use textures because input and output are stored in the same array
  __global__ void Refine_Cuda_3D(__CUFLOAT *fine, 
-#ifndef __MGTEX
+//#ifndef __MGTEX
  __CUFLOAT *coarse, 
-#endif
+//#endif
  const __CINT i3f, const __CINT i3c, const __CINT nnx, const __CINT nny, const __CINT nnz) {
 // interpolation coefficient in 3D is 1/64
-#define coef 0.015625000000000000
-#define cb   0.666666666666666666
+#define coef 0.0156250000000
+#define cb   0.6666666666666
 //constants
-#define three 3.0
-#define nine 9.0
-#define twentyseven 27.0
 
+#define three        3.0
+#define nine         9.0
+#define twentyseven 27.0
 
 #define tx threadIdx.x
 #define ty threadIdx.y
@@ -34,6 +35,7 @@
  float *cfront = clocal ;
  float *cback  = cfront + tilesize ;
  float *cswap ;
+// float cwsf, cesf, cwnf, cenf, cwsb, cesb, cwnb, cenb ; // cell values places in registers
  float cwsf, cesf, cwnf, cenf, cwsb, cesb, cwnb, cenb ; // cell values places in registers
 
  unsigned int ixc = (bx * ntx) + tx;
@@ -53,24 +55,24 @@
 #define cback(i,j) cback[IOL(i,j)]
 #define fine(i,j,k) fine[IDF(i,j,k)]
 
-#ifdef __MGTEX
-#define coarse(i,j,k) tex1Dfetch(texcoarse,IDC(i,j,k));
-#else
+//#ifdef __MGTEX
+//#define coarse(i,j,k) tex1Dfetch(texcoarse,IDC(i,j,k))
+//#else
 #define coarse(i,j,k) coarse[IDC(i,j,k)]
-#endif
+//#endif
 // unsigned int ind, indl;
 // loop over all z-slices, including first row (k=-1)
 //
  for (int k=-1 ; k<=nnz ; k++) {
 //  __syncthreads(); // should not be needed
 // load next coarse row
-  cback(tx+1,ty+1)=coarse(ixc+1,iyc+1,k+1);
+  cback(tx+1,ty+1)=coef*coarse(ixc+1,iyc+1,k+1);
 // load additional boundary points
   if (ty < 2) { // BC in y-direction
-   cback( tx+1, (nty+1)*ty) = coarse(ixc+1, iyc - ty + (nty+1)*ty, k+1); // could absorb lone ty, but this way consistent with x-bc below
+   cback( tx+1, (nty+1)*ty) = coef*coarse(ixc+1, iyc - ty + (nty+1)*ty, k+1); // could absorb lone ty, but this way consistent with x-bc below
   }
   if (tx < 2) { // BC in x-direction
-   cback( (ntx+1)*(tx%2), ty+1) = coarse(ixc - tx + (ntx+1)*(tx%2), iyc+1, k+1);
+   cback( (ntx+1)*(tx%2), ty+1) = coef*coarse(ixc - tx + (ntx+1)*(tx%2), iyc+1, k+1);
   }
 
 // populate corners either by interpolation (boundary corners) or by extra reads from device
@@ -80,7 +82,7 @@
   if ( ((tx==0) || (tx==ntx-1) || (ixc==nnx-1) ) && ((ty==0) || (ty==nty-1) || (iyc==nny-1))) {
 #define dx  (1-2*(bool)(tx))
 #define dy  (1-2*(bool)(ty))
-   cback(tx+1-dx,ty+1-dy)=coarse(ixc+1-dx, iyc+1-dy, k+1) ; // read from device (possibly wrong values)
+   cback(tx+1-dx,ty+1-dy)=coef*coarse(ixc+1-dx, iyc+1-dy, k+1) ; // read from device (possibly wrong values)
 #undef dx
 #undef dy
    if (qedgeblock) { // obtain values at grid edge by interpolation
@@ -127,7 +129,7 @@
 //
 // perform the actual interpolation, uploading directly to device :
 #define izf 2*k
-
+//
   fine(ixf+1,iyf+1,izf)   += (cwsb + (cesb + cwnb + cwsf)*three + (cenb + cesf + cwnf)*nine + cenf*twentyseven);
   fine(ixf,  iyf+1,izf)   += (cesb + (cwsb + cenb + cesf)*three + (cwnb + cwsf + cenf)*nine + cwnf*twentyseven);
   fine(ixf+1,iyf,  izf)   += (cwnb + (cenb + cwsb + cwnf)*three + (cesb + cenf + cwsf)*nine + cesf*twentyseven);

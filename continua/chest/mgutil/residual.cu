@@ -13,8 +13,8 @@
 #define ntx blockDim.x
 #define nty blockDim.y
 #else
-#define ntx _BSIZE_X
-#define nty _BSIZE_Y
+#define ntx _BGSMAX_X
+#define nty _BGSMAX_Y
 #endif
 // thread indices into device memory:
 #define tx threadIdx.x

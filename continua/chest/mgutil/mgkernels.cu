@@ -1,3 +1,12 @@
+// whether to use dynamically allocated shared memory
+#ifdef __DSHMEM
+#define ntx blockDim.x
+#define nty blockDim.y
+#else
+#define ntx _BGSMAX_X
+#define nty _BGSMAX_Y
+#endif
+
 #define qred   1 //(which==_RED   || which==_REDBLACK)
 #define qblack 1 //(which==_BLACK || which==_REDBLACK)
 // index maps : NOTE that they are zero-based (not one-based as in FORTRAN)
@@ -16,7 +25,7 @@
  __global__ void Gauss_Seidel_Cuda_3D(__CUFLOAT *devp, __CUFLOAT *devoodx, __CUFLOAT *devoody, __CUFLOAT *devoodz,
 #endif
                         const __CINT i3b, const __CINT i3, const __CINT i1, const __CINT j1, const __CINT k1, const __CINT nx, const __CINT ny, const __CINT nz, const __CFLOAT dt, 
-                        const int which, const bool qpinitzero) {
+                        const int which, const int8_t qpinitzero) {
 
 #ifdef __MGTEX
 //use texture addressing
@@ -31,14 +40,6 @@
 
 #define tx threadIdx.x
 #define ty threadIdx.y
-// whether to use dynamically allocated shared memory
-#ifdef __DSHMEM
-#define ntx blockDim.x
-#define nty blockDim.y
-#else
-#define ntx _BSIZE_X
-#define nty _BSIZE_Y
-#endif
 
 // NOTE : for GS Red/Black read twice as many locations as there are threads, since the update will involve two passes with half the memory accessed
 
@@ -117,7 +118,7 @@
 //registers 22 + 1 = 23
  unsigned int ind, indl ;// indices
 
-#define devp (qpinitzero) ? 0.0 : devp
+#define devp (qpinitzero) ? (0.f) : devp
 
  ind=IOG(ix+tx+1,iy+1,0) ;
  pfront[0]=devp[ind];
@@ -214,11 +215,11 @@
 // same for y-rows -- omitted here
 // ...
   if (ty < 4) { // BC in y direction
-   p  (IOL(tx+1+ntx*(ty%2), (ty/2)*(nty+1))) = devp  [IOG(ix+1+ntx*(ty%2), iy-ty+(ty/2)*(nty+1), k)]; // subtract ty to get first tile coordinate
+     p(IOL(tx+1+ntx*(ty%2), (ty/2)*(nty+1))) =   devp[IOG(ix+1+ntx*(ty%2), iy-ty+(ty/2)*(nty+1), k)]; // subtract ty to get first tile coordinate
    eps(IOL(tx+1+ntx*(ty%2), (ty/2)*(nty+1))) = deveps(IOG(ix+1+ntx*(ty%2), iy-ty+(ty/2)*(nty+1), k));
   }
   if (tx < 2) {
-   p  (IOL((_SX*ntx+1)*(tx%2), ty+1)) = devp  [IOG(ix-tx+(_SX*ntx+1)*(tx%2), iy+1, k)];
+     p(IOL((_SX*ntx+1)*(tx%2), ty+1)) =   devp[IOG(ix-tx+(_SX*ntx+1)*(tx%2), iy+1, k)];
    eps(IOL((_SX*ntx+1)*(tx%2), ty+1)) = deveps(IOG(ix-tx+(_SX*ntx+1)*(tx%2), iy+1, k));
   }
 

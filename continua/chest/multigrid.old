@@ -39,10 +39,6 @@
 !
  bool, public :: multigrid_initialized=.false.
 !
-#ifdef __CUDA
- int, parameter :: CUnxmin=4, CUnymin=4, CUnzmin=4 ! will need to experiment with minimal grid parameters, however, anticipate that they should be large,
-                                                      ! because overhead of cuda kernels would probably remain significant for small grids
-#endif
  int, parameter :: nxmin=3, nymin=3, nzmin=3 ! minimum allowed number of inner points
  int, save :: maxlev                         ! maximum number of allowed levels (user defined)
  int, parameter :: default_maxlev=1000
@@ -57,9 +53,8 @@
                                        alleast, allwest, allsouth, allnorth, allfront, allback ! arrays that store boundary conditions
 #ifdef __CUDA
 ! CUDA arrays: NOTE that these are _device_ pointers ; they are ONLY addressible from the device
- type(C_PTR) :: CUodxall, CUodyall, CUodzall, CUres, CUallp, CUalleps, CUallkappa, CUallrhs, CUalleast, CUallwest, CUallsouth, CUallnorth, CUallfront, CUallback
+ type(C_PTR) :: CUodxall, CUodyall, CUodzall, CUallp, CUalleps, CUallkappa, CUallrhs, CUalleast, CUallwest, CUallsouth, CUallnorth, CUallfront, CUallback
  bool, save :: qusecuda=.false.;
- int1 :: qpinitzero=0;
 #endif
 !
  float, pointer, save, dimension(:,:) :: bc_wgt
@@ -128,6 +123,7 @@
  bool, save :: compute_initial_residual
  bool, parameter :: default_compute_initial_residual=.true.
  int1, save :: i3D=1, i2D=0
+ int1 :: qpinitzero=0
 !
 #ifdef __TIMER
  int :: mgtimer, smoothtimer
@@ -205,12 +201,7 @@
 #define __VAR	maxlev
 #define __TAG	multigrid_maximum_levels
 #define __NAME	maximum number of grid levels
-  if (existtag_nocase('MULTIGRID_CYCLE',ctx)) then
-   __WRN3( whoami, __STRING(__NAME)//' has no effect in a custom cycle',0);
-   maxlev=default_maxlev
-  else
 #include "parser/parser_macro1.src"
-  endif
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% smoother selection %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
   if (.not.existtag_nocase('MULTIGRID_SMOOTHER',ctx)) then
    l=len_trim(smoother_names(default_smoother))
@@ -255,11 +246,7 @@
 #define __VAR	smooth_iterations
 #define __TAG	multigrid_smooth_iterations
 #define __NAME	number of smoother iterations
-  if (existtag_nocase('MULTIGRID_CYCLE',ctx)) then
-   __WRN3( whoami, __STRING(__NAME)//' has no effect in a custom cycle',3);
-  else
 #include "parser/parser_macro1.src"
-  endif
 !
 #define __VAR	maxcycle
 #define __TAG	multigrid_maximum_cycles
@@ -294,29 +281,17 @@
 #include "parser/parser_macro1.src"
 !
 !**********************************************
-#ifdef __CUDA
-! decide whether we are using CUDA
-  qusecuda=(smoother .eq. GaussSeidel_Cuda_) .or. &
-! insert other conditions here
-&  .false.
-#endif
-!
 ! determine the maximum number of levels possible (3D/2D)
   numlev=1;
   nnx=nx-2; nny=ny-2; nnz=nz-2; ! inner points
   do while ( (mod(nnx,itwo).eq.0).and.(mod(nny,itwo).eq.0).and.(mod(nnz,itwo)*i3d.eq.0).and. &
-#ifdef __CUDA
-&          ((qusecuda.and.nnx.ge.2*CUnxmin.and.nny.ge.2*CUnymin.and.nnz.ge.2*CUnzmin*i3d) .or. &
-&          (.not.qusecuda.and.nnx.ge.2*nxmin.and.nny.ge.2*nymin.and.nnz.ge.2*nzmin*i3d)) .and. &
-#else
-&           nnx.ge.2*nxmin.and.nny.ge.2*nymin.and.nnz.ge.2*nzmin*i3d).and. &
-#endif
-&           numlev.lt.maxlev )
+&              nnx.ge.2*nxmin.and.nny.ge.2*nymin.and.nnz.ge.2*nzmin*i3d.and. &
+&              numlev.lt.maxlev )
    numlev=numlev+1
    nnx=nnx/2; nny=nny/2; nnz=nnz/(2-i2d);
   enddo
 !
-  call message(whoami, 'Number of allowed multigrid levels is '//itoa(numlev))
+  call message(whoami, 'NUMBER OF MULTIGRID LEVELS IS '//itoa(numlev))
 !
 ! define default v-cycle
 !***********************************************
@@ -346,8 +321,6 @@
      call parse_multigrid_cycle(multigrid_cycle_spec, mcycle)
      if (.not.associated(mcycle)) then
       call warning(whoami, 'INVALID CYCLE SPECIFIED. ABORT.',-1)
-     else
-      call message(whoami, 'Using a custom multigrid cycle :"'//trim(multigrid_cycle_spec)//'"');
      endif
    end select
   else
@@ -357,7 +330,7 @@
 ! check that the multigrid cycle makes sense:
 !
   l=1; ! start at the first level
-  if (associated(mcycle)) then ; len_cycle=size(mcycle) ; else ; len_cycle=0 ; endif
+  len_cycle=size(mcycle)
   do i=1,len_cycle
    j=mcycle(i)
    if (j.eq.done) then
@@ -367,13 +340,13 @@
    elseif (j.eq.reduce) then
     l=l+1;
     if (l.gt.numlev) then ! invalid level
-     call warning(whoami, 'INVALID CYCLE SPECIFIED (GRID LEVEL TOO LARGE). ABORT.',-1);
+     call warning(whoami, 'INVALID CYCLE SPECIFIED. ABORT.',-1);
      exit
     endif
    elseif (j.eq.prolong) then
     l=l-1;
     if (l.lt.1) then ! invalid level (allowed levels are [ 0 ... numlev-1 ]
-     call warning(whoami, 'INVALID CYCLE SPECIFIED (GRID LEVEL TOO SMALL). ABORT.',-1);
+     call warning(whoami, 'INVALID CYCLE SPECIFIED. ABORT.',-1);
      exit
     endif
    elseif (j.lt.0) then ! this means an invalid entry
@@ -499,8 +472,12 @@
 !
   call multigrid_update_coef(.true., .true., .true., .true.);
 !
-!
 #ifdef __CUDA
+! decide whether we are using CUDA
+ qusecuda=(smoother .eq. GaussSeidel_Cuda_) .or. &
+! insert other conditions here
+& .false.
+!
  if (qusecuda) then
  __CUDBG('allocating cuda arrays')
 #ifdef __TIMER
@@ -511,6 +488,7 @@
   __ALLOC_DEV_MEM(odxall)
   __ALLOC_DEV_MEM(odyall)
   __ALLOC_DEV_MEM(odzall)
+!3D arrays
   __ALLOC_DEV_MEM(allp)
   __ALLOC_DEV_MEM(alleps)
   __ALLOC_DEV_MEM(allkappa)
@@ -536,12 +514,12 @@
   __COPY_HOST_DEVICE(odzall)
 !3D arrays
 !  __COPY_HOST_DEVICE(allp)
-  call CopyHostToDevice_C(allp, CUallp, nx*ny*nz) ! should only need to copy the finest grid data
+  call CopyHostToDevice_C(allp, CUallp, nx*ny*nz) ! should only need to copy the finest grid
   __COPY_HOST_DEVICE(alleps)
   __COPY_HOST_DEVICE(allkappa)
 ! NOTE : NOT SCALING RHS BY o METRIC HERE ! THIS IS A DIFFERENCE BETWEEN CPU AND CUDA VERSIONS
 !  __COPY_HOST_DEVICE(allrhs)
-  call CopyHostToDevice_C(allrhs, CUallrhs, nnx*nny*nnz) ! should only need to copy the finest grid
+  call CopyHostToDevice_C(allrhs, CUallrhs, (nx-2)*(ny-2)*(nz-2)) ! should only need to copy the finest grid
 ! BC arrays
   __COPY_HOST_DEVICE(alleast)
   __COPY_HOST_DEVICE(allwest)
@@ -549,9 +527,6 @@
   __COPY_HOST_DEVICE(allsouth)
   __COPY_HOST_DEVICE(allback)
   __COPY_HOST_DEVICE(allfront)
-#if defined(__BCTEX) || defined(__MGTEX)
-  call BindTextures_C(CUallrhs, CUallkappa, CUalleps, CUallwest, CUalleast, CUallsouth, CUallnorth, CUallback, CUallfront, len3D, len3Dbc, len2Dyz, len2Dxz, len2Dxy);
-#endif
 #ifdef __TIMER
   __INCR(cumem_time,timer_stamp(cumemtimer));
 #endif
@@ -594,9 +569,6 @@
     __FREE_DEV_MEM(allkappa)
     __FREE_DEV_MEM(allrhs)
 ! BC arrays
-#if defined(__BCTEX) || defined(__MGTEX)
-  call UnbindTextures_C()
-#endif
     __FREE_DEV_MEM(alleast)
     __FREE_DEV_MEM(allwest)
     __FREE_DEV_MEM(allnorth)
@@ -770,7 +742,7 @@
   int :: msglen
   int :: level, i1, j1, k1, i3, i3b, i2, j2, k2 ! indices into global arrays
   int :: i, j, k, m, n
-  int :: nnx, nny, nnz
+  int :: nnx, nny, nnz, nall
   int :: di, icycle
   int :: imax, jmax, kmax
 !
@@ -783,9 +755,6 @@
 #endif
   float :: res ( (nx-2) * (ny-2) * (nz-2) ), curr_residual, d
   bool :: qres
-#ifdef __CUDA
-  int qmaxres ! whether to compute maximum residual
-#endif
 !
 !  interface
 !   subroutine apply_bc(u,g,nnx,nny,nnz,boundary,bctype)
@@ -801,20 +770,9 @@
    return
   endif
 !
-#ifdef __CUDA
-  if (qusecuda) then
-#ifdef __TIMER
-  mgtime=timer_stamp(cumemtimer)
-#endif
-   __ALLOC_DEV_MEM(res)
-#ifdef __TIMER
-  __INCR(cumem_time, timer_stamp(cumemtimer))
-#endif
-  endif
-#endif
-! allocate multigrid arrays
+! allocate multigrid arrays  
 !  allocate(  allw(len3D),  alle(len3D),  alls(len3D),  alln(len3D),  allb(len3D),  allf(len3D),  allo(len3D)  )
-! populate multigrid arrays
+! populate multigrid arrays 
 ! loop over all levels
   nnx=nx-2; nny=ny-2; nnz=nz-2;
   i1=1; j1=1; k1=1;
@@ -847,7 +805,7 @@
   i3=1;  i3b=1;
 !
 ! scale rhs by o metric
-#define nall (nnx*nny*nnz)
+  nall=nnx*nny*nnz ; 
   do k=i3, i3-1+nall; allrhs(k)=allrhs(k)/allo(k); enddo
 !#ifdef __CUDA
 !  if (qusecuda) call CopyHostToDevice_C(allrhs, CUallrhs, (nx-2)*(ny-2)*(nz-2)) ! copy scaled rhs (finest grid only)
@@ -858,41 +816,35 @@
 #include "mgutil/multigrid_bc.src"
 ! compute initial residual
 ! note: def below causes extra divisions in the residual calculation
-#//whether to normalize the residual
-#define _QRESNORM 1
-#if (_QRESNORM==1)
 #define __RNORM /allo(i)
-#else
-#define __RNORM
-#endif
-!
   if (compute_initial_residual) then
 #ifdef __TIMER
  mgtime=timer_stamp(mgtimer)
 #endif
-#ifdef __CUDA
- if (qusecuda) then
-! compute residual within a cuda kernel
-   qmaxres=1 ! whether to compute maximum residual
-   __CUDBG('computing initial resiual');
-   call Residual_Cuda(CUres,CUallp,CUallrhs,CUalleps,CUallkappa,CUodxall,CUodyall,CUodzall,i3b,i3,i1,j1,k1,nnx+2,nny+2,nnz+2,i2d,qmaxres,_QRESNORM,curr_residual,imax)
-   __INC(imax) ; ! change to Fortran indexing convention
- else
-#endif
-   call residual(res, allp, allrhs, allw, alle, alls, alln, allf, allb, allo, nx, ny, nz, q2d)
-#ifdef __CUDA
- endif !qusecuda
-#endif
- qres=.false.
+   call residual(res, allp, allrhs, allw, alle, alls, alln, allf, allb, allo, nx, ny, nz, q2d); qres=.false.;
 #ifdef __TIMER
  __INCR(residual_time,timer_elapsed(mgtimer))
 #endif
+! define residual normalization (could be made different for subsequent calls)
 #include "mgutil/mg_resout.src"
   else
    curr_residual=one
   endif ! compute_initial_residual
   init_residual=curr_residual
 !
+!
+! aa
+! open(666,file='resf0.dat',form='unformatted') ; write(666) res; close(666)
+! open(666,file='rhsf.dat',form='unformatted') ; write(666) allrhs(1:nall); close(666) ! note: RHS normalized by o
+! open(666,file='e.dat',form='unformatted') ; write(666) alle(1:nall); close(666) ! note: RHS normalized by o
+! open(666,file='w.dat',form='unformatted') ; write(666) allw(1:nall); close(666) ! note: RHS normalized by o
+! open(666,file='s.dat',form='unformatted') ; write(666) alls(1:nall); close(666) ! note: RHS normalized by o
+! open(666,file='n.dat',form='unformatted') ; write(666) alln(1:nall); close(666) ! note: RHS normalized by o
+! open(666,file='o.dat',form='unformatted') ; write(666) allo(1:nall); close(666) ! note: RHS normalized by o
+! open(666,file='f.dat',form='unformatted') ; write(666) allf(1:nall); close(666) ! note: RHS normalized by o
+! open(666,file='b.dat',form='unformatted') ; write(666) allb(1:nall); close(666) ! note: RHS normalized by o
+! open(666,file='rhsf.dat',form='unformatted') ; write(666) allrhs(1:nall)*allo(1:nall); close(666) ! note: RHS normalized by o
+! stop ! aa
 ! begin multigrid iterations
 !
   icycle=1;
@@ -913,20 +865,7 @@
  mgtime=timer_stamp(mgtimer)
 #endif
       if (qres) then
-#ifdef __CUDA
-       if (qusecuda) then
-        qmaxres=1; ! SHOULD BE ZERO TO SAVE TIME
-        __CUDBG('computing residual');
-        call Residual_Cuda(CUres,CUallp,CUallrhs,CUalleps,CUallkappa,CUodxall,CUodyall,CUodzall,i3b,i3,i1,j1,k1,nnx+2,nny+2,nnz+2,i2d,qmaxres,_QRESNORM,curr_residual,imax)
-        __INC(imax) ; ! change to Fortran indexing convention
-       else
-#endif
-        call residual(res,allp(i3b),allrhs(i3),allw(i3),alle(i3),alls(i3),alln(i3),allf(i3),allb(i3),allo(i3),nnx+2,nny+2,nnz+2,q2d)
-#ifdef __CUDA
-       endif
-#endif
-! aa : remove below -- just for debugging
-#include "mgutil/mg_resout.src"
+       call residual(res,allp(i3b),allrhs(i3),allw(i3),alle(i3),alls(i3),alln(i3),allf(i3),allb(i3),allo(i3),nnx+2,nny+2,nnz+2,q2d)
 #ifdef __TIMER
  __INCR(residual_time,timer_stamp(mgtimer))
 #endif
@@ -938,36 +877,15 @@
 ! 3D offsets
       i3=i3+nnx*nny*nnz;  i3b=i3b+(nnx+2)*(nny+2)*(nnz+2);
 ! inerpolate
-#ifdef __CUDA
-      if (qusecuda) then ! note that this flag is not optimal, because it is set iff the CUDA GS-smoother is requested
-                         ! i.e., suppose we want to run a CPU smoother, with interpolation/coarsening done with CUDA ? Practically, that would be a stupid idea,
-                         ! but technically, it could be useful; at this point, such things are not supported; maybe in the future
-       __CUDBG('coarsening solution');
-       call Coarsen_Cuda(CUres, CUallrhs, i3, nnx, nny, nnz, i2d, 0)
-      else
-#endif
-       call coarsen(res, allrhs(i3), nnx, nny, nnz, i2d, 0)
-#ifdef __CUDA
-      endif ! qusecuda
-#endif
+      call coarsen(res, allrhs(i3), nnx, nny, nnz, i2d, 0)
 ! switch to coarse grid lengths
       nnx=nnx/2; nny=nny/2; nnz=nnz/(2-i2d); ! 3D/2D
 !        write(0,*) size(allrhs), i3+(nnx)*(nny)*(nnz) - 1 ! aa
 !        write(0,*) size(allp), i3b+(nnx+2)*(nny+2)*(nnz+2) - 1 ! aa
-!
+! scale new rhs by o metric
+      do k=i3, i3-1+nnx*nny*nnz; allrhs(k)=allrhs(k)/allo(k); enddo
 ! initialize solution (to 0, are there other sensible options?)
-#ifdef __CUDA
-      if (qusecuda) then
-       qpinitzero=1 ! flag to initialize solution p to zero in the next smoothing kernel ; by itself insufficient because BC below _still_ gets called with wrong data !
-       call InitDevMem_C(CUallp, i3b, izero, (nnx+2)*(nny+2)*(nnz+2)) ! should not be necessary as long as boundary conditions are aware of zero initial solution
-      else
-#endif
-       call fzero(allp(i3b),nnx+2,nny+2,nnz+2)
-! also scale new RHS by o metric, only if running on CPU
-       do k=i3, i3-1+nnx*nny*nnz; allrhs(k)=allrhs(k)/allo(k); enddo
-#ifdef __CUDA
-      endif
-#endif
+      call fzero(allp(i3b),nnx+2,nny+2,nnz+2)
 ! update bc (note that the bc update should be unnecessary in most cases, since we begin from an initial solution of zero)
       __INC(level)
 !
@@ -983,17 +901,7 @@
 !
       nnx=2*nnx; nny=2*nny; nnz=(2-i2d)*nnz; ! switch to finer grid dimensions
       di=(nnx+2)*(nny+2)*(nnz+2)
-#ifdef __CUDA
-      if (qusecuda) then
-       __CUDBG('refining solution')
-       call Refine_Cuda(CUallp, CUallp, i3b-di, i3b, nnx, nny, nnz, i2d)
-       qpinitzero=0 ! needed if refinement immediately follows coarsening (a pathological case)
-      else
-#endif
-       call refine(allp(i3b-di), allp(i3b), nnx, nny, nnz, i2d)
-#ifdef __CUDA
-      endif
-#endif
+      call refine(allp(i3b-di), allp(i3b), nnx, nny, nnz, i2d)
 ! update offsets
 ! update indices (some of these updates are not necessary in this version of subroutine)
       i1=i1-2*nnx-1;      j1=j1-2*nny-1;      k1=k1-2*(nnz-i2d)-i3d;
@@ -1002,7 +910,7 @@
 ! 3D offsets
       i3=i3-nnx*nny*nnz;  i3b=i3b-di;
 ! update bc
-      __INCR(level,-1)
+      level=level-1
 #ifdef __TIMER
  __INCR(refine_time,timer_elapsed(mgtimer))
 #endif
@@ -1058,14 +966,23 @@
        enddo
 #ifdef __CUDA
        case(GaussSeidel_Cuda_);
-!      qpinitzero=1
        do k=1,j
-!       write(0,*) 'p init zero :', qpinitzero
-        __CUDBG('GS smoother');
         call GaussSeidel_Cuda(CUallp,CUallrhs,CUalleps,CUallkappa,CUodxall,CUodyall,CUodzall,i3b,i3,i1,j1,k1,nnx+2,nny+2,nnz+2,omega,i2d,qpinitzero)
-!       write(0,*) 'p init zero :', qpinitzero
-! update BC
-#include "mgutil/multigrid_bc.src"
+! to subtract BC time from smoother time
+#ifdef __TIMER
+ mgtime=timer_stamp(mgtimer)
+#endif
+        call ApplyBC_Cuda(CUallp,CUallwest,CUalleast,CUallnorth,CUallsouth,CUallfront,CUallback,i3b,i2,j2,k2,nnx+2,nny+2,nnz+2,bc_type,bc_wgt(:,level),i2d,qpinitzero)
+#ifdef __TIMER
+#ifdef __INSIDESMOOTHER
+ smooth_time=smooth_time+bc_time ! subtract the BC time from smoother time
+#endif
+ __INCR(bc_time, timer_elapsed(mgtimer))
+#ifdef __INSIDESMOOTHER
+ smooth_time=smooth_time-bc_time
+#endif
+#endif
+
        enddo
 #endif /* __CUDA */
 #endif /* __BINDC */
@@ -1146,49 +1063,31 @@
 !       we could check less frequently and save a little time
 !***********************************************
    if (icycle.gt.convergence_skip_cycles) then
+! check whether the solution is on the GPU
 #ifdef __CUDA
-    if (qusecuda) then
-     qmaxres=1 ! whether to compute maximum residual
-     __CUDBG('computing residual')
-     call Residual_Cuda(CUres,CUallp,CUallrhs,CUalleps,CUallkappa,CUodxall,CUodyall,CUodzall,i3b,i3,i1,j1,k1,nnx+2,nny+2,nnz+2,i2d,qmaxres,_QRESNORM,curr_residual,imax)
-     __INC(imax) ; ! change to Fortran indexing convention
-    else
-#endif
-     call residual(res,allp,allrhs,allw,alle,alls,alln,allf,allb,allo,nx,ny,nz,q2d)
-#ifdef __CUDA
-    endif
-#endif
-    qres=.false.; ! false means residual is already known
 #ifdef __TIMER
-    __INCR(residual_time,timer_stamp(mgtimer))
+ if (qusecuda) mgtime=timer_stamp(cumemtimer)
+#endif /*  __TIMER */
+ if (qusecuda) then
+  __CUDBG('copying solution from device to host')
+  call CopyDeviceToHost_C(allp, CUallp, nx*ny*nz) ; ! note that we are copying _ONLY_ the outer grid layer because we are outside of the cycle ; this may change
+ endif
+#endif /*  CUDA */
+#ifdef __TIMER
+#ifdef __CUDA
+ if (qusecuda) __INCR(cumem_time, timer_stamp(cumemtimer))
+#endif /*  __CUDA  */
+ mgtime=timer_stamp(mgtimer)
+#endif /*  __TIMER */
+   call residual(res,allp,allrhs,allw,alle,alls,alln,allf,allb,allo,nx,ny,nz,q2d); qres=.false.; ! false means residual is already known
+#ifdef __TIMER
+ __INCR(residual_time,timer_stamp(mgtimer))
 #endif
-!
 #include "mgutil/mg_resout.src"
-   endif ! icycle
+   endif
 !***********************************************
-   __INC(icycle)
+   icycle=icycle+1
   enddo ! while not solved
-!
-! copy solution to main array
-#ifdef __CUDA
-  if (qusecuda) then
-#ifdef __TIMER
-   mgtime=timer_stamp(cumemtimer)
-#endif
-! copy solution to host
-   __CUDBG('copy solution to host')
-   call CopyDeviceToHost_C(p,CUallp,nx*ny*nz)
-! free cuda residual array
-   __FREE_DEV_MEM(res)
-#ifdef __TIMER
-   __INCR(cumem_time, timer_stamp(cumemtimer))
-#endif
-  else
-#endif
-   call copy3d(allp,p,nx,ny,nz)
-#ifdef __CUDA
-  endif ! qusecuda
-#endif
 !
 #ifdef __TIMER
  mgtime=timer_elapsed_total(mgtimer)
@@ -1211,6 +1110,12 @@
  call timer_erase(mgtimer)
  call timer_erase(smoothtimer)
 #endif
+! copy solution to main array
+  call copy3d(allp,p,nx,ny,nz)
+! aa
+! open(666,file='resf.dat',form='unformatted') ; write(666) res; close(666)
+! open(666,file='p.dat',form='unformatted') ; write(666) p; close(666)
+! open(666,file='p.dat',form='formatted') ; write(666,*) p(:,:,2); close(666)
 !
  end subroutine multigrid_solve
 !*****************************************************************************************!
@@ -1232,7 +1137,7 @@
   int :: ind, ind2, strlen, iter
   int :: i
   type (int_vector) :: cycle
-!
+!  
   ind=1
   strlen=len_trim(str)
   call int_vector_init(cycle)
@@ -1241,18 +1146,18 @@
 !
    command=str(ind:ind)
    if (any(csmooth.eq.command)) then 
-! look for number of smoother iterations
+! look for number of iterations
     ind2=ind+1;
     do
      command=str(ind2:ind2)
      if (ind2.gt.strlen) exit
-     if (any(digits2.eq.command) .or. (ind2.eq.ind+1.and.command.eq.hyphen)) then
-       __INC(ind2)
+     if (any(digits2.eq.command) .or. (ind2.eq.ind+1.and.command.eq.hyphen)) then 
+       ind2=ind2+1; 
      else
       exit
      endif
     enddo
-    __DEC(ind2)
+    ind2=ind2-1
 !
     if (ind2.gt.ind) then 
      iter=atoi(str(ind+1:ind2))
@@ -1264,7 +1169,7 @@
      endif
     else
      iter=smooth_iterations
-    endif ! ind2
+    endif ! ind2  
     i=int_vector_add(cycle,iter)
     ind=ind2
    elseif (any(cprolong.eq.command)) then
@@ -1274,7 +1179,7 @@
    elseif (any(space.eq.command)) then 
 ! nothing
    else ! invalid character
-    call warning(whoami, 'Invalid character "'//command//'" encountered. Nothing done.',-1)
+    call warning(whoami, 'Invalid character encountered. Nothing done.',-1)
     exit
    endif
    ind=ind+1
@@ -1284,7 +1189,6 @@
    allocate(icycle(cycle%last))
    icycle=cycle%i(1:cycle%last)
   endif
-!__DBGOUT(*,size(icycle), cycle%last, cycle%i)
 !
   call int_vector_done(cycle)
 !

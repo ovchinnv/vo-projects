@@ -24,14 +24,17 @@
 #define izf (izc<<1)
 
 // coarse index accounts for possible BC ; nnx are coarse lengths
-#define IDC(i,j,k) ( i3 - 1 + (k+ibc)*((nnx+2*ibc)*(nny+2*ibc)) + (j+ibc)*(nnx+2*ibc)   + (i+ibc) )
+#define IDC(i,j,k) ( i3 - 1 + (k+ibc)*(nnx+2*ibc)*(nny+2*ibc) + (j+ibc)*(nnx+2*ibc)   + (i+ibc) )
 // fine index accounts for possible BC points ; index is assumed to start at 0 ; fine lengths are twice the coarse lengths ; hence taking 2 out
-#define IDF(i,j,k) (          (k+ibc)*(2*(nnx+ibc)*2*(nny+ibc)) + (j+ibc)*2*(nnx+ibc)   + (i+ibc) )
+#define IDF(i,j,k) (          (k+ibc)*(4*(nnx+ibc)*(nny+ibc)) + (j+ibc)*2*(nnx+ibc)   + (i+ibc) )
 
- coarse[ IDC(ixc,iyc,izc) ] = 0.125 * ( fine( IDF(ixf, iyf, izf))   + fine( IDF(ixf+1, iyf, izf)  ) + fine( IDF(ixf+1, iyf+1, izf)  ) + fine( IDF(ixf, iyf+1, izf)) +
-                                        fine( IDF(ixf, iyf, izf+1)) + fine( IDF(ixf+1, iyf, izf+1)) + fine( IDF(ixf+1, iyf+1, izf+1)) + fine( IDF(ixf, iyf+1, izf+1)) ) ;
+#define coef 0.1250000000000
+
+ coarse[ IDC(ixc,iyc,izc) ] = coef * ( fine( IDF(ixf, iyf, izf))   + fine( IDF(ixf+1, iyf, izf)  ) + fine( IDF(ixf+1, iyf+1, izf)  ) + fine( IDF(ixf, iyf+1, izf)) +
+                                       fine( IDF(ixf, iyf, izf+1)) + fine( IDF(ixf+1, iyf, izf+1)) + fine( IDF(ixf+1, iyf+1, izf+1)) + fine( IDF(ixf, iyf+1, izf+1)) ) ;
 
 }
+#undef coef
 #undef tx
 #undef ty
 #undef tz

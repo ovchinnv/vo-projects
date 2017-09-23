@@ -40,6 +40,15 @@ interface
  type(C_PTR) :: devp
  end subroutine FreeDevMem_C
 
+ subroutine InitDevMem_C(devp, i3b, v, len) bind(c,name='InitDevMem')
+ use, intrinsic :: iso_c_binding
+ __IMPNONE
+ type(C_PTR) :: devp
+ __FCINT, VALUE :: i3b
+ __FCINT, VALUE :: v
+ __FCINT, VALUE :: len
+ end subroutine InitDevMem_C
+
  subroutine BindTextures_C(rhs, kappa, eps, bcw, bce, bcs, bcn, bcb, bcf, len3d, len3dbc, sx, sy, sz) bind(c,name='BindTextures')
  use, intrinsic :: iso_c_binding
  __IMPNONE
@@ -97,7 +106,7 @@ interface
  int(C_INT8_T), VALUE :: i2d
  end subroutine Refine_Cuda
 
- subroutine ApplyBC_Cuda(CUallp,CUallwest,CUalleast,CUallnorth,CUallsouth,CUallfront,CUallback,i3b,i2,j2,k2,nx,ny,nz,bc_type,bc_wgt,i2d) bind(c,name='ApplyBC_Cuda')
+ subroutine ApplyBC_Cuda(CUallp,CUallwest,CUalleast,CUallnorth,CUallsouth,CUallfront,CUallback,i3b,i2,j2,k2,nx,ny,nz,bc_type,bc_wgt,i2d,qpinitzero) bind(c,name='ApplyBC_Cuda')
  use, intrinsic :: iso_c_binding
  __IMPNONE
  type(C_PTR), VALUE :: CUallp,CUallwest,CUalleast,CUallnorth,CUallsouth,CUallfront,CUallback
@@ -107,6 +116,7 @@ interface
  __FCINT, dimension(6) :: bc_type ! boundary condition codes
  __FCFLOAT, dimension(6) :: bc_wgt ! boundary condition values at current level only
  int(C_INT8_T), VALUE :: i2d
+ int(C_INT8_T), VALUE :: qpinitzero
  end subroutine ApplyBC_Cuda
 
 
