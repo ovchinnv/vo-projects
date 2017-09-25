@@ -186,14 +186,14 @@
     cenb=cback(tx+2,ty+1) ;
     cwnb=cback(tx+1,ty+1) ;
 
-    fine(ixf+3,iyf+1,izf)   += (cwsb + (cesb + cwnb + cwsf)*three + (cenb + cesf + cwnf)*nine + cenf*twentyseven); // optional bc point ; can be omitted
+//    fine(ixf+3,iyf+1,izf)   += (cwsb + (cesb + cwnb + cwsf)*three + (cenb + cesf + cwnf)*nine + cenf*twentyseven); // optional bc point ; can be omitted
     fine(ixf+2,iyf+1,izf)   += (cesb + (cwsb + cenb + cesf)*three + (cwnb + cwsf + cenf)*nine + cwnf*twentyseven);
-    fine(ixf+3,iyf,  izf)   += (cwnb + (cenb + cwsb + cwnf)*three + (cesb + cenf + cwsf)*nine + cesf*twentyseven); // omit
+//    fine(ixf+3,iyf,  izf)   += (cwnb + (cenb + cwsb + cwnf)*three + (cesb + cenf + cwsf)*nine + cesf*twentyseven); // omit
     fine(ixf+2,iyf,  izf)   += (cenb + (cwnb + cesb + cenf)*three + (cwsb + cwnf + cesf)*nine + cwsf*twentyseven);
 //
-    fine(ixf+3,iyf+1,izf+1) += (cwsf + (cesf + cwnf + cwsb)*three + (cenf + cesb + cwnb)*nine + cenb*twentyseven); // omit
+//    fine(ixf+3,iyf+1,izf+1) += (cwsf + (cesf + cwnf + cwsb)*three + (cenf + cesb + cwnb)*nine + cenb*twentyseven); // omit
     fine(ixf+2,iyf+1,izf+1) += (cesf + (cwsf + cenf + cesb)*three + (cwnf + cwsb + cenb)*nine + cwnb*twentyseven);
-    fine(ixf+3,iyf,  izf+1) += (cwnf + (cenf + cwsf + cwnb)*three + (cesf + cenb + cwsb)*nine + cesb*twentyseven); // omit
+//    fine(ixf+3,iyf,  izf+1) += (cwnf + (cenf + cwsf + cwnb)*three + (cesf + cenb + cwsb)*nine + cesb*twentyseven); // omit
     fine(ixf+2,iyf,  izf+1) += (cenf + (cwnf + cesf + cenb)*three + (cwsf + cwnb + cesb)*nine + cwsb*twentyseven);
    } //ixc
 //
@@ -208,13 +208,13 @@
     cenb=cback(tx+1,ty+2) ;
     cwnb=cback(tx,ty+2) ;
 //
-    fine(ixf+1,iyf+3,izf)   += (cwsb + (cesb + cwnb + cwsf)*three + (cenb + cesf + cwnf)*nine + cenf*twentyseven); // omit optional bc point
-    fine(ixf,  iyf+3,izf)   += (cesb + (cwsb + cenb + cesf)*three + (cwnb + cwsf + cenf)*nine + cwnf*twentyseven); //omit
+//    fine(ixf+1,iyf+3,izf)   += (cwsb + (cesb + cwnb + cwsf)*three + (cenb + cesf + cwnf)*nine + cenf*twentyseven); // omit optional bc point
+//    fine(ixf,  iyf+3,izf)   += (cesb + (cwsb + cenb + cesf)*three + (cwnb + cwsf + cenf)*nine + cwnf*twentyseven); //omit
     fine(ixf+1,iyf+2,izf)   += (cwnb + (cenb + cwsb + cwnf)*three + (cesb + cenf + cwsf)*nine + cesf*twentyseven);
     fine(ixf,  iyf+2,izf)   += (cenb + (cwnb + cesb + cenf)*three + (cwsb + cwnf + cesf)*nine + cwsf*twentyseven);
 //
-    fine(ixf+1,iyf+3,izf+1) += (cwsf + (cesf + cwnf + cwsb)*three + (cenf + cesb + cwnb)*nine + cenb*twentyseven); //omit
-    fine(ixf,  iyf+3,izf+1) += (cesf + (cwsf + cenf + cesb)*three + (cwnf + cwsb + cenb)*nine + cwnb*twentyseven); //omit
+//    fine(ixf+1,iyf+3,izf+1) += (cwsf + (cesf + cwnf + cwsb)*three + (cenf + cesb + cwnb)*nine + cenb*twentyseven); //omit
+//    fine(ixf,  iyf+3,izf+1) += (cesf + (cwsf + cenf + cesb)*three + (cwnf + cwsb + cenb)*nine + cwnb*twentyseven); //omit
     fine(ixf+1,iyf+2,izf+1) += (cwnf + (cenf + cwsf + cwnb)*three + (cesf + cenb + cwsb)*nine + cesb*twentyseven);
     fine(ixf,  iyf+2,izf+1) += (cenf + (cwnf + cesf + cenb)*three + (cwsf + cwnb + cesb)*nine + cwsb*twentyseven);
 // x/y corner
@@ -229,14 +229,14 @@
      cenb=cback(tx+2,ty+2) ;
      cwnb=cback(tx+1,ty+2) ;
 //
-     fine(ixf+3,iyf+3,izf)   += (cwsb + (cesb + cwnb + cwsf)*three + (cenb + cesf + cwnf)*nine + cenf*twentyseven); // omit
-     fine(ixf+2,iyf+3,izf)   += (cesb + (cwsb + cenb + cesf)*three + (cwnb + cwsf + cenf)*nine + cwnf*twentyseven); // omit
-     fine(ixf+3,iyf+2,izf)   += (cwnb + (cenb + cwsb + cwnf)*three + (cesb + cenf + cwsf)*nine + cesf*twentyseven); // omit
+//     fine(ixf+3,iyf+3,izf)   += (cwsb + (cesb + cwnb + cwsf)*three + (cenb + cesf + cwnf)*nine + cenf*twentyseven); // omit
+//     fine(ixf+2,iyf+3,izf)   += (cesb + (cwsb + cenb + cesf)*three + (cwnb + cwsf + cenf)*nine + cwnf*twentyseven); // omit
+//     fine(ixf+3,iyf+2,izf)   += (cwnb + (cenb + cwsb + cwnf)*three + (cesb + cenf + cwsf)*nine + cesf*twentyseven); // omit
      fine(ixf+2,iyf+2,izf)   += (cenb + (cwnb + cesb + cenf)*three + (cwsb + cwnf + cesf)*nine + cwsf*twentyseven);
 //
-     fine(ixf+3,iyf+3,izf+1) += (cwsf + (cesf + cwnf + cwsb)*three + (cenf + cesb + cwnb)*nine + cenb*twentyseven); // omit
-     fine(ixf+2,iyf+3,izf+1) += (cesf + (cwsf + cenf + cesb)*three + (cwnf + cwsb + cenb)*nine + cwnb*twentyseven); // omit
-     fine(ixf+3,iyf+2,izf+1) += (cwnf + (cenf + cwsf + cwnb)*three + (cesf + cenb + cwsb)*nine + cesb*twentyseven); // omit
+//     fine(ixf+3,iyf+3,izf+1) += (cwsf + (cesf + cwnf + cwsb)*three + (cenf + cesb + cwnb)*nine + cenb*twentyseven); // omit
+//     fine(ixf+2,iyf+3,izf+1) += (cesf + (cwsf + cenf + cesb)*three + (cwnf + cwsb + cenb)*nine + cwnb*twentyseven); // omit
+//     fine(ixf+3,iyf+2,izf+1) += (cwnf + (cenf + cwsf + cwnb)*three + (cesf + cenb + cwsb)*nine + cesb*twentyseven); // omit
      fine(ixf+2,iyf+2,izf+1) += (cenf + (cwnf + cesf + cenb)*three + (cwsf + cwnb + cesb)*nine + cwsb*twentyseven);
     } //ixc
    } //iyc
