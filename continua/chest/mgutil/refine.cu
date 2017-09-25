@@ -69,46 +69,56 @@
   cback(tx+1,ty+1)=coef*coarse(ixc+1,iyc+1,k+1);
 // load additional boundary points
   if ( (ty==0) || ((ty==nty-1)&&(iyc==nny-1)) ) { // BC in y ; both boundaries at far edge only
-#define dy  (1-2*(bool)(ty))
-   cback( tx+1, ty+1-dy ) = coef*coarse(ixc+1, iyc+1-dy, k+1) ;
+#define dyl  (1-2*(bool)(ty))
+#define dxl  (1-2*(bool)(tx))
+   cback( tx+1, ty+1-dyl ) = coef*coarse(ixc+1, iyc+1-dyl, k+1) ;
   }
   if ( (tx==0) || ((tx==ntx-1)&&(ixc==nnx-1)) ) { // BC in x
-#define dx  (1-2*(bool)(tx))
-   cback( tx+1-dx, ty+1 ) = coef*coarse(ixc+1-dx, iyc+1, k+1) ;
+   cback( tx+1-dxl, ty+1 ) = coef*coarse(ixc+1-dxl, iyc+1, k+1) ;
 // corners :
    if ( (ty==0) || ((ty==nty-1)&&(iyc==nny-1)) ) {
-    cback(tx+1-dx,ty+1-dy) = coef*coarse(ixc+1-dx, iyc+1-dy, k+1) ;
+    cback(tx+1-dxl,ty+1-dyl) = coef*coarse(ixc+1-dxl, iyc+1-dyl, k+1) ;
    }
   }
-#undef dx
-#undef dy
-
 // flag corner threads
   qcorthread = ( (ixc==0) || (ixc==nnx-1) ) && ( (iyc==0) || (iyc==nny-1) ) ;
-#define dx  (1-2*(bool)(ixc))
-#define dy  (1-2*(bool)(iyc))
+#define dxg  (1-2*(bool)(ixc))
+#define dyg  (1-2*(bool)(iyc))
 // populate boundary corners by interpolation
   if (k==0) {
     __syncthreads();
 // interpolate k=0 corner "bc" arrays
 // y-const.
     if ( (ixc==0) || (ixc==nnx-1) ) {
-     cfront(tx+1-dx,ty+1) = cback(tx+1-dx,ty+1) + cfront(tx+1,ty+1) - cback(tx+1,ty+1) ; // treat four possible corner points together
+     cfront(tx+1-dxg,ty+1) = cback(tx+1-dxg,ty+1) + cfront(tx+1,ty+1) - cback(tx+1,ty+1) ; // treat four possible corner points together
+     if ( (ty==0) || ((ty==nty-1)&&(iyc==nny-1)) ) { // BC in y
+      cfront(tx+1-dxg,ty+1-dyl) = cback(tx+1-dxg,ty+1-dyl) + cfront(tx+1,ty+1-dyl) - cback(tx+1,ty+1-dyl) ; // treat four possible corner points together 
+     }
     }
 // x-const
-    if ( (iyc==0) || (iyc=nny-1) ) {
-     cfront(tx+1,ty+1-dy) = cback(tx+1,ty+1-dy) + cfront(tx+1,ty+1) - cback(tx+1,ty+1) ; // treat four possible corner points together
+    if ( (iyc==0) || (iyc==nny-1) ) {
+     cfront(tx+1,ty+1-dyg) = cback(tx+1,ty+1-dyg) + cfront(tx+1,ty+1) - cback(tx+1,ty+1) ; // treat four possible corner points together
+     if ( (tx==0) || ((tx==ntx-1)&&(ixc==nnx-1)) ) { // BC in x
+      cfront(tx+1-dxl,ty+1-dyg) = cback(tx+1-dxl,ty+1-dyg) + cfront(tx+1-dxl,ty+1) - cback(tx+1-dxl,ty+1) ; // treat four possible corner points together
+// NOTE : corners should be taken care of below because they are the outermost corners
+     }
     }
   } else if (k==nnz) {
     __syncthreads();
 // interpolate k=nnz corner "bc" arrays
 // y-const.
     if ( (ixc==0) || (ixc==nnx-1) ) {
-     cback(tx+1-dx,ty+1) = cfront(tx+1-dx,ty+1) + cback(tx+1,ty+1) - cfront(tx+1,ty+1) ; // treat four possible corner points together
+     cback(tx+1-dxg,ty+1) = cfront(tx+1-dxg,ty+1) + cback(tx+1,ty+1) - cfront(tx+1,ty+1) ; // treat four possible corner points together
+     if ( (ty==0) || ((ty==nty-1)&&(iyc==nny-1)) ) { // BC in y
+      cback(tx+1-dxg,ty+1-dyl) = cfront(tx+1-dxg,ty+1-dyl) + cback(tx+1,ty+1-dyl) - cfront(tx+1,ty+1-dyl) ; // treat four possible corner points together 
+     }
     }
 // x-const
-    if ( (iyc==0) || (iyc=nny-1) ) {
-     cback(tx+1,ty+1-dy) = cfront(tx+1,ty+1-dy) + cback(tx+1,ty+1) - cfront(tx+1,ty+1) ; // treat four possible corner points together
+    if ( (iyc==0) || (iyc==nny-1) ) {
+     cback(tx+1,ty+1-dyg) = cfront(tx+1,ty+1-dyg) + cback(tx+1,ty+1) - cfront(tx+1,ty+1) ; // treat four possible corner points together
+     if ( (tx==0) || ((tx==ntx-1)&&(ixc==nnx-1)) ) { // BC in x
+      cback(tx+1-dxl,ty+1-dyg) = cfront(tx+1-dxl,ty+1-dyg) + cback(tx+1-dxl,ty+1) - cfront(tx+1-dxl,ty+1) ; // treat four possible corner points together
+     }
     }
   }
 
@@ -117,19 +127,19 @@
    __syncthreads();
 //
    if  ( qcorthread ) {
-    cback(tx+1-dx,ty+1-dy) = cback(tx+1-dx,ty+1) + cback(tx+1,ty+1-dy) - cback(tx+1,ty+1) ; // treat four possible corner points together
+    cback(tx+1-dxg,ty+1-dyg) = cback(tx+1-dxg,ty+1) + cback(tx+1,ty+1-dyg) - cback(tx+1,ty+1) ; // treat four possible corner points together
    }
 // explicitly treat four corners here (k=0) case
    if (k==0) {
     __syncthreads();
     if ( qcorthread ) {
-     cfront(tx+1-dx,ty+1-dy) = cb * ( cfront(tx+1-dx,ty+1) + cfront(tx+1,ty+1-dy) + cback(tx+1-dx,ty+1-dy) ) - cback(tx+1,ty+1) ; // treat four possible corner points together
+     cfront(tx+1-dxg,ty+1-dyg) = cb * ( cfront(tx+1-dxg,ty+1) + cfront(tx+1,ty+1-dyg) + cback(tx+1-dxg,ty+1-dyg) ) - cback(tx+1,ty+1) ; // treat four possible corner points together
     }
    } else if (k==nnz) {
 // four corners at k=nnz
     __syncthreads();
     if (qcorthread) {
-     cback(tx+1-dx,ty+1-dy) = cb * ( cback(tx+1-dx,ty+1) + cback(tx+1,ty+1-dy) + cfront(tx+1-dx,ty+1-dy) ) - cfront(tx+1,ty+1) ; // treat four possible corner points together
+     cback(tx+1-dxg,ty+1-dyg) = cb * ( cback(tx+1-dxg,ty+1) + cback(tx+1,ty+1-dyg) + cfront(tx+1-dxg,ty+1-dyg) ) - cfront(tx+1,ty+1) ; // treat four possible corner points together
 #undef dx
 #undef dy
     }
