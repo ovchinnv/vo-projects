@@ -40,7 +40,7 @@
 
  unsigned int ixc = (bx * ntx) + tx;
  unsigned int iyc = (by * nty) + ty;
- bool qedgeblock;
+ bool qcorthread;
 #define ixf (ixc<<1)
 #define iyf (iyc<<1)
 
@@ -68,80 +68,187 @@
 // load next coarse row
   cback(tx+1,ty+1)=coef*coarse(ixc+1,iyc+1,k+1);
 // load additional boundary points
-  if (ty < 2) { // BC in y-direction
-   cback( tx+1, (nty+1)*ty) = coef*coarse(ixc+1, iyc - ty + (nty+1)*ty, k+1); // could absorb lone ty, but this way consistent with x-bc below
+  if ( (ty==0) || ((ty==nty-1)&&(iyc==nny-1)) ) { // BC in y ; both boundaries at far edge only
+#define dyl  (1-2*(bool)(ty))
+#define dxl  (1-2*(bool)(tx))
+   cback( tx+1, ty+1-dyl ) = coef*coarse(ixc+1, iyc+1-dyl, k+1) ;
   }
-  if (tx < 2) { // BC in x-direction
-   cback( (ntx+1)*(tx%2), ty+1) = coef*coarse(ixc - tx + (ntx+1)*(tx%2), iyc+1, k+1);
-  }
-
-// populate corners either by interpolation (boundary corners) or by extra reads from device
-  qedgeblock = ( (bx==0 || bx == nbx-1) && (by==0 || by == nby-1)  ) ;
-  if  (qedgeblock) __syncthreads(); // make sure tiles are populated prior to interpolation
-
-  if ( ((tx==0) || (tx==ntx-1) || (ixc==nnx-1) ) && ((ty==0) || (ty==nty-1) || (iyc==nny-1))) {
-#define dx  (1-2*(bool)(tx))
-#define dy  (1-2*(bool)(ty))
-   cback(tx+1-dx,ty+1-dy)=coef*coarse(ixc+1-dx, iyc+1-dy, k+1) ; // read from device (possibly wrong values)
-#undef dx
-#undef dy
-   if (qedgeblock) { // obtain values at grid edge by interpolation
-#define dx  (1-2*(bool)(ixc))
-#define dy  (1-2*(bool)(iyc))
-    cback(tx+1-dx,ty+1-dy) = cback(tx+1-dx,ty+1) + cback(tx+1,ty+1-dy) - cback(tx+1,ty+1) ; // treat four possible corner points together
-//    cback(0,0) = cback(1,0) + cback(0,1) - cback(1,1)
+  if ( (tx==0) || ((tx==ntx-1)&&(ixc==nnx-1)) ) { // BC in x
+   cback( tx+1-dxl, ty+1 ) = coef*coarse(ixc+1-dxl, iyc+1, k+1) ;
+// corners :
+   if ( (ty==0) || ((ty==nty-1)&&(iyc==nny-1)) ) {
+    cback(tx+1-dxl,ty+1-dyl) = coef*coarse(ixc+1-dxl, iyc+1-dyl, k+1) ;
    }
   }
-// explicitly treat eight corners here (k=0,nnz) case
+// flag corner threads
+  qcorthread = ( (ixc==0) || (ixc==nnx-1) ) && ( (iyc==0) || (iyc==nny-1) ) ;
+#define dxg  (1-2*(bool)(ixc))
+#define dyg  (1-2*(bool)(iyc))
+// populate boundary corners by interpolation
   if (k==0) {
-   __syncthreads(); // need this because further interpolation below :
-   if ( ((ixc==0) || (ixc==nnx-1) ) && ((iyc==0) || (iyc==nny-1)) ) {
-    cfront(tx+1-dx,ty+1-dy) = cb * ( cfront(tx+1-dx,ty+1) + cfront(tx+1,ty+1-dy) + cback(tx+1-dx,ty+1-dy) ) - cback(tx+1,ty+1) ; // treat four possible corner points together
-   }
+    __syncthreads();
+// interpolate k=0 corner "bc" arrays
+// y-const.
+    if ( (ixc==0) || (ixc==nnx-1) ) {
+     cfront(tx+1-dxg,ty+1) = cback(tx+1-dxg,ty+1) + cfront(tx+1,ty+1) - cback(tx+1,ty+1) ; // treat four possible corner points together
+     if ( (ty==0) || ((ty==nty-1)&&(iyc==nny-1)) ) { // BC in y
+      cfront(tx+1-dxg,ty+1-dyl) = cback(tx+1-dxg,ty+1-dyl) + cfront(tx+1,ty+1-dyl) - cback(tx+1,ty+1-dyl) ; // treat four possible corner points together 
+     }
+    }
+// x-const
+    if ( (iyc==0) || (iyc==nny-1) ) {
+     cfront(tx+1,ty+1-dyg) = cback(tx+1,ty+1-dyg) + cfront(tx+1,ty+1) - cback(tx+1,ty+1) ; // treat four possible corner points together
+     if ( (tx==0) || ((tx==ntx-1)&&(ixc==nnx-1)) ) { // BC in x
+      cfront(tx+1-dxl,ty+1-dyg) = cback(tx+1-dxl,ty+1-dyg) + cfront(tx+1-dxl,ty+1) - cback(tx+1-dxl,ty+1) ; // treat four possible corner points together
+// NOTE : corners should be taken care of below because they are the outermost corners
+     }
+    }
   } else if (k==nnz) {
-   __syncthreads(); // need this because further interpolation below :
-   if ( ((ixc==0) || (ixc==nnx-1) ) && ((iyc==0) || (iyc==nny-1)) ) {
-    cback(tx+1-dx,ty+1-dy) = cb * ( cback(tx+1-dx,ty+1) + cback(tx+1,ty+1-dy) + cfront(tx+1-dx,ty+1-dy) ) - cfront(tx+1,ty+1) ; // treat four possible corner points together
+    __syncthreads();
+// interpolate k=nnz corner "bc" arrays
+// y-const.
+    if ( (ixc==0) || (ixc==nnx-1) ) {
+     cback(tx+1-dxg,ty+1) = cfront(tx+1-dxg,ty+1) + cback(tx+1,ty+1) - cfront(tx+1,ty+1) ; // treat four possible corner points together
+     if ( (ty==0) || ((ty==nty-1)&&(iyc==nny-1)) ) { // BC in y
+      cback(tx+1-dxg,ty+1-dyl) = cfront(tx+1-dxg,ty+1-dyl) + cback(tx+1,ty+1-dyl) - cfront(tx+1,ty+1-dyl) ; // treat four possible corner points together 
+     }
+    }
+// x-const
+    if ( (iyc==0) || (iyc==nny-1) ) {
+     cback(tx+1,ty+1-dyg) = cfront(tx+1,ty+1-dyg) + cback(tx+1,ty+1) - cfront(tx+1,ty+1) ; // treat four possible corner points together
+     if ( (tx==0) || ((tx==ntx-1)&&(ixc==nnx-1)) ) { // BC in x
+      cback(tx+1-dxl,ty+1-dyg) = cfront(tx+1-dxl,ty+1-dyg) + cback(tx+1-dxl,ty+1) - cfront(tx+1-dxl,ty+1) ; // treat four possible corner points together
+     }
+    }
+  }
+
+// populate boundary corners by interpolation
+  if ( ( (bx==0) || (bx==nbx-1) ) && ( (by==0) || (by==nby-1) ) ) { // whether this is a corner block
+   __syncthreads();
+//
+   if  ( qcorthread ) {
+    cback(tx+1-dxg,ty+1-dyg) = cback(tx+1-dxg,ty+1) + cback(tx+1,ty+1-dyg) - cback(tx+1,ty+1) ; // treat four possible corner points together
+   }
+// explicitly treat four corners here (k=0) case
+   if (k==0) {
+    __syncthreads();
+    if ( qcorthread ) {
+     cfront(tx+1-dxg,ty+1-dyg) = cb * ( cfront(tx+1-dxg,ty+1) + cfront(tx+1,ty+1-dyg) + cback(tx+1-dxg,ty+1-dyg) ) - cback(tx+1,ty+1) ; // treat four possible corner points together
+    }
+   } else if (k==nnz) {
+// four corners at k=nnz
+    __syncthreads();
+    if (qcorthread) {
+     cback(tx+1-dxg,ty+1-dyg) = cb * ( cback(tx+1-dxg,ty+1) + cback(tx+1,ty+1-dyg) + cfront(tx+1-dxg,ty+1-dyg) ) - cfront(tx+1,ty+1) ; // treat four possible corner points together
 #undef dx
 #undef dy
+    }
    }
   }
 //
 // compute fine grid data by interpolation
-  __syncthreads() ; // make sure shared data is up-to-date
 //
-  cwsf=cfront(tx,ty) ;
-  cesf=cfront(tx+1,ty) ;
-  cenf=cfront(tx+1,ty+1) ;
-  cwnf=cfront(tx,ty+1) ;
+  if (k>-1) { // only for positive k
+   __syncthreads() ; // make sure shared data is up-to-date
 //
-  cwsb=cback(tx,ty) ;
-  cesb=cback(tx+1,ty) ;
-  cenb=cback(tx+1,ty+1) ;
-  cwnb=cback(tx,ty+1) ;
+   cwsf=cfront(tx,ty) ;
+   cesf=cfront(tx+1,ty) ;
+   cenf=cfront(tx+1,ty+1) ;
+   cwnf=cfront(tx,ty+1) ;
+//
+   cwsb=cback(tx,ty) ;
+   cesb=cback(tx+1,ty) ;
+   cenb=cback(tx+1,ty+1) ;
+   cwnb=cback(tx,ty+1) ;
+//
+// perform the actual interpolation, uploading directly to device :
+#define izf 2*k
+//
+   fine(ixf+1,iyf+1,izf)   += (cwsb + (cesb + cwnb + cwsf)*three + (cenb + cesf + cwnf)*nine + cenf*twentyseven);
+   fine(ixf,  iyf+1,izf)   += (cesb + (cwsb + cenb + cesf)*three + (cwnb + cwsf + cenf)*nine + cwnf*twentyseven);
+   fine(ixf+1,iyf,  izf)   += (cwnb + (cenb + cwsb + cwnf)*three + (cesb + cenf + cwsf)*nine + cesf*twentyseven);
+   fine(ixf,  iyf,  izf)   += (cenb + (cwnb + cesb + cenf)*three + (cwsb + cwnf + cesf)*nine + cwsf*twentyseven);
+//
+   fine(ixf+1,iyf+1,izf+1) += (cwsf + (cesf + cwnf + cwsb)*three + (cenf + cesb + cwnb)*nine + cenb*twentyseven);
+   fine(ixf,  iyf+1,izf+1) += (cesf + (cwsf + cenf + cesb)*three + (cwnf + cwsb + cenb)*nine + cwnb*twentyseven);
+   fine(ixf+1,iyf,  izf+1) += (cwnf + (cenf + cwsf + cwnb)*three + (cesf + cenb + cwsb)*nine + cesb*twentyseven);
+   fine(ixf,  iyf,  izf+1) += (cenf + (cwnf + cesf + cenb)*three + (cwsf + cwnb + cesb)*nine + cwsb*twentyseven);
+//
+//additional far boundary points
+   if (ixc==nnx-1) {
+    cwsf=cfront(tx+1,ty) ;
+    cesf=cfront(tx+2,ty) ;
+    cenf=cfront(tx+2,ty+1) ;
+    cwnf=cfront(tx+1,ty+1) ;
+//
+    cwsb=cback(tx+1,ty) ;
+    cesb=cback(tx+2,ty) ;
+    cenb=cback(tx+2,ty+1) ;
+    cwnb=cback(tx+1,ty+1) ;
+
+//    fine(ixf+3,iyf+1,izf)   += (cwsb + (cesb + cwnb + cwsf)*three + (cenb + cesf + cwnf)*nine + cenf*twentyseven); // optional bc point ; can be omitted
+    fine(ixf+2,iyf+1,izf)   += (cesb + (cwsb + cenb + cesf)*three + (cwnb + cwsf + cenf)*nine + cwnf*twentyseven);
+//    fine(ixf+3,iyf,  izf)   += (cwnb + (cenb + cwsb + cwnf)*three + (cesb + cenf + cwsf)*nine + cesf*twentyseven); // omit
+    fine(ixf+2,iyf,  izf)   += (cenb + (cwnb + cesb + cenf)*three + (cwsb + cwnf + cesf)*nine + cwsf*twentyseven);
+//
+//    fine(ixf+3,iyf+1,izf+1) += (cwsf + (cesf + cwnf + cwsb)*three + (cenf + cesb + cwnb)*nine + cenb*twentyseven); // omit
+    fine(ixf+2,iyf+1,izf+1) += (cesf + (cwsf + cenf + cesb)*three + (cwnf + cwsb + cenb)*nine + cwnb*twentyseven);
+//    fine(ixf+3,iyf,  izf+1) += (cwnf + (cenf + cwsf + cwnb)*three + (cesf + cenb + cwsb)*nine + cesb*twentyseven); // omit
+    fine(ixf+2,iyf,  izf+1) += (cenf + (cwnf + cesf + cenb)*three + (cwsf + cwnb + cesb)*nine + cwsb*twentyseven);
+   } //ixc
+//
+   if (iyc==nny-1) {
+    cwsf=cfront(tx,ty+1) ;
+    cesf=cfront(tx+1,ty+1) ;
+    cenf=cfront(tx+1,ty+2) ;
+    cwnf=cfront(tx,ty+2) ;
+//
+    cwsb=cback(tx,ty+1) ;
+    cesb=cback(tx+1,ty+1) ;
+    cenb=cback(tx+1,ty+2) ;
+    cwnb=cback(tx,ty+2) ;
+//
+//    fine(ixf+1,iyf+3,izf)   += (cwsb + (cesb + cwnb + cwsf)*three + (cenb + cesf + cwnf)*nine + cenf*twentyseven); // omit optional bc point
+//    fine(ixf,  iyf+3,izf)   += (cesb + (cwsb + cenb + cesf)*three + (cwnb + cwsf + cenf)*nine + cwnf*twentyseven); //omit
+    fine(ixf+1,iyf+2,izf)   += (cwnb + (cenb + cwsb + cwnf)*three + (cesb + cenf + cwsf)*nine + cesf*twentyseven);
+    fine(ixf,  iyf+2,izf)   += (cenb + (cwnb + cesb + cenf)*three + (cwsb + cwnf + cesf)*nine + cwsf*twentyseven);
+//
+//    fine(ixf+1,iyf+3,izf+1) += (cwsf + (cesf + cwnf + cwsb)*three + (cenf + cesb + cwnb)*nine + cenb*twentyseven); //omit
+//    fine(ixf,  iyf+3,izf+1) += (cesf + (cwsf + cenf + cesb)*three + (cwnf + cwsb + cenb)*nine + cwnb*twentyseven); //omit
+    fine(ixf+1,iyf+2,izf+1) += (cwnf + (cenf + cwsf + cwnb)*three + (cesf + cenb + cwsb)*nine + cesb*twentyseven);
+    fine(ixf,  iyf+2,izf+1) += (cenf + (cwnf + cesf + cenb)*three + (cwsf + cwnb + cesb)*nine + cwsb*twentyseven);
+// x/y corner
+    if (ixc==nnx-1) {
+     cwsf=cfront(tx+1,ty+1) ;
+     cesf=cfront(tx+2,ty+1) ;
+     cenf=cfront(tx+2,ty+2) ;
+     cwnf=cfront(tx+1,ty+2) ;
+//
+     cwsb=cback(tx+1,ty+1) ;
+     cesb=cback(tx+2,ty+1) ;
+     cenb=cback(tx+2,ty+2) ;
+     cwnb=cback(tx+1,ty+2) ;
+//
+//     fine(ixf+3,iyf+3,izf)   += (cwsb + (cesb + cwnb + cwsf)*three + (cenb + cesf + cwnf)*nine + cenf*twentyseven); // omit
+//     fine(ixf+2,iyf+3,izf)   += (cesb + (cwsb + cenb + cesf)*three + (cwnb + cwsf + cenf)*nine + cwnf*twentyseven); // omit
+//     fine(ixf+3,iyf+2,izf)   += (cwnb + (cenb + cwsb + cwnf)*three + (cesb + cenf + cwsf)*nine + cesf*twentyseven); // omit
+     fine(ixf+2,iyf+2,izf)   += (cenb + (cwnb + cesb + cenf)*three + (cwsb + cwnf + cesf)*nine + cwsf*twentyseven);
+//
+//     fine(ixf+3,iyf+3,izf+1) += (cwsf + (cesf + cwnf + cwsb)*three + (cenf + cesb + cwnb)*nine + cenb*twentyseven); // omit
+//     fine(ixf+2,iyf+3,izf+1) += (cesf + (cwsf + cenf + cesb)*three + (cwnf + cwsb + cenb)*nine + cwnb*twentyseven); // omit
+//     fine(ixf+3,iyf+2,izf+1) += (cwnf + (cenf + cwsf + cwnb)*three + (cesf + cenb + cwsb)*nine + cesb*twentyseven); // omit
+     fine(ixf+2,iyf+2,izf+1) += (cenf + (cwnf + cesf + cenb)*three + (cwsf + cwnb + cesb)*nine + cwsb*twentyseven);
+    } //ixc
+   } //iyc
+  } // k>=0
 //
 // swap cfront and cback local shmem pointers
 //
   cswap =cfront;
   cfront=cback;
   cback =cswap;
-  if (k<0) continue; // skip to next iteration
-//
-// perform the actual interpolation, uploading directly to device :
-#define izf 2*k
-//
-  fine(ixf+1,iyf+1,izf)   += (cwsb + (cesb + cwnb + cwsf)*three + (cenb + cesf + cwnf)*nine + cenf*twentyseven);
-  fine(ixf,  iyf+1,izf)   += (cesb + (cwsb + cenb + cesf)*three + (cwnb + cwsf + cenf)*nine + cwnf*twentyseven);
-  fine(ixf+1,iyf,  izf)   += (cwnb + (cenb + cwsb + cwnf)*three + (cesb + cenf + cwsf)*nine + cesf*twentyseven);
-  fine(ixf,  iyf,  izf)   += (cenb + (cwnb + cesb + cenf)*three + (cwsb + cwnf + cesf)*nine + cwsf*twentyseven);
-//
-  fine(ixf+1,iyf+1,izf+1) += (cwsf + (cesf + cwnf + cwsb)*three + (cenf + cesb + cwnb)*nine + cenb*twentyseven);
-  fine(ixf,  iyf+1,izf+1) += (cesf + (cwsf + cenf + cesb)*three + (cwnf + cwsb + cenb)*nine + cwnb*twentyseven);
-  fine(ixf+1,iyf,  izf+1) += (cwnf + (cenf + cwsf + cwnb)*three + (cesf + cenb + cwsb)*nine + cesb*twentyseven);
-  fine(ixf,  iyf,  izf+1) += (cenf + (cwnf + cesf + cenb)*three + (cwsf + cwnb + cesb)*nine + cwsb*twentyseven);
-//
- }
-}
+ } //k
+} //refine
 
 #undef tx
 #undef ty
