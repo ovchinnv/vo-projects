@@ -5,7 +5,7 @@ DEPS=constants bestfit output dynamol multicom parser confcons mpi_stub
 COMMON=..
 
 LOCALMACROS=-include $(COMMON)/source.defs
-LOCALMACROS+= -include $(ROOT)/dmol.defs
+LOCALMACROS+=-include $(ROOT)/dmol.defs
 LOCALDEPS=$(ROOT)/mpitype.def $(COMMON)/source.defs 
 LOCALDEPS+=$(ROOT)/dmol.defs
 

@@ -55,10 +55,9 @@ aceplug_err_t aceplug_init(struct aceplug_sim_t *s, int argc, char **argkey, cha
   printf("'\n");
  }
 //
-
  __CINT natoms=0;
  __CFLOAT *m=NULL, *q=NULL;
-
+//
  natoms = s->natoms ;
 //
  private_data->r  = (__CFLOAT *) calloc(3 * natoms, sizeof(__CFLOAT));

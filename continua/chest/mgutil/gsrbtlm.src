@@ -1,0 +1,156 @@
+ subroutine GaussSeidelRBTiledLoMem(p,rhs,eps,kappa,odxcen,odxcor,odycen,odycor,odzcen,odzcor,nx,ny,nz,dt,tilesize,i2d)
+! conceptual GPU template 
+! compute metrics 'on the fly'
+ use constants, only : one, itwo
+ implicit none
+ int :: nx, ny, nz
+ int1 :: i2d
+ float :: dt
+ float :: odxcen(nx-1), odxcor(nx-2)
+ float :: odycen(ny-1), odycor(ny-2)
+ float :: odzcen(nz-1-i2d-i2d), odzcor(nz-2-i2d) ! 3D/2D
+ float, dimension(nx,ny,nz) :: p, eps
+ float, dimension(nx-2,ny-2,nz-2) :: rhs, kappa
+ float :: w, e, s, n, f, b, o
+
+ int :: nnx, nny, nnz, ntot
+ int :: nxp, nyp, nzp
+ int :: i, j, k, m, im, jm, km, ii, jj, kk, jeps
+ int :: offset
+!
+ int :: tilesize                                     ! conceptually, might be related to CPU cache size
+ int :: tilex, tx, ty, tz, ntx, nty, ntz, remainder  ! sizes do not include ghost cells
+ float, allocatable, dimension(:,:,:) :: p1, rhs1, eps1, kappa1
+ float, allocatable, dimension(:) :: odxcen1, odxcor1, odycen1, odycor1, odzcen1, odzcor1 ! local metrics
+!
+ nnx=nx-2; nny=ny-2; nnz=nz-2;
+ nxp=nnx+1; nyp=nny+1; nzp=nnz+1;
+!
+ ntot=nnx*nny*nnz
+!
+ tilesize=min(max(tilesize,4),ntot) ! tile should not be larger than number of points
+!
+ if (i2d.eq.1) then 
+! determine tile dimensions (reuse some variables)
+  tilex=INT(sqrt(1.0*tilesize));
+  offset=NOT(ISHFTC(1,-1))         ! upper bound -- largest representable int : all ones except 1st bit 
+! vary tile sizes a little to get a better cover (heuristic)
+  do i=0,1;  im = tilex + i;          ntx = (nnx/im) + min(1,mod(nnx,im)); ! number of tiles in x-direction
+   do j=0,2; jm = tilesize / im + j ; nty = (nny/jm) + min(1,mod(nny,jm)); ! number of tiles in y-direction
+    remainder = ntx*nty*im*jm - ntot  ! number of elements by which the size of the cover exceeds grid size
+!aa
+! write(0,*) im, jm, ntx, nty, remainder, ntot
+ 
+    if (offset.gt.remainder) then
+     tx=im; ty=jm;
+     offset=remainder
+    endif
+  enddo; enddo ! i, j
+!
+! allocate data, now that tile size is known (pad epsilon for easy corner interpolation)
+  allocate(rhs1(tx,ty,1),eps1(0:tx+1,0:ty+1,1),kappa1(tx,ty,1),p1(tx+2,ty+2,1))
+  allocate(odxcen1(tx+1),odxcor1(tx),odycen1(ty+1),odycor1(ty))
+! slide tile over all points and perform RB relaxation within each tile
+  k=2 ! 2D
+  km=k-1
+  jj=1;
+  do while (jj.le.nny)  ; nty=min(ty,nny-jj+1); ii=1
+! local y-metrics
+   odycen1(1:nty+1)=odycen(jj:jj+nty);   odycor1(1:nty)=odycor(jj:jj+nty-1); ! center-to-center metric has extra element
+   do while (ii.le.nnx) ; ntx=min(tx,nnx-ii+1); ! number of elements to read
+! local x-metrics
+    odxcen1(1:ntx+1)=odxcen(ii:ii+ntx);   odxcor1(1:ntx)=odxcor(ii:ii+ntx-1);
+!
+! populate tile
+!
+! epsilon: top ghost row (j=0)
+    jm=jj-1; jeps=max(jm,1)
+    j=0; im=ii;
+    do i=1,ntx+1; eps1(i,j,1)=eps(min(im,nnx),jeps,km); im=im+1;  enddo ; ! ignore left corner ghost cell
+    jm=jm+1;
+! inner point j-loop
+    do j=1,nty; im=ii-1;
+! epsilon: left ghost point
+     eps1(0,j,1)=eps(max(1,im),jm,km); im=im+1;
+! inner point i-loop
+     do i=1,ntx
+      rhs1(i,j,1)=rhs(im,jm,km);   eps1(i,j,1)=eps(im,jm,km);   kappa1(i,j,1)=kappa(im,jm,km);   p1(i,j,1)=p(im,jm,k)
+      im=im+1;
+     enddo ; ! i
+! epsilon: right ghost point
+     eps1(ntx+1,j,1)=eps(min(im,nnx),jm,km) !
+! p: last inner point and right ghost point
+     p1(ntx+1,j,1)=p(im,jm,k); im=im+1      ! remaining boundary points
+     p1(ntx+2,j,1)=p(im,jm,k)               !
+     jm=jm+1;
+    enddo ! j
+! p: bottom inner points
+! epsilon: bottom ghost points
+    j=nty+1; im=ii;
+    jeps=min(jm,nny);
+    do i=1,ntx+1
+     eps1(i,j,1)=eps(min(im,nnx),jeps,km); ! epsilon : neumann BC
+     p1(i,j,1)=p(im,jm,k); im=im+1;
+    enddo ;
+    p1(ntx+2,j,1)=p(im,jm,k);
+    jm=jm+1;
+! p: bottom ghost points
+    j=nty+2; im=ii;
+    do i=1,ntx+1                                   ! ignore corner ghost point
+     p1(i,j,1)=p(im,jm,k); im=im+1;
+    enddo ;
+!************************************************************************************************
+! smooth within tile (iteration involves local data only)
+!************************************************************************************************
+! red: sum of indices is odd; black: sum of indices is even
+! black:
+    do j=2,nty+1;               jm=j-1; offset=mod(j,itwo)
+     do i=2+offset,ntx+1,2;     im=i-1;
+! compute metrics
+      w = odxcor1(im)*odxcen1(im)*(eps1(im,jm,1)+eps1(im-1,jm,1)) ! 0.5 included using o normalization
+      e = odxcor1(im)*odxcen1(i )*(eps1(im,jm,1)+eps1(i   ,jm,1))
+      s = odycor1(jm)*odycen1(jm)*(eps1(im,jm,1)+eps1(im,jm-1,1))
+      n = odycor1(jm)*odycen1(j )*(eps1(im,jm,1)+eps1(im  ,j ,1))
+      o = -(w+e+s+n) + kappa(im,jm,1) ; o=one/o 
+!
+      p1(i,j,1)=p1(i,j,1) - dt * ( p1(i,j,1) &
+&                                  + o*( w*p1(im,j,1) + e*p1(i+1,j,1) + s*p1(i,jm,1) + n*p1(i,j+1,1) ) &
+&                                  - rhs1(im,jm,1) )
+!  NOTE: rhs above has been divided by o, which means that o is already known; 
+!  this routine is _just a test of computing metrics on-the-fly vs. memory access_
+    enddo ; enddo ;
+! red:
+    do j=2,nty+1;               jm=j-1; offset=mod(j,itwo)
+     do i=3-offset,ntx+1,2;     im=i-1;
+! compute metrics
+      w = odxcor1(im)*odxcen1(im)*(eps1(im,jm,1)+eps1(im-1,jm,1)) ! 0.5 included using o normalization
+      e = odxcor1(im)*odxcen1(i )*(eps1(im,jm,1)+eps1(i   ,jm,1))
+      s = odycor1(jm)*odycen1(jm)*(eps1(im,jm,1)+eps1(im,jm-1,1))
+      n = odycor1(jm)*odycen1(j )*(eps1(im,jm,1)+eps1(im  ,j ,1))
+      o = -(w+e+s+n) + kappa(im,jm,1) ; o=one/o 
+!
+      p1(i,j,1)=p1(i,j,1) - dt * ( p1(i,j,1) &
+&                                  + o*( w*p1(im,j,1) + e*p1(i+1,j,1) + s*p1(i,jm,1) + n*p1(i,j+1,1) ) &
+&                                  - rhs1(im,jm,1) )
+    enddo ; enddo ;
+!
+!************************************************************************************************
+! put solution back into global array (inner points only)
+    jm=jj+1
+    do j=2,nty+1; im=ii+1;            do i=2,ntx+1
+     p(im,jm,k)=p1(i,j,1);   im=im+1; enddo ;      jm=jm+1; 
+    enddo
+! shift tile
+    ii=ii+tx
+   enddo    ! ii
+   jj=jj+ty
+  enddo     ! jj
+! free tile memory
+  deallocate(eps1, kappa1, rhs1, p1)
+  deallocate(odxcen1, odxcor1, odycen1, odycor1)
+!
+ else ! i2d
+! 3D case not done yet
+ endif
+!
+ end subroutine GaussSeidelRBTiledLoMem
