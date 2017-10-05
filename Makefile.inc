@@ -6,7 +6,8 @@ CFLAGS =-O3 -fno-math-errno -c -fPIC
 #
 # NVIDIA CUDA COMPILER ######
 NVCC=nvcc
-NVCCFLAGS=-O3 -m32 -Xcompiler -mfloat-abi=hard -gencode arch=compute_32,code=sm_32 -ccbin $(CC) --use_fast_math -c
+#NVCCFLAGS=-O3 -m32 -Xcompiler -mfloat-abi=hard -gencode arch=compute_32,code=sm_32 -ccbin $(CC) --use_fast_math -c
+NVCCFLAGS=-O3 -ccbin $(CC) --use_fast_math -c
 #NVCCFLAGS=-O3 -m32 -Xcompiler -mfloat-abi=hard -gencode arch=compute_32,code=sm_32 -ccbin $(CC) -c
 #NVCCFLAGS=-O3 -m32 -Xcompiler -mfloat-abi=hard -gencode arch=compute_32,code=sm_32 -ccbin $(CC) --prec-div=false --ftz=true --prec-sqrt=false -c
 
@@ -44,7 +45,7 @@ LOMP=-lgomp
 #
 # G95 reguires no space between "-D" and the name
 FORTRAN_COMPILER=$(notdir $(FC))
-DEFS+=-Dint=integer -Dfloat=real*8 -Dbool=logical -Dmpiint=MPI_INTEGER -Dmpifloat=MPI_REAL8 -Dmpichar=MPI_CHARACTER -Dmpiint4=MPI_INTEGER4\
+DEFS+=-Dint=integer -Dfloat=real*4 -Dbool=logical -Dmpiint=MPI_INTEGER -Dmpifloat=MPI_REAL8 -Dmpichar=MPI_CHARACTER -Dmpiint4=MPI_INTEGER4\
      -Dmpibool=MPI_LOGICAL -Dint1=integer\(kind=KIND\(\'a\'\)\) -D__RCOMP -D__DMOL -D__CHES -D__EDDIE -D__$(FORTRAN_COMPILER) \
      -Dint4mpi=integer -D__TIMER #-D__PARALLEL #-D__DEBUG -D__PATHSCALE #-Dint4mpi="integer(KIND=MPI_INTEGER_KIND)" 
 
@@ -66,7 +67,7 @@ LDFLAGS=-dynamic -Bdynamic $(LOMP) -Wl,-z,defs # to list unresolved symbols duri
 #LDFLAGS=-static -ipa
 
 # extra libs for linking fortran and cuda objects together using c/nvcc/gfortran as linker front ends
-EXTRA_LIBS+=-L/usr/local/cuda/lib -lcudart -lcuda -lgfortran -lstdc++ -lgcc -lm
+EXTRA_LIBS+=-L/usr/local/cuda/lib -L/opt/cuda/lib64  -lcudart -lcuda -lgfortran -lstdc++ -lgcc -lm
 # extra libs for ifort
 #EXTRA_LIBS+=-lirc -limf -lifcore -ldl
 #
