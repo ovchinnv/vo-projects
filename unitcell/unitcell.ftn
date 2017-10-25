@@ -1,0 +1,216 @@
+#define __CLASS
+#ifndef __CLASS
+#define _TYPE type
+#define _SELF
+#define _COMMA
+#else
+! if want to make into a class :
+#define _TYPE class
+#define _SELF ucell
+#define _COMMA,
+#endif
+#define __M unitcell
+! for now, support basic triclinit cells
+#define __F(_WHAT) __CONCAT3(__M,_,_WHAT)
+
+      module __M
+      __DEP_CONST
+      __DEP_OUTPUT
+      __CHARMM_ONLY __DEP_KINDS
+      __IMPNONE
+!
+      type cell
+       bool :: initialized=.false.
+! basic, redundant data types :
+       float :: alpha=pio4, beta=pio4, gamma=pio4 ! lattice angles
+       float :: a=one, b=one, c=one ! lattice lengths
+       float, dimension(3,3) :: vectors=RESHAPE((/one, zero, zero, zero, one, zero, zero, zero, one/),(/3,3/))
+       float, dimension(3) :: center=(/zero, zero, zero/)
+       float :: volume = one
+#ifdef __CLASS
+       contains
+        procedure :: update_lattice => __F(set_lattice)
+        procedure :: check_lattice => __F(check_lattice)
+        procedure :: initialize => __F(set_lattice)
+        procedure :: done => __F(done)
+        procedure :: print => __F(print)
+#endif
+      end type cell
+!
+#ifndef __CLASS
+      type(cell) :: ucell
+#endif
+!      _DECL_MSGBUF
+       private _MSGBUF
+       private i_
+!
+      interface __F(update_lattice)
+       module procedure __F(set_lattice)
+      end interface
+!
+      interface __F(nitialize)
+       module procedure __F(set_lattice)
+      end interface
+!
+      contains
+! for now, all subroutines use the unit cell contained in this module
+! in the future would be better to instantiate unit cell objects (more like in the vector classes)
+#define _SUB __F(done)
+       subroutine _SUB(_SELF)
+#ifdef __CLASS
+       _TYPE(cell) :: _SELF
+#endif
+       ucell%alpha=pio4; ucell%beta=pio4; ucell%gamma=pio4 ! lattice angles
+       ucell%a=one; ucell%b=one; ucell%c=one ! lattice lengths
+       ucell%vectors=RESHAPE((/one, zero, zero, zero, one, zero, zero, zero, one/),(/3,3/))
+       ucell%center=(/zero, zero, zero/)
+       ucell%volume = one
+       ucell%initialized=.false.
+       end subroutine _SUB
+#undef _SUB
+!
+#define _SUB __F(set_lattice)
+       subroutine _SUB ( _SELF _COMMA la_,lb_,lc_,aa_,ab_,ag_)
+#ifdef __CLASS
+       _TYPE(cell) :: _SELF
+#endif
+       __OPAR(la, float);
+       __OPAR(lb, float);
+       __OPAR(lc, float);
+       __OPAR(aa, float);
+       __OPAR(ab, float);
+       __OPAR(ag, float);
+       bool :: ok=.false.
+       __IAM(_SUB)
+!
+       __PRESENT(la,ucell%a)
+       __PRESENT(lb,ucell%b)
+       __PRESENT(lc,ucell%c)
+       __PRESENT(aa,ucell%alpha)
+       __PRESENT(ab,ucell%beta)
+       __PRESENT(ag,ucell%gamma)
+!    ckeck lattice
+       ok=__F(check_lattice)(_SELF)
+       if (.not.ok) then
+        __WRN(whoami, 'INVALID LATTICE PARAMETERS SPECIFIED')
+       else
+        call __F(vectors_from_lattice)(_SELF)
+        if (ucell%volume.lt.__ERRTOL) then
+         __WARN(whoami, 'UNITCELL VOLUME IS ALMOST ZERO (',ucell%volume,')');
+        endif
+        ucell%initialized=.true.
+       endif
+       end subroutine _SUB
+!================================================
+#undef _SUB
+#define _SUB __F(check_lattice)
+       function _SUB(_SELF)
+#ifdef __CLASS
+       _TYPE(cell) :: _SELF
+#endif
+       bool :: _SUB
+!
+       __IAM(_SUB)
+       _SUB=.false.
+! make sure cell lengths are positive
+       __ASSERT(ucell%a,>,zero)
+       __ASSERT(ucell%b,>,zero)
+       __ASSERT(ucell%c,>,zero)
+! make sure angles are in a valid range
+       __ASSERT(ucell%alpha,>,zero)
+       __ASSERTWARN(ucell%alpha,<,PI)
+! wrap angle
+       ucell%alpha=modulo(ucell%alpha,TWOPI) ; if (ucell%alpha.gt.PI) __INCR(ucell%alpha, -TWOPI)
+! check again
+       __ASSERT(ucell%alpha,>,zero)
+       __ASSERT(ucell%alpha,<,PI)
+!
+       __ASSERT(ucell%beta,>,zero)
+       __ASSERTWARN(ucell%beta,<,PI)
+! wrap angle
+       ucell%beta=modulo(ucell%beta,TWOPI) ; if (ucell%beta.gt.PI) __INCR(ucell%beta, -TWOPI)
+! check again
+       __ASSERT(ucell%beta,>,zero)
+       __ASSERT(ucell%beta,<, PI)
+!
+       __ASSERT(ucell%gamma,>,zero)
+       __ASSERTWARN(ucell%gamma,<,PI)
+! wrap angle
+       ucell%gamma=modulo(ucell%gamma,TWOPI) ; if (ucell%gamma.gt.PI) __INCR(ucell%gamma, -TWOPI)
+! check again
+       __ASSERT(ucell%gamma,>,zero)
+       __ASSERT(ucell%gamma,<,PI)
+!
+       end function _SUB
+!================================================
+#undef _SUB
+#define _SUB __F(vectors_from_lattice)
+       subroutine _SUB(_SELF)
+#ifdef __CLASS
+       _TYPE(cell) :: _SELF
+#endif
+       __IAM(SUB)
+!
+       float sg, osg, cg, ca, cb
+       sg=sin(ucell%gamma)
+       __ASSERT(sg,>,zero)
+       osg=one/sg
+       cg=cos(ucell%gamma)
+       ca=cos(ucell%alpha)
+       cb=cos(ucell%beta)
+!
+       ucell%vectors(1,1)=ucell%a
+       ucell%vectors(2,1)=zero
+       ucell%vectors(3,1)=zero
+!
+       ucell%vectors(1,2)=cg*ucell%b
+       ucell%vectors(2,2)=sg*ucell%b
+       ucell%vectors(3,2)=zero
+!
+       ucell%vectors(1,3)=cb*ucell%c
+       ucell%vectors(2,3)=ucell%c * ( ca - cg*cb) * osg
+       ucell%vectors(3,3)=ucell%c * osg * sqrt ( max (zero,  one-ca**2-cb**2-cg**2+two*ca*cb*cg))
+       ucell%volume=ucell%vectors(3,3)*ucell%a*ucell%b*sg
+!
+       end subroutine _SUB
+!================================================
+#undef _SUB
+#define _SUB __F(print)
+       subroutine _SUB(_SELF)
+       __DEP_MULTICOM
+       __DEP_MPI
+       __DEP_OUTPUT
+#ifdef __CLASS
+       _TYPE(cell) :: _SELF
+#endif
+       __IAM(SUB)
+       if (.not.ucell%initialized) then
+        __WRN(whoami, 'UNIT CELL NOT INITIALIZED. ')
+        return
+       endif
+!
+#define _TAB char(9)
+       write(_MSGBUF(1),'(A)') _TAB//'UNIT CELL DIMENSIONS:'
+       write(_MSGBUF(2),'(A)') _TAB//'===================='
+       write(_MSGBUF(3),999) _TAB//'A:',ucell%a
+       write(_MSGBUF(4),999) _TAB//'B:',ucell%b
+       write(_MSGBUF(5),999) _TAB//'C:',ucell%c
+!
+       write(_MSGBUF(3),999) _TAB//'ALPHA:',ucell%alpha
+       write(_MSGBUF(4),999) _TAB//'BETA:',ucell%beta
+       write(_MSGBUF(5),999) _TAB//'GAMMA:',ucell%gamma
+!
+       write(_MSGBUF(6),999) _TAB//'VOLUME:',ucell%volume
+!
+       __PRINT(_MSGBUF)
+!
+ 999  format (A,F20.10)
+
+       end subroutine _SUB
+!
+      end module __M
+
+
+
+!
+
