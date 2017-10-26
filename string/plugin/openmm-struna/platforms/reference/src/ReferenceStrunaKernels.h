@@ -34,6 +34,7 @@
 
 #include "StrunaKernels.h"
 #include "openmm/Platform.h"
+#include <stdbool.h>
 #include "struna.h"
 #include <vector>
 
@@ -70,7 +71,8 @@ public:
      */
     void copyParametersToContext(OpenMM::ContextImpl& context, const StrunaForce& force);
 private:
-    bool hasInitialized, usesPeriodic;
+    bool hasInitialized;
+    _Bool usesPeriodic;
     OpenMM::ContextImpl& contextImpl;
     int natoms;    // number of particles
     int* atomlist; // list of atom indices involved in restraints

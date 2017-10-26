@@ -36,6 +36,7 @@
 #include "openmm/internal/ContextImpl.h"
 #include "openmm/cuda/CudaContext.h"
 #include "openmm/cuda/CudaArray.h"
+#include <stdbool.h>
 #include "struna.h"
 #include <vector>
 
@@ -84,7 +85,8 @@ private:
     class CopyForcesTask;
     class StartCalculationPreComputation;
     class AddForcesPostComputation;
-    bool hasInitialized, usesPeriodic;
+    bool hasInitialized;
+    _Bool usesPeriodic;
     OpenMM::ContextImpl& contextImpl;
     OpenMM::CudaContext& cu;
     OpenMM::CudaArray* strunaForces;
