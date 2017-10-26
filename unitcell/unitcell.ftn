@@ -10,7 +10,7 @@
 #define _COMMA,
 #endif
 #define __M unitcell
-! for now, support basic triclinit cells
+! for now, support basic triclinic cells
 #define __F(_WHAT) __CONCAT3(__M,_,_WHAT)
 
       module __M
@@ -22,15 +22,20 @@
       type cell
        bool :: initialized=.false.
 ! basic, redundant data types :
-       float :: alpha=pio4, beta=pio4, gamma=pio4 ! lattice angles
+       float :: alpha=pio2, beta=pio2, gamma=pio2 ! lattice angles
        float :: a=one, b=one, c=one ! lattice lengths
        float, dimension(3,3) :: vectors=RESHAPE((/one, zero, zero, zero, one, zero, zero, zero, one/),(/3,3/))
        float, dimension(3) :: center=(/zero, zero, zero/)
        float :: volume = one
+       bool :: qortho=.true.
+#define __QORTHO ucell%qortho = (abs(ucell%alpha-pio2)<__ERRTOL) .and. (abs(ucell%beta-pio2)<__ERRTOL) .and. (abs(ucell%gamma-pio2)<__ERRTOL)
 #ifdef __CLASS
        contains
+        procedure :: set_lattice => __F(set_lattice)
         procedure :: update_lattice => __F(set_lattice)
         procedure :: check_lattice => __F(check_lattice)
+        procedure :: set_vectors => __F(set_vectors)
+        procedure :: update_vectors => __F(set_vectors)
         procedure :: initialize => __F(set_lattice)
         procedure :: done => __F(done)
         procedure :: print => __F(print)
@@ -48,6 +53,10 @@
        module procedure __F(set_lattice)
       end interface
 !
+      interface __F(update_vectors)
+       module procedure __F(set_vectors)
+      end interface
+!
       interface __F(nitialize)
        module procedure __F(set_lattice)
       end interface
@@ -60,11 +69,12 @@
 #ifdef __CLASS
        _TYPE(cell) :: _SELF
 #endif
-       ucell%alpha=pio4; ucell%beta=pio4; ucell%gamma=pio4 ! lattice angles
+       ucell%alpha=pio2; ucell%beta=pio2; ucell%gamma=pio2 ! lattice angles
        ucell%a=one; ucell%b=one; ucell%c=one ! lattice lengths
        ucell%vectors=RESHAPE((/one, zero, zero, zero, one, zero, zero, zero, one/),(/3,3/))
        ucell%center=(/zero, zero, zero/)
        ucell%volume = one
+       ucell%qortho=.true.
        ucell%initialized=.false.
        end subroutine _SUB
 #undef _SUB
@@ -94,12 +104,63 @@
        if (.not.ok) then
         __WRN(whoami, 'INVALID LATTICE PARAMETERS SPECIFIED')
        else
+        ucell%a=la
+        ucell%b=lb
+        ucell%c=lc
+!
+        ucell%alpha=aa
+        ucell%beta=ab
+        ucell%gamma=ag
+!
+        __QORTHO
+!
         call __F(vectors_from_lattice)(_SELF)
         if (ucell%volume.lt.__ERRTOL) then
          __WARN(whoami, 'UNITCELL VOLUME IS ALMOST ZERO (',ucell%volume,')');
         endif
         ucell%initialized=.true.
        endif
+       end subroutine _SUB
+!================================================
+#undef _SUB
+#define _SUB __F(set_vectors)
+       subroutine _SUB ( _SELF _COMMA box)
+       __DEP_BESTFIT
+! this is a permissive, incomplete version; we are missing a transformation matrix in the case that the origin and orientation of axes is nonstandard
+#ifdef __CLASS
+       _TYPE(cell) :: _SELF
+#endif
+       float, intent(in) :: box(3,3)
+       float :: dp, ooa, oob, ooc, csa, csb, csg
+       __IAM(_SUB)
+!
+       ucell%vectors = box
+       ucell%volume = box(1,1) * ( box(2,2)*box(3,3) - box(3,2)*box(2,3) ) + &
+     &                box(2,1) * ( box(3,2)*box(1,3) - box(1,2)*box(3,3) ) + &
+     &                box(3,1) * ( box(1,2)*box(2,3) - box(2,2)*box(1,3) )     ! a . b x c
+!
+       ucell%a=sqrt( box(1,1)**2 + box(2,1)**2 + box(3,1)**2 );
+       ucell%b=sqrt( box(1,2)**2 + box(2,2)**2 + box(3,2)**2 );
+       ucell%c=sqrt( box(1,3)**2 + box(2,3)**2 + box(3,3)**2 );
+       ooa=one/ucell%a;
+       oob=one/ucell%b;
+       ooc=one/ucell%c;
+!
+       csg = ( box(1,1)*box(1,2) + box(2,1)*box(2,2) + box(3,1)*box(3,2) ) * ooa * oob ;
+       ucell%gamma = acos( min(one, max(-one, csg) ) )
+!
+       csb = ( box(1,1)*box(1,3) + box(2,1)*box(2,3) + box(3,1)*box(3,3) ) * ooa * ooc ;
+       ucell%beta = acos( min(one, max(-one, csb) ) )
+!
+       csa = ( box(1,2)*box(1,3) + box(2,2)*box(2,3) + box(3,2)*box(3,3) ) * oob * ooc ;
+       ucell%alpha = acos( min(one, max(-one, csa) ) )
+!
+       __QORTHO
+!
+       if (ucell%volume.lt.__ERRTOL) then
+         __WARN(whoami, 'UNITCELL VOLUME IS ALMOST ZERO (',ucell%volume,')');
+       endif
+       ucell%initialized=.true.
        end subroutine _SUB
 !================================================
 #undef _SUB
@@ -196,11 +257,11 @@
        write(_MSGBUF(4),999) _TAB//'B:',ucell%b
        write(_MSGBUF(5),999) _TAB//'C:',ucell%c
 !
-       write(_MSGBUF(3),999) _TAB//'ALPHA:',ucell%alpha
-       write(_MSGBUF(4),999) _TAB//'BETA:',ucell%beta
-       write(_MSGBUF(5),999) _TAB//'GAMMA:',ucell%gamma
+       write(_MSGBUF(6),999) _TAB//'ALPHA:',ucell%alpha
+       write(_MSGBUF(7),999) _TAB//'BETA:',ucell%beta
+       write(_MSGBUF(8),999) _TAB//'GAMMA:',ucell%gamma
 !
-       write(_MSGBUF(6),999) _TAB//'VOLUME:',ucell%volume
+       write(_MSGBUF(9),999) _TAB//'VOLUME:',ucell%volume
 !
        __PRINT(_MSGBUF)
 !
@@ -209,8 +270,4 @@
        end subroutine _SUB
 !
       end module __M
-
-
-
 !
-
