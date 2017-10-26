@@ -6,7 +6,8 @@ CFLAGS =-O3 -fno-math-errno -c -fPIC
 #
 # NVIDIA CUDA COMPILER ######
 NVCC=nvcc
-NVCCFLAGS=-O3 -m32 -Xcompiler -mfloat-abi=hard -gencode arch=compute_32,code=sm_32 -ccbin $(CC) --use_fast_math -c
+#NVCCFLAGS=-O3 -m32 -Xcompiler -mfloat-abi=hard -gencode arch=compute_32,code=sm_32 -ccbin $(CC) --use_fast_math -c
+NVCCFLAGS=-O3 -ccbin $(CC) --use_fast_math -c
 #NVCCFLAGS=-O3 -m32 -Xcompiler -mfloat-abi=hard -gencode arch=compute_32,code=sm_32 -ccbin $(CC) -c
 #NVCCFLAGS=-O3 -m32 -Xcompiler -mfloat-abi=hard -gencode arch=compute_32,code=sm_32 -ccbin $(CC) --prec-div=false --ftz=true --prec-sqrt=false -c
 
@@ -66,7 +67,7 @@ LDFLAGS=-dynamic -Bdynamic $(LOMP) -Wl,-z,defs # to list unresolved symbols duri
 #LDFLAGS=-static -ipa
 
 # extra libs for linking fortran and cuda objects together using c/nvcc/gfortran as linker front ends
-EXTRA_LIBS+=-L/usr/local/cuda/lib -lcudart -lcuda -lgfortran -lstdc++ -lgcc -lm
+EXTRA_LIBS+=-L/usr/local/cuda/lib -L/opt/cuda/lib64  -lcudart -lcuda -lgfortran -lstdc++ -lgcc -lm
 # extra libs for ifort
 #EXTRA_LIBS+=-lirc -limf -lifcore -ldl
 #
