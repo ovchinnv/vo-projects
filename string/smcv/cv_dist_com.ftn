@@ -21,7 +21,7 @@ __CHARMM_ONLY##IF STRINGM
 !
       contains
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       function cv_dist_com_add(atom_list, p, _COMMON_ARGS, iproj, frame_, vec) result(l) ! note: i is the atom index in the PSF
+       function cv_dist_com_add(atom_list, p, _COMMON_ARGS, iproj, frame_, vec, qper) result(l) ! note: i is the atom index in the PSF
        __DEP_OUTPUT
        __DEP_CONST
        __DEP_NUMBER
@@ -35,6 +35,7 @@ __CHARMM_ONLY##IF STRINGM
        int, intent(in) :: iproj ! 0 - no projection, 1 - distance along projection, 2 - distance in plane orthogonal to projection
        int, intent(in) :: frame_ ! reference frame
        float, intent(in) :: vec(3)
+       bool, intent(in) :: qper ! periodicity flag
 !      locals
        int :: i, j, l, m, ind, num_int, ncom(2), ii, jj, ncomf, frame
        int, pointer :: indf(:)
@@ -87,6 +88,7 @@ __CHARMM_ONLY##IF STRINGM
            ind=ind+1
           enddo
          enddo
+         if (found) found=(qper.eqv.(cv%priv(l)%p(ind).gt.izero)); __INC(ind) ! check periodicity flag
          if (found) found=(iproj.eq.cv%priv(l)%p(ind)); __INC(ind)      ! check distance type
          if (found .and. iproj.gt.0) found=(frame.eq.cv%priv(l)%p(ind)) ! check frame index
 !
@@ -116,7 +118,7 @@ __CHARMM_ONLY##IF STRINGM
         if  (l.gt.0) then
 !     allocate private data
 !     space needed:
-         num_int = 2 + sum(ncom) + 2 ! number of ints needded for storage
+         num_int = 2 + sum(ncom) + 3 ! number of ints needded for storage (incl. periodicity flag and projection variables)
 !
          allocate(cv%priv(l)%p(num_int));
          cv%priv(l)%p(1:2)=ncom(1:2)
@@ -131,6 +133,8 @@ __CHARMM_ONLY##IF STRINGM
            __INC(ind)
           enddo
          enddo
+!    periodicity flag
+         if (qper) then  ; cv%priv(l)%p(ind)=ione ; else ; cv%priv(l)%p(ind)=izero ; endif ; __INC(ind)
 !    real data:
          allocate(cv%priv(l)%pr(10));
          do i=1,2; do j=1,3
@@ -220,7 +224,8 @@ __CHARMM_ONLY##IF STRINGM
 
        bool :: qframe=.false., qcom1, qcom2, &
      &   qproj, & ! whether to compute a 1-component projection distance ; requires vector computed in 'vec' above
-     &   qortho   ! whether to compute a 2D distance with 1 component projected out
+     &   qortho,& ! whether to compute a 2D distance with 1 component projected out
+     &   qper     ! whether to ignore periodicity
        int, pointer :: priv(:)
 !
        __IAM(CV_DIST_COM_CALC)
@@ -269,10 +274,27 @@ __CHARMM_ONLY##IF STRINGM
         enddo ! k - components
 !
 !      now compute vector
-!       constant contribution
+!      constant contribution
         dcom=cv%priv(i)%pr(4:6)-cv%priv(i)%pr(1:3)
 !      add atomic contribution
         __INCR(dcom,com2-com1)
+!      account for periodicity, assuming orthorombic cell aligned with laboratory axes
+        jj=jj+1;
+        qper=(cv%priv(i)%p(jj).gt.0)
+!
+        if (qper) then
+         if (cv%ucell%initialized) then
+          if (cv%ucell%qortho) then
+#define __DPER(_I) dcom(_I)=modulo(dcom(_I), cv%ucell%vectors(_I,_I)) ; if (dcom(_I) .gt. half*cv%ucell%vectors(_I,_I)) __INCR(dcom(_I), -cv%ucell%vectors(_I,_I))
+           __DPER(1)
+           __DPER(2)
+           __DPER(3)
+          else
+           __WRN(whoami, 'PERIODIC CORRECTIONS ARE ONLY SUPPORTED FOR ORTHORHOMBIC CELLS. WILL SKIP CORRECTION.')
+          endif
+         endif
+        endif ! qper
+!
 ! is this a projected distance ?
         qproj=cv%priv(i)%p(jj+1).gt.0              ! distance along 1D projection
         qortho=qproj.and.(cv%priv(i)%p(jj+1).gt.1) ! distance within a plane orthogonal to vector
