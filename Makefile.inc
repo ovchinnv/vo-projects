@@ -49,7 +49,7 @@ DEFS+=-Dint=integer -Dfloat=real*8 -Dbool=logical -Dmpiint=MPI_INTEGER -Dmpifloa
      -Dmpibool=MPI_LOGICAL -Dint1=integer\(kind=KIND\(\'a\'\)\) -D__RCOMP -D__DMOL -D__CHES -D__EDDIE -D__$(FORTRAN_COMPILER) \
      -Dint4mpi=integer -D__TIMER #-D__PARALLEL #-D__DEBUG -D__PATHSCALE #-Dint4mpi="integer(KIND=MPI_INTEGER_KIND)" 
 
-STRING_FLAGS=-D__STRING_SERIAL -D__ACEMD -D__NAMD $(OMP)
+STRING_FLAGS= -D__ACEMD -D__NAMD $(OMP)
 DEFS+=$(STRING_FLAGS)
 
 #LOCALDEFS+=-D__SINGLE # single-precision hack
@@ -67,7 +67,10 @@ LDFLAGS=-dynamic -Bdynamic $(LOMP) -Wl,-z,defs # to list unresolved symbols duri
 #LDFLAGS=-static -ipa
 
 # extra libs for linking fortran and cuda objects together using c/nvcc/gfortran as linker front ends
-EXTRA_LIBS+=-L/usr/local/cuda/lib -L/opt/cuda/lib64  -lcudart -lcuda -lgfortran -lstdc++ -lgcc -lm
+ifdef __CUDA
+EXTRA_LIBS+=-L/usr/local/cuda/lib -L/opt/cuda/lib64  -lcudart -lcuda 
+endif
+EXTRA_LIBS+=-lgfortran -lstdc++ -lgcc -lm
 # extra libs for ifort
 #EXTRA_LIBS+=-lirc -limf -lifcore -ldl
 #
