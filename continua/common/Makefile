@@ -9,7 +9,7 @@ include $(ROOT)/Makefile.inc
 
 continuum.o: gridsize.o grid.o
 grid.o: gridsize.o
-grid.F90 : gridopts.def
+grid.F90 : gridopts.def $(ROOT)/parser/parser_macro1.src
 
 test:: force_look
 	$(MAKE) -C test

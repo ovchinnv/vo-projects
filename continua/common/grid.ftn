@@ -61,13 +61,16 @@
        float :: dxmax, dxmin, dymax, dymin, dzmax, dzmin
        bool :: qxgridobject=.false., qygridobject=.false., qzgridobject=.false.
        bool :: xstretchfix=.false., ystretchfix=.false., zstretchfix=.false.
+       bool :: xoptimize=.false., yoptimize=.false., zoptimize=.false.
        float, pointer :: dimens(:,:)=>NULL() ! object dimensions
        float, pointer :: agrid(:)=>NULL()
        int :: nnx, nny, nnz, ndim
        bool :: q3d
 !    default parameters for automatic grid generation
 !
-       float, parameter :: dmin_default=half, stretch_default=1.05d0, buffer_default=30d0
+       float, parameter :: dmin_default=half, stretch_default=1.0d0, buffer_default=30d0
+       bool, parameter :: stretchfix_default=.true.,&
+                          optimize_default=.true. ! optimize grid factorization
 !
        __IAM(GRID_INITIALIZE)
 !
@@ -86,16 +89,19 @@
 !
 !    generate/read grids
 !
+#define __GRID_FATAL if (fatal_warning(__COMM)) then; call grid_done(); return; endif
+
 #define __CONTEXT __CTX
 !
        if (__ME.le.0) then ! only root node does this, then broadcasts to the other nodes
 !
 !========================================= x-grid
-       xgrid_file=getval_nocase('XGRID',__CTX) ! query parser module for grid filename 
+       xgrid_file=getval_nocase('XGRID',__CTX) ! query parser module for grid filename or generation type
 !     check for missing value to avoid crash
        if (len_trim(xgrid_file).le.0) then
         call warning(whoami, '"XGRID" is missing.',-1)
        endif
+       __GRID_FATAL
 !
        select case(xgrid_file)
 #define __dim x
@@ -104,11 +110,12 @@
        end select
 !
 !========================================== y-grid
-       ygrid_file=getval_nocase('YGRID',__CTX) ! query parser module for grid filename 
+       ygrid_file=getval_nocase('YGRID',__CTX) ! query parser module for grid filename or generation type
 !     check for missing value to avoid crash
        if (len_trim(ygrid_file).le.0) then
         call warning(whoami, '"YGRID" is missing.',-1)
        endif
+       __GRID_FATAL
        select case(ygrid_file)
 #define __dim y
 #define __DIM Y
@@ -116,11 +123,12 @@
        end select
 !========================================== z-grid
        if (q3d) then ! 3D 
-        zgrid_file=getval_nocase('ZGRID',__CTX) ! query parser module for grid filename 
+        zgrid_file=getval_nocase('ZGRID',__CTX) ! query parser module for grid filename or generation type
 !     check for missing value to avoid crash
         if (len_trim(zgrid_file).le.0) then
          call warning(whoami, '"ZGRID" is missing.',-1)
         endif
+        __GRID_FATAL
         select case(zgrid_file)
          case(''); ! do nothing; allow to skip z-grid for 2D problems
 #define __dim z
@@ -129,7 +137,7 @@
         end select
 !
        else ! 2D
-        if (existtag_nocase('ZGRID')) then 
+        if (existtag_nocase('ZGRID', __CTX)) then 
          call warning(whoami, '"ZGRID" will be ignored in 2D configuration.',0)
         endif
         allocate(zcor(nz)) ! zero-sized allocations should be valid
@@ -140,45 +148,49 @@
        if (qxgridobject.or.qygridobject.or.qzgridobject) then 
          nnx=nx; nny=ny; nnz=nz;
          dimens=>object_dimens()
-         ndim=size(dimens,1); ! number of dimensions
+         if (associated(dimens)) then
+          ndim=size(dimens,1); ! number of dimensions
+         else
+          ndim=0
+         endif
        endif
 ! x-grid
        if (qxgridobject) then 
         if (ndim.gt.0) then 
-         agrid=>grid_around_object( dimens(1,2), dimens(1,3), dxmin, xstretch, xstretchfix, x1 ) 
+         agrid=>grid_around_object( dimens(1,2), dimens(1,3), dxmin, xstretch, xstretchfix, x1, xoptimize ) 
 !            write(0,*) agrid, 'AA'
          if (associated(agrid)) then; nnx=size(agrid); 
           if (associated(xcor)) deallocate(xcor); xcor=>agrid
 !            write(0,*) xcor, 'AA'
-         else ; call warning(whoami,' X-grid could not be created from object.',-1); qxgridobject=.false. ;endif
+         else ; call warning(whoami,'X-grid could not be created from object.',-1); qxgridobject=.false. ;endif
         else
-         call warning(whoami,' Object dimension less than one. Cannot build X-grid.',-1); qxgridobject=.false. ;
+         call warning(whoami,'Object dimension less than one. Cannot build X-grid.',-1); qxgridobject=.false. ;
         endif
        endif ! xgrid
 ! y-grid
        if (qygridobject) then 
         if (ndim.gt.1) then 
-         agrid=>grid_around_object( dimens(2,2), dimens(2,3), dymin, ystretch, ystretchfix, y1 )
+         agrid=>grid_around_object( dimens(2,2), dimens(2,3), dymin, ystretch, ystretchfix, y1, yoptimize )
          if (associated(agrid)) then; nny=size(agrid); 
           if (associated(ycor)) deallocate(ycor); ycor=>agrid
-         else ; call warning(whoami,' Y-grid could not be created from object.',-1); qygridobject=.false. ;endif
+         else ; call warning(whoami,'Y-grid could not be created from object.',-1); qygridobject=.false. ;endif
         else 
-         call warning(whoami,' Object dimension less than two. Cannot build Y-grid.',-1); qygridobject=.false. ;
+         call warning(whoami,'Object dimension less than two. Cannot build Y-grid.',-1); qygridobject=.false. ;
         endif
        endif ! ygrid
 ! z-grid
        if (qzgridobject) then 
         if (q3d) then 
          if (ndim.gt.2) then 
-          agrid=>grid_around_object( dimens(3,2), dimens(3,3), dzmin, zstretch, zstretchfix, z1 ) 
+          agrid=>grid_around_object( dimens(3,2), dimens(3,3), dzmin, zstretch, zstretchfix, z1, zoptimize ) 
           if (associated(agrid)) then; nnz=size(agrid);
            if (associated(zcor)) deallocate(zcor); zcor=>agrid
-          else ; call warning(whoami,' Z-grid could not be created from object.',-1); qzgridobject=.false. ;endif
+          else ; call warning(whoami,'Z-grid could not be created from object.',-1); qzgridobject=.false. ;endif
          else 
-          call warning(whoami,' Object dimension less than three. Cannot build Z-grid.',-1); qzgridobject=.false. ;
+          call warning(whoami,'Object dimension less than three. Cannot build Z-grid.',-1); qzgridobject=.false. ;
          endif
         else ! 2D problem
-         call warning(whoami,' Object dimension is three but geometry is 2D. Cannot build Z-grid.',-1); qzgridobject=.false. ;
+         call warning(whoami,'Object dimension is three but geometry is 2D. Cannot build Z-grid.',-1); qzgridobject=.false. ;
         endif
        endif
 ! 
@@ -187,12 +199,7 @@
        endif ! __ME.eq.0
 !
 !  reduce warnings and terminate if they are fatal
-       if (fatal_warning(__COMM)) then
-        if (associated(xcor)) deallocate(xcor)
-        if (associated(ycor)) deallocate(ycor)
-        if (associated(zcor)) deallocate(zcor)
-        return
-       endif
+       __GRID_FATAL
 !
 !****** additional parallel code for automatic grid generation
 #if __PARALLEL
@@ -234,12 +241,7 @@
 !  reduce warnings and terminate if they are fatal (otherwise bcasts will fail below)
 !
 ! write(0,*) __ME, fatal_warning(__COMM),'!'
-       if (fatal_warning(__COMM)) then
-        if (associated(xcor)) deallocate(xcor)
-        if (associated(ycor)) deallocate(ycor)
-        if (associated(zcor)) deallocate(zcor)
-        return
-       endif
+      __GRID_FATAL
 ! allocate arrays on other nodes
        if (__ME.gt.0) allocate(xcor(nx), ycor(ny), zcor(nz))
 !
@@ -337,9 +339,24 @@
        end subroutine grid_initialize 
 !*******************************************************************************************
        subroutine grid_done
-       deallocate(xcor,xcen,ycor,ycen,zcor,zcen,&
-     &            dxcor,dxcen,dycor,dycen,dzcor,dzcen,&
-     &            odxcor,odxcen,odycor,odycen,odzcor,odzcen)
+       __FREE(xcor)
+       __FREE(ycor)
+       __FREE(zcor)
+       __FREE(xcen)
+       __FREE(ycen)
+       __FREE(zcen)
+       __FREE(dxcor)
+       __FREE(dycor)
+       __FREE(dzcor)
+       __FREE(dxcen)
+       __FREE(dycen)
+       __FREE(dzcen)
+       __FREE(odxcor)
+       __FREE(odycor)
+       __FREE(odzcor)
+       __FREE(odxcen)
+       __FREE(odycen)
+       __FREE(odzcen)
 !
        grid_initialized=.false.
 !
@@ -387,12 +404,12 @@
 !
        end function grid_exponential
 !*******************************************************************************************
-       function grid_around_object(xmin,xmax,dxmin,stretch,stretchfix,buffer) 
+       function grid_around_object(xmin,xmax,dxmin,stretch,stretchfix,buffer,optimize_factorization) 
        __DEP_CONST
        __DEP_OUTPUT
 !
-       float :: xmin, xmax, dxmin, stretch, buffer
-       bool :: stretchfix
+       float, intent(in) :: xmin, xmax, dxmin, stretch, buffer
+       bool, intent(in) :: stretchfix, optimize_factorization
        float, pointer, dimension(:) :: grid_around_object
        float, pointer, dimension(:) :: g
        int :: n1, n2, n, nnew(1)
@@ -434,26 +451,33 @@
        n2 = INT((xmax-xmin) / dxmin) + 1
 ! total number of points
        n = n1 + n2 + n1 - 2 ! subtract two points since the end of one grid is the beginning of the next
-       n = n-3 ; ! further subtract 3 since we are concerned with the number of inner cell-center points
+!
+       if (optimize_factorization) then
+       n = n-2 ; ! further subtract 2 since we are concerned with the number of inner cell-center points
 !    adjust n so it is suitable for constructing subgrids
 !
 !    for now, allow four possible factorizations : all 2s, one 3, one 5, one 7
-       b=one/log(two);
+        b=one/log(two);
 !
-       c=b*log(one*n)   ; ns(1) =          itwo ** nint(c); ! just 2s
-       c=b*log(one*n/3) ; ns(2) = ithree * itwo ** nint(c); ! one 3
-       c=b*log(one*n/5) ; ns(3) = ifive  * itwo ** nint(c); ! one 5
-       c=b*log(one*n/7) ; ns(4) = iseven * itwo ** nint(c); ! one 7
+        c=b*log(one*n)   ; ns(1) =          itwo ** nint(c); ! just 2s
+        c=b*log(one*n/3) ; ns(2) = ithree * itwo ** nint(c); ! one 3
+        c=b*log(one*n/5) ; ns(3) = ifive  * itwo ** nint(c); ! one 5
+        c=b*log(one*n/7) ; ns(4) = iseven * itwo ** nint(c); ! one 7
 ! now choose the factorization that gives the closest number of points to n
 !        write(0,*) ns, n, 'AA'
-       nnew=ns( minloc ( abs ( ns-n ) ) ) + 2 ! note that nnew must be an array of rank 1; add two points (for ghost cells)
+        nnew=ns( minloc ( abs ( ns-n ) ) ) + 2 ! note that nnew must be an array of rank 1; add two points (for ghost cells)
 ! now need to modify grid spacings to correspond to the new grid size
 ! for simplicity, keep the inner grid the same, but modify stretching:
-       n2=n2 + mod(n2,itwo) * sign(ione,n-nnew(1)) ; ! make the number of inner points even if it is not
-       dx0=(xmax-xmin)/(n2-1); ! spacing between inner points
-       n1=(nnew(1)-n2)/2 ; ! n1 count with ghost point; 
-       n1=n1 - 1 ! corresponds to the number of intervals
+        n2=n2 + mod(n2,itwo) * sign(ione,n-nnew(1)) ; ! make the number of inner points even if it is not
+        dx0=(xmax-xmin)/(n2-1); ! spacing between inner points
+        n1=(nnew(1)-n2)/2 ; ! n1 count with ghost point; 
+        n1=n1 - 1 ! corresponds to the number of intervals
 !         write(0,*) n2, n1, nnew(1), dxmin, dx0, stretch, buffer, 'AA'
+       else ! optimize factorization
+        nnew(1)=n
+        n1=n1-2 ! subtract two for gridpoint redundancy and one for ghostpoint (see below)
+        dx0=dxmin
+       endif
 ! compute new stretching coefficient (keep buffer region the same)
 !
 !     newton-raphson optimization to get optimal stretching parameter
