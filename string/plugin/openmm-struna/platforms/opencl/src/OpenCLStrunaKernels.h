@@ -36,6 +36,7 @@
 #include "openmm/internal/ContextImpl.h"
 #include "openmm/opencl/OpenCLContext.h"
 #include "openmm/opencl/OpenCLArray.h"
+#include <stdbool.h>
 #include "struna.h"
 #include <vector>
 
@@ -83,7 +84,8 @@ private:
     class ExecuteTask;
     class StartCalculationPreComputation;
     class AddForcesPostComputation;
-    bool hasInitialized;
+    bool hasInitialized; 
+    _Bool usesPeriodic;
     OpenMM::ContextImpl& contextImpl;
     OpenMM::OpenCLContext& cl;
     OpenMM::OpenCLArray* strunaForces;
@@ -92,11 +94,13 @@ private:
     cl::Event syncEvent;
     int forceGroupFlag;
     std::vector<OpenMM::Vec3> pos;
+    OpenMM::Vec3 boxVectors[3];
 // VO 2017
     double sm_energy; // plugin energy
     int natoms;    // number of particles
     int* atomlist; // list of atom indices involved in restraints
     double *r, *fr; // positions and forces
+    double box[9] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 } ; // box vectors
 };
 
 } // namespace StrunaPlugin

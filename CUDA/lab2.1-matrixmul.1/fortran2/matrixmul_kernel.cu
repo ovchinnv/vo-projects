@@ -1,0 +1,1 @@
+/home/taly/projects/CUDA/lab2.1-matrixmul.1/matrixmul_kernel.cu
