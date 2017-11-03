@@ -2,11 +2,12 @@
 % close all
 
 
-q3d=false;
+q3d=true;
 ascii=true;
 
-gridname='xy_test.xyz';
+gridname='xyz_test.xyz';
 dataname='solution.dat';
+goldname='solution-gold.dat';
 
 if ~exist('read')
  read=1;
@@ -16,6 +17,7 @@ if (read)
  if (ascii)
   grd=textread(gridname, '%f','bufsize', 1000000);
   dat=textread(dataname, '%f','bufsize', 1000000);
+  gold=textread(goldname, '%f','bufsize', 1000000);
  end
  read=0;
 end 
@@ -29,7 +31,7 @@ ny2=floor(dat(2));
 if (q3d)
  nz=floor(grd(3));
  nz2=floor(dat(3));
- i=4; i2=4;
+ i=4; i2=8;
 else
  nz=1;
  nz2=1; 
@@ -43,6 +45,14 @@ end
 %
 %
 if (q3d)
+% grid
+% in case the grid is full as in plot3d
+ x=grd(i:nx+i-1);
+ y=grd(nx*ny*nz+i:nx:nx*ny*nz+nx*ny+i-1);
+ z=grd(2*nx*ny*nz+i:ny*ny:end);
+%
+ d=reshape(dat (i2:nx*ny*nz+i2-1), nx,ny,nz);
+ g=reshape(gold(i2:nx*ny*nz+i2-1), nx,ny,nz);
 else
 % grid
 % x=reshape(grd(i:nx*ny+i-1),  nx,ny); xx=x(:,1); % in case the grid is full
@@ -51,9 +61,28 @@ else
  y=grd(nx+i:nx+i+ny-1);
 % 
  d=reshape(dat(i2:nx*ny+i2-1), nx,ny);
+ g=reshape(gold(i2:nx*ny+i2-1), nx,ny);
 end
 
-%pcolor(x,y,d); shading flat; colorbar; box on
-meshc(x,y,d); shading flat; colorbar; box on
+dg=d-g;
 
+% show slice
+kz=10;
+
+%
+mesh(x,y,d(:,:,kz)); shading flat; colorbar; box on
+%mesh(x,y,g(:,:,kz)); shading flat; colorbar; box on
+%mesh(x,y,dg(:,:,kz)); shading flat; colorbar; box on
+mesh(x(2:nx-1),y(2:ny-1),dg(2:end-1,2:end-1,kz)); shading flat; colorbar; box on
+%hold on ;
+%pcolor(x,y,d(:,:,kz)); shading flat; colorbar; box on
+%meshc(x,y,d); shading flat; colorbar; box on
+
+return
+
+jy=10;
+mesh(x,z,squeeze(d(:,jy,:))); shading flat; colorbar; box on
+%mesh(x,z,squeeze(g(:,jy,:))); shading flat; colorbar; box on
+%mesh(x,z,squeeze(dg(:,jy,:))); shading flat; colorbar; box on
+mesh(x(2:end-1),z(2:end-1),squeeze(dg(2:end-1,jy,2:end-1))); shading flat; colorbar; box on
 
