@@ -8,7 +8,7 @@ CHARMM_DIR=stringm
 
 LOCALMACROS=-include source.defs
 LOCALDEPS=$(ROOT)/mpitype.def source.defs 
-LOCALDEPS+=dmol_select_macro.def
+LOCALDEPS+=$(ROOT)/dmol_select_macro.def
 
 include $(ROOT)/Makefile.inc
 

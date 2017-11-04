@@ -2,6 +2,9 @@ DIRS=driver state bestfit constants dynamol erf files lu multicom multidiag outp
 confcons enm continua pnm mpi_stub unitcell #tempering
 DISTRIB=include obj lib
 
+ROOT=.
+NAME=
+
 all : $(DIRS)
 clean ::
 	for d in $(DIRS); do (cd $$d; $(MAKE) clean); done
