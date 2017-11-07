@@ -1,0 +1,270 @@
+#define __CTX __WATERSHELLCTX
+#define __RESTARTCTX __CONCAT(__WATERSHELLCTX,_RESTART)
+#define _N WATERSHELL
+#//define __CHKUPDATE(_WHAT)   ( (mod(iteration, _WHAT) .eq. ione) .or. _WHAT.eq.ione )
+#define __CHKUPDATE(_WHAT)   (mod(iteration, _WHAT) .eq. izero)
+
+module _N
+
+ use system, only : r, rcomp, radius, natom, system_PDB_initialized, system_minimal_initialized, system_PDB_init, system_done, system_getind, &
+&                   system_init_mol_scalar_nocase
+ __DEP_OUTPUT
+ __DEP_PARSER
+ __DEP_CONST
+ __DEP_FILES
+ __DEP_MPI
+ __IMPNONE
+
+ private
+
+ public __NM(initialize)
+!public __NM(main)
+ public __NM(done)
+
+ bool, private :: __NM(initialized)=.false.
+
+! macro for parameters with defaults
+#define __PAR(_PAR,_TYPE,_DEF) _TYPE, save :: _PAR ; _TYPE, parameter :: __CONCAT(default_,_PAR)=_DEF;
+!
+! surface computation parameters :
+ __PAR(cutoff_surf_stdev,float,5d0)  ! grid smoothing cutoff normalized by standard deviation of gaussian (surface)
+ __PAR(surf_padding,float,0d0)       ! ( units of radius ) padding values to radii which might account for e.g. solvent layer(s)
+ __PAR(stdev_surf,float,2d0)         ! standard deviation of smoothing filter
+!
+ float :: cutoff_surf, oo_stdev_surf
+!
+! surface evolution and output parameters
+ __PAR(contour_update_freq, int, ione)           ! frequency of updating contour value
+ __PAR(contour_update_memory, float, 0.999d0)    ! memory constant for exponential update
+ __PAR(structure_update_freq, int, ione)         ! frequency of updating coordinats from which the surface is generated
+ __PAR(structure_update_memory, float, 0.999d0)  ! memory constant for exponential update
+ __PAR(output_file_freq, int, 1000)              ! frequency of writing output file
+ __PAR(restart_file, character(len=vartaglen), 'NONE') ! restart file name
+ __PAR(structure_file, character(len=vartaglen),'NONE') ! coordinate file (e.g. PDB) with system information, such as atomic radii
+ __PAR(output_file, character(len=vartaglen), 'watershell.restart.txt') ! output file name
+ __PAR(surface_force_constant, float, one)      ! surface restraint force constant
+ __PAR(target_surface_energy, float, 0.001d0) ! target average energy of surface potential / par area ( units of pressure or normal stress )
+!
+!  atom selections
+ __PAR(surface_atom_selection, character(len=vartaglen), 'ANAME=CA')  ! protein CA trace
+ __PAR(solvent_atom_selection, character(len=vartaglen), 'ANAME=OH2') ! TIP3 oxygens atoms
+ int, pointer :: isurface_atoms(:)=>NULL()
+ int, pointer :: isolvent_atoms(:)=>NULL()
+!
+ float, pointer :: r_surf(:,:), & ! reference atom coordinates
+&                  rad_surf(:),&! reference atom radii
+&                  r_solv(:,:), & ! solvent atom coordinates
+&                  rho_solv(:), & ! density value at solvent coordinate
+&                  drho_solv(:,:) ! density gradient at solvent coordinate (inward surface normal)
+ int :: nsurface=-1, nsolvent=-1
+!
+ int :: fid
+ bool :: qrestart=.false. ! whether we are restarting from a restart file
+!
+ float, private, parameter :: osq2=one/sqrt2
+ float, private, parameter :: osq2pi=one/sqrt(twopi)
+!
+!= subroutines
+ contains
+!========
+ __SUB(initialize) ()
+ character(len=vartaglen) :: keyword, context
+ int :: l
+ __IAM(__NM(INITIALIZE))
+!
+#define __CONTEXT __STRING(__CTX)
+ context=__CONTEXT ;
+#define __DEFAULT
+! first, check for restart file
+! if present, read it and skip initialization options
+! read restart file
+#define __CHAR
+#define __VAR	restart_file
+#define __TAG	restart_file
+#define __NAME	restart file
+#include "parser/parser_macro2.src"
+#undef __CHAR
+!
+ qrestart = ( existtag_nocase('restart_file', context) .and. trim(ftoupper(restart_file)).ne.'NONE')
+!
+ if (qrestart) then
+  __MESSAGE(whoami,' WILL READ SURFACE DEFINITION PARAMETERS FROM RESTART FILE.')
+! read and parse restart file
+  fid=-1
+  call files_open(fid, restart_file, 'FORMATTED', 'READ')
+  call parse_file(fid, &
+#ifdef __PARALLEL
+ &  MPI_COMM_NULL, &
+#endif
+ &  quiet_=.false.)
+  call files_close(fid)
+! now comes a trick : change context name temporarily to process the restart file using the same calls
+  context= __STRING(__RESTARTCTX)
+!
+ endif ! have restart file
+!
+#define __MINUSERR
+! density padding
+#define __VAR	surf_padding
+#define __TAG __VAR
+#define __NAME	Density padding
+#include "parser/parser_macro2.src"
+
+#undef __MINUSERR
+#define __LEZEROERR
+! cutoff for density
+#define __VAR	cutoff_surf_stdev
+#define __TAG __VAR
+#define __NAME	Cutoff for density smoothing
+#include "parser/parser_macro2.src"
+
+! GAUSSIAN standard deviations for smoothing
+#define __VAR	stdev_surf
+#define __TAG __VAR
+#define __NAME	Gaussian stdev for density smoothing
+#include "parser/parser_macro2.src"
+
+#undef __LEZEROERR
+#define __MINUSERR
+
+! ====== done with (possible) restart file data
+ context=__CONTEXT ! reset context if changed
+! other parameters
+#define __INT
+#define __VAR	contour_update_freq
+#define __TAG	__VAR
+#define __NAME	frequency of updating surface contour value
+#define __DOIFOK if (__VAR.eq.izero) __MESSAGE(whoami, ' UPDATE OF SURFACE CONTOUR REFERENCE VALUE IS OFF.')
+#include "parser/parser_macro2.src"
+!
+#define __VAR	structure_update_freq
+#define __TAG	__VAR
+#define __NAME	frequency of updating reference structure
+#define __DOIFOK if (__VAR.eq.izero) __MESSAGE(whoami, ' SURFACE UPDATE IS OFF.')
+#include "parser/parser_macro2.src"
+!
+#define __VAR	output_file_freq
+#define __TAG	__VAR
+#define __NAME	frequency for writing output/restart file
+#define __DOIFOK if (__VAR.le.izero) __WRN(whoami, ' RESTART FILE WILL BE WRITTEN AT THE END ONLY')
+#include "parser/parser_macro2.src"
+#undef __INT
+!
+! output file
+#define __CHAR
+! read structure file
+#define __VAR	structure_file
+#define __TAG	__VAR
+#define __NAME	structure file
+#include "parser/parser_macro2.src"
+! read atom selections
+! atoms to define surface
+#define __CHAR
+#define __WARNIFMISSING
+#define __VAR	surface_atom_selection
+#define __TAG	surface_atoms
+#define __NAME	surface atoms
+#include "parser/parser_macro2.src"
+! (solvent) atoms to which surface forces are applied
+#define __VAR	solvent_atom_selection
+#define __TAG	solvent_atoms
+#define __NAME	solvent atoms
+#include "parser/parser_macro2.src"
+!
+#undef __WARNIFMISSING
+#define __VAR	output_file
+#define __TAG	__VAR
+#define __NAME	watershell output file
+#include "parser/parser_macro2.src"
+#undef __CHAR
+!
+#undef __MINUSERR
+#define __LEZEROERR
+!
+#define __VAR contour_update_memory
+#define __TAG __VAR
+#define __NAME memory constant for surface contour update
+#define __DOIFOK if (__VAR.le.zero) __WRN(whoami, ' UPDATE OF SURFACE CONTOUR REFERENCE VALUE IS OFF.')
+#include "parser/parser_macro2.src"
+!
+#define __VAR structure_update_memory
+#define __TAG __VAR
+#define __NAME memory constant for reference structure update
+#define __DOIFOK if (__VAR.le.zero) __WRN(whoami, ' SURFACE UPDATE IS OFF.')
+#include "parser/parser_macro2.src"
+!
+#define __VAR surface_force_constant
+#define __TAG __VAR
+#define __NAME force constant for surface potential
+#define __DOIFOK if (__VAR.lt.__ERRTOL) __WRN(whoami, ' SURFACE FORCE IS OFF.')
+#include "parser/parser_macro2.src"
+!
+#define __VAR target_surface_energy
+#define __TAG __VAR
+#define __NAME target surface energy per area
+#define __DOIFOK if (__VAR.lt.__ERRTOL) __WRN(whoami, ' TARGET SURFACE ENERGY IS ALMOST ZERO.')
+#include "parser/parser_macro2.src"
+!
+! read structure file
+!
+ __MESSAGE(whoami, 'READING STRUCTURE FROM FILE "'//trim(structure_file)//'"');
+ call system_PDB_init(structure_file, 'PDB');
+ if (.not. fatal_warning()) system_PDB_initialized=.true.
+! save coordinates in rcomp, just in case we need them later ?
+ if (associated(rcomp) .and. associated(r)) rcomp=r
+! copy coordinates
+ isurface_atoms=>system_getind(surface_atom_selection)
+ if (associated(isurface_atoms)) then
+  nsurface=size(isurface_atoms)
+  __ALLOC(r_surf(3,nsurface))
+  __ALLOC(rad_surf(nsurface))
+ else
+  __WRN(whoami, ' COULD NOT ALLOCATE MEMORY FOR SURFACE ATOM INDICES.')
+ endif
+! repeat for solvent atoms
+ isolvent_atoms=>system_getind(solvent_atom_selection)
+ if (associated(isolvent_atoms)) then
+  nsolvent=size(isolvent_atoms)
+  __ALLOC(r_solv(3,nsolvent))
+  __ALLOC(rho_solv(nsolvent))
+  __ALLOC(drho_solv(3,nsolvent))
+ else
+  __WRN(whoami, ' COULD NOT ALLOCATE MEMORY FOR SOLVENT ATOM INDICES.')
+ endif
+!
+ if  (qrestart) then
+! read surface atom coordinates from restart file (context __RESTARTCTX)
+ else
+! take surface atom coordinates from structure (PDB) file
+  r_surf=r(:,isurface_atoms)
+  rad_surf=radius(isurface_atoms)  
+ endif
+!
+!
+ oo_stdev_surf=one/stdev_surf
+ cutoff_surf  =cutoff_surf_stdev*stdev_surf
+!
+ if (.not.fatal_warning()) __NM(initialized)=.true.
+!
+ end __SUB(initialize)
+!================================================================
+ __SUB(done)
+ __IAM(__NM(done))
+ if (__NM(initialized)) then
+  __MESSAGE(whoami, ' WRITING RESTART FILE.')
+  call __NM(write_restart_file)()
+ endif
+!
+ call system_done()
+ call parser_done()
+ __FREE(r_surf)
+ __FREE(r_solv)
+ __FREE(rad_surf)
+ __FREE(rho_solv)
+ __FREE(drho_solv)
+!
+ __NM(initialized)=.false.
+!
+ end __SUB(done)
+!
+end module _N
