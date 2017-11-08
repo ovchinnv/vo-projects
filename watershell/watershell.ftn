@@ -1,6 +1,6 @@
 #define __CTX __WATERSHELLCTX
 #define __RESTARTCTX __CONCAT(__WATERSHELLCTX,_RESTART)
-#define _N WATERSHELL
+#define _N watershell
 #//define __CHKUPDATE(_WHAT)   ( (mod(iteration, _WHAT) .eq. ione) .or. _WHAT.eq.ione )
 #define __CHKUPDATE(_WHAT)   (mod(iteration, _WHAT) .eq. izero)
 
@@ -21,7 +21,7 @@ module _N
 !public __NM(main)
  public __NM(done)
 
- bool, private :: __NM(initialized)=.false.
+ bool, private :: __NM(initialized)=.false., radii_initialized=.true.
 
 ! macro for parameters with defaults
 #define __PAR(_PAR,_TYPE,_DEF) _TYPE, save :: _PAR ; _TYPE, parameter :: __CONCAT(default_,_PAR)=_DEF;
@@ -70,6 +70,7 @@ module _N
  __SUB(initialize) ()
  character(len=vartaglen) :: keyword, context
  int :: l
+ float, pointer :: farray(:) => NULL()
  __IAM(__NM(INITIALIZE))
 !
 #define __CONTEXT __STRING(__CTX)
@@ -212,12 +213,27 @@ module _N
  if (.not. fatal_warning()) system_PDB_initialized=.true.
 ! save coordinates in rcomp, just in case we need them later ?
  if (associated(rcomp) .and. associated(r)) rcomp=r
+! initialize radii using a system function
+
+#define __GET_RAD(_TAG)  if (existtag_nocase(__STRING(_TAG),context)) then;\
+                            farray=>system_init_mol_scalar_nocase(__STRING(_TAG), context);\
+                            radius=farray;\
+                            deallocate(farray);\
+                            radii_initialized=.true.;
+ __GET_RAD(radii)
+ else __GET_RAD(radius) ! other tags here
+ endif
+!
+ if (.not.radii_initialized) __WRN(whoami, ' COULD NOT INITIALIZE ATOMIC RADII');
+!
 ! copy coordinates
+!
  isurface_atoms=>system_getind(surface_atom_selection)
  if (associated(isurface_atoms)) then
   nsurface=size(isurface_atoms)
   __ALLOC(r_surf(3,nsurface))
   __ALLOC(rad_surf(nsurface))
+  __FREE(isurface_atoms)
  else
   __WRN(whoami, ' COULD NOT ALLOCATE MEMORY FOR SURFACE ATOM INDICES.')
  endif
@@ -228,6 +244,7 @@ module _N
   __ALLOC(r_solv(3,nsolvent))
   __ALLOC(rho_solv(nsolvent))
   __ALLOC(drho_solv(3,nsolvent))
+  __FREE(isolvent_atoms)
  else
   __WRN(whoami, ' COULD NOT ALLOCATE MEMORY FOR SOLVENT ATOM INDICES.')
  endif
