@@ -18,8 +18,9 @@ module _N
  private
 
  public __NM(initialize)
-!public __NM(main)
+ public __NM(main)
  public __NM(done)
+ private __NM(write_restart_file)
 
  bool, private :: __NM(initialized)=.false., radii_initialized=.false.
 
@@ -29,10 +30,11 @@ module _N
 ! surface computation parameters :
  __PAR(cutoff_surf_stdev,float,5d0)  ! grid smoothing cutoff normalized by standard deviation of gaussian (surface)
  __PAR(surf_padding,float,0d0)       ! ( units of radius ) padding values to radii which might account for e.g. solvent layer(s)
- __PAR(stdev_surf,float,2d0)         ! standard deviation of smoothing filter
+ __PAR(surf_stdev,float,2d0)         ! standard deviation of smoothing filter
 !
- float :: cutoff_surf, oo_stdev_surf
+ float :: cutoff_surf, oo_surf_stdev
 !
+ __PAR(iteration,int,izero)   ! iteration
 ! surface evolution and output parameters
  __PAR(contour_update_freq, int, ione)           ! frequency of updating contour value
  __PAR(contour_update_memory, float, 0.999d0)    ! memory constant for exponential update
@@ -69,7 +71,8 @@ module _N
 !========
  __SUB(initialize) ()
  character(len=vartaglen) :: keyword, context
- int :: l
+ int :: l, ierr
+ character(len=maxlinelen) :: line
  float, pointer :: farray(:) => NULL()
  __IAM(__NM(INITIALIZE))
 !
@@ -120,9 +123,9 @@ module _N
 #include "parser/parser_macro2.src"
 
 ! GAUSSIAN standard deviations for smoothing
-#define __VAR	stdev_surf
+#define __VAR	surf_stdev
 #define __TAG __VAR
-#define __NAME	Gaussian stdev for density smoothing
+#define __NAME	Standard deviation of Gaussian filter for density smoothing
 #include "parser/parser_macro2.src"
 
 #undef __LEZEROERR
@@ -132,6 +135,14 @@ module _N
  context=__CONTEXT ! reset context if changed
 ! other parameters
 #define __INT
+#define __DEFAULT
+#define __WARNIFMISSING
+#define __INT
+#define __VAR	iteration
+#define __TAG	__VAR
+#define __NAME	starting iteration
+!
+#include "parser/parser_macro2.src"
 #define __VAR	contour_update_freq
 #define __TAG	__VAR
 #define __NAME	frequency of updating surface contour value
@@ -185,13 +196,15 @@ module _N
 #define __VAR contour_update_memory
 #define __TAG __VAR
 #define __NAME memory constant for surface contour update
-#define __DOIFOK if (__VAR.le.zero) __WRN(whoami, ' UPDATE OF SURFACE CONTOUR REFERENCE VALUE IS OFF.')
+#define __DOIFOK if (__VAR.le.zero) then ; __WRN(whoami, ' UPDATE OF SURFACE CONTOUR REFERENCE VALUE IS OFF.') ; \
+ elseif (__VAR .gt. one ) then ; __WRN(whoami, ftoupper(__STRING(__NAME))//' SHOULD _NOT_ BE GRETER THAN ONE !') ; endif
 #include "parser/parser_macro2.src"
 !
 #define __VAR structure_update_memory
 #define __TAG __VAR
 #define __NAME memory constant for reference structure update
-#define __DOIFOK if (__VAR.le.zero) __WRN(whoami, ' SURFACE UPDATE IS OFF.')
+#define __DOIFOK if (__VAR.le.zero) then ; __WRN(whoami, ' SURFACE UPDATE IS OFF.') ; \
+ elseif (__VAR .gt. one ) then ; __WRN(whoami, ftoupper(__STRING(__NAME))//' SHOULD _NOT_ BE GRETER THAN ONE !') ; endif
 #include "parser/parser_macro2.src"
 !
 #define __VAR surface_force_constant
@@ -233,7 +246,6 @@ module _N
   nsurface=size(isurface_atoms)
   __ALLOC(r_surf(3,nsurface))
   __ALLOC(rad_surf(nsurface))
-  __FREE(isurface_atoms)
  else
   __WRN(whoami, ' COULD NOT ALLOCATE MEMORY FOR SURFACE ATOM INDICES.')
  endif
@@ -244,26 +256,62 @@ module _N
   __ALLOC(r_solv(3,nsolvent))
   __ALLOC(rho_solv(nsolvent))
   __ALLOC(drho_solv(3,nsolvent))
-  __FREE(isolvent_atoms)
  else
   __WRN(whoami, ' COULD NOT ALLOCATE MEMORY FOR SOLVENT ATOM INDICES.')
  endif
 !
  if  (qrestart) then
 ! read surface atom coordinates from restart file (context __RESTARTCTX)
- else
+  do l=1, nsurface
+   line=getval_nocase('rsurf_'//trim(itoa(l)),__STRING(__RESTARTCTX))
+   if (len_trim(line).gt.0) then
+    read(line,*,iostat=ierr) r_surf(:,l)
+    if (ierr.ne.0) then
+     __WRN(whoami, 'ERROR READING COORDINATE FROM LINE "'//trim(line)//'"')
+     cycle
+    endif
+   else
+    __WRN(whoami, 'ERROR READING COORDINATE FROM LINE "'//trim(line)//'"')
+   endif ! line ok
+  enddo ! over surface atoms
+ else ! qrestart
 ! take surface atom coordinates from structure (PDB) file
   r_surf=r(:,isurface_atoms)
-  rad_surf=radius(isurface_atoms)  
- endif
+  rad_surf=radius(isurface_atoms)
+ endif ! qrestart
 !
-!
- oo_stdev_surf=one/stdev_surf
- cutoff_surf  =cutoff_surf_stdev*stdev_surf
+ oo_surf_stdev=one/surf_stdev
+ cutoff_surf  =cutoff_surf_stdev*surf_stdev
 !
  if (.not.fatal_warning()) __NM(initialized)=.true.
 !
  end __SUB(initialize)
+!======================================
+ __SUB(write_restart_file) ()
+! = adapted from tempering
+ __IAM(__NM(WRITE_RESTART_FILE))
+ int :: ifile, i
+ ifile=-1 ! make sure files_open determines the handle automatically
+ call files_open(ifile, output_file, 'FORMATTED','WRITE')
+!
+#define _W write(ifile,*)
+ _W '#WATERSHELL RESTART FILE'
+ _W __STRING(__RESTARTCTX)//' {'
+ _W 'iteration=',iteration
+ _W 'surf_stdev=',surf_stdev, ' # standard deviation of Gaussian filter'
+ _W 'cutoff_surf_stdev=',cutoff_surf_stdev, ' # distance from center beyond which it set to zero (units of stdandard deviation)'
+ _W 'surf_padding=',surf_padding, ' # scalar padding added to each atom radius'
+!
+! write the current reference atoms :
+ _W '# rsurf_i : reference coordinate triple for atom #i used to define surface'
+ do i=1, nsurface
+  _W 'rsurf_'//trim(itoa(i)),'=(',r_surf(:,i),')'
+ enddo ! surface atoms
+ _W '}'
+! close file
+ call files_close(ifile)
+!
+ end __SUB(write_restart_file)
 !================================================================
  __SUB(done)
  __IAM(__NM(done))
@@ -279,9 +327,52 @@ module _N
  __FREE(rad_surf)
  __FREE(rho_solv)
  __FREE(drho_solv)
+ __FREE(isurface_atoms)
+ __FREE(isolvent_atoms)
 !
  __NM(initialized)=.false. ; radii_initialized=.false.
 !
  end __SUB(done)
+!================================================================
+ __SUB(main)(r,fr)
+ float, intent(in) :: r(:,:)   ! coordinate array
+ float, intent(out) :: fr(:,:) ! force array
+ __IAM(__NM(main))
 !
+!================================================================
+ if (.not. __NM(initialized)) then
+  __WRN(whoami, ftoupper(__STRING(_N))//' NOT INITIALIZED. NOTHING DONE.');
+  return
+ endif
+
+
+
+!============================================= update reference coordinates
+ if (structure_update_freq.gt.izero) then
+  if __CHKUPDATE(structure_update_freq) then
+   r_surf = structure_update_memory * r_surf + (one - structure_update_memory) * r(:,isurface_atoms)
+  endif
+ endif
+
+
+!============================================= update contour value
+ if (contour_update_freq.gt.izero) then
+  if __CHKUPDATE(contour_update_freq) then
+! ...
+  endif
+ endif
+
+
+!============================================= output restart file
+ if (output_file_freq.gt.izero) then
+  if __CHKUPDATE(output_file_freq) then
+!
+   __MESSAGE(whoami, ' WRITING OUTPUT/RESTART FILE TO ("'//trim(output_file)//'")')
+   call __NM(write_restart_file)
+!
+  endif
+ endif
+!
+ end __SUB(main)
+!================================================================
 end module _N
