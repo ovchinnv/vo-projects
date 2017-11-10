@@ -28,11 +28,12 @@ module _N
 #define __PAR(_PAR,_TYPE,_DEF) _TYPE, save :: _PAR ; _TYPE, parameter :: __CONCAT(default_,_PAR)=_DEF;
 !
 ! surface computation parameters :
+ __PAR(surface_contour_value, float, -one) ! value of density isosurface which is defines the surface ; negative means to compute from structure
  __PAR(cutoff_surf_stdev,float,5d0)  ! grid smoothing cutoff normalized by standard deviation of gaussian (surface)
  __PAR(surf_padding,float,0d0)       ! ( units of radius ) padding values to radii which might account for e.g. solvent layer(s)
  __PAR(surf_stdev,float,2d0)         ! standard deviation of smoothing filter
 !
- float :: cutoff_surf, oo_surf_stdev
+ float :: cutoff_surf, oo_surf_stdev, logistic_constant
 !
  __PAR(iteration,int,izero)   ! iteration
 ! surface evolution and output parameters
@@ -113,8 +114,21 @@ module _N
 #define __TAG __VAR
 #define __NAME	Density padding
 #include "parser/parser_macro2.src"
-
+!
 #undef __MINUSERR
+! value for density isosurface
+#define __VAR	surface_contour_value
+#define __TAG __VAR
+#define __NAME	Value for density isosurface
+#define __DOIFOK if (__VAR.le.zero) __MESSAGE(whoami, ' DENSITY ISOSURFACE VALUE WILL BE COMPUTED FROM COORDINATES.')
+#include "parser/parser_macro2.src"
+!
+#define __VAR surface_force_constant
+#define __TAG __VAR
+#define __NAME force constant for surface potential
+#define __DOIFOK if (__VAR.lt.__ERRTOL) __WRN(whoami, ' SURFACE FORCE IS OFF.')
+#include "parser/parser_macro2.src"
+!
 #define __LEZEROERR
 ! cutoff for density
 #define __VAR	cutoff_surf_stdev
@@ -207,12 +221,6 @@ module _N
  elseif (__VAR .gt. one ) then ; __WRN(whoami, ftoupper(__STRING(__NAME))//' SHOULD _NOT_ BE GRETER THAN ONE !') ; endif
 #include "parser/parser_macro2.src"
 !
-#define __VAR surface_force_constant
-#define __TAG __VAR
-#define __NAME force constant for surface potential
-#define __DOIFOK if (__VAR.lt.__ERRTOL) __WRN(whoami, ' SURFACE FORCE IS OFF.')
-#include "parser/parser_macro2.src"
-!
 #define __VAR target_surface_energy
 #define __TAG __VAR
 #define __NAME target surface energy per area
@@ -282,6 +290,10 @@ module _N
 !
  oo_surf_stdev=one/surf_stdev
  cutoff_surf  =cutoff_surf_stdev*surf_stdev
+! compute constant (=1/a)  for logistic distribution that matches the stdev
+! the distribution is a * exp (-xa) / ( 1 + exp (-xa ) )^2
+! the corresponding cdf is 1 / ( 1 + exp (-xa) )
+ logistic_constant = sqrt3 * opi * surf_stdev ;
 !
  if (.not.fatal_warning()) __NM(initialized)=.true.
 !
@@ -298,6 +310,8 @@ module _N
  _W '#WATERSHELL RESTART FILE'
  _W __STRING(__RESTARTCTX)//' {'
  _W 'iteration=',iteration
+ _W 'surface_contour_value=',surface_contour_value, ' # value for which density isosurface is computed'
+ _W 'surface_force_constant=',surface_force_constant, ' # surface force constant'
  _W 'surf_stdev=',surf_stdev, ' # standard deviation of Gaussian filter'
  _W 'cutoff_surf_stdev=',cutoff_surf_stdev, ' # distance from center beyond which it set to zero (units of stdandard deviation)'
  _W 'surf_padding=',surf_padding, ' # scalar padding added to each atom radius'
@@ -337,6 +351,10 @@ module _N
  __SUB(main)(r,fr)
  float, intent(in) :: r(:,:)   ! coordinate array
  float, intent(out) :: fr(:,:) ! force array
+! int :: ibeg, iend ! atom indices for looping
+ float :: density_beyond_contour, pre, d0
+ float :: surface_energy
+ int :: i
  __IAM(__NM(main))
 !
 !================================================================
@@ -361,8 +379,38 @@ module _N
 ! ...
   endif
  endif
-
-
+!============================================= compute contour value and gradient at solvent coordinates
+! compute forces, average density at contour value
+! this is the time-consuming part ; it could benefit from GPU acceleration and/or nonbonded lists
+ call __NM(compute_density_grad)
+! to "regularize" variation of applied forces with the contour value, 
+! use a rough approximation to the inverse of the filter CDF;
+! for efficiency, use a logistic function matched to the Gaussian filter
+!
+! to avoid divide iverflow, define minimum density as the smallest float in single precision
+#define  __RHO_MIN FERRTOL()
+#define  __RHO_INVERSE(_L) ( - logistic_constant * log ( one/(max(_L,__RHO_MIN)) - one) )
+!
+ surface_energy=zero
+ density_beyond_contour=zero
+!
+! precompute inverted surface contour value :
+  d0=__RHO_INVERSE ( surface_contour_value ) ;
+!
+ do i=1, nsolvent
+  if ( rho_solv(i) .lt. surface_contour_value) then
+   pre = ( __RHO_INVERSE ( rho_solv(i) ) - d0 ) ;
+!
+! add atomic force
+   fr(:,isolvent_atoms(i)) = surface_force_constant * pre * drho_solv(:,i)
+! sum "energy"
+   __INCR(density_beyond_contour, rho_solv(i))
+   __INCR(surface_energy, pre**2) ! x k/2
+  endif
+ enddo
+!
+ __SCALE(surface_energy, half*surface_force_constant)
+!
 !============================================= output restart file
  if (output_file_freq.gt.izero) then
   if __CHKUPDATE(output_file_freq) then
