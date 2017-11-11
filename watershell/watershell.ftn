@@ -1,3 +1,12 @@
+! to "regularize" variation of applied forces with the contour value, 
+! use a rough approximation to the inverse of the filter CDF;
+! for efficiency, use a logistic function matched to the Gaussian filter
+!
+! to avoid divide iverflow, define minimum density as the smallest float in single precision
+#define  __RHO_MIN FERRTOL()
+#define  __RHO(_X) ( one/(one+exp(-_X/logistic_constant)) )
+#define  __RHO_INVERSE(_L) ( - logistic_constant * log ( one/(max(_L,__RHO_MIN)) - one) )
+!
 #define __CTX __WATERSHELLCTX
 #define __RESTARTCTX __CONCAT(__WATERSHELLCTX,_RESTART)
 #define _N watershell
@@ -28,17 +37,19 @@ module _N
 #define __PAR(_PAR,_TYPE,_DEF) _TYPE, save :: _PAR ; _TYPE, parameter :: __CONCAT(default_,_PAR)=_DEF;
 !
 ! surface computation parameters :
- __PAR(surface_contour_value, float, -one) ! value of density isosurface which is defines the surface ; negative means to compute from structure
+! __PAR(surface_contour_value, float, -one) ! value of density isosurface which is defines the surface ; negative means to compute from structure
+ __PAR(surface_distance, float, zero)! approximate distance from surface ; obtained by inverting logistic function of density (as an approximation)
  __PAR(cutoff_surf_stdev,float,5d0)  ! grid smoothing cutoff normalized by standard deviation of gaussian (surface)
  __PAR(surf_padding,float,0d0)       ! ( units of radius ) padding values to radii which might account for e.g. solvent layer(s)
  __PAR(surf_stdev,float,2d0)         ! standard deviation of smoothing filter
 !
- float :: cutoff_surf, oo_surf_stdev, logistic_constant
+ float :: cutoff_surf, cutoff_surf2, oo_surf_stdev, logistic_constant
+ float :: surface_contour_value ! value of density isosurface which is defines the surface ; negative means to compute from structure
 !
  __PAR(iteration,int,izero)   ! iteration
 ! surface evolution and output parameters
- __PAR(contour_update_freq, int, ione)           ! frequency of updating contour value
- __PAR(contour_update_memory, float, 0.999d0)    ! memory constant for exponential update
+ __PAR(distance_update_freq, int, ione)          ! frequency of updating distance value
+ __PAR(distance_update_step, float, 0.001d0)     ! constant for update
  __PAR(structure_update_freq, int, ione)         ! frequency of updating coordinats from which the surface is generated
  __PAR(structure_update_memory, float, 0.999d0)  ! memory constant for exponential update
  __PAR(output_file_freq, int, 1000)              ! frequency of writing output file
@@ -60,6 +71,7 @@ module _N
 &                  rho_solv(:), & ! density value at solvent coordinate
 &                  drho_solv(:,:) ! density gradient at solvent coordinate (inward surface normal)
  int :: nsurface=-1, nsolvent=-1
+ float :: oonsolvent
 !
  int :: fid
  bool :: qrestart=.false. ! whether we are restarting from a restart file
@@ -117,10 +129,23 @@ module _N
 !
 #undef __MINUSERR
 ! value for density isosurface
-#define __VAR	surface_contour_value
+! abandoning this in favor pf distance
+!#define __VAR	surface_contour_value
+!#define __TAG __VAR
+!#define __NAME	Value for density isosurface
+!#define __DOIFOK if (__VAR.le.zero) __MESSAGE(whoami, ' DENSITY ISOSURFACE VALUE WILL BE COMPUTED FROM COORDINATES.')
+!#include "parser/parser_macro2.src"
+! value for distance of the surface from protein (approximate)
+#define __VAR	surface_distance
 #define __TAG __VAR
-#define __NAME	Value for density isosurface
-#define __DOIFOK if (__VAR.le.zero) __MESSAGE(whoami, ' DENSITY ISOSURFACE VALUE WILL BE COMPUTED FROM COORDINATES.')
+#define __NAME	Distance of solvent surface from protein
+#define __DOIFOK if (__VAR.lt.__ERRTOL) then ; \
+                  __MESSAGE(whoami, ' LOCATION OF SOLVENT SURFACE WILL BE SET FROM SOLVENT COORDINATES.') ; \
+                 else ;\
+                  __VAR=-(abs(__VAR)) ; \
+                  surface_contour_value=__RHO(surface_distance) ;\
+                 endif ! make sure to set a negative value
+!
 #include "parser/parser_macro2.src"
 !
 #define __VAR surface_force_constant
@@ -157,10 +182,10 @@ module _N
 #define __NAME	starting iteration
 !
 #include "parser/parser_macro2.src"
-#define __VAR	contour_update_freq
+#define __VAR	distance_update_freq
 #define __TAG	__VAR
-#define __NAME	frequency of updating surface contour value
-#define __DOIFOK if (__VAR.eq.izero) __MESSAGE(whoami, ' UPDATE OF SURFACE CONTOUR REFERENCE VALUE IS OFF.')
+#define __NAME	frequency of updating target distance from surface
+#define __DOIFOK if (__VAR.eq.izero) __MESSAGE(whoami, ' UPDATE OF SURFACE DISTANCE VALUE IS OFF.')
 #include "parser/parser_macro2.src"
 !
 #define __VAR	structure_update_freq
@@ -207,11 +232,10 @@ module _N
 #undef __MINUSERR
 #define __LEZEROERR
 !
-#define __VAR contour_update_memory
+#define __VAR distance_update_step
 #define __TAG __VAR
 #define __NAME memory constant for surface contour update
-#define __DOIFOK if (__VAR.le.zero) then ; __WRN(whoami, ' UPDATE OF SURFACE CONTOUR REFERENCE VALUE IS OFF.') ; \
- elseif (__VAR .gt. one ) then ; __WRN(whoami, ftoupper(__STRING(__NAME))//' SHOULD _NOT_ BE GRETER THAN ONE !') ; endif
+#define __DOIFOK if (__VAR.le.zero) __WRN(whoami, ' UPDATE OF SURFACE CONTOUR REFERENCE VALUE IS OFF.')
 #include "parser/parser_macro2.src"
 !
 #define __VAR structure_update_memory
@@ -260,7 +284,7 @@ module _N
 ! repeat for solvent atoms
  isolvent_atoms=>system_getind(solvent_atom_selection)
  if (associated(isolvent_atoms)) then
-  nsolvent=size(isolvent_atoms)
+  nsolvent=size(isolvent_atoms) ; oonsolvent=one/nsolvent ;
   __ALLOC(r_solv(3,nsolvent))
   __ALLOC(rho_solv(nsolvent))
   __ALLOC(drho_solv(3,nsolvent))
@@ -285,11 +309,13 @@ module _N
  else ! qrestart
 ! take surface atom coordinates from structure (PDB) file
   r_surf=r(:,isurface_atoms)
-  rad_surf=radius(isurface_atoms)
  endif ! qrestart
+!
+ rad_surf=radius(isurface_atoms)
 !
  oo_surf_stdev=one/surf_stdev
  cutoff_surf  =cutoff_surf_stdev*surf_stdev
+ cutoff_surf2 =cutoff_surf**2
 ! compute constant (=1/a)  for logistic distribution that matches the stdev
 ! the distribution is a * exp (-xa) / ( 1 + exp (-xa ) )^2
 ! the corresponding cdf is 1 / ( 1 + exp (-xa) )
@@ -310,7 +336,8 @@ module _N
  _W '#WATERSHELL RESTART FILE'
  _W __STRING(__RESTARTCTX)//' {'
  _W 'iteration=',iteration
- _W 'surface_contour_value=',surface_contour_value, ' # value for which density isosurface is computed'
+! _W 'surface_contour_value=',surface_contour_value, ' # value for which density isosurface is computed'
+ _W 'surface_distance=',surface_distance, ' # distance of solvent surface from solute'
  _W 'surface_force_constant=',surface_force_constant, ' # surface force constant'
  _W 'surf_stdev=',surf_stdev, ' # standard deviation of Gaussian filter'
  _W 'cutoff_surf_stdev=',cutoff_surf_stdev, ' # distance from center beyond which it set to zero (units of stdandard deviation)'
@@ -352,8 +379,8 @@ module _N
  float, intent(in) :: r(:,:)   ! coordinate array
  float, intent(out) :: fr(:,:) ! force array
 ! int :: ibeg, iend ! atom indices for looping
- float :: density_beyond_contour, pre, d0
- float :: surface_energy
+ float :: distance_from_solute, distance_from_solute2, pre, d0
+ float :: surface_energy, surface_force, density_beyond_contour
  int :: i
  __IAM(__NM(main))
 !
@@ -372,45 +399,69 @@ module _N
   endif
  endif
 
-
-!============================================= update contour value
- if (contour_update_freq.gt.izero) then
-  if __CHKUPDATE(contour_update_freq) then
-! ...
-  endif
- endif
 !============================================= compute contour value and gradient at solvent coordinates
 ! compute forces, average density at contour value
 ! this is the time-consuming part ; it could benefit from GPU acceleration and/or nonbonded lists
- call __NM(compute_density_grad)
-! to "regularize" variation of applied forces with the contour value, 
-! use a rough approximation to the inverse of the filter CDF;
-! for efficiency, use a logistic function matched to the Gaussian filter
-!
-! to avoid divide iverflow, define minimum density as the smallest float in single precision
-#define  __RHO_MIN FERRTOL()
-#define  __RHO_INVERSE(_L) ( - logistic_constant * log ( one/(max(_L,__RHO_MIN)) - one) )
+! moving down below
+! call __NM(compute_density_grad)
 !
  surface_energy=zero
- density_beyond_contour=zero
+ distance_from_solute=zero
+ distance_from_solute2=zero ! for computing second moment
 !
-! precompute inverted surface contour value :
-  d0=__RHO_INVERSE ( surface_contour_value ) ;
+!========================== compute contour value if needed
+! if reference contour value is negative, estimate a reasonable value from density distribution
+ if (surface_distance .lt. __ERRTOL) then
+  call __NM(compute_density_grad)(.false.) ! need entire sum
+  do i=1, nsolvent
+! convert to distance
+   d0 = __RHO_INVERSE(rho_solv(i))
+   __INCR(distance_from_solute, d0)
+   __INCR(distance_from_solute2, d0**2)
+  enddo
+! set contour value to average value + (a) x stdev ; a set empirically
+  __SCALE(distance_from_solute,oonsolvent);
+  __SCALE(distance_from_solute2,oonsolvent);
+  surface_distance = distance_from_solute - & ! average
+&                         2d0 * sqrt( max(zero,distance_from_solute2 - distance_from_solute**2) ) ! analytically positive, but, just in case, protect from roundoff
+  surface_contour_value = __RHO(surface_distance)
+ else
+  call __NM(compute_density_grad)(.true.) ! truncate if value exceeds
+ endif
+!========================== compute contour value ^
+!========================== compute forces :
+! calculate density integral using only atoms beyond contour (to estimate surface area)
+ density_beyond_contour=zero
 !
  do i=1, nsolvent
   if ( rho_solv(i) .lt. surface_contour_value) then
-   pre = ( __RHO_INVERSE ( rho_solv(i) ) - d0 ) ;
+   __INCR(density_beyond_contour, rho_solv(i))
+   pre = ( __RHO_INVERSE ( rho_solv(i) ) - surface_distance ) ;
 !
 ! add atomic force
    fr(:,isolvent_atoms(i)) = surface_force_constant * pre * drho_solv(:,i)
 ! sum "energy"
-   __INCR(density_beyond_contour, rho_solv(i))
-   __INCR(surface_energy, pre**2) ! x k/2
+   __INCR(surface_force, pre) ! x k, below
+   __INCR(surface_energy, pre**2) ! x k/2, below
   endif
  enddo
 !
+ __SCALE(surface_force, surface_force_constant)
  __SCALE(surface_energy, half*surface_force_constant)
 !
+!=========================== evolve/update contour value using surface energy
+!
+ if (distance_update_freq.gt.izero) then
+  if __CHKUPDATE(distance_update_freq) then
+! for now, a very simple update strategy
+! in the future will add estimation of pressure and surface tension
+
+    d0 = ( target_surface_energy - oonsolvent * surface_energy );
+    __INCR(surface_distance, distance_update_step * d0)
+    surface_contour_value = __RHO(surface_distance)
+
+  endif
+ endif
 !============================================= output restart file
  if (output_file_freq.gt.izero) then
   if __CHKUPDATE(output_file_freq) then
@@ -423,4 +474,60 @@ module _N
 !
  end __SUB(main)
 !================================================================
+ __SUB(compute_density_grad)(qtruncate_sum)
+ bool :: qtruncate_sum ! whether we can stop computation for each atom once the density reaches a threshold value
+ int :: i, j
+ float :: rp(3), rw(3), dr(3), dr2, a, b, expa, expb, ooc
+ float :: rmaxsurf, rsurf, rsurfn
+ __IAM(__NM(compute_density_grad))
+! naive algorithm to compute density at each solvent coordinate
+! adapted from molecule.ftn in continua
+!
+! error function definition
+#ifndef __erf
+#define __erf erf
+#endif
+#define __SMOOTH_GAUSS(__A,__B,__C)  half * ( __erf (__A) - __erf (__B) ) + osq2pi*( exp(-__A**2) - exp(-__B**2 ) ) /__C
+
+!
+ do i=1, nsolvent ! outer loop over solvent atoms
+   rho_solv(i)=zero
+   drho_solv(:,i)=zero
+   rw=r_solv(:,i);
+   do j=1, nsurface ! inner loop over solute atoms
+! determine if atoms are too far away :
+    rp=r_surf(:,j)
+!
+    rsurf    = ( rad_surf(j) + surf_padding )
+    rmaxsurf = ( cutoff_surf  + rsurf  )
+!
+    dr = rp-rw ;
+    if (any(dr .gt. rmaxsurf)) cycle
+    dr=dr**2 ; dr2=sum(dr);
+    if (dr2 .gt. rmaxsurf**2) cycle
+! proceed with calculation
+    rsurfn=rsurf * oo_surf_stdev
+    dr2 = sqrt(dr2) * oo_surf_stdev
+! a and b
+    a = osq2 * (dr2 + rsurfn)
+    b = osq2 * (dr2 - rsurfn)
+    ooc = one / dr2
+!
+    expa = exp ( - a**2 )
+    expb = exp ( - b**2 )
+! update density
+    __INCR(rho_solv(i), half * ( __erf(a) - __erf(b) ) + osq2pi * ooc * ( expa - expb )   )
+    if (qtruncate_sum.and. &
+&      (__RHO_INVERSE(rho_solv(i)).gt.surface_contour_value) ) exit ! density threshold exceeded ; will not apply force to this atom
+! otherwise, compute gradient contribution : (note that I am flipping the direction of dr (in the notes it is r0-r)
+    __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurfn + half * (expa - expb) * ooc) )
+! add gradient contribution
+    __INCR(drho_solv(:,i),dr)
+   enddo ! nsurface
+ enddo ! nsolvent
+!
+ end __SUB(compute_density_grad)
+!================================================================
 end module _N
+
+
