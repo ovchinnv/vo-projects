@@ -179,7 +179,7 @@ void CudaCalcStrunaForceKernel::initialize(const System& system, const StrunaFor
     pos.resize(natoms);
     frc.resize(natoms);
     hasInitialized = true;
-}
+} // initialize
 
 double CudaCalcStrunaForceKernel::execute(ContextImpl& context, bool includeForces, bool includeEnergy) {
     // This method does nothing.  The actual calculation is started by the pre-computation, continued on
