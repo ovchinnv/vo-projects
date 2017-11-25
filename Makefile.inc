@@ -125,7 +125,7 @@ default: $(ROOT)/$(NAME).stamp
 %.o:%.f $(LIBDEPS)
 	$(FC) $(FFLAGS) $(DEFS) $(PIC) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $< -o $@
 %.o:%.c $(CLIBDEPS) $(HEADS)
-	$(CC) $(LOCALDEFS) $(CFLAGS) $(PIC) $(LOCALMACROS) $< -o $@
+	$(CC) $(LOCALDEFS) $(CFLAGS) $(PIC) $(GLOBALMACROS) $(LOCALMACROS) $< -o $@
 %.o:%.cu $(HEADS)
 	$(NVCC) $(NVCCFLAGS) $(LOCALDEFS) $(CUINCLUDES) $(LOCALMACROS) $< -o $@
 %.o:%.F90 $(LIBDEPS)
