@@ -8,6 +8,7 @@
 module sm_plugin
  use system, only : r, rcomp, m, q, bfactor, occupancy, fr, natom, system_PDB_initialized, system_minimal_initialized, system_PDB_init, system_done
  use system, f=>fr
+ use unitcell
  __DEP_OUTPUT, set_minwarnlev, set_minerrorlev, set_minmessagelev
  __DEP_CONST
  __CBIND
@@ -39,7 +40,7 @@ module sm_plugin
 #define __CFUN(__NAME, ...) function __NAME (__VA_ARGS__) bind(c, name=__STRING(__NAME))
 !
 #define _ME sm_init_plugin
- __CFUN(_ME, n, mass, charge, inputname, il, outputname, ol, alist)
+ __CFUN(_ME, n, mass, charge, inputname, il, outputname, ol, alist, qper, box)
  __DEP_VECTORS
  __DEP_PARSER
  __DEP_FILES
@@ -56,6 +57,8 @@ module sm_plugin
  type(c_ptr), value, intent(in) :: inputname, outputname
  real(__FCFLOAT), intent(in), dimension(n) :: mass, charge
  int( __FCINT), intent(in), value :: n, il, ol
+ logical(__FCBOOL), value, intent(in) :: qper
+ real(__FCFLOAT), intent(in), dimension(3,3) :: box ! lattice vectors
 !
  character(len=il), pointer :: ifname
  character(len=ol), pointer :: ofname
@@ -159,7 +162,12 @@ module sm_plugin
   else
    select case(sm_flavor);
      case(ftsm_flavor);    call ftsm_exec(initctx)
-     case(smcv_flavor);    call smcv_exec(initctx)
+     case(smcv_flavor);
+      if (qper) then 
+       call cv%ucell%update_vectors(box) ; ! note that this is a hack since SMCV is not initialized yet
+       call cv%ucell%print() ;
+      endif
+      call smcv_exec(initctx)
      case default ; __WRN(whoami, ' UNKNOWN METHOD REQUESTED.')
    end select
   endif
@@ -178,7 +186,7 @@ end function _ME
 #undef _ME
 !===================================================================
 #define _ME sm_dyna_plugin
- __CFUN(_ME, iteration_, r_plugin, f_plugin, e, alist)
+ __CFUN(_ME, iteration_, r_plugin, f_plugin, e, alist, qper, box)
 ! SMCV modules:
  use cv_common, only : cv
  use smcv_master, only : smcv_main
@@ -194,6 +202,9 @@ end function _ME
  real(__FCFLOAT), intent(out), dimension(3, natom) :: f_plugin
  real(__FCFLOAT), intent(out) :: e
  type(c_ptr), intent(out) :: alist ! send back a list of atom indices if smcv not initialized
+ logical(__FCBOOL), value, intent(in) :: qper
+ logical(__FCBOOL) :: qper_ ! copy that I can modify
+ real(__FCFLOAT), intent(in), dimension(3,3) :: box ! lattice vectors
  int(__FCINT) :: _ME
  int :: i, ierr
 !
@@ -206,6 +217,7 @@ end function _ME
  if (initialized .or. defer_init_until_dyna) then
 
   iteration=iteration_
+  qper_=qper
 !
   if (initialized) then ! just load coordinates
    r(:,atomlist(2:))=r_plugin(:,atomlist(2:))
@@ -219,7 +231,13 @@ end function _ME
    else
     select case(sm_flavor);
      case(ftsm_flavor);    call ftsm_exec(initctx)
-     case(smcv_flavor);    call smcv_exec(initctx)
+     case(smcv_flavor);
+      if (qper_) then
+       call cv%ucell%update_vectors(box) ; ! note that this is a hack since SMCV is not initialized yet
+       call cv%ucell%print() ;
+       qper_=.false. ! prevent repeat call
+      endif
+     call smcv_exec(initctx)
      case default ; __WRN(whoami, ' UNKNOWN METHOD REQUESTED.')
     end select
    endif
@@ -238,6 +256,11 @@ end function _ME
    case(ftsm_flavor);
     call ftsm_main(__X, __Y, __Z, __XCOMP, __YCOMP, __ZCOMP, f(1,:), f(2,:), f(3,:), m, iteration)
    case(smcv_flavor);
+    if (qper_) then 
+     call cv%ucell%update_vectors(box) ! may move this functionality inside smcv_main; for now, minimal changes
+! debug/test unit cell output
+!     call cv%ucell%print()
+    endif
     call smcv_main(__X, __Y, __Z, __XCOMP, __YCOMP, __ZCOMP, m, f(1,:), f(2,:), f(3,:), iteration, sm_energy)
    case default ;
     __WRN(whoami, ' UNKNOWN METHOD REQUESTED.')

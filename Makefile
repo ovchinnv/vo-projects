@@ -1,6 +1,9 @@
 DIRS=driver state bestfit constants dynamol erf files lu multicom multidiag output parselist parser random string timer vectors \
-confcons enm continua pnm mpi_stub #tempering
+confcons enm continua pnm mpi_stub unitcell #tempering
 DISTRIB=include obj lib
+
+ROOT=.
+NAME=
 
 all : $(DIRS)
 clean ::
