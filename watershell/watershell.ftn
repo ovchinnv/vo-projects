@@ -9,13 +9,12 @@
 !
 #define __CTX __WATERSHELLCTX
 #define __RESTARTCTX __CONCAT(__WATERSHELLCTX,_RESTART)
-#define _N watershell
 #//define __CHKUPDATE(_WHAT)   ( (mod(iteration, _WHAT) .eq. ione) .or. _WHAT.eq.ione )
 #define __CHKUPDATE(_WHAT)   (mod(iteration, _WHAT) .eq. izero)
 
 module _N
 
- use system, only : r, rcomp, radius, natom, system_PDB_initialized, system_minimal_initialized, system_PDB_init, system_done, system_getind, &
+ use system, only : r, rcomp, fr, radius, natom, system_PDB_initialized, system_PDB_init, system_done, system_getind, &
 &                   system_init_mol_scalar_nocase
  __DEP_OUTPUT
  __DEP_PARSER
@@ -30,8 +29,14 @@ module _N
  public __NM(main)
  public __NM(done)
  private __NM(write_restart_file)
+!
+! hack to make variables from system visible from plugin
+ public natom
+ public r
+ public fr
 
- bool, private :: __NM(initialized)=.false., radii_initialized=.false.
+ bool, public :: __NM(initialized)=.false.
+ bool, private:: radii_initialized=.false.
 
 ! macro for parameters with defaults
 #define __PAR(_PAR,_TYPE,_DEF) _TYPE, save :: _PAR ; _TYPE, parameter :: __CONCAT(default_,_PAR)=_DEF;
@@ -62,15 +67,15 @@ module _N
 !  atom selections
  __PAR(surface_atom_selection, character(len=vartaglen), 'ANAME=CA')  ! protein CA trace
  __PAR(solvent_atom_selection, character(len=vartaglen), 'ANAME=OH2') ! TIP3 oxygens atoms
- int, pointer :: isurface_atoms(:)=>NULL()
- int, pointer :: isolvent_atoms(:)=>NULL()
+ int, pointer, public :: isurface_atoms(:)=>NULL()
+ int, pointer, public :: isolvent_atoms(:)=>NULL()
 !
  float, pointer :: r_surf(:,:), & ! reference atom coordinates
-&                  rad_surf(:),&! reference atom radii
+&                  rad_surf(:), & ! reference atom radii
 &                  r_solv(:,:), & ! solvent atom coordinates
 &                  rho_solv(:), & ! density value at solvent coordinate
 &                  drho_solv(:,:) ! density gradient at solvent coordinate (inward surface normal)
- int :: nsurface=-1, nsolvent=-1
+ int, public :: nsurface=-1, nsolvent=-1
  float :: oonsolvent
 !
  int :: fid
@@ -129,7 +134,7 @@ module _N
 !
 #undef __MINUSERR
 ! value for density isosurface
-! abandoning this in favor pf distance
+! abandoning this in favor of distance
 !#define __VAR	surface_contour_value
 !#define __TAG __VAR
 !#define __NAME	Value for density isosurface
@@ -375,9 +380,10 @@ module _N
 !
  end __SUB(done)
 !================================================================
- __SUB(main)(r,fr)
+ __SUB(main)(r,fr,energy)
  float, intent(in) :: r(:,:)   ! coordinate array
  float, intent(out) :: fr(:,:) ! force array
+ float, intent(out) :: energy
 ! int :: ibeg, iend ! atom indices for looping
  float :: distance_from_solute, distance_from_solute2, pre, d0
  float :: surface_energy, surface_force, density_beyond_contour
@@ -389,8 +395,8 @@ module _N
   __WRN(whoami, ftoupper(__STRING(_N))//' NOT INITIALIZED. NOTHING DONE.');
   return
  endif
-
-
+!
+__INC(iteration)
 
 !============================================= update reference coordinates
  if (structure_update_freq.gt.izero) then
@@ -420,10 +426,11 @@ module _N
    __INCR(distance_from_solute2, d0**2)
   enddo
 ! set contour value to average value + (a) x stdev ; a set empirically
+#define _a 2d0
   __SCALE(distance_from_solute,oonsolvent);
   __SCALE(distance_from_solute2,oonsolvent);
   surface_distance = distance_from_solute - & ! average
-&                         2d0 * sqrt( max(zero,distance_from_solute2 - distance_from_solute**2) ) ! analytically positive, but, just in case, protect from roundoff
+&                         _a * sqrt( max(zero,distance_from_solute2 - distance_from_solute**2) ) ! analytically positive, but, just in case, protect from roundoff
   surface_contour_value = __RHO(surface_distance)
  else
   call __NM(compute_density_grad)(.true.) ! truncate if value exceeds
@@ -448,6 +455,7 @@ module _N
 !
  __SCALE(surface_force, surface_force_constant)
  __SCALE(surface_energy, half*surface_force_constant)
+ energy=surface_energy
 !
 !=========================== evolve/update contour value using surface energy
 !
@@ -529,5 +537,4 @@ module _N
  end __SUB(compute_density_grad)
 !================================================================
 end module _N
-
 
