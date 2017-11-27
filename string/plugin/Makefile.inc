@@ -79,6 +79,7 @@ LINKOBJS=\
  fieldbcdef.o \
  formats.o \
  stats.o \
+ unitcell.o \
  util.o
 
 

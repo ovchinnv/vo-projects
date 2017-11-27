@@ -3,7 +3,7 @@ CVOBJ=cv_posi_com.o cv_dist_com.o cv_angle_com.o cv_anglvec.o cv_dihe_com.o cv_r
 OBJS=cv_types.o cv_common.o cv_frames.o cv_cvrms.o smcv_master.o smcv.o smcv_add.o smcv_check_set.o smcv_stats.o $(CVOBJ)
 HEADS=smcv_interface.h
 NAME=string/smcv
-DEPS=output vectors bestfit constants multicom random lu multidiag parser dynamol parser mpi_stub
+DEPS=output vectors bestfit constants multicom random lu multidiag parser dynamol parser mpi_stub unitcell
 
 COMMON=..
 

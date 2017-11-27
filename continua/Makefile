@@ -3,28 +3,14 @@ COMMON=.
 OBJS=
 NAME=continua
 SUBDIRS=io common objects chest # eddie
-DEPS+=$(addprefix $(NAME)/,$(SUBDIRS))
+DEPS=state
 
-LOCALDEPS=
+LOCALMACROS=-include source.defs
+LOCALDEPS=$(ROOT)/mpitype.def source.defs 
+LOCALDEPS+=outmacro1.def
 
 include $(ROOT)/Makefile.inc
-include $(COMMON)/Makefile.inc
-
-#$(ROOT)/$(NAME).stamp:: $(SUBDIRS)
-
-all : $(SUBDIRS)
-
-$(SUBDIRS) : $(addprefix $(NAME)/, $(addsuffix .stamp, $(SUBDIRS)))
-
-chest : force_look
-	cd chest; $(MAKE) chest
+#include $(COMMON)/Makefile.inc
 
 clean::
 	for d in $(SUBDIRS); do (cd $$d; $(MAKE) clean); done
-
-test:: force_look
-	$(MAKE) -C test
-
-
-
-.SILENT : test

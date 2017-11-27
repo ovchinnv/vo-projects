@@ -106,7 +106,9 @@ void OpenCLCalcStrunaForceKernel::initialize(const System& system, const StrunaF
     // allocate position and force arrays
     r=(double*) calloc(3 * natoms, sizeof(double));
     fr=(double*) calloc(3 * natoms, sizeof(double));
+    //PBC
     //
+    usesPeriodic = system.usesPeriodicBoundaryConditions();
     // Get particle masses and charges (if available)
     double *m=NULL; //mass
     double *q=NULL; //charge
@@ -154,6 +156,19 @@ void OpenCLCalcStrunaForceKernel::executeOnWorkerThread() {
     int i, j, ierr;
     // buffer for uploading forces to the device:
     bool qdble=cl.getUseDoublePrecision();
+    // update periodic vectors
+    if (usesPeriodic) {
+     contextImpl.getPeriodicBoxVectors(boxVectors[0], boxVectors[1], boxVectors[2]);
+     box[0]=boxVectors[0][0]*nm2A;
+     box[1]=boxVectors[0][1]*nm2A;
+     box[2]=boxVectors[0][2]*nm2A;
+     box[3]=boxVectors[1][0]*nm2A;
+     box[4]=boxVectors[1][1]*nm2A;
+     box[5]=boxVectors[1][2]*nm2A;
+     box[6]=boxVectors[2][0]*nm2A;
+     box[7]=boxVectors[2][1]*nm2A;
+     box[8]=boxVectors[2][2]*nm2A;
+    }
     // copy coordinates :
     if (atomlist==NULL) { // atomlist is not defined; therefore, provide all coords
      for (i=0, rptr=r ; i < natoms ; i++) {
@@ -162,7 +177,7 @@ void OpenCLCalcStrunaForceKernel::executeOnWorkerThread() {
       *(rptr++) = pos[i][2]*nm2A;
      }
     // compute plugin forces and energy
-     ierr=sm_dyna_plugin(iteration, r, fr, &sm_energy, &atomlist); // might return valid atomlist
+     ierr=sm_dyna_plugin(iteration, r, fr, &sm_energy, &atomlist, usesPeriodic, box); // might return valid atomlist
     // copy plugin forces
 //=============
      if (qdble) { // double precision version
@@ -206,7 +221,7 @@ void OpenCLCalcStrunaForceKernel::executeOnWorkerThread() {
       *(rptr)   = pos[j][2]*nm2A;
      }
 //
-     ierr=sm_dyna_plugin(iteration, r, fr, &sm_energy, &atomlist); // atomlist should not be modified in this call
+     ierr=sm_dyna_plugin(iteration, r, fr, &sm_energy, &atomlist, usesPeriodic, box); // atomlist should not be modified in this call
 //
      if (qdble) { // double
       double *frc = (double*) cl.getPinnedBuffer();

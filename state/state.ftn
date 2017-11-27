@@ -40,32 +40,46 @@ module state
 !
  contains
 !=====================================================================
-  subroutine state_initialize()
+  subroutine state_initialize(qreinit_)
 !
   __IAM(STATE_INITIALIZE)
   int :: i, j
+  __OPAR(qreinit, bool)
   type(varray3df), pointer :: v
 !
   if (__ME.eq.0) then ; warnlev=-1  ; else ; warnlev=get_minmessagelev()+2 ; endif ! produce output only on root node
 !
-  if (state_initialized) call state_done()
-  nvar3df=izero
-  allocate(vars3df(expand_increment))
-  do i=1, expand_increment
-    v=>vars3df(i)
-    v%v=>null()
-    v%vname='UNDEFINED';
-    v%vdescription='UNDEFINED';
-    v%vcontext='UNDEFINED';
-    v%vinit=.false.
-! bc data
-    v%vbcinit(:)=.false.
-    v%vbc_type(:)=undefined
-    v%vbc_wgt(:)=zero
-    do j=1,numbc ;  v%vbcs(j)%d=>null() ; enddo
-  enddo
+  __PRESENT(qreinit,.false.)
 !
-  state_initialized=.true.
+  if (state_initialized) then
+   if (qreinit) then
+    call warning(whoami, 'Will reinitialize. All state variables will be destroyed.', warnlev);
+    call state_done()
+#ifdef __DEBUG
+   else
+    call message(whoami, 'Already initialized. Nothing done.')
+#endif
+   endif
+  endif
+!
+  if (.not.state_initialized) then
+   nvar3df=izero
+   allocate(vars3df(expand_increment))
+   do i=1, expand_increment
+     v=>vars3df(i)
+     v%v=>null()
+     v%vname='UNDEFINED';
+     v%vdescription='UNDEFINED';
+     v%vcontext='UNDEFINED';
+     v%vinit=.false.
+! bc data
+     v%vbcinit(:)=.false.
+     v%vbc_type(:)=undefined
+     v%vbc_wgt(:)=zero
+     do j=1,numbc ;  v%vbcs(j)%d=>null() ; enddo
+   enddo
+   state_initialized=.true.
+  endif ! state_initialized
 !
   end subroutine state_initialize
 !=======================================================================
@@ -77,7 +91,7 @@ module state
    do i=1, size(vars3df) 
     v=>vars3df(i)
     if (associated(v%v)) deallocate(v%v)
-    do j=1,numbc ; if (associated(v%vbcs(j)%d)) deallocate(v%vbcs(j)%d) ;  enddo
+    do j=1,numbc ; __FREE(v%vbcs(j)%d) ;  enddo
    enddo
 !
    deallocate(vars3df)
@@ -179,9 +193,24 @@ module state
    allocate(vars3df_bkp(nvar3df + expand_increment))
    vars3df_bkp(1:nvar3df)=vars3df
    deallocate(vars3df) ; vars3df=>vars3df_bkp ; nullify(vars3df_bkp)
+! initialize data for new arrays:
+   do i=1, expand_increment
+    var=>vars3df(nvar3df+i)
+    var%v=>null()
+    var%vname='UNDEFINED';
+    var%vdescription='UNDEFINED';
+    var%vcontext='UNDEFINED';
+    var%vinit=.false.
+! bc data
+    var%vbcinit(:)=.false.
+    var%vbc_type(:)=undefined
+    var%vbc_wgt(:)=zero
+    do j=1,numbc ; var%vbcs(j)%d=>null() ; enddo
+   enddo
   endif
 !
-  nvar3df=nvar3df+1
+  __INC(nvar3df)
+!
   var=>vars3df(nvar3df)
   allocate(var%v(vdim(1),vdim(2), vdim(3)))
   var%vname=vname
