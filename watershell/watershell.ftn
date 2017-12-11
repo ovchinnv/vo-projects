@@ -103,7 +103,8 @@ module _N
 #ifdef __NEIGHBOR_LIST
  __PAR(qneighbor_list, bool, .true.) ! whether to use a neighbor list to shorten loops over surface atoms
  int :: neighbor_list_factor ! coefficient used to relate sorting frequency and limit index to loop length
- int, pointer :: solute_neighbor_mind(:) ! for each solvent atom, index of closest solute atom
+ int, pointer :: solute_neighbor_mind(:) ! for each solvent atom, index of closest solute atom in the mindist algorithm
+!                                        ! also, the largest index of an atom within the cutoff distance for original algorithm
 ! note : should implement a real test of the neighbor list algorithm, e.g. scanning the entire array and comparing with the
 ! short array result
 #endif
@@ -202,18 +203,6 @@ module _N
 !#define __NAME	Value for density isosurface
 !#define __DOIFOK if (__VAR.le.zero) __MESSAGE(whoami, ' DENSITY ISOSURFACE VALUE WILL BE COMPUTED FROM COORDINATES.')
 !#include "parser/parser_macro2.src"
-! value for distance of the surface from protein (approximate)
-#define __VAR	surface_distance
-#define __TAG __VAR
-#define __NAME	Distance of solvent surface from protein
-#define __DOALWAYS if (__VAR.lt.__ERRTOL) then ; \
-                  __MESSAGE(whoami, 'LOCATION OF SOLVENT SURFACE WILL BE SET FROM SOLVENT COORDINATES.') ; \
-                 else ;\
-                  __VAR=-(abs(__VAR)) ; \
-                  surface_contour_value=__RHO(surface_distance) ;\
-                 endif ! make sure to set to a negative value
-!
-#include "parser/parser_macro2.src"
 !
 #define __VAR surface_force_constant
 #define __TAG __VAR
@@ -233,10 +222,27 @@ module _N
 #define __TAG __VAR
 #define __NAME	Standard deviation of Gaussian filter for density smoothing
 #include "parser/parser_macro2.src"
-
+! compute constant (=1/a)  for logistic distribution that matches the stdev
+! the distribution is a * exp (-xa) / ( 1 + exp (-xa ) )^2
+! the corresponding cdf is 1 / ( 1 + exp (-xa) )
+ logistic_constant = sqrt3 * opi * surf_stdev ; ! need this for __RHO below
+!
 #undef __LEZEROERR
+!
+! value for distance of the surface from protein (approximate)
+#define __VAR	surface_distance
+#define __TAG __VAR
+#define __NAME	Distance of solvent surface from protein
+#define __DOALWAYS if (__VAR.lt.__ERRTOL) then ; \
+                  __MESSAGE(whoami, 'LOCATION OF SOLVENT SURFACE WILL BE SET FROM SOLVENT COORDINATES.') ; \
+                 else ;\
+                  __VAR=-(abs(__VAR)) ; \
+                  surface_contour_value=__RHO(surface_distance) ;\
+                 endif ! make sure to set to a negative value
+!
+#include "parser/parser_macro2.src"
 #define __MINUSERR
-
+!
 ! ====== done with (possible) restart file data
  context=__CONTEXT ! reset context if changed
 ! other parameters
@@ -293,11 +299,11 @@ module _N
 #include "parser/parser_macro2.src"
 #undef __CHAR
 !
+#if defined(__SORT_LIST) & defined(__NEIGHBOR_LIST)
 #define __INT
 #define __VAR	full_sum_freq
 #define __TAG	__VAR
 #define __NAME	frequency of force calculation without density truncation
-#if defined(__SORT_LIST) & defined(__NEIGHBOR_LIST)
 #define __DOALWAYS if (__VAR.le.zero) then ;\
                   __WRN(whoami, 'SOLVENT ATOM NEIGHBOR LISTS CANNOT BE USED WITH "'//__STRING(__VAR)//'"=0.') ;\
                   neighbor_list_factor=ione ;\
@@ -437,10 +443,6 @@ module _N
  oo_surf_stdev=one/surf_stdev
  cutoff_surf  =cutoff_surf_stdev*surf_stdev
  cutoff_surf2 =cutoff_surf**2
-! compute constant (=1/a)  for logistic distribution that matches the stdev
-! the distribution is a * exp (-xa) / ( 1 + exp (-xa ) )^2
-! the corresponding cdf is 1 / ( 1 + exp (-xa) )
- logistic_constant = sqrt3 * opi * surf_stdev ;
 !
  if (.not.fatal_warning()) __NM(initialized)=.true.
 !
@@ -606,7 +608,7 @@ module _N
    __SCALE(distance_from_solute2,oonsolvent);
    __DBGOUT('Distance from solute std ', sqrt ( distance_from_solute2 - distance_from_solute**2))
    surface_distance = distance_from_solute - & ! average
-#define _a 0.2d0
+#define _a 0.1d0
 &                          _a * sqrt( max(zero,distance_from_solute2 - distance_from_solute**2) ) ! analytically positive, but, just in case, protect from roundoff
 #undef _a
    surface_contour_value = __RHO(surface_distance)
@@ -1008,6 +1010,7 @@ module _N
  float :: isgn_, x_, erfa, erfb
 #endif
  float :: rmaxsurf, rsurf ! , rsurfn
+ bool :: qforced
  __IAM(__NM(compute_density_grad))
 !
 ! different erf implementations/approximations
@@ -1054,13 +1057,13 @@ module _N
 #endif
 #endif
 !$OMP ) &
-!$omp private ( rw, i, j, rp, rsurf, rmaxsurf, dr, dr2, ooc, expa, expb &
+!$omp private ( rw, i, j, rp, rsurf, rmaxsurf, dr, dr2, ooc, expa, expb, qforced &
 #ifdef __SORT_LIST
 !$OMP ,dr2old, jj &
 #endif
 !$OMP )
 !!$omp do schedule(runtime)
-!$omp do schedule(static)
+!$omp do ! schedule(static)
 #endif
   do i=1, nsolvent ! outer loop over solvent atoms
 ! does not help below
@@ -1070,12 +1073,17 @@ module _N
 !#define osq2pi 0.398942280401433d0
 !#define osq2   0.707106781186547d0
 !
+   qforced=.true.
    rho_solv(i)=zero ;
    drho_solv(:,i)=zero
    rw=r_solv(:,i);
 #ifdef __SORT_LIST
    dr2old=-1.d0 ; ! set to a small number to guarantee that no swap is done on first iteration
+#ifdef __NEIGHBOR_LIST
+   do jj=1,max(1,min(nsurface, solute_neighbor_mind(i) * (min(neighbor_list_factor,2)) ))
+#else
    do jj=1, nsurface ! inner loop over solute atoms
+#endif
     j=solute_neighbor_list(jj,i)
 #else
    do j=1, nsurface ! inner loop over solute atoms
@@ -1114,7 +1122,7 @@ module _N
 ! proceed with calculation
     rsurf=rsurf * oo_surf_stdev ! NOTE: redefining rsurf to get rid o variable rsurfn (rsurf <== rsurfn)
     dr2 = sqrt(dr2) * oo_surf_stdev
-! _nonce cycle ! aa get 54
+! _nonce cycle ! aa
 ! a and b
     a = osq2 * (dr2 + rsurf)
     b = osq2 * (dr2 - rsurf)
@@ -1123,7 +1131,7 @@ module _N
 !
     expa = exp ( - a**2 )
     expb = exp ( - b**2 )
-! _nonce cycle ! aa get 54
+! _nonce cycle ! aa
 !
 ! update density
 #ifdef __ERFHYBRID
@@ -1135,13 +1143,17 @@ module _N
 #endif
 ! _nonce cycle ! aa get 24
 !    if (qtruncate_sum .and.&
-    if(rho_solv(i).gt.surface_contour_value) exit ! density threshold exceeded ; will not apply force to this atom
+    if(rho_solv(i).gt.surface_contour_value) then
+     qforced=.false.
+     exit ! density threshold exceeded ; will not apply force to this atom
+    endif
 ! otherwise, compute gradient contribution : (note that I am flipping the direction of dr (in the notes it is r0-r)
     __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurf + half * (expa - expb) * ooc) )
 ! add gradient contribution
     __INCR(drho_solv(:,i),dr)
 ! _nonce
    enddo ! nsurface
+   qforced_solv(i)=qforced
   enddo ! nsolvent
 !#undef zero
 !#undef half
@@ -1158,19 +1170,23 @@ module _N
 !$omp shared ( rho_solv, drho_solv, r_solv, r_surf, rad_surf, surf_padding, nsolvent, nsurface, cutoff_surf, oo_surf_stdev &
 #ifdef __SORT_LIST
 !$OMP , solute_neighbor_list &
+#ifdef __NEIGHBOR_LIST
 !$OMP , solute_neighbor_mind &
+#endif
 #ifdef __SORT_LIST
 #endif
 #endif
 !$OMP ) &
-!$omp private ( rw, i, j, rp, rsurf, rmaxsurf, dr, dr2, ooc, expa, expb &
+!$omp private ( rw, i, j, rp, rsurf, rmaxsurf, dr, dr2, ooc, expa, expb, qforced &
 #ifdef __SORT_LIST
 !$OMP ,dr2old, jj &
 #endif
 !$OMP )
-!$omp do schedule(static)
+!!$omp do schedule(dynamic)
+!$omp do ! schedule(static)
 #endif
   do i=1, nsolvent ! outer loop over solvent atoms
+   qforced=.true.
    rho_solv(i)=zero ;
    drho_solv(:,i)=zero
    rw=r_solv(:,i);
@@ -1194,31 +1210,49 @@ module _N
     endif
     dr2old=dr2
 #endif
-    if (dr2 .gt. rmaxsurf**2) cycle
-    rsurf=rsurf * oo_surf_stdev
-    dr2 = sqrt(dr2) * oo_surf_stdev
-    a = osq2 * (dr2 + rsurf)
-    b = osq2 * (dr2 - rsurf)
-    ooc = one / dr2
-    expa = exp ( - a**2 )
-    expb = exp ( - b**2 )
+    if (dr2 .gt. rmaxsurf**2) cycle ! solute atom outside cutoff for this solvent atom -- skip it
+!   atom is within the cutoff; record its index before computing density contribution (note: recording index before swap above)
+#if defined(__SORT_LIST) & defined(__NEIGHBOR_LIST)
+    solute_neighbor_mind(i)=jj
+#endif
+!
+    if (qforced) then
+     rsurf=rsurf * oo_surf_stdev
+     dr2 = sqrt(dr2) * oo_surf_stdev
+     a = osq2 * (dr2 + rsurf)
+     b = osq2 * (dr2 - rsurf)
+     ooc = one / dr2
+     expa = exp ( - a**2 )
+     expb = exp ( - b**2 )
 ! update density
 #ifdef __ERFHYBRID
-    __erfo7i(a,erfa)
-    __erfo7i(b,erfb)
-    __INCR(rho_solv(i), half * ( erfa - erfb ) + osq2pi * ooc * ( expa - expb )   )
+     __erfo7i(a,erfa)
+     __erfo7i(b,erfb)
+     __INCR(rho_solv(i), half * ( erfa - erfb ) + osq2pi * ooc * ( expa - expb )   )
 #else
-    __INCR(rho_solv(i), half * ( __erf(a) - __erf(b) ) + osq2pi * ooc * ( expa - expb )   )
+     __INCR(rho_solv(i), half * ( __erf(a) - __erf(b) ) + osq2pi * ooc * ( expa - expb )   )
 #endif
-    __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurf + half * (expa - expb) * ooc) )
+     if (rho_solv(i).gt.surface_contour_value) then
+      qforced=.false.
+     else
+      __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurf + half * (expa - expb) * ooc) )
 ! add gradient contribution
-    __INCR(drho_solv(:,i),dr)
+      __INCR(drho_solv(:,i),dr)
+     endif ! rho>contour value
+    endif ! qforced
 ! _nonce
    enddo ! nsurface
+   qforced_solv(i)=qforced
   enddo ! nsolvent
 #ifdef __OMP
 !$omp end do
 !$omp end parallel
+#endif
+#if defined(__NEIGHBOR_LIST) & defined(__SORT_LIST)
+#ifdef __DDEBUG
+ write(666,'(7000(I4,"("I4")"))') (solute_neighbor_mind(i), solute_neighbor_list(solute_neighbor_mind(i),i), i=1,nsolvent)
+! close(666)
+#endif
 #endif
  endif ! truncate sum
 !
@@ -1288,6 +1322,7 @@ module _N
    dr2old=-1.d0 ; ! set to a small number to guarantee that no swap is done on first iteration
 #ifdef __NEIGHBOR_LIST
    do jj=1,max(1,min(nsurface, solute_neighbor_mind(i) * neighbor_list_factor ))
+!   do jj=1,max(1,min(nsurface, solute_neighbor_mind(i) ))
 #else
    do jj=1, nsurface ! inner loop over solute atoms
 #endif
