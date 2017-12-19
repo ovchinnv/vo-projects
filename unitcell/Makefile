@@ -1,7 +1,7 @@
 ROOT=..
 OBJS=unitcell.o
 NAME=unitcell
-DEPS=output constants
+DEPS=output constants bestfit
 
 LOCALMACROS=-include source.defs
 LOCALDEPS=source.defs
