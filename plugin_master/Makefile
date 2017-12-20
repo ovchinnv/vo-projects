@@ -1,6 +1,6 @@
 NAME=dynamo
 ROOT=..
-HEADS=plugin.h
+HEADS=plugin.h plugin.hpp
 OBJS= plugin_master.o plugin_acemd.o
 
 DEPS=files dynamol continua output parser constants
