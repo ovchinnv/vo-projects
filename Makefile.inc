@@ -168,6 +168,8 @@ $(ROOT)/$(NAME).stamp:: $(OBJS) $(MODS) $(HEADS) $(DISTRIB) $(addprefix $(ROOT)/
 ########################## SOURCE CODE #######################
 %.h:%.H $(LOCALDEPS) $(GLOBALDEPS)
 	$(FPP) $(FPPFLAGS) $(DEFS) $(LOCALDEFS) $(GLOBALMACROS) $(LOCALMACROS) -P $< > $@
+%.hpp:%.H $(LOCALDEPS) $(GLOBALDEPS)
+	$(FPP) -D__CPLUSPLUS $(FPPFLAGS) $(DEFS) $(LOCALDEFS) $(GLOBALMACROS) $(LOCALMACROS) -P $< > $@
 %.F90:%.ftn $(LOCALDEPS) $(GLOBALDEPS) $(HEADS)
 	sed 's/\([^\#]\)\(\/\/\)/\1\^\^/g' $< | $(FPP) $(FPPFLAGS) $(DEFS) $(LOCALDEFS) -U__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(MSG) $(INCLUDES) -P | sed 's/\^\^/\/\//g' > $@
 %_.F90:%.ftn $(LOCALDEPS) $(GLOBALDEPS) $(HEADS)

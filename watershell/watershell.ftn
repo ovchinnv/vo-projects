@@ -80,7 +80,8 @@ module _N
  __PAR(surface_force_constant, float, one)      ! surface restraint force constant
  __PAR(target_surface_energy, float, 5d0) ! target average energy of surface potential / par area ( units of pressure or normal stress )
 #ifdef __RMFT
- __PAR(remove_net_torque, bool, .false.) ! whether to remove net force and torque on the solvent atom
+ __PAR(remove_net_torque, bool, .false.) ! whether to remove net torque on the solvent atom
+ __PAR(remove_net_force, bool, .true.)   ! whether to remove net force ( ONLY ACTIVE IF removing net torque )
 #endif
  __PAR(qminimum_distance, bool, .false.) ! use the (cheaper) minimum distance method, rather than density method
 !
@@ -351,6 +352,13 @@ module _N
 #define __TAG __VAR
 #define __NAME flag to remove net torque from solvent atoms
 #include "parser/parser_macro2.src"
+! to remove net force :
+ if (remove_net_torque) then
+#define __VAR remove_net_force
+#define __TAG __VAR
+#define __NAME flag to remove net force from solvent atoms
+#include "parser/parser_macro2.src"
+ endif
 #undef __BOOL
 #endif
 !
@@ -751,7 +759,7 @@ module _N
    if (remove_net_torque) then ! for now, here; optimize later, if needed
     ir=r_solv(:,i)-r_com ;
     iforce=surface_force_constant * pre / d0 * ddist_solv(:,i) ! re sign : note that surface_distance is negative
-!    __INCR(__U(net_force),iforce) ! comment out not to remove net force
+    __INCR(__U(net_force),iforce) ! comment out not to remove net force
     __INCR(__U(net_torque)(1), ir(2) * iforce(3) - ir(3) * iforce(2)) ! similarly : comment out not to remove net torque
     __INCR(__U(net_torque)(2), ir(3) * iforce(1) - ir(1) * iforce(3))
     __INCR(__U(net_torque)(3), ir(1) * iforce(2) - ir(2) * iforce(1))
@@ -803,7 +811,7 @@ module _N
 #endif
 !   fr(:,isolvent_atoms(i))=zero ! make sure this is done elsewhere
   endif
- enddo
+ enddo ! nsolvent
 #ifdef __OMP
 !$omp end do
 #ifdef __RMFT
@@ -862,7 +870,11 @@ module _N
   A(3,4)=-A(6,1); A(4,3)=A(3,4)
   A(3,5)=-A(6,2); A(5,3)=A(3,5)
 ! rhs=(/net_force, net_torque/)
-  rhs(1:3)=-net_force;
+  if (remove_net_force) then
+   rhs(1:3)=-net_force
+  else
+   rhs(1:3)=0d0
+  endif
   rhs(4:6)=-net_torque;
 !       invert by LU
 !#ifdef __DEBUG
