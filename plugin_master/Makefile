@@ -1,0 +1,30 @@
+NAME=dynamo
+ROOT=..
+HEADS=plugin.h plugin.hpp
+OBJS= plugin_master.o plugin_acemd.o
+
+DEPS=files dynamol continua output parser constants
+
+LIB=lib$(NAME).so
+LIBS+=$(LIB)
+
+LOCALMACROS+=-include source.defs -D__BINDC 
+LOCALDEPS+=source.defs
+
+default : all
+
+include plugins.inc
+include watershell.inc
+include struna.inc
+
+include $(ROOT)/Makefile.inc
+
+all : $(LIB)
+$(LIB) : $(OBJS) $(COBJS) $(LOBJS)
+
+$(SOURCES) : $(LOCALDEPS)
+
+plugin_acemd.o : aceplug.h
+plugin_master.F90 : parser/parser_macro2.src
+clean ::
+	

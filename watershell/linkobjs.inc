@@ -1,4 +1,8 @@
-LINKOBJS=\
+LINKOBJS+=\
+ erfappx.o \
+ erfsun_ref.o \
+ erfsun_value.o \
+ lu.o \
  constants.o\
  output.o \
  parser.o \

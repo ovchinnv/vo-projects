@@ -2,7 +2,7 @@ ROOT=..
 OBJS=sm_var.o sm_config.o splines.o sm_util.o sm_main.o tsp.o multicom_serial_string.o
 NAME=string
 SUBDIRS=sm0k ftsm smcv
-DEPS=multicom multidiag output mpi_stub
+DEPS=multicom multidiag output mpi_stub unitcell
 DEPS+=$(addprefix $(NAME)/,$(SUBDIRS))
 CHARMM_DIR=stringm
 

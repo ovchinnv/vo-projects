@@ -1,13 +1,15 @@
+!#init 0
 #define __SMCVINITCTX SMCV_INIT
 #define __SMCVDONECTX SMCV_DONE
 #define __FTSMINITCTX FTSM_INIT
 #define __FTSMDONECTX FTSM_DONE
+!#end init 0
 !
 #define __CBIND use, intrinsic :: iso_c_binding
 !
 module sm_plugin
  use system, only : r, rcomp, m, q, bfactor, occupancy, fr, natom, system_PDB_initialized, system_minimal_initialized, system_PDB_init, system_done
- use system, f=>fr
+! use system, f=>fr ! does not seem to be needed anymore
  use unitcell
  __DEP_OUTPUT, set_minwarnlev, set_minerrorlev, set_minmessagelev
  __DEP_CONST
@@ -16,23 +18,25 @@ module sm_plugin
  __IMPNONE
 
  private
-
+!#vars 0
  int, parameter :: ftsm_flavor=1, smcv_flavor=2, unknown=-1
  int, save :: sm_flavor = unknown
  character(len=9) :: initctx='UNDEFINED', donectx='UNDEFINED'
  bool, save :: defer_init_until_dyna=.false. ! if true, will call initializer after coordinates are available
- bool, save :: initialized=.false.
- bool, save :: minimal_system=.true. ! a minimal system results when a PDB file is not provided
- int, save :: iteration
+ bool, save :: sm_initialized=.false.
+ bool, save :: qper_parser_override=.false. ! to turn off (override) periodicity in parser
+ int, save :: sm_iteration
  float, save :: sm_energy=zero
- int(__FCINT), save, allocatable, target :: atomlist(:)
-!
+ int(__FCINT), save, allocatable, target :: sm_atomlist(:)
+!#end vars 0
+ bool, save :: minimal_system=.true. ! a minimal system results when a PDB file is not provided
+!#vars 2
  interface
   subroutine smcv_exec(ctx)
   character(len=*) :: ctx
   end subroutine smcv_exec
  end interface
-!
+!#end vars 2
  contains
 ! subroutines to call the string code from external MD programs
 !
@@ -62,15 +66,18 @@ module sm_plugin
 !
  character(len=il), pointer :: ifname
  character(len=ol), pointer :: ofname
+ character(len=vartaglen) :: structure_file
+!#vars 1
+ character(len=vartaglen) :: fl_name
+ int :: ierr
+!#end vars 1
 !
- character(len=vartaglen) :: structurefile, fl_name
-!
- int :: i, fid, ierr, l
+ int :: i, fid, l
  __IAM(_ME)
  _ME=1
 !
 !==================================================
- if (initialized) call sm_done_plugin() ! reinitialize to clean up from a previous run
+ if (sm_initialized) call sm_done_plugin() ! reinitialize to clean up from a previous run
 !
  call c_f_pointer(inputname, ifname)
  call c_f_pointer(outputname, ofname)
@@ -91,10 +98,20 @@ module sm_plugin
  if (existtag_nocase('minwarnlev'   ,__STRING(__OUTCTX))) call set_minwarnlev   (atoi(getval('minwarnlev',__STRING(__OUTCTX))))
  if (existtag_nocase('minmessagelev',__STRING(__OUTCTX))) call set_minmessagelev(atoi(getval('minmessagelev',__STRING(__OUTCTX))))
  if (existtag_nocase('minerrorlev'  ,__STRING(__OUTCTX))) call set_minerrorlev  (atoi(getval('minerrorlev',__STRING(__OUTCTX  ))))
+!#init 1
 !=================================================
 ! determine the string method flavor :
 !=================================================
- __GET_OPT_PAR(string_method, fl_name, 'SMCV', maincontext_name);
+! __GET_OPT_PAR(string_method, fl_name, 'SMCV', maincontext_name);
+ if (parser_find_context(__STRING(__SMCVINITCTX)).gt.0) then
+  fl_name='SMCV';
+ elseif (parser_find_context(__STRING(__FTSMINITCTX)).gt.0) then
+  fl_name='FTSM'
+ else
+  __MESSAGE(whoami, 'STRING METHOD CONFIGURATION OPTIONS NOT PROVIDED. SKIPPING INTIALIZATION.');
+   goto 999
+ endif
+!
  i=len_trim(fl_name)
 !
  select case(fl_name(1:i))
@@ -109,25 +126,30 @@ module sm_plugin
    donectx=__STRING(__SMCVDONECTX)
    __MESSAGE(whoami, 'STRING METHOD IN COLLECTIVE VARIABLES (SMCV) REQUESTED');
   case default ; sm_flavor=unknown
-   __MESSAGE(whoami, 'UNKNOWN METHOD "'//fl_name(1:i)//'" REQUESTED. ABORT.');
+   __MESSAGE(whoami, 'UNKNOWN STRING METHOD "'//fl_name(1:i)//'" REQUESTED. ABORT.');
    return
  end select
+!#end init 1
 ! check for structure (PDB) file
  if (existtag_nocase('structure', initctx)) then
-  structurefile=getval_nocase('structure', initctx);
-  l=len_trim(structurefile)
-  __MESSAGE(whoami, 'READING STRUCTURE FROM FILE "'//structurefile(1:l)//'"');
-  call system_PDB_init(structurefile, 'PDB');
-  system_PDB_initialized=.true.
+!#init 2
+  if (.not. system_PDB_initialized) then
+   structure_file=getval_nocase('structure', initctx);
+   l=len_trim(structure_file)
+   __MESSAGE(whoami, 'READING STRUCTURE FROM FILE "'//structure_file(1:l)//'"');
+   call system_PDB_init(structure_file, 'PDB');
+   system_PDB_initialized=.true.
 ! save coordinates in rcomp
-  if (associated(rcomp) .and. associated(r)) rcomp=r
+   if (associated(rcomp) .and. associated(r)) rcomp=r
+  endif ! system_PDB_initialized
+!#end init 2
   minimal_system = .false.
 ! check to make sure that the MD code sent the correct number of atoms
   if (n.ne.natom) then
    __WRN(whoami, 'NUMBER OF ATOMS RECEIVED('//itoa(n)//') MUST EQUAL THAT IN THE STRUCTURE FILE ('//itoa(natom)//'). ABORT.')
    return
   endif
- else
+ else !================= minimal system ================== (backward compatibility)
   call warning(whoami, 'STRUCTURE PDB FILE UNSPECIFIED. ASSUMING A MINIMAL SYSTEM WITH NO TOPOLOGY.',0)
   minimal_system=.true.
   if (n<0) then
@@ -138,7 +160,7 @@ module sm_plugin
   __MESSAGE(whoami, 'INITIALIZING STRUNA PLUGIN WITH '//itoa(n)//' ATOMS RECEIVED');
 ! maintaining coordinate compatibility with dynamol
 ! however, not using state variables below, i.e. allocating here
-  allocate(r(3,n), rcomp(3,n), f(3,n), m(n), q(n), bfactor(n), occupancy(n)) ! note transposed dimensions relative to acemd plugin + dynamol
+  allocate(r(3,n), rcomp(3,n), fr(3,n), m(n), q(n), bfactor(n), occupancy(n)) ! note transposed dimensions relative to acemd plugin + dynamol
   natom=n
   system_minimal_initialized=.true.
   r=__NAN
@@ -150,25 +172,28 @@ module sm_plugin
  m=mass
  q=charge
 !
+!#init 3
  __GET_OPT_PAR_B(defer_init_dyna, defer_init_until_dyna, .false., initctx);
+! periodicity override from parser :
+ __GET_OPT_PAR_B(pbc, qper_parser_override, qper, initctx); ! if not present use qper
 !
 ! defer initialization until coordinates are available
  if ( defer_init_until_dyna ) then 
-  __MESSAGE(whoami, 'WILL DEFER EXECUTION OF INITIALIZATION STACK UNTIL DYNAMICS');
+  __MESSAGE(whoami, 'WILL DEFER EXECUTION OF STRUNA INITIALIZATION STACK UNTIL DYNAMICS');
  else
-  __MESSAGE(whoami, 'EXECUTING INITIALIZATION STACK');
+  __MESSAGE(whoami, 'EXECUTING STRUNA INITIALIZATION STACK');
   if (noexec(initctx)) then
    call warning(whoami, 'CONTEXT "'//initctx//'" DOES NOT CONTAIN EXECUTABLE STATEMENTS.', -1);
   else
    select case(sm_flavor);
      case(ftsm_flavor);    call ftsm_exec(initctx)
      case(smcv_flavor);
-      if (qper) then 
+      if (qper_parser_override) then ! should add option to override qper in input file ; esp. for acemd, where qper=.true.
        call cv%ucell%update_vectors(box) ; ! note that this is a hack since SMCV is not initialized yet
        call cv%ucell%print() ;
       endif
       call smcv_exec(initctx)
-     case default ; __WRN(whoami, ' UNKNOWN METHOD REQUESTED.')
+     case default ; __WRN(whoami, ' UNKNOWN STRING METHOD REQUESTED.')
    end select
   endif
 !
@@ -178,15 +203,18 @@ module sm_plugin
 #include "../atomlist.def"
  endif ! defer
 !
- initialized=.not.defer_init_until_dyna
- iteration=-abs(__NAN)
+ sm_initialized=.not.defer_init_until_dyna
+ sm_iteration=-abs(__NAN)
+!
+ 999 continue
+!#end init 3
  _ME=0
 !
 end function _ME
 #undef _ME
 !===================================================================
 #define _ME sm_dyna_plugin
- __CFUN(_ME, iteration_, r_plugin, f_plugin, e, alist, qper, box)
+ __CFUN(_ME, iteration_, r_plugin, f_double_plugin, f_single_plugin, qsingle, e, alist, qper, box)
 ! SMCV modules:
  use cv_common, only : cv
  use smcv_master, only : smcv_main
@@ -199,7 +227,9 @@ end function _ME
 !
  int(C_LONG), value, intent(in) :: iteration_
  real(__FCFLOAT), intent(in), dimension(3, natom) :: r_plugin
- real(__FCFLOAT), intent(out), dimension(3, natom) :: f_plugin
+ real(c_double), intent(out), dimension(3, natom) :: f_double_plugin
+ real(c_float), intent(out), dimension(3, natom) :: f_single_plugin
+ logical(__FCBOOL), value, intent(in) :: qsingle
  real(__FCFLOAT), intent(out) :: e
  type(c_ptr), intent(out) :: alist ! send back a list of atom indices if smcv not initialized
  logical(__FCBOOL), value, intent(in) :: qper
@@ -214,16 +244,20 @@ end function _ME
 !
  e=zero ; ! not computed yet
 !
- if (initialized .or. defer_init_until_dyna) then
-
-  iteration=iteration_
-  qper_=qper
+!#main 0
+ if (sm_initialized .or. defer_init_until_dyna) then
+  sm_iteration=iteration_
+  qper_=qper.and.qper_parser_override
 !
-  if (initialized) then ! just load coordinates
-   r(:,atomlist(2:))=r_plugin(:,atomlist(2:))
+  if (sm_initialized) then
+!#end main 0
+! load coordinates and zero out force
+   r(:,sm_atomlist(2:))=r_plugin(:,sm_atomlist(2:))
+   fr(:,sm_atomlist(2:))=zero ! reset force
+!#main 1
   else
 ! complete initialization
-   __MESSAGE(whoami, 'EXECUTING INITIALIZATION STACK');
+   __MESSAGE(whoami, 'EXECUTING STRUNA INITIALIZATION STACK');
 ! load all coords (we do not know which ones we will need b/c initialization is incomplete)
    r=r_plugin
    if (noexec(initctx)) then
@@ -238,40 +272,49 @@ end function _ME
        qper_=.false. ! prevent repeat call
       endif
      call smcv_exec(initctx)
-     case default ; __WRN(whoami, ' UNKNOWN METHOD REQUESTED.')
+     case default ; __WRN(whoami, ' UNKNOWN STRING METHOD REQUESTED.')
     end select
    endif
    call parser_clear_context(initctx)
    if (fatal_warning()) return
 !
-   initialized=.true.
+   sm_initialized=.true.
 ! compute unique atomlist
 #include "../atomlist.def"
 ! now the atom list should be defined -- use it below for forces
-  endif ! not initialized
-!
-  f(:,atomlist(2:))=zero ! start from zero force
-!
+   fr(:,sm_atomlist(2:))=zero ! reset force
+!#end main 1
+!#main 2
+  endif ! not sm_initialized
+!#end main 2
+!#main 3
   select case(sm_flavor);
    case(ftsm_flavor);
-    call ftsm_main(__X, __Y, __Z, __XCOMP, __YCOMP, __ZCOMP, f(1,:), f(2,:), f(3,:), m, iteration)
+    call ftsm_main(__X, __Y, __Z, __XCOMP, __YCOMP, __ZCOMP, fr(1,:), fr(2,:), fr(3,:), m, sm_iteration)
    case(smcv_flavor);
     if (qper_) then 
      call cv%ucell%update_vectors(box) ! may move this functionality inside smcv_main; for now, minimal changes
 ! debug/test unit cell output
 !     call cv%ucell%print()
     endif
-    call smcv_main(__X, __Y, __Z, __XCOMP, __YCOMP, __ZCOMP, m, f(1,:), f(2,:), f(3,:), iteration, sm_energy)
+    call smcv_main(__X, __Y, __Z, __XCOMP, __YCOMP, __ZCOMP, m, fr(1,:), fr(2,:), fr(3,:), sm_iteration, sm_energy)
    case default ;
-    __WRN(whoami, ' UNKNOWN METHOD REQUESTED.')
+    __WRN(whoami, ' UNKNOWN STRING METHOD REQUESTED.')
   end select
+!#end main 3
 !
 ! update namd forces
 ! note that per CHARMM convention, which the plugin code inherits, forces correspond to grad V, not -grad V !
-  f_plugin(:,atomlist(2:)) = - f(:,atomlist(2:))
+  if (qsingle) then
+   f_single_plugin(:,sm_atomlist(2:)) = - fr(:,sm_atomlist(2:))
+  else
+   f_double_plugin(:,sm_atomlist(2:)) = - fr(:,sm_atomlist(2:))
+  endif
+!#main 4
 ! update energy
-  e=sm_energy
+  __INCR(e,sm_energy)
  endif
+!#end main 4
 !
  _ME=0
 !
@@ -288,34 +331,36 @@ end function _ME
  __DEP_PARSER, only : parser_done, parser_clear_context
 !
  __IAM(_ME)
-!
+!#done 0
  select case(sm_flavor);
   case(smcv_flavor); call smcv_exec(donectx)
   case(ftsm_flavor); call ftsm_exec(donectx)
-  case default ; __WRN(whoami, ' UNKNOWN METHOD REQUESTED.')
+  case default ; __WRN(whoami, ' UNKNOWN STRING METHOD REQUESTED.')
  end select
-!
- if (.not. initialized) return ! avoid multiple done calls
+!#end done 0
+ if (.not. sm_initialized) return ! avoid multiple done calls
 !
 ! NAMD may have multiple runs concatenated in one script file (e.g. minimization followed by dynamics); for this reason
 ! we will not destruct this object
 ! if ( .false. ) then
 !
+!#done 1
  call parser_clear_context(donectx)
+!#end done 1
  call parser_done()
-
+!#done 2
  select case(sm_flavor);
   case(smcv_flavor); if (smcv_initialized) call smcv_done()
   case(ftsm_flavor); if (ftsm_initialized) call ftsm_done()
-  case default ; __WRN(whoami, ' UNKNOWN METHOD REQUESTED.')
+  case default ; __WRN(whoami, ' UNKNOWN STRING METHOD REQUESTED.')
  end select
-!
+!#end done 2
  call system_done()
 !
  if (minimal_system) then ! free variables allocated outside of state
   __FREE(r)
   __FREE(rcomp)
-  __FREE(f)
+  __FREE(fr)
   __FREE(m)
   __FREE(q)
   __FREE(bfactor)
@@ -325,13 +370,12 @@ end function _ME
  endif
 !
  call files_done()
-!
- __DEALL(atomlist)
+!#done 3
+ __DEALL(sm_atomlist)
  sm_flavor=unknown
- initialized=.false.
+ sm_initialized=.false.
  defer_init_until_dyna=.false.
-!
-! endif
+!#end done 3
 !
 end subroutine _ME
 !

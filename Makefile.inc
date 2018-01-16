@@ -47,7 +47,7 @@ LOMP=-lgomp
 FORTRAN_COMPILER=$(notdir $(FC))
 DEFS+=-Dint=integer -Dfloat=real*8 -Dbool=logical -Dmpiint=MPI_INTEGER -Dmpifloat=MPI_REAL8 -Dmpichar=MPI_CHARACTER -Dmpiint4=MPI_INTEGER4\
      -Dmpibool=MPI_LOGICAL -Dint1=integer\(kind=KIND\(\'a\'\)\) -D__RCOMP -D__DMOL -D__CHES -D__EDDIE -D__$(FORTRAN_COMPILER) \
-     -Dint4mpi=integer -D__TIMER #-D__PARALLEL #-D__DEBUG -D__PATHSCALE #-Dint4mpi="integer(KIND=MPI_INTEGER_KIND)" 
+     -Dint4mpi=integer -D__TIMER #-D__DEBUG #-D__PARALLEL #-D__DEBUG -D__PATHSCALE #-Dint4mpi="integer(KIND=MPI_INTEGER_KIND)" 
 
 STRING_FLAGS= -D__ACEMD -D__NAMD $(OMP)
 DEFS+=$(STRING_FLAGS)
@@ -138,10 +138,10 @@ default: $(ROOT)/$(NAME).stamp
 %.o:%.F $(LIBDEPS)
 	$(FC) $(FFLAGS) $(DEFS) $(PIC) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $< -o $@
 %.a:    $(OBJS) $(HEADS)
-	$(AR) $(AFLAGS) $@ $(LOBJS)
+	$(AR) $(AFLAGS) $@ $(LOBJS) $^
 	file=$@ ; if [ -f $$file ] ; then ln -fs `pwd`/$$file ${ROOT}/lib/$$file; 2>/dev/null; fi
 %.so:   $(OBJS) $(HEADS)
-	$(LD) $(LDFLAGS) -shared $(LOBJS) $(OBJS) $(COBJS) -o $@
+	$(LD) $(LDFLAGS) -shared $(sort $(LOBJS) $(OBJS) $(COBJS)) -o $@
 	file=$@ ; if [ -f $$file ] ; then ln -fs `pwd`/$$file ${ROOT}/lib/$$file; 2>/dev/null; fi
 ###############################################################
 # DISTRIBUTION DIRS
@@ -168,6 +168,8 @@ $(ROOT)/$(NAME).stamp:: $(OBJS) $(MODS) $(HEADS) $(DISTRIB) $(addprefix $(ROOT)/
 ########################## SOURCE CODE #######################
 %.h:%.H $(LOCALDEPS) $(GLOBALDEPS)
 	$(FPP) $(FPPFLAGS) $(DEFS) $(LOCALDEFS) $(GLOBALMACROS) $(LOCALMACROS) -P $< > $@
+%.hpp:%.H $(LOCALDEPS) $(GLOBALDEPS)
+	$(FPP) -D__CPLUSPLUS $(FPPFLAGS) $(DEFS) $(LOCALDEFS) $(GLOBALMACROS) $(LOCALMACROS) -P $< > $@
 %.F90:%.ftn $(LOCALDEPS) $(GLOBALDEPS) $(HEADS)
 	sed 's/\([^\#]\)\(\/\/\)/\1\^\^/g' $< | $(FPP) $(FPPFLAGS) $(DEFS) $(LOCALDEFS) -U__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(MSG) $(INCLUDES) -P | sed 's/\^\^/\/\//g' > $@
 %_.F90:%.ftn $(LOCALDEPS) $(GLOBALDEPS) $(HEADS)

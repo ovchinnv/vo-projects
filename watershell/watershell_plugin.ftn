@@ -11,13 +11,12 @@ module __NM(plugin)
  private
 !
  bool, save :: initialized=.false.
- int, save :: iteration
  int(__FCINT), target, allocatable :: atomlist(:)
  int, parameter :: foutput=999 ! output file unit
 !
 !
  contains
-! a collection of subroutines to call the tempering code from a plugin
+! a collection of subroutines to call the watershell code from a plugin
 !
 #define __CSUB(__NAME, ...) subroutine __NAME (__VA_ARGS__) bind(c, name=__STRING(__NAME))
 #define __CFUN(__NAME, ...) function __NAME (__VA_ARGS__) bind(c, name=__STRING(__NAME))
@@ -95,12 +94,14 @@ end function _ME
 #undef _ME
 !===================================================================
 #define _ME __NM(dyna_from_plugin)
- __CFUN(_ME, iteration_, r_plugin, f_plugin, e)
+ __CFUN(_ME, iteration_, r_plugin, f_plugin_double, f_plugin_single, e, qsingle)
  __DEP_PARSER
  int(__FCINT) :: _ME
  int(C_LONG), value, intent(in) :: iteration_
  real(__FCFLOAT), intent(in), dimension(3, natom) :: r_plugin
- real(__FCFLOAT), intent(out), dimension(3, natom) :: f_plugin
+ real(c_double), intent(out), dimension(3, natom) :: f_plugin_double
+ real(c_float),  intent(out), dimension(3, natom) :: f_plugin_single
+ logical(__FCBOOL), value, intent(in) :: qsingle
  real(__FCFLOAT), intent(out) :: e
  __IAM(_ME)
 !
@@ -111,7 +112,57 @@ end function _ME
   return
  endif
 !
- iteration=iteration_
+ e=zero
+!
+! this plugin does not have coordinate/force arrays defined,
+! which are nevertheless needed for a possible type change, since ,e.g. the MD
+! software could pass data in a different type (single prec.) ; I hack into the
+! watershell module (into system, really) and copy the coordinates ; then, pass them
+! to the watershell (even though watershell already has them as members !)
+!
+! reset forces to zero
+ fr(:,isolvent_atoms)=zero
+! update coordinates :
+ r(:,isurface_atoms)=r_plugin(:,isurface_atoms) ! possible type change
+ r(:,isolvent_atoms)=r_plugin(:,isolvent_atoms)
+!
+ call __NM(main)(r, fr, e)
+! update forces
+!write(666,*) fr(:,isolvent_atoms)
+ if (qsingle) then
+  f_plugin_single(:,isolvent_atoms)=fr(:,isolvent_atoms)
+ else
+  f_plugin_double(:,isolvent_atoms)=fr(:,isolvent_atoms)
+ endif
+! f_plugin(:,iforced_atoms)=fr(:,iforced_atoms)
+!
+ if (.not.fatal_warning()) _ME=0
+!
+end function _ME
+#undef _ME
+#ifdef __OBSOLETE
+!===================================================================
+! SINGLE PRECISION FORCE VERSION
+!===================================================================
+#define _ME __NM(dyna_from_acemd)
+ __CFUN(_ME, iteration_, r_acemd, f_acemd, e)
+ __DEP_PARSER
+ int(__FCINT) :: _ME
+ int(C_LONG), value, intent(in) :: iteration_
+ real(__FCFLOAT), intent(in), dimension(3, natom) :: r_acemd
+ real(C_FLOAT), intent(out), dimension(3, natom) :: f_acemd
+ real(__FCFLOAT), intent(out) :: e
+ __IAM(_ME)
+!
+!aa
+!return
+ _ME=1
+!
+ if (.not. initialized) then
+  __WRN(whoami, ftoupper(__STRING(_N))//' NOT INITIALIZED. NOTHING DONE.');
+  return
+ endif
+!
  e=zero
 !
 ! this plugin does not have coordinate/force arrays defined,
@@ -121,17 +172,26 @@ end function _ME
 ! to the watershell (even though watershell already has them as members !)
 !
 ! update coordinates :
- r(:,isurface_atoms)=r_plugin(:,isurface_atoms) ! possible type change
- r(:,isolvent_atoms)=r_plugin(:,isolvent_atoms)
+!! commented out because using r_acemd directly
+! hack into watershell to anticipate whether surface atoms will be needed (update)
+! if (structure_update_freq.gt.izero) then
+!   if(mod(iteration+1,structure_update_freq).eq.izero) &
+!    r(:,isurface_atoms)=r_acemd(:,isurface_atoms) ! note that we are using iteration from module, not iteration_
+! endif
+! r(:,isolvent_atoms)=r_acemd(:,isolvent_atoms)
 !
- call __NM(main)(r, fr, e)
+! call __NM(main)(r, fr, e)
+ call __NM(main)(r_acemd, fr, e)
 ! update forces
- f_plugin(:,isolvent_atoms)=fr(:,isolvent_atoms)
+!write(666,*) fr(:,isolvent_atoms)
+!  close(666)
+ f_acemd(:,isolvent_atoms)=fr(:,isolvent_atoms)
 !
  if (.not.fatal_warning()) _ME=0
 !
 end function _ME
 #undef _ME
+#endif
 !===================================================================
 #define _ME __NM(done_from_plugin)
  __CSUB(_ME)
