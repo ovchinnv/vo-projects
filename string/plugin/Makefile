@@ -3,7 +3,7 @@ ROOT=../..
 COMMON=..
 OBJS=sm_plugin.o sm_plugin_acemd.o
 HEADS=struna.h
-DEPS=string dynamol mpi_stub
+DEPS=dynamol mpi_stub
 
 LIB=libstruna.so libstruna.a
 LIBS+=$(LIB)

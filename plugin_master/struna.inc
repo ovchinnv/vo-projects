@@ -6,7 +6,7 @@ include $(ROOT)/string/plugin/linkobjs.inc
 LOCALMACROS+=-D__STRUNA -include struna.defs
 LOCALDEPS+=struna.defs
 
-plugin_master.F90 : struna_vars.src struna_init.src struna_main.src struna_done.src
+plugin_master.F90 : $(ROOT)/string.stamp $(ROOT)/string/plugin.stamp  struna_vars.src struna_init.src struna_main.src struna_done.src
 struna_vars.src : force_look
 	sed -n '/!#vars 0/{:a;n;/!#end vars 0/b;p;ba}' $(ROOT)/string/plugin/sm_plugin.F90 >$@
 	sed -n '/!#vars 1/{:a;n;/!#end vars 1/b;p;ba}' $(ROOT)/string/plugin/sm_plugin.F90 >>$@
