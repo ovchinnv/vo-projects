@@ -23,3 +23,8 @@ $(SOURCES) : $(LOCALDEPS)
 watershell_plugin.o : watershell.o
 
 watershell.F90 watershell_plugin.F90 : parser/parser_macro2.src
+
+watershell_plugin_acemd.o : aceplug.h
+
+aceplug.h:
+	wget raw.githubusercontent.com/Acellera/plumed1/master/plumed-1.3/ACEMD/aceplug.h

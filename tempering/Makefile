@@ -31,6 +31,8 @@ include Makefile.inc
 $(SOURCES) : $(LOCALDEPS)
 
 tempering_plugin_acemd.o : tempering_plugin_acemd.c aceplug.h
+aceplug.h:
+	wget raw.githubusercontent.com/Acellera/plumed1/master/plumed-1.3/ACEMD/aceplug.h
 tempering_plugin.o : tempering.o
 tempering.o : energy_grid.o
 energy_grid.o : griddata.o

@@ -27,5 +27,8 @@ include $(COMMON)/Makefile.inc
 sm_plugin.o : $(COMMON)/sm_var.mod $(COMMON)/sm_config.mod ../atomlist.def
 sm_plugin_acemd.o : aceplug.h
 
+aceplug.h:
+	wget raw.githubusercontent.com/Acellera/plumed1/master/plumed-1.3/ACEMD/aceplug.h
+
 clean::
 	rm -f $(OBJS) $(HEADS)
