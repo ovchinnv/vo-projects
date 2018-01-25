@@ -120,6 +120,8 @@ void OpenCLCalcDynamoForceKernel::initialize(const System& system, const DynamoF
      box[6]=boxVectors[2][0]*nm2A;
      box[7]=boxVectors[2][1]*nm2A;
      box[8]=boxVectors[2][2]*nm2A;
+    } else {
+     for ( int i=0 ; i < 9 ; i++ ) { box[i]=0.0 ; } // initialize "by hand" for compatibility with older compilers
     }
     // Get particle masses and charges (if available)
     double *m=NULL; //mass

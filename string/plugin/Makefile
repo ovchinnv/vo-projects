@@ -2,7 +2,7 @@ NAME=string/plugin
 ROOT=../..
 COMMON=..
 OBJS=sm_plugin.o sm_plugin_acemd.o
-HEADS=struna.h
+HEADS=struna.h struna.hpp
 DEPS=dynamol mpi_stub
 
 LIB=libstruna.so libstruna.a

@@ -65,7 +65,7 @@ void testForce() {
     string log ="test.log";
     // create script file below
     ofstream testfile;
-    testfile.open(script);
+    testfile.open(script.c_str());
     testfile << "output {\n";
     testfile << " minwarnlev=-1\n";
     testfile << "}\n";

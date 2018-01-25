@@ -39,7 +39,15 @@
 #include <string>
 
 namespace DynamoPlugin {
-
+// constants for conversion between OPENMM and STRUNA units :
+    static const double Cal2J = 4.184;
+    static const double J2Cal = 1./Cal2J;
+    static const double nm2A = 10;
+    static const double A2nm = 1.0/nm2A;
+    static const double omm2str_e=J2Cal; // energy conversion
+    static const double str2omm_e=Cal2J;
+    static const double omm2str_f=J2Cal/nm2A;   // force conversion
+    static const double str2omm_f=Cal2J/A2nm;
 /**
  * This kernel is invoked by DynamoForce to calculate the forces acting on the system and the energy of the system.
  */
@@ -66,15 +74,6 @@ public:
      * @return the potential energy due to the force
      */
     virtual double execute(OpenMM::ContextImpl& context, bool includeForces, bool includeEnergy) = 0;
-// constants for conversion between OPENMM and DYNAMO units :
-    const double Cal2J = 4.184;
-    const double J2Cal = 1./Cal2J;
-    const double nm2A = 10;
-    const double A2nm = 1.0/nm2A;
-    const double omm2str_e=J2Cal; // energy conversion
-    const double str2omm_e=Cal2J;
-    const double omm2str_f=J2Cal/nm2A;   // force conversion
-    const double str2omm_f=Cal2J/A2nm;
 };
 
 } // namespace DynamoPlugin

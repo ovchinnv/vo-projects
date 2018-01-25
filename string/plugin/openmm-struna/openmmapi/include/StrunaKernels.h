@@ -39,7 +39,7 @@
 #include <string>
 
 namespace StrunaPlugin {
-
+// constants for conversion between OPENMM and STRUNA units :
     static const double Cal2J = 4.184;
     static const double J2Cal = 1./Cal2J;
     static const double nm2A = 10;
@@ -48,7 +48,6 @@ namespace StrunaPlugin {
     static const double str2omm_e=Cal2J;
     static const double omm2str_f=J2Cal/nm2A;   // force conversion
     static const double str2omm_f=Cal2J/A2nm;
-
 /**
  * This kernel is invoked by StrunaForce to calculate the forces acting on the system and the energy of the system.
  */
@@ -75,7 +74,6 @@ public:
      * @return the potential energy due to the force
      */
     virtual double execute(OpenMM::ContextImpl& context, bool includeForces, bool includeEnergy) = 0;
-// constants for conversion between OPENMM and STRUNA units :
 };
 
 } // namespace StrunaPlugin

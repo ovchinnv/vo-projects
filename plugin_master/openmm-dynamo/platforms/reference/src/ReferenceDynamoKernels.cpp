@@ -37,6 +37,7 @@
 #include "openmm/reference/RealVec.h"
 #include "openmm/reference/ReferencePlatform.h"
 #include <cstring>
+#include <cstdlib>
 
 using namespace DynamoPlugin;
 using namespace OpenMM;
@@ -153,6 +154,8 @@ double ReferenceCalcDynamoForceKernel::execute(ContextImpl& context, bool includ
      box[6]=boxVectors[2][0]*nm2A;
      box[7]=boxVectors[2][1]*nm2A;
      box[8]=boxVectors[2][2]*nm2A;
+    } else {
+     for ( int i=0 ; i < 9 ; i++ ) { box[i]=0.0 ; } // initialize "by hand" for compatibility with older compilers
     }
     //
     // copy coordinates :
