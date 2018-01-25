@@ -52,6 +52,11 @@ static vector<RealVec>& extractForces(ContextImpl& context) {
     return *((vector<RealVec>*) data->forces);
 }
 
+static RealVec* extractBoxVectors(ContextImpl& context) {
+    ReferencePlatform::PlatformData* data = reinterpret_cast<ReferencePlatform::PlatformData*>(context.getPlatformData());
+    return (RealVec*) data->periodicBoxVectors;
+}
+
 ReferenceCalcStrunaForceKernel::ReferenceCalcStrunaForceKernel(std::string name, \
                const OpenMM::Platform& platform, \
                OpenMM::ContextImpl& contextImpl) : CalcStrunaForceKernel(name, platform), \
@@ -84,8 +89,23 @@ void ReferenceCalcStrunaForceKernel::initialize(const System& system, const Stru
     // allocate position and force arrays
     r=(double*) calloc(3 * natoms, sizeof(double));
     fr=(double*) calloc(3 * natoms, sizeof(double));
-    // Get particle masses and charges (if available)
+    // PBC flag
+    usesPeriodic = system.usesPeriodicBoundaryConditions();
+    OpenMM::Vec3 boxVectors[3];
+    if (usesPeriodic) {
+     system.getDefaultPeriodicBoxVectors(boxVectors[0], boxVectors[1], boxVectors[2]);
+     box[0]=boxVectors[0][0]*nm2A;
+     box[1]=boxVectors[0][1]*nm2A;
+     box[2]=boxVectors[0][2]*nm2A;
+     box[3]=boxVectors[1][0]*nm2A;
+     box[4]=boxVectors[1][1]*nm2A;
+     box[5]=boxVectors[1][2]*nm2A;
+     box[6]=boxVectors[2][0]*nm2A;
+     box[7]=boxVectors[2][1]*nm2A;
+     box[8]=boxVectors[2][2]*nm2A;
+    }
 
+    // Get particle masses and charges (if available)
     double *m=NULL; //mass
     double *q=NULL; //charge
     m = (double*) malloc(natoms * sizeof(double)); // allocate memory
@@ -104,7 +124,7 @@ void ReferenceCalcStrunaForceKernel::initialize(const System& system, const Stru
         }
     }
     // initialize struna
-    int ierr=sm_init_plugin(natoms, m, q, inputfile, ilen, logfile, llen, &atomlist);
+    int ierr=sm_init_plugin(natoms, m, q, inputfile, ilen, logfile, llen, &atomlist, usesPeriodic, box);
     free(m);
     free(q);
     hasInitialized = true;
@@ -114,13 +134,26 @@ double ReferenceCalcStrunaForceKernel::execute(ContextImpl& context, bool includ
     //
     ReferencePlatform::PlatformData* data = reinterpret_cast<ReferencePlatform::PlatformData*>(context.getPlatformData());
     int iteration = data->stepCount;
-    double sm_energy; // struna energy
     double* rptr; // pointer to positions array
     double* fptr; // pointer to force array
     int* aptr; // pointer to atom index array
     int i, j, ierr;
     vector<RealVec>& pos = extractPositions(context);
     vector<RealVec>& frc = extractForces(context);
+    double sm_energy;
+    RealVec * boxVectors;
+    if (usesPeriodic) {
+     boxVectors = extractBoxVectors(context);
+     box[0]=boxVectors[0][0]*nm2A;
+     box[1]=boxVectors[0][1]*nm2A;
+     box[2]=boxVectors[0][2]*nm2A;
+     box[3]=boxVectors[1][0]*nm2A;
+     box[4]=boxVectors[1][1]*nm2A;
+     box[5]=boxVectors[1][2]*nm2A;
+     box[6]=boxVectors[2][0]*nm2A;
+     box[7]=boxVectors[2][1]*nm2A;
+     box[8]=boxVectors[2][2]*nm2A;
+    }
     //
     // copy coordinates :
     if (atomlist==NULL) { // atomlist is not defined; therefore, provide all coords
@@ -130,11 +163,11 @@ double ReferenceCalcStrunaForceKernel::execute(ContextImpl& context, bool includ
       *(rptr++) = pos[i][2]*nm2A;
      }
     // compute plugin forces and energy
-     ierr=sm_dyna_plugin(iteration, r, fr, &sm_energy, &atomlist); // might return valid atomlist
+     ierr=sm_dyna_plugin(iteration, r, fr, &sm_energy, &atomlist, usesPeriodic, box); // might return valid atomlist
     // copy plugin forces
      if (atomlist!=NULL) { // atom indices provided; use them for adding forces
       for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
-       j=*aptr - 1; // for zero offset (e.g. first coordinate lives in r[0]
+       j=*aptr - 1; // for zero offset (e.g. first coordinate lives in r[0])
        fptr=fr + 3*j ;
        frc[j][0]+= (*(fptr++))*str2omm_f; // include unit conversion
        frc[j][1]+= (*(fptr++))*str2omm_f;
@@ -156,7 +189,7 @@ double ReferenceCalcStrunaForceKernel::execute(ContextImpl& context, bool includ
       *(rptr)   = pos[j][2]*nm2A;
      }
 //
-     ierr=sm_dyna_plugin(iteration, r, fr, &sm_energy, &atomlist); // atomlist should not be modified in this call
+     ierr=sm_dyna_plugin(iteration, r, fr, &sm_energy, &atomlist, usesPeriodic, box); // atomlist should not be modified in this call
 //
      for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
       j=*aptr - 1;

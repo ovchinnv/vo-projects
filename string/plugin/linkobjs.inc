@@ -1,6 +1,4 @@
-LIB=libstruna.so libstruna.a
-LIBS+=$(LIB)
-LINKOBJS=\
+LINKOBJS+=\
  atompar.o \
  bondpar.o \
  anglpar.o \
@@ -79,10 +77,7 @@ LINKOBJS=\
  fieldbcdef.o \
  formats.o \
  stats.o \
- util.o
-
-
-default : plugin
-plugin : $(LIB)
-$(LIB) : $(LOBJS) Makefile.inc
-
+ unitcell.o \
+ util.o \
+ dmol.o \
+ verlet.o

@@ -2,13 +2,13 @@ ROOT=..
 OBJS=sm_var.o sm_config.o splines.o sm_util.o sm_main.o tsp.o multicom_serial_string.o
 NAME=string
 SUBDIRS=sm0k ftsm smcv
-DEPS=multicom multidiag output mpi_stub
+DEPS=multicom multidiag output mpi_stub unitcell
 DEPS+=$(addprefix $(NAME)/,$(SUBDIRS))
 CHARMM_DIR=stringm
 
 LOCALMACROS=-include source.defs
 LOCALDEPS=$(ROOT)/mpitype.def source.defs 
-LOCALDEPS+=dmol_select_macro.def
+LOCALDEPS+=$(ROOT)/dmol_select_macro.def
 
 include $(ROOT)/Makefile.inc
 
@@ -23,6 +23,9 @@ endif
 	(cd $$d; $(MAKE) charmm; \
 	/bin/sh -c 'for file in `ls *.src 2>/dev/null`; do  ln -fs `pwd`/$$file ../$(CHARMM_DIR)/$$file; done'); \
 	done
+
+plugin:all
+	$(MAKE) -C $@
 
 clean::
 	for d in $(SUBDIRS); do (cd $$d; $(MAKE) clean); done
