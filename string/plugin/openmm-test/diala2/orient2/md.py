@@ -54,8 +54,8 @@ pbc=0; # whether periodic boundary conditions are on
 mini=0;          # whether to minimize before dynamics
 ministeps=100;   # number of minimization iterations
 
-nsteps=10000;    # number of simulation steps
-outputfreq=1000; # frequency of generating output
+nsteps=100000;    # number of simulation steps
+outputfreq=10000; # frequency of generating output
 dcdfreq=100;   # frequency of dcd output
 
 dynamo=1;
