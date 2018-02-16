@@ -192,7 +192,7 @@ void CudaCalcDynamoForceKernel::initialize(const System& system, const DynamoFor
     free(q);
     pos.resize(natoms);
     frc.resize(natoms);
-    hasInitialized = true;
+    hasInitialized = (ierr==0);
 } // initialize
 
 double CudaCalcDynamoForceKernel::execute(ContextImpl& context, bool includeForces, bool includeEnergy) {

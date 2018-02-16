@@ -145,7 +145,7 @@ void OpenCLCalcDynamoForceKernel::initialize(const System& system, const DynamoF
     int ierr=master_init_plugin(natoms, m, q, inputfile, ilen, logfile, llen, &atomlist, usesPeriodic, box);
     free(m);
     free(q);
-    hasInitialized = true;
+    hasInitialized = (ierr==0);
 }
 
 double OpenCLCalcDynamoForceKernel::execute(ContextImpl& context, bool includeForces, bool includeEnergy) {

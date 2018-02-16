@@ -128,7 +128,7 @@ void ReferenceCalcDynamoForceKernel::initialize(const System& system, const Dyna
     int ierr=master_init_plugin(natoms, m, q, inputfile, ilen, logfile, llen, &atomlist, usesPeriodic, box);
     free(m);
     free(q);
-    hasInitialized = true;
+    hasInitialized = (ierr==0);
 }
 
 double ReferenceCalcDynamoForceKernel::execute(ContextImpl& context, bool includeForces, bool includeEnergy) {
