@@ -192,7 +192,8 @@ void CudaCalcDynamoForceKernel::initialize(const System& system, const DynamoFor
     free(q);
     pos.resize(natoms);
     frc.resize(natoms);
-    hasInitialized = (ierr==0);
+    hasInitialized = true;
+    if (ierr) throw OpenMMException("Could not initialize DYNAMO plugin");
 } // initialize
 
 double CudaCalcDynamoForceKernel::execute(ContextImpl& context, bool includeForces, bool includeEnergy) {
