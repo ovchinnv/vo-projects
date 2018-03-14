@@ -1,0 +1,66 @@
+#!/bin/bash
+# add NB exclusions to a psf file
+# quick and dirty prototype
+
+tmpfile=_tmp;
+
+psfin=diala2-x.psf
+psfout=diala2-nbx2.psf
+pdbin=diala2-0.pdb
+
+
+# extract exclusion list from bfactor columns in the pdb file
+list1=(`awk '$10 ~ /1.0/ {print $2}' $pdbin`)
+list2=(`awk '$10 ~ /2.0/ {print $2}' $pdbin`)
+
+echo ${list1[@]} > ${tmpfile}1
+echo ${list2[@]} > ${tmpfile}2
+
+natoms=`grep NATOM $psfin | awk '{print $1}'`;
+
+# create exclusion list as a in matlab
+echo "
+ l1=load('${tmpfile}1'); nl1=length(l1);
+ l2=load('${tmpfile}2'); nl2=length(l2);
+ nnbx = nl1 * nl2 ;
+ xlist= [];
+ iblo=zeros($natoms,1);
+ offset=0;
+ for i=1:nl1
+  xlist=[xlist, l2];
+  iblo(i) = i*nl2;
+ end
+ iblo(i+1:$natoms)=iblo(i) ; % set remaining pointers to the last one
+%
+ fid=fopen(['$tmpfile','.psf'],'w');
+% fmt_nnbx='%10d%10d%10d%10d%10d%10d%10d%10d\n'; % extended
+ fmt_nnbx='%8d%8d%8d%8d%8d%8d%8d%8d\n';
+ fprintf(fid,'\n%8d',nnbx) ; fprintf(fid,'%s\n',' !NNB')
+ fprintf(fid,fmt_nnbx,xlist)
+ if (nnbx==0 || mod(nnbx,8)>0 ) ; fprintf(fid,'\n') ; end
+%print IBLO array (indexed by atoms) : points to last nonbonded exclusion of atom i
+ fprintf(fid,fmt_nnbx, iblo)
+ if (nl1==0 || mod(nl1,8)>0 ) ; fprintf(fid,'\n') ; end
+ " | octave ;
+
+# rebuild psf : 
+
+#nnbx = natom * (natom-1) / 2 ;
+#xlist=[];
+#iblo=zeros(1,natom);
+#offset=0;
+#for i=1:natom
+# xlist=[xlist, i+1:natom];
+# offset=offset+(natom-i);
+# iblo(i)=offset;
+#end
+
+
+# part of psf before exclusions
+~/scripts/xtext $psfin PSF '!NNB' 0 -2 > $psfout
+# new exclusion list
+cat ${tmpfile}.psf >> $psfout
+echo >> $psfout # extra line
+# part of psf after exclusions and through to the end
+~/scripts/xtext $psfin '!NGRP' >> $psfout
+rm ${tmpfile}*

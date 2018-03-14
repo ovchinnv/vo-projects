@@ -37,6 +37,7 @@
 #include "openmm/reference/RealVec.h"
 #include "openmm/reference/ReferencePlatform.h"
 #include <cstring>
+#include <cstdlib>
 
 using namespace StrunaPlugin;
 using namespace OpenMM;
@@ -91,6 +92,21 @@ void ReferenceCalcStrunaForceKernel::initialize(const System& system, const Stru
     fr=(double*) calloc(3 * natoms, sizeof(double));
     // PBC flag
     usesPeriodic = system.usesPeriodicBoundaryConditions();
+    OpenMM::Vec3 boxVectors[3];
+    if (usesPeriodic) {
+     system.getDefaultPeriodicBoxVectors(boxVectors[0], boxVectors[1], boxVectors[2]);
+     box[0]=boxVectors[0][0]*nm2A;
+     box[1]=boxVectors[0][1]*nm2A;
+     box[2]=boxVectors[0][2]*nm2A;
+     box[3]=boxVectors[1][0]*nm2A;
+     box[4]=boxVectors[1][1]*nm2A;
+     box[5]=boxVectors[1][2]*nm2A;
+     box[6]=boxVectors[2][0]*nm2A;
+     box[7]=boxVectors[2][1]*nm2A;
+     box[8]=boxVectors[2][2]*nm2A;
+    } else {
+     for ( int i=0 ; i < 9 ; i++ ) { box[i]=0.0 ; } // initialize "by hand" for compatibility with older compilers
+    }
 
     // Get particle masses and charges (if available)
     double *m=NULL; //mass
@@ -111,7 +127,7 @@ void ReferenceCalcStrunaForceKernel::initialize(const System& system, const Stru
         }
     }
     // initialize struna
-    int ierr=sm_init_plugin(natoms, m, q, inputfile, ilen, logfile, llen, &atomlist);
+    int ierr=sm_init_plugin(natoms, m, q, inputfile, ilen, logfile, llen, &atomlist, usesPeriodic, box);
     free(m);
     free(q);
     hasInitialized = true;
@@ -121,14 +137,14 @@ double ReferenceCalcStrunaForceKernel::execute(ContextImpl& context, bool includ
     //
     ReferencePlatform::PlatformData* data = reinterpret_cast<ReferencePlatform::PlatformData*>(context.getPlatformData());
     int iteration = data->stepCount;
-    double sm_energy; // struna energy
     double* rptr; // pointer to positions array
     double* fptr; // pointer to force array
     int* aptr; // pointer to atom index array
     int i, j, ierr;
     vector<RealVec>& pos = extractPositions(context);
     vector<RealVec>& frc = extractForces(context);
-    RealVec* boxVectors;
+    double sm_energy;
+    RealVec * boxVectors;
     if (usesPeriodic) {
      boxVectors = extractBoxVectors(context);
      box[0]=boxVectors[0][0]*nm2A;
@@ -150,7 +166,7 @@ double ReferenceCalcStrunaForceKernel::execute(ContextImpl& context, bool includ
       *(rptr++) = pos[i][2]*nm2A;
      }
     // compute plugin forces and energy
-     ierr=sm_dyna_plugin(iteration, r, fr, &sm_energy, &atomlist, usesPeriodic, box); // might return valid atomlist
+     ierr=sm_dyna_plugin(iteration, r, fr, NULL, 0, &sm_energy, &atomlist, usesPeriodic, box); // might return valid atomlist
     // copy plugin forces
      if (atomlist!=NULL) { // atom indices provided; use them for adding forces
       for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
@@ -176,7 +192,7 @@ double ReferenceCalcStrunaForceKernel::execute(ContextImpl& context, bool includ
       *(rptr)   = pos[j][2]*nm2A;
      }
 //
-     ierr=sm_dyna_plugin(iteration, r, fr, &sm_energy, &atomlist, usesPeriodic, box); // atomlist should not be modified in this call
+     ierr=sm_dyna_plugin(iteration, r, fr, NULL, 0, &sm_energy, &atomlist, usesPeriodic, box); // atomlist should not be modified in this call
 //
      for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
       j=*aptr - 1;

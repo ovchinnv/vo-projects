@@ -1,1 +1,1 @@
-/home/volk/projects/continua/chest/test/molecule/q.dat
+q.dat

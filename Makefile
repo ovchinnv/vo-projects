@@ -1,5 +1,5 @@
 DIRS=driver state bestfit constants dynamol erf files lu multicom multidiag output parselist parser random string timer vectors \
-confcons enm continua pnm mpi_stub unitcell #tempering
+confcons enm continua pnm mpi_stub unitcell watershell plugin_master #tempering
 DISTRIB=include obj lib
 
 ROOT=.

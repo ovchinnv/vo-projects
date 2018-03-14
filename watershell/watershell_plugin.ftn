@@ -1,0 +1,212 @@
+#define __CBIND use, intrinsic :: iso_c_binding
+!
+module __NM(plugin)
+ __DEP_OUTPUT
+ __DEP_CONST
+ __DEP_VECTORS
+ __CBIND
+ use _N
+
+ __IMPNONE
+
+ private
+!
+ bool, save :: initialized=.false.
+ int(__FCINT), target, allocatable :: atomlist(:), forced_atomlist(:)
+ int, parameter :: foutput=999 ! output file unit
+ type (int_vector) :: atoms, forced_atoms
+!
+!
+ contains
+! a collection of subroutines to call the watershell code from a plugin
+!
+#define __CSUB(__NAME, ...) subroutine __NAME (__VA_ARGS__) bind(c, name=__STRING(__NAME))
+#define __CFUN(__NAME, ...) function __NAME (__VA_ARGS__) bind(c, name=__STRING(__NAME))
+!
+#define _ME __NM(init_from_plugin)
+ __CFUN(_ME, inputname, il, outputname, ol, alist);
+ __DEP_PARSER
+ __DEP_FILES
+ __DEP_VECTORS
+#ifdef __PARALLEL
+ __DEP_MPI
+#endif
+!
+ int(__FCINT) :: _ME
+ int( __FCINT), intent(in), value :: il, ol
+ type(c_ptr), value, intent(in) :: inputname, outputname
+ type(c_ptr), intent(out) :: alist ! send back a list of atom indices
+!
+ character(len=il), pointer :: ifname
+ character(len=ol), pointer :: ofname
+!
+ type (int_vector) :: atoms
+ int :: i, j
+
+ int :: fid
+ __IAM(_ME)
+ _ME=1
+!
+ call c_f_pointer(outputname, ofname)
+!
+ call output_init(filename=ofname, fid_=foutput)
+! make sure that the string method flavor is valid
+ __MESSAGE(whoami, 'INITIALIZING '//ftoupper(__STRING(_N))//' PLUGIN');
+! open input file
+ call c_f_pointer(inputname, ifname)
+ fid=-1
+ call files_open(fid, ifname, 'FORMATTED', 'READ')
+! parse input file
+ call parse_file(fid, &
+#ifdef __PARALLEL
+ & MPI_COMM_NULL, &
+#endif
+ & quiet_=.false.)
+ call files_close(fid)
+!=== check output options
+ if (existtag_nocase('minwarnlev'   ,__STRING(__OUTCTX))) call set_minwarnlev   (atoi(getval('minwarnlev',__STRING(__OUTCTX))))
+ if (existtag_nocase('minmessagelev',__STRING(__OUTCTX))) call set_minmessagelev(atoi(getval('minmessagelev',__STRING(__OUTCTX))))
+ if (existtag_nocase('minerrorlev'  ,__STRING(__OUTCTX))) call set_minerrorlev  (atoi(getval('minerrorlev',__STRING(__OUTCTX  ))))
+!=== ^ check output options
+!
+ call atoms%init()
+ call forced_atoms%init()
+ call __NM(initialize)(atoms, forced_atoms)
+!
+! compute atomlist and return
+!
+ allocate(atomlist(atoms%last+1))
+ atomlist(1)=atoms%last ! number of atoms first
+ atomlist(2:)=atoms%i(1:atoms%last)
+ alist=c_loc(atomlist)
+!
+ allocate(forced_atomlist(forced_atoms%last+1))
+ forced_atomlist(1)=forced_atoms%last ! number of atoms first
+ forced_atomlist(2:)=forced_atoms%i(1:forced_atoms%last)
+!
+ if (fatal_warning()) return
+!
+ initialized=__NM(initialized)
+ _ME=0
+!
+end function _ME
+#undef _ME
+!===================================================================
+#define _ME __NM(dyna_from_plugin)
+ __CFUN(_ME, iteration_, r_plugin, f_plugin_double, f_plugin_single, e, qsingle)
+ __DEP_PARSER
+ int(__FCINT) :: _ME
+ int(C_LONG), value, intent(in) :: iteration_
+ real(__FCFLOAT), intent(in), dimension(3, natom) :: r_plugin
+ real(c_double), intent(out), dimension(3, natom) :: f_plugin_double
+ real(c_float),  intent(out), dimension(3, natom) :: f_plugin_single
+ logical(__FCBOOL), value, intent(in) :: qsingle
+ real(__FCFLOAT), intent(out) :: e
+ __IAM(_ME)
+!
+ _ME=1
+!
+ if (.not. initialized) then
+  __WRN(whoami, ftoupper(__STRING(_N))//' NOT INITIALIZED. NOTHING DONE.');
+  return
+ endif
+!
+ e=zero
+!
+! this plugin does not have coordinate/force arrays defined,
+! which are nevertheless needed for a possible type change, since ,e.g. the MD
+! software could pass data in a different type (single prec.) ; I hack into the
+! watershell module (into system, really) and copy the coordinates ; then, pass them
+! to the watershell (even though watershell already has them as members !)
+!
+! reset forces to zero
+#ifdef __DEBUG
+ fr=zero;
+#else
+ fr(:,forced_atomlist(2:))=zero
+#endif
+! update coordinates :
+ r(:,atomlist(2:))=r_plugin(:,atomlist(2:)) ! possible type change
+!
+ call __NM(main)(r, fr, e)
+! update forces
+!write(666,*) fr(:,isolvent_atoms)
+ if (qsingle) then
+  f_plugin_single(:,forced_atomlist(2:))=fr(:,forced_atomlist(2:))
+ else
+  f_plugin_double(:,forced_atomlist(2:))=fr(:,forced_atomlist(2:))
+ endif
+! f_plugin(:,iforced_atoms)=fr(:,iforced_atoms)
+!
+ if (.not.fatal_warning()) _ME=0
+!
+end function _ME
+#undef _ME
+#ifdef __OBSOLETE
+!===================================================================
+! SINGLE PRECISION FORCE VERSION
+!===================================================================
+#define _ME __NM(dyna_from_acemd)
+ __CFUN(_ME, iteration_, r_acemd, f_acemd, e)
+ __DEP_PARSER
+ int(__FCINT) :: _ME
+ int(C_LONG), value, intent(in) :: iteration_
+ real(__FCFLOAT), intent(in), dimension(3, natom) :: r_acemd
+ real(C_FLOAT), intent(out), dimension(3, natom) :: f_acemd
+ real(__FCFLOAT), intent(out) :: e
+ __IAM(_ME)
+!
+!aa
+!return
+ _ME=1
+!
+ if (.not. initialized) then
+  __WRN(whoami, ftoupper(__STRING(_N))//' NOT INITIALIZED. NOTHING DONE.');
+  return
+ endif
+!
+ e=zero
+!
+! this plugin does not have coordinate/force arrays defined,
+! which are nevertheless needed for a possible type change, since ,e.g. the MD
+! software could pass data in a different type (single prec.) ; I hack into the
+! watershell module (into system, really) and copy the coordinates ; then, pass them
+! to the watershell (even though watershell already has them as members !)
+!
+! update coordinates :
+!! commented out because using r_acemd directly
+! hack into watershell to anticipate whether surface atoms will be needed (update)
+! if (structure_update_freq.gt.izero) then
+!   if(mod(iteration+1,structure_update_freq).eq.izero) &
+!    r(:,isurface_atoms)=r_acemd(:,isurface_atoms) ! note that we are using iteration from module, not iteration_
+! endif
+! r(:,isolvent_atoms)=r_acemd(:,isolvent_atoms)
+!
+! call __NM(main)(r, fr, e)
+ call __NM(main)(r_acemd, fr, e)
+! update forces
+!write(666,*) fr(:,isolvent_atoms)
+!  close(666)
+ f_acemd(:,isolvent_atoms)=fr(:,isolvent_atoms)
+!
+ if (.not.fatal_warning()) _ME=0
+!
+end function _ME
+#undef _ME
+#endif
+!===================================================================
+#define _ME __NM(done_from_plugin)
+ __CSUB(_ME)
+ __DEP_PARSER
+ __IAM(_ME)
+ __MESSAGE(whoami, 'FINALIZING '//ftoupper(__STRING(_N))//' PLUGIN');
+ call __NM(done)()
+ call output_done()
+ __DEALL(atomlist)
+ call atoms%done()
+ call forced_atoms%done()
+ initialized=.false.
+end subroutine _ME
+#undef _ME
+!===================================================================
+end module __NM(plugin)

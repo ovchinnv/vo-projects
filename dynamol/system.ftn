@@ -974,8 +974,11 @@ module system
  character, parameter :: nontext(3) = (/' ','=','~'/)
  character, parameter :: opchar(7) = (/'=','~','(',')','<','>','!'/)
  character(len=8), parameter :: unitary(4) = (/'ALL     ','NOH     ','HEAVY   ','HYDROGEN'/) ! list of tags corresponding to unitary operations
+ int, parameter :: qor=1, qand=2, qxor=3, qend=4
+ int :: algebra=qor ;
+ int, pointer :: flag(:)=>NULL()
+ int, pointer :: ind0(:)=>NULL()
  int, pointer :: ind(:)
- int, pointer :: ind0(:)
  int :: l, i, ii, j, nsel
  type(int_vector) :: ilist
  bool :: qerror
@@ -996,6 +999,15 @@ module system
   call message(whoami, 'Processing selection "'//s(1:l)//'"');
  endif
 !
+! create initial selection (ALL)
+!
+ allocate(flag(1:natom)) ; flag=0 ! nothing selected
+ allocate(ind0(1:natom)) ! temporary array
+ algebra=qor ! needed for a single sub-selection to work
+!
+! for now, use goto statements to build more complicated (but still simple) selections
+ 1000  continue
+! reset temporary aray to begin new (sub) selection
 !
  if (all(letters.ne.s(1:1))) then
   call warning(whoami, 'Invalid character "'//s(1:1)//'" in selection specifier. Abort.', -1); return
@@ -1007,25 +1019,40 @@ module system
 !
   call adjustleft(s,l);
   if (all(opchar.ne.s(1:1))) then
-   call warning(whoami, 'Invalid character "'//s(1:1)//'" in operator. Abort.', -1); return
+   if (tag.eq.'ATOMID') then 
+    operator='=' ! for backward compatibility, allow atomid list without "="
+   else
+    call warning(whoami, 'Invalid character "'//s(1:1)//'" in operator. Abort.', -1); return
+   endif
   else
    operator=pop_string(s,l,opchar,.true.) ! take off just the operator part of the string
   endif
 !
-  value=pop_string(s,l);
+! in the case of ATOMID, want to read the entire list, up to possibly "AND" "OR" "XOR"
+  if (tag.eq.'ATOMID') then
+   value=pop_string(s,l,'AOXaox');
+  else
+   value=pop_string(s,l);
+  endif
 !
  endif ! not unitary
 !
-! process simple selection condition
-! create initial selection (ALL)
- allocate(ind0(1:natom)) ; ind0=(/ (i , i=1,natom) /);
- nsel=natom
+! process simple selection conditions
 !
  select case(tag)
 !===========
-  case('ALL') ;  ! nothing -- ind0 is correct
+  case('ALL') ; ! all atoms
+   ind0=(/ (i,i=1,natom) /) ; nsel=natom
 !==================== adapted from minimal_system
   case('ATOMID')
+!
+#ifdef __DEBUG
+write(666,*) value
+write(666,*) s(1:l)
+write(666,*) l
+ close(666)
+#endif
+!
    if(l.lt.0) then
     call warning(whoami, 'Selection text is empty. Abort.', -1)
     qerror=.true.
@@ -1045,15 +1072,20 @@ module system
 !===========
   case('NOH','HEAVY') ;
    if (.not.system_structure_initialized) then
-    call warning(whoami, 'Structure not initialized. Abort.',-1);
-    qerror=.true.
+    if (.not.system_PDB_initialized) then ! use the first letter of PDB name
+     call warning(whoami, 'Structure not initialized. Abort.',-1);
+     qerror=.true.
+    else
+     nsel=0
+     do i=1, natom ;
+      if ( all( atoms%aname(i)(1:1) .ne.(/'H','h'/) ) ) then ; __INC(nsel) ; ind0(nsel)=i ; endif ! repopulate ind0 with matching indices
+     enddo
+    endif
    else
-    j=0
-    do i=1, nsel ;
-     ii = ind0(i)
-     if ( all( atoms%type(ii)(1:1) .ne.(/'H','h'/) ) ) then ; __INC(j) ; ind0(j)=ii ; endif ! repopulate ind0 with matching indices
+    nsel=0
+    do i=1, natom ;
+     if ( all( atoms%type(i)(1:1) .ne.(/'H','h'/) ) ) then ; __INC(nsel) ; ind0(nsel)=i ; endif ! repopulate ind0 with matching indices
     enddo
-    nsel=j;
    endif
 !===========
   case('HYDROGEN') ;
@@ -1061,12 +1093,10 @@ module system
     call warning(whoami, 'Structure not initialized. Abort.',-1);
     qerror=.true.
    else
-    j=0
-    do i=1, nsel ;
-     ii = ind0(i)
-     if ( any( atoms%type(ii)(1:1) .eq.(/'H','h'/) ) ) then ; __INC(j) ; ind0(j)=ii ; endif ! repopulate ind0 with matching indices
+    nsel=0
+    do i=1, natom ;
+     if ( any( atoms%type(i)(1:1) .eq.(/'H','h'/) ) ) then ; __INC(nsel) ; ind0(nsel)=i ; endif ! repopulate ind0 with matching indices
     enddo
-    nsel=j;
    endif
 !===========
   case('ANAME');
@@ -1076,20 +1106,39 @@ module system
    else
     select case(operator)
      case('=','==') ;
-      j=0 ! new index on ind0 
-      do i=1, nsel ; 
-       ii = ind0(i)
-       if (atoms%aname(ii).eq.value) then ; __INC(j) ; ind0(j)=ii ; endif ! repopulate ind0 with matching indices
+      nsel=0 ! new index on ind0 
+      do i=1, natom ; 
+       if (atoms%aname(i).eq.value) then ; __INC(nsel) ; ind0(nsel)=i ; endif ! repopulate ind0 with matching indices
       enddo
-      nsel=j;
 !
      case('~=','!=','<>') ;
-      j=0
-      do i=1, nsel ; 
-       ii = ind0(i)
-       if (atoms%aname(ii).ne.value) then ; __INC(j) ; ind0(j)=ii ; endif
+      nsel=0
+      do i=1, natom ;
+       if (atoms%aname(i).ne.value) then ; __INC(nsel) ; ind0(nsel)=i ; endif
       enddo
-      nsel=j;
+!
+     case default;
+      call warning(whoami, 'Unsupported operator "'//trim(operator)//'" for selection tag "'//trim(tag)//'". Abort.', -1); qerror=.true.
+    end select
+   endif
+!===========
+  case('SEGID', 'SEGNAME', 'SEGMENT');
+   if (.not. (system_structure_initialized .or. system_PDB_initialized)) then
+    call warning(whoami, 'Structure not initialized. Abort.',-1);
+    qerror=.true.
+   else
+    select case(operator)
+     case('=','==') ;
+      nsel=0 ! new index on ind0 
+      do i=1, natom ; 
+       if (atoms%segid(i).eq.value) then ; __INC(nsel) ; ind0(nsel)=i ; endif ! repopulate ind0 with matching indices
+      enddo
+!
+     case('~=','!=','<>') ;
+      nsel=0
+      do i=1, natom ;
+       if (atoms%segid(i).ne.value) then ; __INC(nsel) ; ind0(nsel)=i ; endif
+      enddo
 !
      case default;
       call warning(whoami, 'Unsupported operator "'//trim(operator)//'" for selection tag "'//trim(tag)//'". Abort.', -1); qerror=.true.
@@ -1104,36 +1153,28 @@ module system
    else
     select case(operator)
      case('=','==') ;
-      j=0 ! new index on ind0 
-      do i=1, nsel ; 
-       ii = ind0(i)
-       if ( abs(bfactor(ii)-atof(value)).lt.__ERRTOL ) then ; __INC(j) ; ind0(j)=ii ; endif ! repopulate ind0 with matching indices
+      nsel=0 ! new index on ind0 
+      do i=1, natom
+       if ( abs(bfactor(i)-atof(value)).lt.__ERRTOL ) then ; __INC(nsel) ; ind0(nsel)=i ; endif ! repopulate ind0 with matching indices
       enddo
-      nsel=j;
 !
      case('~=','!=','<>') ;
-      j=0
-      do i=1, nsel ; 
-       ii = ind0(i)
-       if ( abs(bfactor(ii)-atof(value)).gt.__ERRTOL ) then ; __INC(j) ; ind0(j)=ii ; endif
+      nsel=0
+      do i=1, natom
+       if ( abs(bfactor(i)-atof(value)).gt.__ERRTOL ) then ; __INC(nsel) ; ind0(nsel)=i ; endif
       enddo
-      nsel=j;
 !
      case('<') ;
-      j=0
-      do i=1, nsel ; 
-       ii = ind0(i)
-       if ( bfactor(ii) < atof(value) ) then ; __INC(j) ; ind0(j)=ii ; endif
+      nsel=0
+      do i=1, natom
+       if ( bfactor(i) < atof(value) ) then ; __INC(nsel) ; ind0(nsel)=i ; endif
       enddo
-      nsel=j;
 !
      case('>') ;
-      j=0
-      do i=1, nsel ; 
-       ii = ind0(i)
-       if ( bfactor(ii) > atof(value) ) then ; __INC(j) ; ind0(j)=ii ; endif
+      nsel=0
+      do i=1, natom
+       if ( bfactor(i) > atof(value) ) then ; __INC(nsel) ; ind0(nsel)=i ; endif
       enddo
-      nsel=j;
 !
      case default;
       call warning(whoami, 'Unsupported operator "'//trim(operator)//'" for selection tag "'//trim(tag)//'". Abort.', -1); qerror=.true.
@@ -1147,36 +1188,28 @@ module system
    else
     select case(operator)
      case('=','==') ;
-      j=0 ! new index on ind0 
-      do i=1, nsel ;
-       ii = ind0(i)
-       if ( abs(occupancy(ii)-atof(value)).lt.__ERRTOL ) then ; __INC(j) ; ind0(j)=ii ; endif ! repopulate ind0 with matching indices
+      nsel=0 ! new index on ind0 
+      do i=1, natom
+       if ( abs(occupancy(i)-atof(value)).lt.__ERRTOL ) then ; __INC(nsel) ; ind0(nsel)=i ; endif ! repopulate ind0 with matching indices
       enddo
-      nsel=j;
 !
      case('~=','!=','<>') ;
-      j=0
-      do i=1, nsel ; 
-       ii = ind0(i)
-       if ( abs(occupancy(ii)-atof(value)).gt.__ERRTOL ) then ; __INC(j) ; ind0(j)=ii ; endif
+      nsel=0
+      do i=1, natom
+       if ( abs(occupancy(i)-atof(value)).gt.__ERRTOL ) then ; __INC(nsel) ; ind0(nsel)=i ; endif
       enddo
-      nsel=j;
 !
      case('<') ;
-      j=0
-      do i=1, nsel ; 
-       ii = ind0(i)
-       if ( occupancy(ii) < atof(value) ) then ; __INC(j) ; ind0(j)=ii ; endif
+      nsel=0
+      do i=1, natom
+       if ( occupancy(i) < atof(value) ) then ; __INC(nsel) ; ind0(nsel)=i ; endif
       enddo
-      nsel=j;
 !
      case('>') ;
-      j=0
-      do i=1, nsel ; 
-       ii = ind0(i)
-       if ( occupancy(ii) > atof(value) ) then ; __INC(j) ; ind0(j)=ii ; endif
+      nsel=0
+      do i=1, natom
+       if ( occupancy(i) > atof(value) ) then ; __INC(nsel) ; ind0(nsel)=i ; endif
       enddo
-      nsel=j;
 !
      case default;
       call warning(whoami, 'Unsupported operator "'//trim(operator)//'" for selection tag "'//trim(tag)//'". Abort.', -1); qerror=.true.
@@ -1188,12 +1221,71 @@ module system
  end select
 !
  if (.not.qerror) then
-  allocate(ind(1:nsel)); ind=ind0(1:nsel)
+! update flag array
+  do i=1, nsel ! loop over current selection
+    j=ind0(i)
+    if (j.gt.izero.and.j.le.natom) then ! modify flag
+     if ((algebra.eq.qor) .or. (algebra.eq.qand.and.flag(j).eq.1) .or. (algebra.eq.qxor.and.flag(j).eq.0)) then 
+      flag(j)=-1
+     else
+      flag(j)=0
+     endif
+    else
+     call warning(whoami, ' Invalid atom index specified ("'//itoa(j)//'"). Abort',-1); qerror=.true.
+    endif
+  enddo
+! there is one remaining case : if an atom was not chosen in this selection, but was chosen in the previous selection
+! and the algebra is "and" it should be turned off
+! using three values for the flag (-1,0,1), we loop over all atoms, check whether the flag is 1 (which means that it was
+! successfully set in the previous selection) and set it to zero ; this is because it should only be true if it was set
+! also in this selection, in which case its value would be -1
+  if (algebra.eq.qand) then
+   where (flag==1)
+    flag=0
+   end where
+  endif
+  flag=abs(flag) ! set valid flag to 1, since only -1 and 0 remain after loop above
+ endif
+!
+! look for or or and
+ call adjustleft(s,l);
+ if (len_trim(s).gt.0) then
+   value=pop_string(s,l);
+   select case(value)
+    case('OR','|','||');  algebra=qor;
+    case('XOR');          algebra=qxor;
+    case('AND','&','&&'); algebra=qand;
+    case default;
+     call warning(whoami, 'Unknown characters after selection string ("'//value//'"). Abort.',-1) ; qerror=.true.; algebra=qend
+   end select
+ else
+   algebra=qend
+ endif
+!
+ call adjustleft(s,l);
+ if ( .not. qerror .and. any(algebra .eq. (/qor, qand, qxor/) ) ) goto 1000
+!
+ if (.not.qerror) then
+  nsel=count(flag==1)
+  allocate(ind(1:nsel))
+  nsel=0
+  do i=1, natom
+   if (flag(i)==1) then
+    __INC(nsel)
+    ind(nsel)=i
+   endif
+  enddo
+!
   call message(whoami, itoa(nsel)//' atoms were selected.')
+#ifdef __DEBUG
+  write(666,*) pack(flag, flag>0)
+  close(666)
+#endif
   if (nsel.lt.1) deallocate(ind)
  endif
 !
  __FREE(ind0)
+ __FREE(flag)
 !
  end function system_getind
 !=========================================================================
@@ -1491,6 +1583,7 @@ module system
  __IAM(SYSTEM_INIT_MOL_SCALAR)
  int :: l, flen, j, ifmt, icol=-1, fid
 !
+ fid=-1 ! to compute file handle automatically
 !
  tag2=tag; call adjustleft(tag2); l=len_trim(tag2)
 !
@@ -1504,7 +1597,7 @@ module system
  if (present(ctx_)) then ; ctx = ctx_ ; else ; ctx=maincontext_name ; endif
 !%%%%%%%%%% check whether the tag exists %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  if (existtag_nocase(tag2, ctx)) then
-   select case(getval_nocase_upper(tag2))
+   select case(getval_nocase_upper(tag2, ctx))
     case('CONST','CONSTANT')
      if     (existtag_nocase(tag2(1:l)//'constant', ctx)) then
       allocate(s(natom)) ; s=atof(getval_nocase(tag2(1:l)//'constant', ctx))
@@ -1602,6 +1695,9 @@ module system
           column=mol_col_name(icol)
           call message(whoami, &
  &'Reading data for variable "'//tag2(1:l)//'" from column '//column(1:len_trim(column))//' of file '//filename(1:flen))
+#ifdef __DEBUG
+      write(777,*) 'open file ', filename(1:flen), ' with fid=',fid ; close(777)
+#endif
           call files_open(fid, name_=filename(1:flen), form_='FORMATTED', action_='READ')
           if (fid.ge.0) then
            allocate(rtemp(ndim,natom), otemp(natom), btemp(natom))

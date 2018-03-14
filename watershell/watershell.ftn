@@ -1,0 +1,1767 @@
+! to "regularize" variation of applied forces with the contour value, 
+! use a rough approximation to the inverse of the filter CDF;
+! for efficiency, use a logistic function matched to the Gaussian filter
+!
+! to avoid divide iverflow, define minimum density as the smallest float in single precision
+#define  __RHO_MIN FERRTOL()
+#define  __RHO(_X) ( one/(one+exp(-_X/logistic_constant)) )
+#define  __OORHO(_R) ( one/(max(_R,__RHO_MIN)))
+#define  __RHO_INVERSE(_L) ( - logistic_constant * log ( __OORHO(_L) - one) )
+#// if already have 1/rho
+#define  __RHO_INVERSE2(_OL) ( - logistic_constant * log ( _OL - one) )
+!
+#define __CTX __WATERSHELLCTX
+#define __RESTARTCTX __CONCAT(__WATERSHELLCTX,_RESTART)
+#//define __CHKUPDATE(_WHAT)   ( (mod(iteration, _WHAT) .eq. ione) .or. _WHAT.eq.ione )
+#define __CHKUPDATE(_WHAT)   (mod(iteration, _WHAT) .eq. izero)
+
+! for openmm local thread variables
+#ifdef __OMP
+#define _U _
+#else
+#define _U
+#endif
+#define __U(_WHAT) __CONCAT(_WHAT,_U)
+
+
+module _N
+
+ use system, only : r, rcomp, fr, radius, natom, system_PDB_initialized, system_PDB_init, system_done, system_getind, &
+&                   system_init_mol_scalar_nocase
+ __DEP_OUTPUT
+ __DEP_PARSER
+ __DEP_CONST
+ __DEP_FILES
+ __DEP_MPI
+ __IMPNONE
+
+ private
+
+ public __NM(initialize)
+ public __NM(main)
+ public __NM(done)
+ private __NM(write_restart_file)
+!
+! hack to make variables from system visible from plugin
+ public natom
+ public iteration
+ public structure_update_freq
+ public r
+ public fr
+
+ bool, public :: __NM(initialized)=.false.
+ bool, private:: radii_initialized=.false.
+
+! macro for parameters with defaults
+#define __PAR(_PAR,_TYPE,_DEF) _TYPE, save :: _PAR ; _TYPE, parameter :: __CONCAT(default_,_PAR)=_DEF;
+!
+! surface computation parameters :
+! __PAR(surface_contour_value, float, -one) ! value of density isosurface which is defines the surface ; negative means to compute from structure
+ __PAR(surface_distance, float, zero)! approximate distance from surface ; obtained by inverting logistic function of density (as an approximation)
+ __PAR(cutoff_surf_stdev,float,5d0)  ! grid smoothing cutoff normalized by standard deviation of gaussian (surface)
+ __PAR(surf_padding,float,0d0)       ! ( units of radius ) padding values to radii which might account for e.g. solvent layer(s)
+ __PAR(surf_stdev,float,2d0)         ! standard deviation of smoothing filter
+!
+ float :: cutoff_surf, cutoff_surf2, oo_surf_stdev, logistic_constant
+ float :: surface_contour_value ! value of density isosurface which is defines the surface ; negative means to compute from structure
+!
+ __PAR(iteration,int,izero)   ! iteration
+! surface evolution and output parameters
+ __PAR(distance_update_freq, int, ione)          ! frequency of updating distance value
+ __PAR(distance_update_step, float, 0.001d0)     ! constant for update
+ __PAR(structure_update_freq, int, ione)         ! frequency of updating coordinats from which the surface is generated
+ __PAR(structure_update_memory, float, 0.999d0)  ! memory constant for exponential update
+ __PAR(output_freq, int, 1000)              ! frequency of writing output file
+ __PAR(full_sum_freq, int, 60)                   ! frequency of force calculation without density truncation
+                                                 ! doing the full calculation allows all atoms to be sorted
+ __PAR(restart_file, character(len=vartaglen), 'NONE') ! restart file name
+ __PAR(structure_file, character(len=vartaglen),'NONE') ! coordinate file (e.g. PDB) with system information, such as atomic radii
+ __PAR(output_file, character(len=vartaglen), 'watershell.restart.txt') ! output file name
+ __PAR(surface_force_constant, float, one)      ! surface restraint force constant
+ __PAR(target_surface_energy, float, 5d0) ! target average energy of surface potential / par area ( units of pressure or normal stress )
+#ifdef __RMFT
+ __PAR(remove_net_torque, bool, .false.) ! whether to remove net torque on the solvent atom
+ __PAR(remove_net_force, bool, .true.)   ! whether to remove net force ( ONLY ACTIVE IF removing net torque )
+#endif
+ __PAR(qminimum_distance, bool, .false.) ! use the (cheaper) minimum distance method, rather than density method
+!
+!  atom selections
+ __PAR(surface_atom_selection, character(len=vartaglen), 'ANAME=CA')  ! protein CA trace
+ __PAR(solvent_atom_selection, character(len=vartaglen), 'ANAME=OH2') ! TIP3 oxygens atoms
+ int, pointer, public :: isurface_atoms(:)=>NULL()
+ int, pointer, public :: isolvent_atoms(:)=>NULL()
+!
+ float, pointer :: r_surf(:,:), & ! reference atom coordinates
+&                  rad_surf(:), & ! reference atom radii
+&                  r_solv(:,:), & ! solvent atom coordinates
+&                  rho_solv(:), & ! density value at solvent coordinate
+&                  drho_solv(:,:),& ! density gradient at solvent coordinate (inward surface normal)
+&                  dist_solv(:), &! minimum distance to solute
+&                  ddist_solv(:,:) ! distance gradient at solvent coordinate (inward surface normal)
+ bool, pointer :: qforced_solv(:) ! flags that indicate whether a force is to be applied on the atom
+#ifdef __SORT_LIST
+ int, pointer :: solute_neighbor_list(:,:) ! for each solvent atom, the solute atoms are sorted in terms of proximity
+#ifdef __NEIGHBOR_LIST
+ __PAR(qneighbor_list, bool, .true.) ! whether to use a neighbor list to shorten loops over surface atoms
+ int :: neighbor_list_factor ! coefficient used to relate sorting frequency and limit index to loop length
+ int, pointer :: solute_neighbor_mind(:) ! for each solvent atom, index of closest solute atom in the mindist algorithm
+!                                        ! also, the largest index of an atom within the cutoff distance for original algorithm
+! note : should implement a real test of the neighbor list algorithm, e.g. scanning the entire array and comparing with the
+! short array result
+#endif
+#endif
+!
+ int, public :: nsurface=-1, nsolvent=-1
+ int :: nsolvent_outside
+ float :: oonsurface, oonsolvent, oonsolvent_outside
+ float :: current_surface_distance
+#ifdef __RMFT
+ float :: r_com(3) =(/zero, zero, zero/); ! center of mass (geometry) for torque computation
+#ifdef __SIMPLE_NET_FORCE_SURFACE
+ float :: r_com_inst(3) =(/zero, zero, zero/); ! inst. center of mass (geometry) for torque computation
+#endif
+ float :: net_force(3) = (/zero, zero, zero/);
+ float :: net_force_ave(3) = (/zero, zero, zero/); ! running average of net force
+ __PAR(net_force_ave_update_memo, float, 0d0); ! memory governing the evolution of net force average ; 0 -- instant force correction
+ float :: max_force(3) = (/zero, zero, zero/);
+ float :: net_torque(3) = (/zero, zero, zero/);
+#endif
+!
+ int :: fid
+ bool :: qrestart=.false. ! whether we are restarting from a restart file
+!
+ float, private, parameter :: osq2=one/sqrt2
+ float, private, parameter :: osq2pi=one/sqrt(twopi)
+!
+!= subroutines
+ contains
+!========
+ __SUB(initialize) (atoms, forced_atoms)
+ __DEP_VECTORS
+ type (int_vector), optional :: atoms, forced_atoms
+ character(len=vartaglen) :: keyword, context
+ int :: l, ierr
+ character(len=maxlinelen) :: line
+ float, pointer :: farray(:) => NULL()
+ __IAM(__NM(INITIALIZE))
+!
+#define __CONTEXT __STRING(__CTX)
+ context=__CONTEXT ;
+#define __DEFAULT
+! first, check if we have the watershell context present
+ if (parser_find_context(__STRING(__CTX)).le.0) then
+  __MESSAGE(whoami, trim(ftoupper(__STRING(_N)))//' CONFIGURATION OPTIONS NOT PROVIDED. SKIPPING INTIALIZATION.');
+   return
+ endif
+!
+! next, check for restart file
+! if present, read it and skip initialization options
+! read restart file
+#define __CHAR
+#define __VAR	restart_file
+#define __TAG	restart_file
+#define __NAME	restart file
+#include "parser/parser_macro2.src"
+#undef __CHAR
+!
+ qrestart = ( existtag_nocase('restart_file', context) .and. trim(ftoupper(restart_file)).ne.'NONE')
+!
+ if (qrestart) then
+  __MESSAGE(whoami,'WILL READ SURFACE DEFINITION PARAMETERS FROM RESTART FILE.')
+! read and parse restart file
+  fid=-1
+  call files_open(fid, restart_file, 'FORMATTED', 'READ')
+  call parse_file(fid, &
+#ifdef __PARALLEL
+ &  MPI_COMM_NULL, &
+#endif
+ &  quiet_=.false.)
+  call files_close(fid)
+! now comes a trick : change context name temporarily to process the restart file using the same calls
+  context= __STRING(__RESTARTCTX)
+!
+ endif ! have restart file
+!
+#define __BOOL
+#define __TAG minimum_distance
+#define __VAR __CONCAT(q,__TAG)
+#define __NAME flag to use the (faster) minimum distance to solute method
+#include "parser/parser_macro2.src"
+!
+#if defined(__SORT_LIST) & defined(__NEIGHBOR_LIST)
+#define __TAG neighbor_list
+#define __VAR __CONCAT(q,__TAG)
+#define __NAME flag to use a neighbor list for solvent forces (default=yes)
+#define __DOALWAYS if (__VAR) then ;\
+                    __MESSAGE(whoami, 'WILL USE A NEIGHBOR LIST FOR SOLVENT FORCES.');\
+                   else ; \ 
+                    __MESSAGE(whoami, 'WILL NOT USE A NEIGHBOR LIST FOR SOLVENT FORCES.');\
+                   endif
+#include "parser/parser_macro2.src"
+#endif
+#undef __BOOL
+!
+#define __WARNIFMISSING
+#define __MINUSERR
+! density padding
+#define __VAR	surf_padding
+#define __TAG __VAR
+#define __NAME	Density padding
+#include "parser/parser_macro2.src"
+!
+#undef __MINUSERR
+! value for density isosurface
+! abandoning this in favor of distance
+!#define __VAR	surface_contour_value
+!#define __TAG __VAR
+!#define __NAME	Value for density isosurface
+!#define __DOIFOK if (__VAR.le.zero) __MESSAGE(whoami, ' DENSITY ISOSURFACE VALUE WILL BE COMPUTED FROM COORDINATES.')
+!#include "parser/parser_macro2.src"
+!
+#define __VAR surface_force_constant
+#define __TAG __VAR
+#define __NAME force constant for surface potential
+#define __DOIFOK if (__VAR.lt.__ERRTOL) __WRN(whoami, 'SURFACE FORCE IS OFF.')
+#include "parser/parser_macro2.src"
+!
+#define __LEZEROERR
+! cutoff for density
+#define __VAR	cutoff_surf_stdev
+#define __TAG __VAR
+#define __NAME	Cutoff for density smoothing
+#include "parser/parser_macro2.src"
+
+! GAUSSIAN standard deviations for smoothing (irrelevant for mindist method)
+#define __VAR	surf_stdev
+#define __TAG __VAR
+#define __NAME	Standard deviation of Gaussian filter for density smoothing
+#include "parser/parser_macro2.src"
+! compute constant (=1/a)  for logistic distribution that matches the stdev
+! the distribution is a * exp (-xa) / ( 1 + exp (-xa ) )^2
+! the corresponding cdf is 1 / ( 1 + exp (-xa) )
+ logistic_constant = sqrt3 * opi * surf_stdev ; ! need this for __RHO below
+!
+#undef __LEZEROERR
+!
+! value for distance of the surface from protein (approximate)
+#define __VAR	surface_distance
+#define __TAG __VAR
+#define __NAME	Distance of solvent surface from protein
+#define __DOALWAYS if (abs(__VAR).lt.__ERRTOL) then ; \
+                  __MESSAGE(whoami, 'LOCATION OF SOLVENT SURFACE WILL BE SET FROM SOLVENT COORDINATES.') ; \
+                 else ;\
+                  __VAR=-(abs(__VAR)) ; \
+                  surface_contour_value=__RHO(surface_distance) ;\
+                 endif ! make sure to set to a negative value
+!
+#include "parser/parser_macro2.src"
+#define __MINUSERR
+!
+! ====== done with (possible) restart file data
+ context=__CONTEXT ! reset context if changed
+! other parameters
+#define __INT
+#define __VAR	iteration
+#define __TAG	__VAR
+#define __NAME	starting iteration
+!
+#include "parser/parser_macro2.src"
+#define __VAR	distance_update_freq
+#define __TAG	__VAR
+#define __NAME	frequency of updating target distance from surface
+#define __DOIFOK if (__VAR.eq.izero) __MESSAGE(whoami, 'UPDATE OF SURFACE DISTANCE VALUE IS OFF.')
+#include "parser/parser_macro2.src"
+!
+#define __VAR	structure_update_freq
+#define __TAG	__VAR
+#define __NAME	frequency of updating reference structure
+#define __DOIFOK if (__VAR.eq.izero) __MESSAGE(whoami, 'SURFACE UPDATE IS OFF.')
+#include "parser/parser_macro2.src"
+!
+#define __VAR	output_freq
+#define __TAG	__VAR
+#define __NAME	frequency for writing output/restart file
+#define __DOIFOK if (__VAR.le.izero) __WRN(whoami, 'RESTART FILE WILL BE WRITTEN AT THE END ONLY')
+#include "parser/parser_macro2.src"
+#undef __INT
+!
+! read atom selections
+! atoms to define surface
+#define __CHAR
+#define __WARNIFMISSING
+#define __VAR	surface_atom_selection
+#define __TAG	surface_atoms
+#define __NAME	surface atoms
+#include "parser/parser_macro2.src"
+! (solvent) atoms to which surface forces are applied
+#define __VAR	solvent_atom_selection
+#define __TAG	solvent_atoms
+#define __NAME	solvent atoms
+#include "parser/parser_macro2.src"
+!
+! output file
+#undef __WARNIFMISSING
+#define __VAR	output_file
+#define __TAG	__VAR
+#define __NAME	watershell output file
+#include "parser/parser_macro2.src"
+#undef __CHAR
+!
+#if defined(__SORT_LIST) & defined(__NEIGHBOR_LIST)
+#define __INT
+#define __VAR	full_sum_freq
+#define __TAG	__VAR
+#define __NAME	frequency of force calculation without density truncation
+#define __DOALWAYS if (__VAR.le.zero) then ;\
+                  __WRN(whoami, 'SOLVENT ATOM NEIGHBOR LISTS CANNOT BE USED WITH "'//__STRING(__VAR)//'"=0.') ;\
+                  neighbor_list_factor=ione ;\
+                  qneighbor_list=.false. ;\
+                 else ;\
+                  neighbor_list_factor = ithree + INT( (__VAR * __VAR) * 2.0d-4); \
+                  if (.not.qneighbor_list) __WRN(whoami, 'NEIGHBOR LIST WILL NOT BE USED BECAUSE "neighbor_list" set to "off"') ;\
+                 endif
+#include "parser/parser_macro2.src"
+!#ifdef __DEBUG
+!       __DBGOUT('FULL_SUM_FREQ IS ',full_sum_freq)
+       __DBGOUT('NEIGHBOR_LIST_FACTOR SET TO ',neighbor_list_factor) ! , ithree + INT(full_sum_freq**2 * 2.0d-4)) 
+!#endif
+#endif
+!
+#undef __INT
+!
+#undef __MINUSERR
+#define __LEZEROERR
+!
+#define __VAR distance_update_step
+#define __TAG __VAR
+#define __NAME memory constant for surface contour update
+#define __DOIFOK if (__VAR.le.zero) __WRN(whoami, 'UPDATE OF SURFACE CONTOUR REFERENCE VALUE IS OFF.')
+#include "parser/parser_macro2.src"
+!
+#define __VAR structure_update_memory
+#define __TAG __VAR
+#define __NAME memory constant for reference structure update
+#define __DOIFOK if (__VAR.le.zero) then ; __WRN(whoami, 'SURFACE UPDATE IS OFF.') ; \
+ elseif (__VAR .gt. one ) then ; __WRN(whoami, ftoupper(__STRING(__NAME))//' SHOULD _NOT_ BE GREATER THAN ONE !') ; endif
+#include "parser/parser_macro2.src"
+!
+#define __VAR target_surface_energy
+#define __TAG __VAR
+#define __NAME target surface energy per area
+#define __DOIFOK if (__VAR.lt.__ERRTOL) __WRN(whoami, 'TARGET SURFACE ENERGY IS ALMOST ZERO.')
+#include "parser/parser_macro2.src"
+!
+#ifdef __RMFT
+#define __BOOL
+#define __VAR remove_net_torque
+#define __TAG __VAR
+#define __NAME flag to remove net torque from solvent atoms
+#include "parser/parser_macro2.src"
+! to remove net force :
+#define __VAR remove_net_force
+#define __TAG __VAR
+#define __NAME flag to remove net force from solvent atoms
+#define __DOIFOK \
+ if (__VAR.and..not.remove_net_torque) then ; \
+  __WRN(whoami, 'NET FORCE REMOVAL REQUIRES NET TORQUE REMOVAL. WILL NOT REMOVE FORCE.') ; \
+ endif
+#include "parser/parser_macro2.src"
+#undef __BOOL
+#undef __LEZEROERR
+#define __MINUSERR
+#define __VAR net_force_ave_update_memo
+#define __TAG __VAR
+#define __NAME memory constant for average net force removal
+#include "parser/parser_macro2.src"
+#endif
+!
+! done pocessing input file parameters
+!
+! read structure file
+! (unless already read elsewhere ; at this point the data structures from dynamol are shared)
+ if (.not. system_PDB_initialized) then
+!=========== structure file
+#define __CHAR
+#define __VAR	structure_file
+#define __TAG	__VAR
+#define __NAME	structure file
+#include "parser/parser_macro2.src"
+#undef __CHAR
+!===========
+  __MESSAGE(whoami, 'READING STRUCTURE FROM FILE "'//trim(structure_file)//'"');
+  call system_PDB_init(structure_file, 'PDB');
+  if (.not. fatal_warning()) system_PDB_initialized=.true.
+! save coordinates in rcomp, just in case we need them later ?
+  if (associated(rcomp) .and. associated(r)) rcomp=r
+ endif
+!=========== end structure file
+! initialize radii using a system function
+!
+#define __GET_RAD(_TAG)  if (existtag_nocase(__STRING(_TAG),context)) then;\
+                            farray=>system_init_mol_scalar_nocase(__STRING(_TAG), context);\
+                            if (associated(farray)) then;\
+                             radius=farray;\
+                             deallocate(farray);\
+                             radii_initialized=.true.; \
+                            endif
+
+ __GET_RAD(radii)
+ else __GET_RAD(radius) ! other tags here
+ endif
+!
+ if (.not.radii_initialized) __WRN(whoami, 'COULD NOT INITIALIZE ATOMIC RADII');
+!
+! copy coordinates
+!
+ isurface_atoms=>system_getind(surface_atom_selection)
+ if (associated(isurface_atoms)) then
+  nsurface=size(isurface_atoms) ; oonsurface=one/nsurface ;
+  __ALLOC(r_surf(3,nsurface))
+  __ALLOC(rad_surf(nsurface))
+! add atoms to list if provided
+  if (present(atoms)) then
+   do l=1, nsurface
+    ierr=atoms%uadd(isurface_atoms(l))
+#if defined(__RMFT) && defined(__SIMPLE_NET_FORCE_SURFACE)
+  if (remove_net_torque.and.present(forced_atoms)) ierr=forced_atoms%uadd(isurface_atoms(l))
+#endif
+   enddo
+  endif
+!
+ else
+  __WRN(whoami, 'COULD NOT ALLOCATE MEMORY FOR SURFACE ATOM INDICES.')
+ endif
+! repeat for solvent atoms
+ isolvent_atoms=>system_getind(solvent_atom_selection)
+ if (associated(isolvent_atoms)) then
+  nsolvent=size(isolvent_atoms) ; oonsolvent=one/nsolvent ;
+  __ALLOC(r_solv(3,nsolvent))
+  __ALLOC(rho_solv(nsolvent))
+  __ALLOC(qforced_solv(nsolvent))
+  dist_solv=>rho_solv
+  __ALLOC(drho_solv(3,nsolvent))
+  ddist_solv=>drho_solv
+#ifdef __SORT_LIST
+  __ALLOC(solute_neighbor_list(nsurface,nsolvent))
+! initialize neighbor list with solute indices from 1 to nsurface for each solute atom:
+#ifdef __DEBUG
+  __DBGOUT('INITIALIZING SOLUTE NEIGHBOR LIST');
+#endif
+  do l=1,nsurface
+   solute_neighbor_list(l,:)=l
+  enddo
+#ifdef __NEIGHBOR_LIST
+  __ALLOC(solute_neighbor_mind(nsolvent))
+  solute_neighbor_mind=nsurface ! initialize to last position in the solute neighbor list array
+#endif
+#endif
+! add atoms to lists if provided
+  if (present(atoms)) then
+   do l=1, nsolvent
+    ierr=atoms%uadd(isolvent_atoms(l))
+   enddo
+  endif
+!
+  if (present(forced_atoms)) then
+   do l=1, nsolvent
+    ierr=forced_atoms%uadd(isolvent_atoms(l))
+   enddo
+  endif
+!
+ else
+  __WRN(whoami, 'COULD NOT ALLOCATE MEMORY FOR SOLVENT ATOM INDICES.')
+ endif
+!
+ if  (qrestart) then
+! read surface atom coordinates from restart file (context __RESTARTCTX)
+  do l=1, nsurface
+   line=getval_nocase('rsurf_'//trim(itoa(l)),__STRING(__RESTARTCTX))
+   if (len_trim(line).gt.0) then
+    read(line,*,iostat=ierr) r_surf(:,l)
+    if (ierr.ne.0) then
+     __WRN(whoami, 'ERROR READING COORDINATE FROM LINE "'//trim(line)//'"')
+     cycle
+    endif
+   else
+    __WRN(whoami, 'ERROR READING COORDINATE FROM LINE "'//trim(line)//'"')
+   endif ! line ok
+  enddo ! over surface atoms
+ else ! qrestart
+! take surface atom coordinates from structure (PDB) file
+  r_surf=r(:,isurface_atoms)
+ endif ! qrestart
+#ifdef __RMFT
+! compute com if removing torque
+ if (remove_net_torque) then 
+  r_com = oonsurface * sum(r_surf,2)
+  if (qrestart) then ! read average force
+   line=getval_nocase('average_net_force',__STRING(__RESTARTCTX))
+   if (len_trim(line).gt.0) then
+    read(line,*,iostat=ierr) net_force_ave
+    if (ierr.ne.0) then
+     __WRN(whoami, 'ERROR READING AVERAGE NET FORCE FROM LINE "'//trim(line)//'"')
+    endif
+   else
+    __WRN(whoami, 'ERROR READING AVERAGE NET FORCE FROM LINE "'//trim(line)//'"')
+   endif ! line ok
+  else ! qrestart
+   net_force_ave=zero;
+  endif ! qrestart
+ endif ! remove net_torque
+#endif
+!
+ rad_surf=radius(isurface_atoms)
+!
+ oo_surf_stdev=one/surf_stdev
+ cutoff_surf  =cutoff_surf_stdev*surf_stdev
+ cutoff_surf2 =cutoff_surf**2
+!
+ if (.not.fatal_warning() .and. radii_initialized) __NM(initialized)=.true.
+!
+ end __SUB(initialize)
+!======================================
+ __SUB(write_restart_file) ()
+! = adapted from tempering
+ __IAM(__NM(WRITE_RESTART_FILE))
+ int :: ifile, i
+ ifile=-1 ! make sure files_open determines the handle automatically
+ call files_open(ifile, output_file, 'FORMATTED','WRITE')
+!
+#define _W write(ifile,*)
+ _W '#WATERSHELL RESTART FILE'
+ _W __STRING(__RESTARTCTX)//' {'
+ _W 'iteration=',iteration
+ if (qminimum_distance)&
+ _W 'minimum_distance=on # use the simpler minimum distance to solvent algorithm'
+! _W 'surface_contour_value=',surface_contour_value, ' # value for which density isosurface is computed'
+ _W 'surface_distance=',surface_distance, ' # distance of solvent surface from solute'
+ _W 'surface_force_constant=',surface_force_constant, ' # surface force constant'
+ _W 'surf_stdev=',surf_stdev, ' # standard deviation of Gaussian filter'
+ _W 'cutoff_surf_stdev=',cutoff_surf_stdev, ' # distance from center beyond which it set to zero (units of stdandard deviation)'
+ _W 'surf_padding=',surf_padding, ' # scalar padding added to each atom radius'
+!
+#ifdef __RMFT
+! need to write out average force (since it is a time average)
+ if (remove_net_torque) then
+ _W 'average_net_force=(',net_force_ave,')'
+ endif
+#endif
+! write the current reference atoms :
+ _W '# rsurf_i : reference coordinate triple for atom #i used to define surface'
+ do i=1, nsurface
+  _W 'rsurf_'//trim(itoa(i)),'=(',r_surf(:,i),')'
+ enddo ! surface atoms
+ _W '}'
+! close file
+ call files_close(ifile)
+!
+ end __SUB(write_restart_file)
+!================================================================
+ __SUB(done)
+ __IAM(__NM(done))
+ if (__NM(initialized)) then
+  __MESSAGE(whoami, 'WRITING RESTART FILE.')
+  call __NM(write_restart_file)()
+ endif
+!
+ call system_done()
+ call parser_done()
+ __FREE(r_surf)
+ __FREE(r_solv)
+ __FREE(qforced_solv)
+ __FREE(rad_surf)
+ __FREE(rho_solv)
+ nullify(dist_solv)
+ __FREE(drho_solv)
+ nullify(ddist_solv)
+ __FREE(isurface_atoms)
+ __FREE(isolvent_atoms)
+#ifdef __SORT_LIST
+ __FREE(solute_neighbor_list)
+#ifdef __NEIGHBOR_LIST
+ __FREE(solute_neighbor_mind)
+#endif
+#endif
+!
+ __NM(initialized)=.false. ; radii_initialized=.false.
+!
+ end __SUB(done)
+!================================================================
+ __SUB(main)(r,fr,energy)
+ use lu
+ float, intent(in) :: r(:,:)   ! coordinate array
+ float, intent(out) :: fr(:,:) ! force array
+ float, intent(out) :: energy
+! int :: ibeg, iend ! atom indices for looping
+ float :: distance_from_solute, distance_from_solute2, pre, d0
+ float :: surface_energy, surface_force, density_beyond_contour
+#ifdef __RMFT
+ float, dimension(3) :: ir, iforce, itorque ! inst position, force and torque corresponding to an atom
+#if defined(__SIMPLE_NET_FORCE_SOLVENT) || defined(__SIMPLE_NET_FORCE_SURFACE)
+ float, dimension(3) :: ir_sum
+#endif
+ float, dimension(3) :: oforce ! existing force
+ float, dimension(6,6) :: A ! matrix for torque removal
+ float, dimension(6) :: rhs ! vector for net force and torque removal
+#endif
+#ifdef __OMP
+ float :: __U(surface_energy)
+ float :: __U(surface_force)
+ float :: __U(density_beyond_contour)
+ int :: __U(nsolvent_outside)
+#ifdef __RMFT
+ float, dimension(3) :: __U(net_force), __U(net_torque), __U(max_force) ! thread locals
+#ifdef __SIMPLE_NET_FORCE_SOLVENT
+ float, dimension(3) :: __U(ir_sum)
+#endif
+ float, dimension(6,6) :: __U(A)
+ float, dimension(6) :: __U(rhs)
+#endif
+#endif
+ int :: i, ii
+ __IAM(__NM(main))
+!================================================================
+ if (.not. __NM(initialized)) then
+  __WRN(whoami, ftoupper(__STRING(_N))//'NOT INITIALIZED. NOTHING DONE.');
+  return
+ endif
+!
+ __INC(iteration)
+! copy solvent coordinates
+ r_solv=r(:,isolvent_atoms)
+!
+#ifdef __RMFT
+#ifdef __SIMPLE_NET_FORCE_SURFACE
+ if (remove_net_torque) r_com_inst = oonsurface * sum(r(:,isurface_atoms),2) ; ! need instant com for SIMPLE_NET_FORCE_SURFACE
+#endif
+#endif
+!============================================= update reference coordinates
+ if (structure_update_freq.gt.izero) then
+  if __CHKUPDATE(structure_update_freq) then
+   r_surf = structure_update_memory * r_surf + (one - structure_update_memory) * r(:,isurface_atoms)
+#ifdef __RMFT
+! recompute COM if subtracting torque
+   if (remove_net_torque) then 
+#ifdef __SIMPLE_NET_FORCE_SURFACE
+! update r_com
+    r_com = structure_update_memory * r_com + (one - structure_update_memory) * r_com_inst ;
+#else
+    r_com = oonsurface * sum(r_surf,2) ;
+#endif
+   endif ! remove_net_torque
+#endif
+  endif
+ endif
+
+#ifdef __DEBUG
+ write(0,*) 'COM ERROR:', r_com - oonsurface*sum(r_surf,2)
+#endif
+
+!============================================= compute contour value/distance and gradient at solvent coordinates
+!
+ surface_energy=zero
+ distance_from_solute=zero
+ distance_from_solute2=zero ! for computing second moment
+!
+!return ! aa
+!========================== compute contour value if needed
+! if surface distance value is zero estimate a reasonable value from current coordinates
+ if ( abs(surface_distance) .lt. __ERRTOL) then
+  if (qminimum_distance) then
+   call __NM(compute_mindist_grad)(.false.) ! need entire sum
+   do i=1, nsolvent
+! convert to distance
+    d0 = dist_solv(i)
+    __DBGOUT('Inst distance from solute  ', d0);
+    __INCR(distance_from_solute, d0)
+    __INCR(distance_from_solute2, d0**2)
+   enddo
+! set contour value to average value + (a) x stdev ; a set empirically
+   __SCALE(distance_from_solute,oonsolvent);
+   __DBGOUT('Distance from solute ', distance_from_solute)
+   __SCALE(distance_from_solute2,oonsolvent);
+   __DBGOUT('Distance from solute std ', sqrt ( distance_from_solute2 - distance_from_solute**2))
+   surface_distance = distance_from_solute - & ! average
+#define _a 0.25d0
+&                          _a * sqrt( max(zero,distance_from_solute2 - distance_from_solute**2) ) ! analytically positive, but, just in case, protect from roundoff
+#undef _a
+   surface_contour_value = __RHO(surface_distance) ! determine this for information, even though not relevant to algorithm
+   __MESSAGE(whoami, 'COMPUTED SURFACE DISTANCE AT '//ftoa(surface_distance)//' A FROM PROTEIN. CONTOUR VALUE IS '//ftoa(surface_contour_value))
+   __DBGOUT( 'COMPUTED SD, SCV: ', surface_distance, surface_contour_value)
+! at this point, qforced_solv is wrong : it will be true everywhere, because surface distance was undefined in the calc. loop
+! recompute qforced_solv :
+   qforced_solv=dist_solv.lt.surface_distance
+!============================================================
+  else ! (NOT) qminimum_distance
+   call __NM(compute_density_grad)(.false.) ! need entire sum
+   do i=1, nsolvent
+! convert to distance
+    d0 = __RHO_INVERSE(rho_solv(i))
+    __DBGOUT('Inst distance from solute  ', d0);
+    __INCR(distance_from_solute, d0)
+    __INCR(distance_from_solute2, d0**2)
+   enddo
+! set contour value to average value + (a) x stdev ; a set empirically
+   __SCALE(distance_from_solute,oonsolvent);
+   __DBGOUT('Distance from solute ', distance_from_solute)
+   __SCALE(distance_from_solute2,oonsolvent);
+   __DBGOUT('Distance from solute std ', sqrt ( distance_from_solute2 - distance_from_solute**2))
+   surface_distance = distance_from_solute - & ! average
+#define _a 0.1d0
+&                          _a * sqrt( max(zero,distance_from_solute2 - distance_from_solute**2) ) ! analytically positive, but, just in case, protect from roundoff
+#undef _a
+   surface_contour_value = __RHO(surface_distance)
+   __MESSAGE(whoami, 'COMPUTED SURFACE DISTANCE AT '//ftoa(surface_distance)//' A FROM PROTEIN. CONTOUR VALUE IS '//ftoa(surface_contour_value))
+   __DBGOUT( 'COMPUTED SD, SCV: ', surface_distance, surface_contour_value)
+! recompute qforced_solv, similarly to above :
+   qforced_solv=rho_solv.lt.surface_contour_value
+  endif ! qminimum_distance
+!========================== if we requested to run without neighbor lists then need to reset solute_neighbor_mind to max
+! otherwise, the early exit version of force routine could miss crucial atoms (the mind list is _not_ updated b/c qnlist=0)
+#if defined(__NEIGHBOR_LIST) & defined(__SORT_LIST)
+  if (.not. qneighbor_list) solute_neighbor_mind=nsurface
+#endif
+!=========================================================================
+ else ! compute reference surface distance
+! aa :  this is the most time consuming part of the force calculation ; perhaps we can do it on the GPU ? Or perhaps can regulate cost otherwise ?
+  if (qminimum_distance) then
+!
+   if (full_sum_freq.gt.izero) then
+! CHKUPDATE false : to truncate sum if running density value exceeds reference
+! ALSO if qneighbor_list = false, this algorithm will be used, looping over all solute/surface indices
+! because in that case, the maximum index in solute_neighbor_mdist is nsurface
+    call __NM(compute_mindist_grad)( &
+#ifdef __SORT_LIST
+#ifdef __NEIGHBOR_LIST
+ &    (.not.qneighbor_list) .or. &
+#endif
+#endif
+ &    (.not.__CHKUPDATE(full_sum_freq)))
+   else
+    call __NM(compute_mindist_grad)(.true.) ! always call quit-early version; however, the max. index will be set to nsurface, so traverse full list
+   endif ! full sum
+!
+  else ! original density-based calculation
+   if (full_sum_freq.gt.izero) then
+    call __NM(compute_density_grad)( &
+#ifdef __SORT_LIST
+#ifdef __NEIGHBOR_LIST
+ &    (.not.qneighbor_list) .or. &
+#endif
+#endif
+! as above for mindist
+! truncate if running density value exceeds reference
+ &    (.not.__CHKUPDATE(full_sum_freq))) 
+   else
+    call __NM(compute_density_grad)(.true.)
+   endif
+  endif ! qminimum_distance
+ endif ! compute reference surface distance
+!========================== compute contour value ^
+!========================== compute forces :
+! to do : calculate density integral using only atoms beyond contour (to estimate surface area)
+ density_beyond_contour=zero
+ surface_energy=zero
+ surface_force=zero
+ nsolvent_outside=izero
+#ifdef __RMFT
+ if (remove_net_torque) then
+  net_force=zero
+  net_torque=zero
+  A=zero
+#ifdef __SIMPLE_NET_FORCE_SOLVENT
+  ir_sum=zero
+#endif
+ endif
+#endif
+!
+! NOTE: here OPENMP does not make much difference but keeping because we are good
+! simple minimum distance algorithm
+ if (qminimum_distance) then
+#ifdef __OMP
+!$omp parallel &
+!$omp shared (dist_solv, ddist_solv, surface_distance, surface_force_constant, &
+#ifdef __RMFT
+!$omp remove_net_torque, net_force, net_torque, A, rhs, qforced_solv, r_com, &
+#ifdef __SIMPLE_NET_FORCE_SOLVENT
+!$omp ir_sum, &
+#endif
+#endif
+!$omp nsolvent, nsurface, nsolvent_outside, surface_force, surface_energy, isolvent_atoms, isurface_atoms, r_surf, r_solv, fr ) &
+!$omp private (i, d0, pre, __U(nsolvent_outside), __U(surface_energy), __U(surface_force)  &
+#ifdef __RMFT
+!$omp ,ir, iforce, __U(net_force), __U(net_torque), __U(A) &
+#ifdef __SIMPLE_NET_FORCE_SOLVENT
+!$omp ,__U(ir_sum) &
+#endif
+#endif
+!$omp )
+ __U(surface_energy)=zero
+ __U(surface_force)=zero
+ __U(nsolvent_outside)=izero
+#ifdef __OMP
+#ifdef __RMFT
+  if (remove_net_torque) then
+   __U(net_force)=zero
+   __U(net_torque)=zero
+   __U(A)=zero
+#ifdef __SIMPLE_NET_FORCE_SOLVENT
+   __U(ir_sum)=zero
+#endif
+  endif
+#endif
+#endif
+
+!$omp do schedule(runtime)
+#endif
+ do i=1, nsolvent
+  if (qforced_solv(i)) then
+!  if (d0.lt.surface_distance) then
+   d0=dist_solv(i)
+   __INC(__U(nsolvent_outside))
+   pre = ( d0 - surface_distance ) ;
+!
+! add atomic force
+!   fr(:,isolvent_atoms(i)) = surface_force_constant * pre / d0 * ddist_solv(:,i) ! re sign : note that surface_distance is negative
+!
+#ifdef __RMFT
+   if (remove_net_torque) then ! for now, here; optimize later, if needed
+    ir=r_solv(:,i)-r_com ;
+#ifdef __SIMPLE_NET_FORCE_SOLVENT
+#ifdef __TORQUE_FROM_ALL_SOLVENT
+! here, we will simply subtract a constant force for each solute atom (possibly including or excluding outside/shell atoms), keep track of COG and 
+! correct torque later, when the total force and COG are known
+    __INCR(__U(ir_sum)(1), ir(1))
+    __INCR(__U(ir_sum)(2), ir(2))
+    __INCR(__U(ir_sum)(3), ir(3))
+#endif
+#endif
+    iforce=surface_force_constant * pre / d0 * ddist_solv(:,i) ! re sign : note that surface_distance is negative
+!    __INCR(__U(net_force),iforce)     ! comment these out not to remove net force
+    __INCR(__U(net_force)(1),iforce(1))
+    __INCR(__U(net_force)(2),iforce(2))
+    __INCR(__U(net_force)(3),iforce(3))
+    __INCR(__U(net_torque)(1), ir(2) * iforce(3) - ir(3) * iforce(2)) ! similarly : comment out not to remove net torque
+    __INCR(__U(net_torque)(2), ir(3) * iforce(1) - ir(1) * iforce(3))
+    __INCR(__U(net_torque)(3), ir(1) * iforce(2) - ir(2) * iforce(1))
+#ifdef __TORQUE_FROM_ALL_SOLVENT
+! update matrix
+!     note : custom weights possible -- see rtmd code
+!     __INCR(__U(A)(1,1),1) ! skip here ; this is just the sum of weights (ones here; totaling nsolvent_atoms)
+     __INCR(__U(A)(5,1),  ir(3))
+     __INCR(__U(A)(6,1), -ir(2))
+     __INCR(__U(A)(6,2),  ir(1))
+     __INCR(__U(A)(4,4),  ir(2)**2 + ir(3)**2)
+     __INCR(__U(A)(5,4), -ir(1)*ir(2))
+     __INCR(__U(A)(6,4), -ir(1)*ir(3))
+     __INCR(__U(A)(5,5),  ir(1)**2 + ir(3)**2)
+     __INCR(__U(A)(6,5), -ir(2)*ir(3))
+     __INCR(__U(A)(6,6),  ir(1)**2 + ir(2)**2)
+#endif
+! set force
+!     fr(:,isolvent_atoms(i))=iforce ;
+!     __INCR(fr(:,isolvent_atoms(i)),iforce) ; ! slightly faster componentwise
+     __INCR(fr(1,isolvent_atoms(i)),iforce(1)) ;
+     __INCR(fr(2,isolvent_atoms(i)),iforce(2)) ;
+     __INCR(fr(3,isolvent_atoms(i)),iforce(3)) ;
+!
+   else ! keep net force/torque
+#endif
+! set force
+!    fr(:,isolvent_atoms(i))=surface_force_constant * pre / d0 * ddist_solv(:,i) ! re sign : note that surface_distance is negative
+!    __INCR(fr(1,isolvent_atoms(i)),surface_force_constant * pre / d0 * ddist_solv(1,i))
+!    __INCR(fr(2,isolvent_atoms(i)),surface_force_constant * pre / d0 * ddist_solv(2,i))
+!    __INCR(fr(3,isolvent_atoms(i)),surface_force_constant * pre / d0 * ddist_solv(3,i))
+!
+    d0=surface_force_constant * pre / d0
+    __INCR(fr(1,isolvent_atoms(i)), d0 * ddist_solv(1,i))
+    __INCR(fr(2,isolvent_atoms(i)), d0 * ddist_solv(2,i))
+    __INCR(fr(3,isolvent_atoms(i)), d0 * ddist_solv(3,i))
+!
+
+#ifdef __RMFT
+   endif
+#endif
+! sum "energy"
+! NOT clear how the surface_force or energy are meaningful
+   __INCR(__U(surface_force), pre) ! x k, below
+   __INCR(__U(surface_energy), pre**2) ! x k/2, below
+  else ! distance check - atoms that are not forced
+
+#ifdef __RMFT
+   if (remove_net_torque) then ! for now, here; optimize later
+    ir=r_solv(:,i)-r_com ;
+#ifdef __SIMPLE_NET_FORCE_SOLVENT
+! accumulate sum of positions to update torque below
+! this is because unforced solvent atoms are used to remove force
+    __INCR(__U(ir_sum)(1), ir(1))
+    __INCR(__U(ir_sum)(2), ir(2))
+    __INCR(__U(ir_sum)(3), ir(3))
+#endif
+! update matrix
+! NOTE : by default (and in the original algorithm) the torque/force were removed from solvent atoms to which shell forces were not applied
+! which is why we are updating the torque matrix below
+!     note : custom weights possible -- see rtmd code
+!     __INCR(__U(A)(1,1),1) ! skip here ; this is just the sum of weights (ones here; totaling nsolvent_atoms)
+     __INCR(__U(A)(5,1),  ir(3))
+     __INCR(__U(A)(6,1), -ir(2))
+     __INCR(__U(A)(6,2),  ir(1))
+     __INCR(__U(A)(4,4),  ir(2)**2 + ir(3)**2)
+     __INCR(__U(A)(5,4), -ir(1)*ir(2))
+     __INCR(__U(A)(6,4), -ir(1)*ir(3))
+     __INCR(__U(A)(5,5),  ir(1)**2 + ir(3)**2)
+     __INCR(__U(A)(6,5), -ir(2)*ir(3))
+     __INCR(__U(A)(6,6),  ir(1)**2 + ir(2)**2)
+   endif
+#endif
+!   fr(:,isolvent_atoms(i))=zero ! make sure this is done elsewhere
+  endif
+ enddo ! nsolvent
+#ifdef __OMP
+!$omp end do
+#ifdef __RMFT
+! if doing here should use __U(A) instead
+! A(1,5)=__U(A)(5,1)
+! A(1,6)=__U(A)(6,1)
+! A(2,6)=__U(A)(6,2)
+! A(4,5)=__U(A)(5,4)
+! A(4,6)=__U(A)(6,4)
+! A(5,6)=__U(A)(6,5)
+#endif
+!$omp critical
+ __INCR(nsolvent_outside, __U(nsolvent_outside))
+ __INCR(surface_energy, __U(surface_energy))
+ __INCR(surface_force, __U(surface_force))
+!$omp end critical
+#endif
+#ifdef __DEBUG
+#ifdef __OMP
+!$omp single
+#endif
+#ifdef __DEBUG
+ write(0,*) 'Force before: ', sum(fr(:,isolvent_atoms),2)
+#endif
+#ifdef __OMP
+!$omp end single
+#endif
+#endif
+#ifdef __RMFT
+ if (remove_net_torque) then
+#ifdef __OMP
+!$omp critical
+  __INCR(net_force, __U(net_force))
+  __INCR(net_torque, __U(net_torque))
+#ifdef __SIMPLE_NET_FORCE_SOLVENT
+  if (remove_net_force) __INCR(ir_sum, __U(ir_sum))
+#endif
+  __INCR(A(5,1), __U(A)(5,1))
+  __INCR(A(6,1), __U(A)(6,1))
+  __INCR(A(6,2), __U(A)(6,2))
+  __INCR(A(5,4), __U(A)(5,4))
+  __INCR(A(6,4), __U(A)(6,4))
+  __INCR(A(6,5), __U(A)(6,5))
+  __INCR(A(4,4), __U(A)(4,4))
+  __INCR(A(5,5), __U(A)(5,5))
+  __INCR(A(6,6), __U(A)(6,6))
+!$omp end critical
+! solve for force correction
+! complete (symmetric) matrix :
+! make sure all threads update the global matrix
+!$omp barrier ! this necessary to ensure that A and rhs are correct
+!$omp single
+#endif
+#ifdef __DEBUG
+ write(0,*) 'Force and torque before(2): ', net_force, net_torque
+#endif
+!  A(1,1)=nsolvent_outside
+!  A(2,2)=nsolvent_outside
+!  A(3,3)=nsolvent_outside
+#ifdef __TORQUE_FROM_ALL_SOLVENT
+#define nsolvent_outside 0
+#endif
+  if (remove_net_force) then
+!
+   net_force_ave = net_force_ave_update_memo * net_force_ave + ( one - net_force_ave_update_memo) * net_force ;
+#ifdef __SIMPLE_NET_FORCE_SOLVENT
+   net_force = - net_force_ave/(max(1,nsolvent-nsolvent_outside))  ! split net_force between correction atoms
+! correct torque the implicit addition of net force (which we have not done yet !), i.e.
+! by subtracting the net_force as above, we add torque to the system, which we need to account for (i.e. subtract) ; hence below;
+! note that the added force is uniform across correction atoms, and therefore the cross product can be factored out
+! second division (x d0) for getting ir_sum from sum !
+   __INCR(net_torque(1),  ir_sum(2) * net_force(3) - ir_sum(3) * net_force(2))
+   __INCR(net_torque(2),  ir_sum(3) * net_force(1) - ir_sum(1) * net_force(3))
+   __INCR(net_torque(3),  ir_sum(1) * net_force(2) - ir_sum(2) * net_force(1))
+   rhs(1:3)=0d0
+#elif defined(__SIMPLE_NET_FORCE_SURFACE)
+   net_force = - net_force_ave  ! split net_force between correction atoms
+! NOTE that r_com is the COM of the smoothed coordinates, but we apply correction forces to actual atoms
+! note that I am not dividing by nsurface ; this is because below we have r_com (vs. r_com_inst) which is an average
+   ir_sum=r_com_inst-r_com;
+   __INCR(net_torque(1),  ir_sum(2) * net_force(3) - ir_sum(3) * net_force(2))
+   __INCR(net_torque(2),  ir_sum(3) * net_force(1) - ir_sum(1) * net_force(3))
+   __INCR(net_torque(3),  ir_sum(1) * net_force(2) - ir_sum(2) * net_force(1))
+   rhs(1:3)=0d0
+! update surface atom forces here
+   __SCALE(net_force, oonsurface) ! force per atom
+   __INCR(fr(1,isurface_atoms), net_force(1))
+   __INCR(fr(2,isurface_atoms), net_force(2))
+   __INCR(fr(3,isurface_atoms), net_force(3))
+#else
+   rhs(1:3)=-net_force_ave
+#endif
+  else
+   rhs(1:3)=0d0
+   net_force_ave=0d0
+  endif ! remove_net_force
+  rhs(4:6)=-net_torque;
+!
+  A(1,1)=nsolvent - nsolvent_outside
+  A(2,2)=nsolvent - nsolvent_outside
+  A(3,3)=nsolvent - nsolvent_outside
+!
+#ifdef __TORQUE_FROM_ALL_SOLVENT
+#undef nsolvent_outside
+#endif
+!
+  A(1,5)=A(5,1)
+  A(1,6)=A(6,1)
+  A(2,6)=A(6,2)
+  A(4,5)=A(5,4)
+  A(4,6)=A(6,4)
+  A(5,6)=A(6,5)
+!
+  A(2,4)=-A(5,1); A(4,2)=A(2,4)
+  A(3,4)=-A(6,1); A(4,3)=A(3,4)
+  A(3,5)=-A(6,2); A(5,3)=A(3,5)
+!       invert by LU
+!#ifdef __DEBUG
+!  write(555,'(6g12.5)') A
+!  write(555,'(6g12.5)') rhs
+!#endif
+  call inv_lu(A, A, 6, i);
+#ifdef __DEBUG
+  if (i.eq.1) then ! singular matrix  -- why ?
+   write(666,*) 'Iteration:', iteration
+   write(666,'(6g22.15)') A
+   write(666,*)
+   write(666,'(6g22.15)') rhs
+   write(666,*) 'surface coords:'
+   write(666,*) r_surf
+   write(666,*) 'solvent coords:'
+   write(666,*) r_solv
+   close(666)
+   stop ! crash so we can look at the matrix !
+  endif
+#endif
+  rhs=matmul(A, rhs);
+!  write(666,*)
+#ifdef __SIMPLE_NET_FORCE_SOLVENT
+! include implicit force mod in rhs (permissible -- see below)
+  if (remove_net_force) then
+   __INCR(rhs(1),net_force(1))
+   __INCR(rhs(2),net_force(2))
+   __INCR(rhs(3),net_force(3))
+  endif
+#endif
+#ifdef __OMP
+!$omp end single
+! apply force correction in parallel
+!$omp barrier
+!$omp do schedule(runtime)
+#endif
+  do i=1,nsolvent
+!   if (qforced_solv(i)) then
+#ifndef __TORQUE_FROM_ALL_SOLVENT
+   if (.not.qforced_solv(i)) then
+#endif
+    ir=r_solv(:,i)-r_com
+    iforce(1) = rhs(1) + ir(3)*rhs(5) - ir(2)*rhs(6)
+    iforce(2) = rhs(2) - ir(3)*rhs(4) + ir(1)*rhs(6)
+    iforce(3) = rhs(3) + ir(2)*rhs(4) - ir(1)*rhs(5)
+!    __INCR(fr(:,isolvent_atoms(i)),iforce)
+    __INCR(fr(1,isolvent_atoms(i)),iforce(1))
+    __INCR(fr(2,isolvent_atoms(i)),iforce(2))
+    __INCR(fr(3,isolvent_atoms(i)),iforce(3))
+! compute maximum force :
+!#ifdef __DEBUG
+!    if (dot_product(iforce, iforce).gt.d0) then  ; d0 = dot_product(iforce, iforce); __U(net_force)=iforce ; endif
+!#endif
+#ifndef __TORQUE_FROM_ALL_SOLVENT
+   endif ! not qforced
+#endif
+  enddo
+#ifdef __OMP
+!$omp end do
+#ifdef __DEBUG
+!    if (dot_product(__U(net_force), __U(net_force)).gt.(dot_product(net_force, net_force))) net_force = __U(net_force)
+!$omp barrier
+#endif
+#endif
+!$omp single
+! print max force :
+!#ifdef __DEBUG
+!  write(777,*) 'Iteration: ', iteration
+!  write(777,'(7g12.5)') dot_product(rhs,rhs), rhs
+!  write(777,'(7g12.5)') dot_product(net_force,net_force), net_force
+!#endif
+!$omp end single
+! check net force
+#if defined(__DEBUG) || defined(__SHOW_TORQUE)
+#ifdef __SHOW_TORQUE
+#ifndef __DEBUG
+  if (output_freq.gt.zero) then
+  if (__CHKUPDATE(output_freq)) then
+#endif
+#endif
+
+  net_force=zero
+  net_torque=zero
+!
+#ifdef __OMP
+  __U(net_force)=zero
+  __U(net_torque)=zero
+!$omp do schedule(runtime)
+#endif
+  do i=1, nsolvent
+! compute torque and force after correction :
+    iforce=fr(:,isolvent_atoms(i))
+    ir=r_solv(:,i)-r_com
+    __INCR(__U(net_force),iforce)
+    __INCR(__U(net_torque)(1), ir(2) * iforce(3) - ir(3) * iforce(2))
+    __INCR(__U(net_torque)(2), ir(3) * iforce(1) - ir(1) * iforce(3))
+    __INCR(__U(net_torque)(3), ir(1) * iforce(2) - ir(2) * iforce(1))
+  enddo
+#ifdef __OMP
+!$omp end do
+!$omp do schedule(runtime)
+#endif
+  do i=1, nsurface
+! compute torque and force after correction :
+    iforce=fr(:,isurface_atoms(i))
+    ir=r(:,isurface_atoms(i))-r_com
+    __INCR(__U(net_force),iforce)
+    __INCR(__U(net_torque)(1), ir(2) * iforce(3) - ir(3) * iforce(2))
+    __INCR(__U(net_torque)(2), ir(3) * iforce(1) - ir(1) * iforce(3))
+    __INCR(__U(net_torque)(3), ir(1) * iforce(2) - ir(2) * iforce(1))
+  enddo
+#ifdef __OMP
+!$omp end do
+!$omp critical
+  __INCR(net_force, __U(net_force))
+  __INCR(net_torque, __U(net_torque))
+!$omp end critical
+!$omp single
+#endif __OMP
+!#ifdef __DEBUG
+! write(0,*) 'Net force on solvent after correction: ', sum(fr(:,isolvent_atoms),2)
+! write(0,*) 'Net force & torque after correction: ', net_force, net_torque
+!#endif
+#ifdef __OMP
+!$omp end single
+#endif
+!
+#ifdef __SHOW_TORQUE
+#ifndef __DEBUG
+  endif
+  endif
+#endif
+#endif
+#endif // __DEBUG or __SHOW_TORQUE
+!
+ endif ! remove_net_torque
+#endif // __RMFT
+#ifdef __OMP
+!$omp end parallel
+#endif
+ else ! not qminimum_distance, i.e. original algorithm
+!================= original density based algorithm ==================
+#ifdef __OMP
+!$omp parallel &
+!$omp shared (rho_solv, drho_solv, surface_contour_value, surface_distance, logistic_constant, surface_force_constant, &
+!$omp nsolvent_outside, density_beyond_contour, surface_force, surface_energy, isolvent_atoms, fr) &
+!$omp private (i, d0, pre, __U(nsolvent_outside), __U(surface_energy), __U(surface_force), __U(density_beyond_contour))
+ __U(density_beyond_contour)=zero
+ __U(surface_energy)=zero
+ __U(surface_force)=zero
+ __U(nsolvent_outside)=izero
+!$omp do schedule(runtime)
+#endif
+ do i=1, nsolvent
+  if ( rho_solv(i) .lt. surface_contour_value) then
+   __INC(__U(nsolvent_outside))
+   __INCR(__U(density_beyond_contour), rho_solv(i))
+   d0=__OORHO( rho_solv(i))
+   pre = ( __RHO_INVERSE2 ( d0 ) - surface_distance ) ;
+!
+! add atomic force
+   d0=logistic_constant*d0*(__OORHO(one-rho_solv(i))) ! derivative of the inverse of logistic function
+!   fr(:,isolvent_atoms(i)) = - surface_force_constant * pre * d0 * drho_solv(:,i) ! (-) because surface_distance is negative ; grad points toward protein
+   d0 = - surface_force_constant * pre * d0
+   __INCR(fr(1,isolvent_atoms(i)), d0 * drho_solv(1,i))
+   __INCR(fr(2,isolvent_atoms(i)), d0 * drho_solv(2,i))
+   __INCR(fr(3,isolvent_atoms(i)), d0 * drho_solv(3,i))
+! sum "energy"
+! NOT clear whether the surface_force or energy are meaningful
+   __INCR(__U(surface_force), pre) ! x k, below
+   __INCR(__U(surface_energy), pre**2) ! x k/2, below
+  else
+!   fr(:,isolvent_atoms(i))=zero ! make sure this gets done elsewhere
+  endif
+ enddo
+#ifdef __OMP
+!$omp end do
+!$omp critical
+ __INCR(nsolvent_outside, __U(nsolvent_outside))
+ __INCR(surface_energy, __U(surface_energy))
+ __INCR(surface_force, __U(surface_force))
+ __INCR(density_beyond_contour, __U(density_beyond_contour)) ! not clear what to do with tis value, or whether it is useful
+!$omp end critical
+!$omp end parallel
+#endif
+!
+ endif ! qminimum_dist
+!
+! compute current surface distance from pre :
+ if (nsolvent_outside .gt. 0) then
+  oonsolvent_outside=one/nsolvent_outside
+ else
+  oonsolvent_outside=zero ;
+ endif
+ current_surface_distance=surface_distance + surface_force * oonsolvent_outside
+!
+ __SCALE(surface_force, -surface_force_constant) ! negative because of sign convention
+ __SCALE(surface_energy, half*surface_force_constant)
+!
+ __INCR(energy,surface_energy)
+!
+!=========================== evolve/update contour value using surface energy
+!
+ if (distance_update_freq.gt.izero) then
+  if __CHKUPDATE(distance_update_freq) then
+! for now, a very simple update strategy
+! in the future will add estimation of pressure and surface tension
+!
+! if the surface energy is higher than the target, d0 < 0, and the surface distance (which is nagative ) will decrease
+    d0 = ( target_surface_energy - oonsolvent_outside * surface_energy );
+    __INCR(surface_distance, distance_update_step * d0)
+    surface_contour_value = __RHO(surface_distance)
+
+  endif
+ endif
+!============================================= output restart file
+ if (output_freq.gt.izero) then
+  if __CHKUPDATE(output_freq) then
+! write a short update of simulation parameters:
+  i=0 ;
+#define __OUT(...)  __INC(i);write(_MSGBUF(i),*) __VA_ARGS__
+#define _TAB char(9)//char(9)
+  __OUT('===================')
+  __OUT('Iteration:', iteration)
+  __OUT('Target distance to protein:      ', surface_distance)
+  __OUT('Current avg. distance to protein:', current_surface_distance)
+  __OUT('# Solute atoms used for density: ', nsurface)
+  __OUT('# Solvent atoms outside / total: ', nsolvent_outside,'/',nsolvent)
+  __OUT('Surface contour value:           ', surface_contour_value)
+  __OUT('Target surface energy:           ', target_surface_energy)
+  __OUT('Current avg. surface energy:     ', surface_energy * oonsolvent_outside )
+#if defined(__SHOW_TORQUE) && defined(__RMFT)
+  if (remove_net_torque) then
+   __OUT('Net force applied to system:    ', net_force)
+   __OUT('Net torque applied to system:   ', net_torque)
+  endif
+#endif
+  __OUT('===================')
+!
+  __PRINT(_MSGBUF)
+
+! write restart file
+   __MESSAGE(whoami, 'WRITING OUTPUT/RESTART FILE TO ("'//trim(output_file)//'")')
+   call __NM(write_restart_file)
+!
+  endif
+ endif
+!
+ end __SUB(main)
+!================================================================
+ __SUB(compute_density_grad)(qtruncate_sum)
+#ifdef __OMP
+ use omp_lib
+#endif
+!
+ bool :: qtruncate_sum ! whether we can stop computation for each atom once the density reaches a threshold value
+ int :: i, j
+ float :: rp(3), rw(3), dr(3), dr2, a, b, expa, expb, ooc
+#ifdef __SORT_LIST
+ int :: jj
+ float :: dr2old ! squared distance difference from previous iteration
+#endif
+#ifdef __ERFHYBRID
+ float :: isgn_, x_, erfa, erfb
+#endif
+ float :: rmaxsurf, rsurf ! , rsurfn
+ bool :: qforced
+ __IAM(__NM(compute_density_grad))
+!
+! different erf implementations/approximations
+  float :: erfsun ! external erf function; code by Sun Microsystems
+  float :: erfo7  ! approximation to within O(-7)
+  float :: erfo5  ! approximation to within O(-5) [contains an exponential term]
+!
+#ifdef __DDEBUG
+#ifdef __OMP
+!$omp parallel
+!$omp single
+ __DBGOUT('OMP: Available processors: ',omp_get_num_procs());
+ __DBGOUT('OMP: Maximum threads:      ',omp_get_max_threads());
+ __DBGOUT('OMP: Current threads:      ',omp_get_num_threads());
+ __DBGOUT('OMP: This thread:          ',omp_get_thread_num());
+!$omp end single
+!$omp end parallel
+#endif __OMP
+#endif
+!
+! naive algorithm to compute density at each solvent coordinate
+! adapted from molecule.ftn in continua
+!
+! error function definition
+#ifndef __erf
+#//define __erf erf
+#// get an improvement of 20% when using inlined erfo7
+#define __erf __erfo7
+#endif
+!
+! if openmp is used, cannot call the function erfo7, so hack to call inlined macro here
+#ifdef __OMP
+#define erfo7 __erfo7
+#endif
+!
+ if (qtruncate_sum) then
+#ifdef __OMP
+!$omp parallel &
+!$omp shared ( rho_solv, drho_solv, r_solv, r_surf, rad_surf, surf_padding, nsolvent, nsurface, cutoff_surf, oo_surf_stdev &
+#ifdef __SORT_LIST
+!$OMP , solute_neighbor_list &
+#ifdef __NEIGHBOR_LIST
+!$OMP , solute_neighbor_mind &
+#endif
+#endif
+!$OMP ) &
+!$omp private ( rw, i, j, rp, rsurf, rmaxsurf, dr, dr2, ooc, expa, expb, qforced &
+#ifdef __SORT_LIST
+!$OMP ,dr2old, jj &
+#endif
+!$OMP )
+!!$omp do schedule(runtime)
+!$omp do ! schedule(runtime)
+#endif
+  do i=1, nsolvent ! outer loop over solvent atoms
+! does not help below
+!#define zero 0d0
+!#define one 1d0
+!#define half 0.5d0
+!#define osq2pi 0.398942280401433d0
+!#define osq2   0.707106781186547d0
+!
+   qforced=.true.
+   rho_solv(i)=zero ;
+   drho_solv(:,i)=zero
+   rw=r_solv(:,i);
+#ifdef __SORT_LIST
+   dr2old=-1.d0 ; ! set to a small number to guarantee that no swap is done on first iteration
+#ifdef __NEIGHBOR_LIST
+   do jj=1,max(1,min(nsurface, solute_neighbor_mind(i) * (min(neighbor_list_factor,2)) ))
+#else
+   do jj=1, nsurface ! inner loop over solute atoms
+#endif
+    j=solute_neighbor_list(jj,i)
+#else
+   do j=1, nsurface ! inner loop over solute atoms
+#endif
+!#define _nonce  rho_solv(i)=0.0001d0;
+!    if (qtruncate_sum.and.rho.gt.surface_contour_value) &     ! density threshold exceeded ; will not apply force to this atom
+!    exit
+!     cycle ! could actually be faster than exit (vectorization?) ; get 107 w/o if above
+! determine if atoms are too far away :
+! _nonce cycle ! aa get 110
+    rp=r_surf(:,j)
+!
+! _nonce cycle ! aa get 111
+    rsurf    = ( rad_surf(j) + surf_padding )
+    rmaxsurf = ( cutoff_surf  + rsurf  ) ! note that this can be precomputed
+!
+!_nonce  cycle ! aa get 105
+    dr = rp-rw ;
+! _nonce  cycle ! aa get 105
+!__DBGOUT('i ', i, ' RW: ', rw)
+!__DBGOUT('j ', j, ' RP: ', rp)
+!__DBGOUT(' DR: ', dr, rmaxsurf)
+!    if (any(abs(dr) .gt. rmaxsurf)) cycle ! not necessary, might actually slow the code
+    dr2=sum(dr**2);
+#ifdef __SORT_LIST
+!   bubble sort between this and previous atom base on distance
+    if (dr2 .lt. dr2old) then ! bubble sort
+     solute_neighbor_list(jj,i)=solute_neighbor_list(jj-1,i)
+     solute_neighbor_list(jj-1,i)=j
+    endif
+    dr2old=dr2
+#endif
+!
+    if (dr2 .gt. rmaxsurf**2) cycle
+! _nonce cycle ! aa get 54
+! proceed with calculation
+    rsurf=rsurf * oo_surf_stdev ! NOTE: redefining rsurf to get rid o variable rsurfn (rsurf <== rsurfn)
+    dr2 = sqrt(dr2) * oo_surf_stdev
+! _nonce cycle ! aa
+! a and b
+    a = osq2 * (dr2 + rsurf)
+    b = osq2 * (dr2 - rsurf)
+    ooc = one / dr2
+! _nonce cycle ! aa get 54
+!
+    expa = exp ( - a**2 )
+    expb = exp ( - b**2 )
+! _nonce cycle ! aa
+!
+! update density
+#ifdef __ERFHYBRID
+    __erfo7i(a,erfa)
+    __erfo7i(b,erfb)
+    __INCR(rho_solv(i), half * ( erfa - erfb ) + osq2pi * ooc * ( expa - expb )   )
+#else
+    __INCR(rho_solv(i), half * ( __erf(a) - __erf(b) ) + osq2pi * ooc * ( expa - expb )   )
+#endif
+! _nonce cycle ! aa get 24
+!    if (qtruncate_sum .and.&
+    if(rho_solv(i).gt.surface_contour_value) then
+     qforced=.false.
+     exit ! density threshold exceeded ; will not apply force to this atom
+    endif
+! otherwise, compute gradient contribution : (note that I am flipping the direction of dr (in the notes it is r0-r)
+    __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurf + half * (expa - expb) * ooc) )
+! add gradient contribution
+    __INCR(drho_solv(:,i),dr)
+! _nonce
+   enddo ! nsurface
+   qforced_solv(i)=qforced
+  enddo ! nsolvent
+!#undef zero
+!#undef half
+!#undef one
+!#undef osq2
+!#undef osq2pi
+#ifdef __OMP
+!$omp end do
+!$omp end parallel
+#endif
+ else ! qtruncate sum
+#ifdef __OMP
+!$omp parallel &
+!$omp shared ( rho_solv, drho_solv, r_solv, r_surf, rad_surf, surf_padding, nsolvent, nsurface, cutoff_surf, oo_surf_stdev &
+#ifdef __SORT_LIST
+!$OMP , solute_neighbor_list &
+#ifdef __NEIGHBOR_LIST
+!$OMP , solute_neighbor_mind &
+#endif
+#ifdef __SORT_LIST
+#endif
+#endif
+!$OMP ) &
+!$omp private ( rw, i, j, rp, rsurf, rmaxsurf, dr, dr2, ooc, expa, expb, qforced &
+#ifdef __SORT_LIST
+!$OMP ,dr2old, jj &
+#endif
+!$OMP )
+!!$omp do schedule(dynamic)
+!$omp do ! schedule(runtime)
+#endif
+  do i=1, nsolvent ! outer loop over solvent atoms
+   qforced=.true.
+   rho_solv(i)=zero ;
+   drho_solv(:,i)=zero
+   rw=r_solv(:,i);
+#ifdef __SORT_LIST
+   dr2old=-1.d0 ; ! set to a small number to guarantee that no swap is done on first iteration
+   do jj=1, nsurface ! inner loop over solute atoms
+    j=solute_neighbor_list(jj,i)
+#else
+   do j=1, nsurface ! inner loop over solute atoms
+#endif
+    rp=r_surf(:,j)
+    rsurf    = ( rad_surf(j) + surf_padding )
+    rmaxsurf = ( cutoff_surf  + rsurf  )
+    dr = rp-rw ;
+    dr2=sum(dr**2);
+#ifdef __SORT_LIST
+!   bubble sort between this and previous atom based on distance
+    if (dr2 .lt. dr2old) then ! bubble sort
+     solute_neighbor_list(jj,i)=solute_neighbor_list(jj-1,i)
+     solute_neighbor_list(jj-1,i)=j
+    endif
+    dr2old=dr2
+#endif
+    if (dr2 .gt. rmaxsurf**2) cycle ! solute atom outside cutoff for this solvent atom -- skip it
+!   atom is within the cutoff; record its index before computing density contribution (note: recording index before swap above)
+#if defined(__SORT_LIST) & defined(__NEIGHBOR_LIST)
+    solute_neighbor_mind(i)=jj
+#endif
+!
+    if (qforced) then
+     rsurf=rsurf * oo_surf_stdev
+     dr2 = sqrt(dr2) * oo_surf_stdev
+     a = osq2 * (dr2 + rsurf)
+     b = osq2 * (dr2 - rsurf)
+     ooc = one / dr2
+     expa = exp ( - a**2 )
+     expb = exp ( - b**2 )
+! update density
+#ifdef __ERFHYBRID
+     __erfo7i(a,erfa)
+     __erfo7i(b,erfb)
+     __INCR(rho_solv(i), half * ( erfa - erfb ) + osq2pi * ooc * ( expa - expb )   )
+#else
+     __INCR(rho_solv(i), half * ( __erf(a) - __erf(b) ) + osq2pi * ooc * ( expa - expb )   )
+#endif
+     if (rho_solv(i).gt.surface_contour_value) then
+      qforced=.false.
+     else
+      __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurf + half * (expa - expb) * ooc) )
+! add gradient contribution
+      __INCR(drho_solv(:,i),dr)
+     endif ! rho>contour value
+    endif ! qforced
+! _nonce
+   enddo ! nsurface
+   qforced_solv(i)=qforced
+  enddo ! nsolvent
+#ifdef __OMP
+!$omp end do
+!$omp end parallel
+#endif
+#if defined(__NEIGHBOR_LIST) & defined(__SORT_LIST)
+#ifdef __DDEBUG
+ write(666,'(7000(I4,"("I4")"))') (solute_neighbor_mind(i), solute_neighbor_list(solute_neighbor_mind(i),i), i=1,nsolvent)
+! close(666)
+#endif
+#endif
+ endif ! truncate sum
+!
+ end __SUB(compute_density_grad)
+!================================================================
+ __SUB(compute_mindist_grad)(quit_early)
+#ifdef __OMP
+ use omp_lib
+#endif
+!
+ bool, intent(in) :: quit_early ! whether we can stop computation for each atom once distance to any atom less than distance to solute surface
+ int :: i, j
+ float :: rp(3), rw(3), dr(3), dr2, dr2min, drmin(3)
+#ifdef __SORT_LIST
+ int :: jj
+ float :: dr2old ! squared minimum distance difference from previous iteration
+#endif
+ float :: rmaxsurf, surface_distance2
+ bool :: qforced ! whether an atom is a forced atom
+ __IAM(__NM(compute_mindist_grad))
+!
+#ifdef __DDEBUG
+#ifdef __OMP
+!$omp parallel
+!$omp single
+ __DBGOUT('OMP: Available processors: ',omp_get_num_procs());
+ __DBGOUT('OMP: Maximum threads:      ',omp_get_max_threads());
+ __DBGOUT('OMP: Current threads:      ',omp_get_num_threads());
+ __DBGOUT('OMP: This thread:          ',omp_get_thread_num());
+!$omp end single
+!$omp end parallel
+#endif __OMP
+#endif
+!
+! simple algorithm to find the closest atom
+ surface_distance2=surface_distance**2
+!
+ if (quit_early) then
+#if defined(__SORT_LIST) & defined(__NEIGHBOR_LIST)
+#ifdef __DDEBUG
+  __DBGOUT('Called ', whoami,'(can quit early) with neighbor_list_factor=',neighbor_list_factor)
+#endif
+#endif
+#ifdef __OMP
+!$omp parallel &
+!$omp shared ( dist_solv, ddist_solv, r_solv, nsolvent, nsurface, surface_distance2 &
+#ifdef __SORT_LIST
+!$OMP , solute_neighbor_list &
+#ifdef __NEIGHBOR_LIST
+!$OMP , solute_neighbor_mind &
+#endif
+#endif
+!$OMP ) &
+!$omp private ( rw, i, j, rp, dr, drmin, dr2, dr2min, qforced &
+#ifdef __SORT_LIST
+!$OMP ,dr2old, jj &
+#endif
+!$OMP )
+!!$omp do schedule(runtime)
+!$omp do schedule(runtime)
+#endif
+  do i=1, nsolvent ! outer loop over solvent atoms
+   qforced=.true.  ! assume that forces will be applied to this atom, check below
+   rw=r_solv(:,i); ! solvent atom coordinate
+   dr2min=ilarge
+#ifdef __SORT_LIST
+   dr2old=-1.d0 ; ! set to a small number to guarantee that no swap is done on first iteration
+#ifdef __NEIGHBOR_LIST
+   do jj=1,max(1,min(nsurface, solute_neighbor_mind(i) * neighbor_list_factor )) ! to check a subset of surface atom list
+!   do jj=1,max(1,min(nsurface, solute_neighbor_mind(i) ))
+#else
+   do jj=1, nsurface ! inner loop over solute atoms ! to check the entire surface atom list
+#endif
+    j=solute_neighbor_list(jj,i) ! note that this is really a (partially) distance sorted list of surface atoms for each solvent atom
+#else
+   do j=1, nsurface ! inner loop over solute atoms, without regard to their location relative to the solvent atom i
+#endif
+    rp=r_surf(:,j) ! protein atom coordinate
+!
+    dr = rp-rw ;
+    dr2=sum(dr**2);
+#ifdef __SORT_LIST
+!   bubble sort between this and previous atom based on distance
+    if (dr2 .lt. dr2old) then
+     solute_neighbor_list(jj,i)=solute_neighbor_list(jj-1,i)
+     solute_neighbor_list(jj-1,i)=j
+    endif
+    dr2old=dr2
+#endif
+!
+    if (dr2 .lt. surface_distance2) then ! the solvent atom is close enough to a surface atom to be considered inside
+     qforced=.false.
+!     dr2min=zero
+!     drmin=zero
+#ifdef __SORT_LIST
+! put this atom first in the list to increase our chances of quitting early next time
+!     solute_neighbor_list(jj,i)=solute_neighbor_list(1,i)
+!     solute_neighbor_list(1,i)=j
+#endif
+     exit ! atom is considered inside, so no need to loop further
+    endif
+    if (dr2 .lt. dr2min) then
+     dr2min=dr2
+     drmin=dr
+#ifdef __SORT_LIST
+! put this atom first in the list
+! note that is is possible to do two swaps one here and one above, in the same loop, which is an error, so turn off both, since no sizeable speed bump anyway
+! should not do this when multiple threads are running
+!     solute_neighbor_list(jj,i)=solute_neighbor_list(1,i)
+!     solute_neighbor_list(1,i)=j
+#endif
+    endif
+   enddo ! nsurface
+   if (qforced) then
+    dist_solv(i) = -sqrt(dr2min) ! negative distance by convention
+    ddist_solv(:,i) = drmin      ! the minimum distance between this atom and a surface atom
+   else
+    dist_solv(i)=zero            ! atom is inside, so set min. distance to zero
+   endif
+   qforced_solv(i)=qforced
+  enddo ! nsolvent
+#ifdef __OMP
+!$omp end do
+!$omp end parallel
+#endif
+ else ! quit_early
+#if defined(__SORT_LIST) & defined(__NEIGHBOR_LIST)
+#ifdef __DDEBUG
+  __DBGOUT('Called ', whoami,'(full loop) with neighbor_list_factor=',neighbor_list_factor)
+#endif
+#endif
+!=====================================================================================
+#ifdef __OMP
+!$omp parallel &
+!$omp shared ( dist_solv, ddist_solv, r_solv, nsolvent, nsurface, surface_distance2 &
+#ifdef __SORT_LIST
+!$OMP , solute_neighbor_list &
+#endif
+!$OMP ) &
+!$omp private ( rw, i, j, rp, dr, drmin, dr2, dr2min &
+#ifdef __SORT_LIST
+!$OMP ,dr2old, jj &
+#endif
+!$OMP )
+!$omp do schedule(runtime)
+#endif
+  do i=1, nsolvent ! outer loop over solvent atoms
+   qforced=.true.
+   rw=r_solv(:,i);
+   dr2min=ilarge
+#ifdef __SORT_LIST
+   dr2old=-1.d0 ; ! set to a small number to guarantee that no swap is done on first iteration
+   do jj=1, nsurface ! inner loop over solute atoms
+!   do jj=nsurface, 1, -1 ! inner loop over solute atoms, starting from the end
+    j=solute_neighbor_list(jj,i)
+#else
+   do j=1, nsurface ! inner loop over solute atoms
+#endif
+    rp=r_surf(:,j) ! protein atom coordinate
+!
+    dr = rp-rw ;
+    dr2=sum(dr**2);
+#ifdef __SORT_LIST
+!   bubble sort between this and previous atom based on distance
+    if (dr2 .lt. dr2old) then
+     solute_neighbor_list(jj,i)=solute_neighbor_list(jj-1,i)
+     solute_neighbor_list(jj-1,i)=j
+    endif
+    dr2old=dr2
+#endif
+!
+    if (dr2 .lt. surface_distance2) then
+     qforced=.false. ! this atom is inside, however, proceed to the end of the surface atom list because we want to sort it
+#ifdef __SORT_LIST
+! put this atom first in the list to increase our chances of quitting early next time
+! NOTE : these section OMP sections have ad hoc problems, such as with -fcheck=all flags
+! also : do not use critical; this produces a completely different compilation ; very slow !
+!!$omp critical
+! not necessary because the code block below will guarantee this
+!     solute_neighbor_list(jj,i)=solute_neighbor_list(1,i)
+!     solute_neighbor_list(1,i)=j
+!!$omp end critical
+#endif
+    endif
+    if (dr2 .lt. dr2min) then
+     dr2min=dr2
+     drmin=dr
+! minimum index inside solute_neighbor_list (before swap below)
+#ifdef __SORT_LIST
+#ifdef __NEIGHBOR_LIST
+     solute_neighbor_mind(i)=jj
+#endif
+! note that it is technically possible to swap twice here and above, which would make two j's in the same list -- error
+! put this atom first in the list
+!     solute_neighbor_list(jj,i)=solute_neighbor_list(1,i)
+!     solute_neighbor_list(1,i)=j
+#endif
+    endif
+   enddo ! nsurface
+#ifdef __DEBUG
+! write(666,*) i,dr2min, ilarge
+! close(666)
+#endif
+   dist_solv(i) = -sqrt(dr2min) ! sign convention ; keep outside of if below to compute average dist
+   if (qforced) then
+    ddist_solv(:,i) = drmin ! for force calculation
+   endif
+   qforced_solv(i)=qforced
+  enddo ! nsolvent
+#ifdef __OMP
+!$omp end do
+!$omp end parallel
+#endif
+#ifdef __DDEBUG
+! write(666,'(1300(I4,"("I4")"))') (solute_neighbor_mind(i), solute_neighbor_list(solute_neighbor_mind(i),i), i=1,nsolvent)
+! close(666)
+#endif
+ endif ! quit_early
+!
+ end __SUB(compute_mindist_grad)
+!================================================================
+end module _N
+
