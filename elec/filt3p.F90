@@ -21,9 +21,11 @@ subroutine filt3p()
  odx=1d0/(xx(2)-xx(1)) ; !assume uniform
  ody=1d0/(yy(2)-yy(1))
  odz=1d0/(zz(2)-zz(1))
- 
+!
  rho=0d0 ! initialize
- 
+ elsr=0d0
+ grad_elsr=0d0
+!
  do i=1,npt ! charges
   __OUT(' Gridding charge #', i,' of ', npt);
   do img=-nimg,nimg ! go over charges in the original and in neighboring images
@@ -87,7 +89,7 @@ subroutine filt3p()
       dz = (z(i)-z(j)) + Lz*kmg
       if (abs(dz)>spt) cycle
       dz2=dy2 + dz**2
-      if (dz2>s2 .or. dz2 < kzero) cycle
+      if (dz2 > s2 .or. dz2 < kzero) cycle
       r=sqrt(dz2)*oos
 ! short-range potential
       __INCR( elsr , q(i) * q(j) * fshort(r) ) ; ! might have contributions from multiple images

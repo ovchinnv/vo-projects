@@ -31,3 +31,4 @@
  call write_field(grad_elsr,'grad_elsr.txt',ascii,size(grad_el))
 ! call write_field(el_dx,'el_dx.txt', ascii, size(el_dx))
  end program elec
+ 

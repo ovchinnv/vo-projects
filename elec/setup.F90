@@ -9,9 +9,9 @@
    __ERR('Could not read file ', trim(chargefile))
    __DIE
   endif
- 
+!
 ! read to the end of file to determine number of particles
-  
+!
   lines=0
   do while (iostatus==0)
    read(chunit,*,iostat=iostatus)
@@ -28,7 +28,7 @@
   npt=lines
   __OUT('read ', npt, ' coordinates and charges')
 ! perturb charge for FD ; this is a way to valudate del_dx, etc.
-! x(1)=x(1)+0.001;
+ x(2)=x(2)+0.001;
 
   __OUT('grid dimensions are ', nx, ny, nz)
   allocate(xx(nx), yy(ny), zz(nz)) ! predetermined grid sizes
@@ -65,6 +65,6 @@
 ! self energy part of l/r energy can be computed right away
 ! note that is does not contribute to any gradients
   el_self=0.5d0*philr_selfc*sum(q**2)
-!
+
  end subroutine setup
   

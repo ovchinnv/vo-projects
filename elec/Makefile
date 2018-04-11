@@ -8,6 +8,7 @@ LDFLAGS=
 
 FILES=vars setup run filt3p direct3p direct3p_nosym util
 OBJS=$(addsuffix .o, $(FILES))
+TESTOBJS:=$(filter-out run.o, $(OBJS)) test.o
 SRC=$(addsuffix .f90, $(FILES))
 EXE=elec
 
@@ -26,3 +27,8 @@ clean :
 	rm -f $(OBJS) *.mod *.f90
 	
 $(OBJS) : vars.o Makefile
+
+test : $(TESTOBJS)
+	$(LD) $(TESTOBJS) -o test
+	./test
+	
