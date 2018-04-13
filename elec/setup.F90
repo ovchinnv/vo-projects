@@ -28,7 +28,7 @@
   npt=lines
   __OUT('read ', npt, ' coordinates and charges')
 ! perturb charge for FD ; this is a way to valudate del_dx, etc.
- x(2)=x(2)+0.001;
+! x(2)=x(2)+0.001;
 
   __OUT('grid dimensions are ', nx, ny, nz)
   allocate(xx(nx), yy(ny), zz(nz)) ! predetermined grid sizes
@@ -44,6 +44,11 @@
   do i=1,nz
    zz(i)=z0+(i-1)*(z1-z0)/(nz-1)
   enddo
+! write grids : 
+  call write_field(xx, 'xx.txt',ascii,nx)
+  call write_field(yy, 'yy.txt',ascii,ny)
+  call write_field(zz, 'zz.txt',ascii,nz)
+!
 !
   __ALLOC(rho(nx,ny,nz));   ! smoothed density
   __ALLOC(phisr_q(npt));    ! short range potential and gradienst below
@@ -64,7 +69,6 @@
 
 ! self energy part of l/r energy can be computed right away
 ! note that is does not contribute to any gradients
-  el_self=0.5d0*philr_selfc*sum(q**2)
+  el_self = 0.5d0 * philr_selfc * sum(q**2) * oos * oeps;
 
  end subroutine setup
-  

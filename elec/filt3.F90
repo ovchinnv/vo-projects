@@ -1,10 +1,10 @@
 
-subroutine filt3p()
+subroutine filt3()
  use vars
 
- int :: nimg=1; ! number of images to consider
- float :: oos=1/spt;
- float :: s2=spt*spt;
+ int :: nimg=2; ! number of images to consider
+ float :: support, support2
+ float :: oos3 = oos**3
  float r2q(npt);
  float dxq(npt);
  float dyq(npt);
@@ -18,6 +18,13 @@ subroutine filt3p()
  float dx2, dy2, dz2, odx, ody, odz
  float dx, dy, dz, pre
 
+#if _FILTER==_GAUSS
+ support = _GAUSS_SUPPORT*spt
+#else
+ support = spt
+#endif
+ support2=support**2
+
  odx=1d0/(xx(2)-xx(1)) ; !assume uniform
  ody=1d0/(yy(2)-yy(1))
  odz=1d0/(zz(2)-zz(1))
@@ -27,10 +34,10 @@ subroutine filt3p()
  grad_elsr=0d0
 !
  do i=1,npt ! charges
-  __OUT(' Gridding charge #', i,' of ', npt);
+  if (.not.quiet) __OUT(' Gridding charge #', i,' of ', npt);
   do img=-nimg,nimg ! go over charges in the original and in neighboring images
-   xmin = x(i) + img*Lx - spt ; ! minimum location on grid for which potential nonzero
-   xmax = xmin + spt + spt;
+   xmin = x(i) + img*Lx - support ; ! minimum location on grid for which potential nonzero
+   xmax = xmin + support + support;
    imin = max (1, INT( (xmin-x0)*odx ) + 1); ! compute index limits on x-grid
    imax = min (nx,INT( (xmax-x0)*odx ) + 2);
 
@@ -38,32 +45,32 @@ subroutine filt3p()
 !stop
 ! proceed if charge supported
    if (imin<=imax) then
-    xmin=xmin+spt;
+    xmin=xmin+support;
     do jmg=-nimg,nimg
-     ymin = y(i) + jmg*Ly - spt ; ! minimum location on grid for which potential nonzero
-     ymax = ymin + spt + spt;
+     ymin = y(i) + jmg*Ly - support ; ! minimum location on grid for which potential nonzero
+     ymax = ymin + support + support;
      jmin = max (1, INT( (ymin-y0)*ody ) + 1);
      jmax = min (ny,INT( (ymax-y0)*ody ) + 2);
 ! proceed if charge supported
      if (jmin<=jmax) then
-      ymin=ymin+spt; ! center pt
+      ymin=ymin+support; ! center pt
       do kmg=-nimg,nimg
-       zmin = z(i) + kmg*Lz - spt ; ! minimum location on grid for which potential nonzero
-       zmax = zmin + spt + spt;
+       zmin = z(i) + kmg*Lz - support ; ! minimum location on grid for which potential nonzero
+       zmax = zmin + support + support;
        kmin = max (1, INT( (zmin-z0)*odz ) + 1);
        kmax = min (nz,INT( (zmax-z0)*odz ) + 2);
 ! proceed if charge supported
        if (kmin<=kmax) then
-        zmin=zmin+spt;
+        zmin=zmin+support;
         do ii=imin,imax
          dx2=(xx(ii)-xmin)**2;
          do jj=jmin,jmax 
           dy2=dx2+(yy(jj)-ymin)**2;
           do kk=kmin,kmax
            r2=dy2+(zz(kk)-zmin)**2;
-           if (r2>s2) cycle
+           if (r2>support2) cycle
            r=sqrt(r2)*oos; ! normalize by support
-           __INCR(rho(ii,jj,kk), q(i) * fpoly(r))
+           __INCR(rho(ii,jj,kk), q(i) * filter(r))
           enddo !kk
          enddo !jj
         enddo !ii
@@ -79,23 +86,23 @@ subroutine filt3p()
   do j=i+1,npt
    do img=-nimg,nimg
     dx = (x(i)-x(j)) + Lx*img
-    if (abs(dx)>spt) cycle
+    if (abs(dx)>support) cycle
     do jmg=-nimg,nimg
      dy = (y(i)-y(j)) + Ly*jmg
-     if (abs(dy)>spt) cycle
+     if (abs(dy)>support) cycle
      dy2=dx**2 + dy**2
-     if (dy2>s2) cycle
+     if (dy2>support2) cycle
      do kmg=-nimg,nimg
       dz = (z(i)-z(j)) + Lz*kmg
-      if (abs(dz)>spt) cycle
+      if (abs(dz)>support) cycle
       dz2=dy2 + dz**2
-      if (dz2 > s2 .or. dz2 < kzero) cycle
+      if (dz2 > support2 .or. dz2 < kzero) cycle
       r=sqrt(dz2)*oos
 ! short-range potential
-      __INCR( elsr , q(i) * q(j) * fshort(r) ) ; ! might have contributions from multiple images
+      __INCR( elsr , q(i) * q(j) * fshort(r) ) ; ! might have contributions from multiple images ; need to x oos, because r has been scaled above
 
-! short-range potential gradienst
-      pre = q(i) * q(j) * fshortp(r) ;
+! short-range potential gradients
+      pre = q(i) * q(j) * fshortp(r) ; ! double check normalization by support : need to x oos^3
 !
       __INCR(elsr_dx(i) , pre*dx)
       __INCR(elsr_dy(i) , pre*dy)
@@ -112,11 +119,11 @@ subroutine filt3p()
  enddo ! i/npt
 
 ! normalization
-rho=rho/spt**3 ; ! filter support normalization
+ __SCALE(rho, oos3)
 !
-__SCALE(elsr, 1./(fourpi*eps)) ! no division by 2 because loop does not double count
-__SCALE(elsr_dx, 1./(fourpi*eps))
-__SCALE(elsr_dy, 1./(fourpi*eps))
-__SCALE(elsr_dz, 1./(fourpi*eps))
+ __SCALE(elsr, oos/(fourpi*eps)) ! no division by 2 because loop does not double count
+ __SCALE(elsr_dx, oos3/(fourpi*eps)) ! these normalizations are needed because the filter is normalized by support, but units must be physical
+ __SCALE(elsr_dy, oos3/(fourpi*eps))
+ __SCALE(elsr_dz, oos3/(fourpi*eps))
 
-end subroutine filt3p
+end subroutine filt3

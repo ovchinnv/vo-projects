@@ -13,16 +13,21 @@ program test
  __FPAR(h,0.00001d0)
  __FPAR(oo2h,1d0/(2d0*h))
 !
-!
+! for finite difference energy test :
  __FARR(elsr_dfd,:,:)
  __FARR(elsr_dx_fd,:)
  __FARR(elsr_dy_fd,:)
  __FARR(elsr_dz_fd,:)
- 
+!
+ __FARR(el_dfd,:,:)
+ __FARR(el_dx_fd,:)
+ __FARR(el_dy_fd,:)
+ __FARR(el_dz_fd,:)
+!
  __OUT(' Running tests')
  __OUT(' Calling setup')
  call setup()
- 
+!
  __OUT(' Check fshortp function: ')
  __ALLOC(mem(n,2))
  r=>mem(:,1);
@@ -33,61 +38,101 @@ program test
  enddo
  
  call write_field(mem,'fshortp.txt',ascii,2*n)
- 
- 
- __OUT(' FD test of short-range potential :' )
+
+ __OUT(' FD test of energy gradients:' )
+ __OUT(' ---------------------------');
+
  __ALLOC(elsr_dfd(npt,3))
+ __ALLOC(el_dfd(npt,3))
  elsr_dfd=0d0
+ el_dfd=0d0
 !
  elsr_dx_fd=>elsr_dfd(:,1)
  elsr_dy_fd=>elsr_dfd(:,2)
  elsr_dz_fd=>elsr_dfd(:,3)
+ el_dx_fd=>el_dfd(:,1)
+ el_dy_fd=>el_dfd(:,2)
+ el_dz_fd=>el_dfd(:,3)
 !
- __OUT(' Computing analytical gradients');
- call filt3p()
+ quiet=.true. ! reduce output
  __OUT(' Computing finite-difference gradients');
  do i=1,npt
+ __OUT(' Perturbing particle #',i,' of ',npt);
 ! x-grad :
-  x(i)=x(i)+h ; 
-  call filt3p()
+  __INCR(x(i),h)
+  call filt3()
+  call direct3()
   elsr_dx_fd(i)=elsr ; 
-
-  x(i)=x(i)-h-h ;
-  call filt3p()
+  el_dx_fd(i)=el ;
+  __INCR(x(i),-h*2) ;
+  call filt3()
+  call direct3()
   __INCR(elsr_dx_fd(i),-elsr)
- __SCALE(elsr_dx_fd(i),oo2h)
-
-! y-grad : 
-  y(i)=y(i)+h ; 
-  call filt3p()
+  __SCALE(elsr_dx_fd(i),oo2h)
+  __INCR(el_dx_fd(i),-el)
+  __SCALE(el_dx_fd(i),oo2h)
+  __INCR(x(i),h)
+! y-grad :
+  __INCR(y(i),h)
+  call filt3()
+  call direct3()
   elsr_dy_fd(i)=elsr ; 
-
-  y(i)=y(i)-h-h ;
-  call filt3p()
+  el_dy_fd(i)=el ;
+  __INCR(y(i),-h*2) ;
+  call filt3()
+  call direct3()
   __INCR(elsr_dy_fd(i),-elsr)
- __SCALE(elsr_dy_fd(i),oo2h)
-! z-grad : 
-  z(i)=z(i)+h ; 
-  call filt3p()
+  __SCALE(elsr_dy_fd(i),oo2h)
+  __INCR(el_dy_fd(i),-el)
+  __SCALE(el_dy_fd(i),oo2h)
+  __INCR(y(i),h)
+! z-grad :
+  __INCR(z(i),h)
+  call filt3()
+  call direct3()
   elsr_dz_fd(i)=elsr ; 
-
-  z(i)=z(i)-h-h ;
-  call filt3p()
+  el_dz_fd(i)=el ;
+  __INCR(z(i),-h*2) ;
+  call filt3()
+  call direct3()
   __INCR(elsr_dz_fd(i),-elsr)
- __SCALE(elsr_dz_fd(i),oo2h)
+  __SCALE(elsr_dz_fd(i),oo2h)
+  __INCR(el_dz_fd(i),-el)
+  __SCALE(el_dz_fd(i),oo2h)
+  __INCR(z(i),h)
  enddo ! npt
 
+ __OUT(' Computing analytical gradients');
+ call filt3()
+ call direct3()
+
+! short range test
  errx=sum(abs(elsr_dx-elsr_dx_fd));
  erry=sum(abs(elsr_dy-elsr_dy_fd));
  errz=sum(abs(elsr_dz-elsr_dz_fd));
-
- __OUT(' Total absolute x-grad error : ', errx )
- __OUT(' Total absolute y-grad error : ', erry )
- __OUT(' Total absolute z-grad error : ', errz )
+ __OUT(' Total absolute S/R x-grad error : ', errx )
+ __OUT(' Total absolute S/R y-grad error : ', erry )
+ __OUT(' Total absolute S/R z-grad error : ', errz )
  if ((errx+erry+errz)<h) then
-  __OUT( ' Total absolute grad error < h (=',h,'). PASSED.')
+  __OUT( ' Total absolute S/R grad error < h (=',h,'). PASSED.')
  else
-  __OUT( ' Total absolute grad error >= h (=',h,'). FAILED.')
+  __OUT( ' Total absolute S/R grad error >= h (=',h,'). FAILED.')
  endif
+
+! long range test
+ errx=sum(abs(el_dx-el_dx_fd));
+ erry=sum(abs(el_dy-el_dy_fd));
+ errz=sum(abs(el_dz-el_dz_fd));
+ __OUT(' Total absolute L/R x-grad error : ', errx )
+ __OUT(' Total absolute L/R y-grad error : ', erry )
+ __OUT(' Total absolute L/R z-grad error : ', errz )
+ if ((errx+erry+errz)<h) then
+  __OUT( ' Total absolute L/R grad error < h (=',h,'). PASSED.')
+ else
+  __OUT( ' Total absolute L/R grad error >= h (=',h,'). FAILED.')
+ endif
+
+ __FREE(elsr_dfd)
+ __FREE(el_dfd)
 
 end
