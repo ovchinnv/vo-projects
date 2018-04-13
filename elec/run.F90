@@ -12,7 +12,7 @@
 !
  totcharge=sum(rho(1:nx-1, 1:ny-1, 1:nz-1))
   __OUT('Total particle charge is ', sum(q)) 
-  __OUT('Total smoothed charge is ', totcharge) 
+  __OUT('Charge density integral is ', totcharge*dxx*dyy*dzz)
 !
 ! compute laplacian for FD Poisson equation
  lap=-(rho-totcharge/((nx-1)*(ny-1)*(nz-1)))/eps ;

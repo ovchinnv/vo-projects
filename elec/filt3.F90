@@ -5,18 +5,19 @@ subroutine filt3()
  int :: nimg=2; ! number of images to consider
  float :: support, support2
  float :: oos3 = oos**3
- float r2q(npt);
- float dxq(npt);
- float dyq(npt);
- float dzq(npt);
+! float r2q(npt);
+! float dxq(npt);
+! float dyq(npt);
+! float dzq(npt);
 
  float xmin, xmax, ymin, ymax, zmin, zmax
  int imin, imax, jmin, jmax, kmin, kmax
- int ii, jj, kk, img, jmg, kmg
+ int ii, jj, kk, im, jm, km
+ int img, jmg, kmg
  int i, j
- float r, r2
+ float r
  float dx2, dy2, dz2, odx, ody, odz
- float dx, dy, dz, pre
+ float dxq, dyq, dzq, pre
 
 #if _FILTER==_GAUSS
  support = _GAUSS_SUPPORT*spt
@@ -24,10 +25,10 @@ subroutine filt3()
  support = spt
 #endif
  support2=support**2
-
- odx=1d0/(xx(2)-xx(1)) ; !assume uniform
- ody=1d0/(yy(2)-yy(1))
- odz=1d0/(zz(2)-zz(1))
+!
+ odx=1d0/dxx
+ ody=1d0/dyy
+ odz=1d0/dzz
 !
  rho=0d0 ! initialize
  elsr=0d0
@@ -35,67 +36,65 @@ subroutine filt3()
 !
  do i=1,npt ! charges
   if (.not.quiet) __OUT(' Gridding charge #', i,' of ', npt);
-  do img=-nimg,nimg ! go over charges in the original and in neighboring images
-   xmin = x(i) + img*Lx - support ; ! minimum location on grid for which potential nonzero
-   xmax = xmin + support + support;
-   imin = max (1, INT( (xmin-x0)*odx ) + 1); ! compute index limits on x-grid
-   imax = min (nx,INT( (xmax-x0)*odx ) + 2);
-
-! write(0,*) i, x(i), xmin, xmax, imin, imax
-!stop
-! proceed if charge supported
-   if (imin<=imax) then
-    xmin=xmin+support;
-    do jmg=-nimg,nimg
-     ymin = y(i) + jmg*Ly - support ; ! minimum location on grid for which potential nonzero
-     ymax = ymin + support + support;
-     jmin = max (1, INT( (ymin-y0)*ody ) + 1);
-     jmax = min (ny,INT( (ymax-y0)*ody ) + 2);
-! proceed if charge supported
-     if (jmin<=jmax) then
-      ymin=ymin+support; ! center pt
-      do kmg=-nimg,nimg
-       zmin = z(i) + kmg*Lz - support ; ! minimum location on grid for which potential nonzero
-       zmax = zmin + support + support;
-       kmin = max (1, INT( (zmin-z0)*odz ) + 1);
-       kmax = min (nz,INT( (zmax-z0)*odz ) + 2);
-! proceed if charge supported
-       if (kmin<=kmax) then
-        zmin=zmin+support;
-        do ii=imin,imax
-         dx2=(xx(ii)-xmin)**2;
-         do jj=jmin,jmax 
-          dy2=dx2+(yy(jj)-ymin)**2;
-          do kk=kmin,kmax
-           r2=dy2+(zz(kk)-zmin)**2;
-           if (r2>support2) cycle
-           r=sqrt(r2)*oos; ! normalize by support
-           __INCR(rho(ii,jj,kk), q(i) * filter(r))
-          enddo !kk
-         enddo !jj
-        enddo !ii
-       endif ! kmin
-      enddo ! kmg
-     endif ! jmin
-    enddo ! jmg
-   endif ! imin
-  enddo !img
+! determine limit indices on the (periodic) grid
+  xmin = x(i) - support
+  xmax = x(i) + support
+!
+  imin = INT( (xmin-x0)*odx ) + 1 ! could be negative (i.e. off-the-grid), but the indices are consistent with the 1-based offset
+  imax = INT( (xmax-x0)*odx ) + 2
+!
+  ymin = y(i) - support
+  ymax = y(i) + support
+!
+  jmin = INT( (ymin-y0)*ody ) + 1
+  jmax = INT( (ymax-y0)*ody ) + 2
+!
+  zmin = z(i) - support
+  zmax = z(i) + support
+!
+  kmin = INT( (zmin-z0)*odz ) + 1
+  kmax = INT( (zmax-z0)*odz ) + 2
+!
+!write(0,*) support
+!write(0,*) xmin, xmax, imin, imax
+!write(0,*) ymin, ymax, jmin, jmax
+!write(0,*) zmin, zmax, kmin, kmax
+!
+  do ii=imin,imax
+   dx2=(dxx*(ii-1) - (x(i) - x0) )**2; ! actual x-distance between gridpoint and charge
+!   im=ii; do while (im<0) ; im=im+nx-1 ; enddo ; im=mod(ii-1,nx-1)+1 ! in case modulo not implemented
+   im=modulo(ii-1,nx-1)+1 ! x-grid index in the primary cell
+   do jj=jmin,jmax
+    dy2=dx2+(dyy*(jj-1) - (y(i) - y0))**2;
+    if (dy2>support2) cycle
+    jm=modulo(jj-1,ny-1)+1
+    do kk=kmin,kmax
+     dz2=dy2+(dzz*(kk-1) - (z(i) - z0) )**2;
+     if (dz2>support2) cycle
+     km=modulo(kk-1,nz-1)+1
+     r=sqrt(dz2)*oos; ! normalize by support
+     __INCR(rho(im,jm,km), q(i) * filter(r))
+!write(0,*) ii, jj, kk, im, jm, km, r, filter(r)
+    enddo !kk
+   enddo !jj
+  enddo !ii
 !
 ! also need to compute short-range potential energy at grid points
 ! do this in a primitive O(n^2) loop
+!if (.false.) then
   do j=i+1,npt
    do img=-nimg,nimg
-    dx = (x(i)-x(j)) + Lx*img
-    if (abs(dx)>support) cycle
+    dxq = (x(i)-x(j)) + Lx*img
+    if (abs(dxq)>support) cycle
     do jmg=-nimg,nimg
-     dy = (y(i)-y(j)) + Ly*jmg
-     if (abs(dy)>support) cycle
-     dy2=dx**2 + dy**2
+     dyq = (y(i)-y(j)) + Ly*jmg
+     if (abs(dyq)>support) cycle
+     dy2=dxq**2 + dyq**2
      if (dy2>support2) cycle
      do kmg=-nimg,nimg
-      dz = (z(i)-z(j)) + Lz*kmg
-      if (abs(dz)>support) cycle
-      dz2=dy2 + dz**2
+      dzq = (z(i)-z(j)) + Lz*kmg
+      if (abs(dzq)>support) cycle
+      dz2=dy2 + dzq**2
       if (dz2 > support2 .or. dz2 < kzero) cycle
       r=sqrt(dz2)*oos
 ! short-range potential
@@ -104,22 +103,27 @@ subroutine filt3()
 ! short-range potential gradients
       pre = q(i) * q(j) * fshortp(r) ; ! double check normalization by support : need to x oos^3
 !
-      __INCR(elsr_dx(i) , pre*dx)
-      __INCR(elsr_dy(i) , pre*dy)
-      __INCR(elsr_dz(i) , pre*dz)
+      __INCR(elsr_dx(i) , pre*dxq)
+      __INCR(elsr_dy(i) , pre*dyq)
+      __INCR(elsr_dz(i) , pre*dzq)
 ! reflect for other atom in pair
-      __INCR(elsr_dx(j) , -pre*dx)
-      __INCR(elsr_dy(j) , -pre*dy)
-      __INCR(elsr_dz(j) , -pre*dz)
+      __INCR(elsr_dx(j) , -pre*dxq)
+      __INCR(elsr_dy(j) , -pre*dyq)
+      __INCR(elsr_dz(j) , -pre*dzq)
      enddo !kmg
     enddo !jmg
    enddo !img
   enddo ! j/npt
+!endif
 !
  enddo ! i/npt
 
 ! normalization
  __SCALE(rho, oos3)
+! apply periodic BC to rho :
+ rho(nx,:,:)=rho(1,:,:)
+ rho(:,ny,:)=rho(:,1,:)
+ rho(:,:,nz)=rho(:,:,1)
 !
  __SCALE(elsr, oos/(fourpi*eps)) ! no division by 2 because loop does not double count
  __SCALE(elsr_dx, oos3/(fourpi*eps)) ! these normalizations are needed because the filter is normalized by support, but units must be physical

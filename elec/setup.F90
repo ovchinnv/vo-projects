@@ -33,22 +33,24 @@
   __OUT('grid dimensions are ', nx, ny, nz)
   allocate(xx(nx), yy(ny), zz(nz)) ! predetermined grid sizes
 ! compute grids :
+  dxx=Lx/(nx-1);
   do i=1,nx
-   xx(i)=x0+(i-1)*(x1-x0)/(nx-1)
+   xx(i)=x0+(i-1)*dxx
   enddo
 !
+  dyy=Ly/(ny-1);
   do i=1,ny
-   yy(i)=y0+(i-1)*(y1-y0)/(ny-1)
+   yy(i)=y0+(i-1)*dyy
   enddo
 !
+  dzz=Lz/(nz-1);
   do i=1,nz
-   zz(i)=z0+(i-1)*(z1-z0)/(nz-1)
+   zz(i)=z0+(i-1)*dzz
   enddo
 ! write grids : 
   call write_field(xx, 'xx.txt',ascii,nx)
   call write_field(yy, 'yy.txt',ascii,ny)
   call write_field(zz, 'zz.txt',ascii,nz)
-!
 !
   __ALLOC(rho(nx,ny,nz));   ! smoothed density
   __ALLOC(phisr_q(npt));    ! short range potential and gradienst below

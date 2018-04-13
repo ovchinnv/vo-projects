@@ -7,13 +7,13 @@
 ! __IPAR(ny,16)
 ! __IPAR(nz,16)
 !
- __IPAR(nx,32)
- __IPAR(ny,32)
- __IPAR(nz,32)
+! __IPAR(nx,32)
+! __IPAR(ny,32)
+! __IPAR(nz,32)
 !
-! __IPAR(nx,48)
-! __IPAR(ny,48)
-! __IPAR(nz,48)
+ __IPAR(nx,48)
+ __IPAR(ny,48)
+ __IPAR(nz,48)
 !
 ! __IPAR(nx,64)
 ! __IPAR(ny,64)
@@ -38,6 +38,7 @@
  __FARR(xx,:)
  __FARR(yy,:)
  __FARR(zz,:)
+ float dxx, dyy, dzz
 
 ! positions and charges
  int :: npt=0
@@ -79,7 +80,7 @@
 ! should be softcoded below 
  __FPAR(eps,1d0); ! permittivity
  __FPAR(oeps,1d0/eps); ! permittivity
- __FPAR(spt,1.25d0); ! filter support -- should move this elsewhere and make soft
+ __FPAR(spt,0.2d0); ! filter support -- should move this elsewhere and make soft
  __FPAR(oos,1d0/spt);
 
 ! for long-range ewald

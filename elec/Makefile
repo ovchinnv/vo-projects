@@ -1,8 +1,8 @@
 FC=gfortran
-FCFLAGS=-c -O3 -fimplicit-none -ffixed-line-length-none -ffree-line-length-none -g
+FCFLAGS=-c -O3 -fimplicit-none -ffixed-line-length-none -ffree-line-length-none -fcheck=all -g
 FPP=cpp
-FPPFLAGS=-D_FILTER=_POLY3
-#FPPFLAGS=-D_FILTER=_GAUSS
+#FPPFLAGS=-D_FILTER=_POLY3
+FPPFLAGS=-D_FILTER=_GAUSS
 
 LD=$(FC)
 LDFLAGS=
@@ -20,7 +20,7 @@ default : $(EXE)
 $(EXE) : $(OBJS)
 	$(LD) $(OBJS) -o $@
 
-$(SRC) : $(DEFS)
+$(SRC) : $(DEFS) Makefile
 
 %.o : %.f90
 	$(FC) $(FCFLAGS) $< -o $@
