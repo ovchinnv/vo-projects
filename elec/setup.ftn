@@ -1,52 +1,124 @@
+! adapted from driver.ftn
+#ifdef __PARALLEL
+#define __MAINCOMM PARSER
+#//
+#define __COMM __CONCAT(MPI_COMM_,__MAINCOMM )
+#define __ME   __CONCAT(ME_,__MAINCOMM )
+#define __NCPU __CONCAT(SIZE_,__MAINCOMM )
+#define _COMMA ,
+#else
+#define __COMM
+#define __ME 0
+#define _COMMA
+#endif
+#ifdef __QPRINT
+#undef __QPRINT
+#endif
+#define __QPRINT qprint=(__ME.eq.0)
 
- subroutine setup
+#define _ME setup_elec
+ subroutine _ME
   use vars
+  __DEP_CONST
+  __DEP_PARSER
+  __DEP_FILES
+  __DEP_OUTPUT
+  __IMPNONE
   int :: iostatus=0
   int i, lines
+  __IAM(_ME)
 
-  open(file=chargefile, unit=chunit, form='formatted', status='old', iostat=iostatus)
-  if (iostatus.ne.0) then
-   __ERR('Could not read file ', trim(chargefile))
-   __DIE
-  endif
+  int :: numarg, flen, fid=-1
+  character(len=vartaglen) :: keyword, filename, fname, chargefile
+
+
+  if (__ME.le.0) then 
+#ifdef __NEED_IARGC
+  numarg=iargc() ! number of arguments
+#else
+  numarg=command_argument_count() ! number of arguments
+#endif
+   if (numarg.ge.1) then 
+    call getarg(1, filename)
+    fname=filename
+   call adjustleft(fname)
+    flen=len_trim(fname)
+    call files_open(handle_=fid, name_=filename(1:flen), form_='FORMATTED', action_='READ')
+    if (fid.lt.0) call error(whoami,'Could not open file',-1)
+   else
+   fid=5 ! if file name missing, read from standard input
+   endif
+  endif ! me
+!    call parser (only the root will receive a valid file handle (see above); all nodes still call parse_file)
+  call parse_file(fid _COMMA __COMM)
+!
+!========= query parser for parameters =======
+  if (__ME.le.0) call files_close(fid)
+!
+  if (__ME.le.0) then
+   chargefile=getval_nocase('chargefile')
+!
+   fid=-1; ! to assign handle
+   call files_open(fid, chargefile, 'FORMATTED', 'READ')
 !
 ! read to the end of file to determine number of particles
 !
-  lines=0
-  do while (iostatus==0)
-   read(chunit,*,iostat=iostatus)
-   __INC(lines)
-  enddo
-  __INCR(lines,-1)
-  __OUT('file "', trim(chargefile), '" contains ',lines,'lines' )
+   lines=0
+   do while (iostatus==0)
+    read(fid,*,iostat=iostatus)
+    __INC(lines)
+   enddo
+   __INCR(lines,-1)
+   __OUT('file "', trim(chargefile), '" contains ',lines,'lines' )
 ! now read data
-  allocate(x(lines), y(lines), z(lines), q(lines))
-  rewind(chunit)
-  do i=1, lines
-   read(chunit,*,iostat=iostatus) x(i), y(i), z(i), q(i)
-  enddo
-  npt=lines
-  __OUT('read ', npt, ' coordinates and charges')
+   allocate(x(lines), y(lines), z(lines), q(lines))
+   rewind(fid)
+   do i=1, lines
+    read(fid,*,iostat=iostatus) x(i), y(i), z(i), q(i)
+   enddo
+   call files_close(fid)
+   npt=lines
+   __OUT('read ', npt, ' coordinates and charges')
+  endif
 ! perturb charge for FD ; this is a way to valudate del_dx, etc.
 ! x(2)=x(2)+0.001;
 
+! ===== grid dimensions
+  nx=atoi(getval_nocase('nx'))
+  ny=atoi(getval_nocase('ny'))
+  nz=atoi(getval_nocase('nx'))
   __OUT('grid dimensions are ', nx, ny, nz)
   allocate(xx(nx), yy(ny), zz(nz)) ! predetermined grid sizes
+! ==== domain size
+  x0=atof(getval_nocase('x0'))
+  x1=atof(getval_nocase('x1'))
+!
+  y0=atof(getval_nocase('y0'))
+  y1=atof(getval_nocase('y1'))
+!
+  z0=atof(getval_nocase('z0'))
+  z1=atof(getval_nocase('z1'))
+!
 ! compute grids :
+  Lx=x1-x0 ; oLx=one/Lx
   dxx=Lx/(nx-1);
   do i=1,nx
    xx(i)=x0+(i-1)*dxx
   enddo
 !
+  Ly=y1-y0 ; oLy=one/Ly
   dyy=Ly/(ny-1);
   do i=1,ny
    yy(i)=y0+(i-1)*dyy
   enddo
 !
+  Lz=z1-z0 ; oLz=one/Lz
   dzz=Lz/(nz-1);
   do i=1,nz
    zz(i)=z0+(i-1)*dzz
   enddo
+!
+  oV=oLx*oLy*oLz
 ! write grids : 
   call write_field(xx, 'xx.txt',ascii,nx)
   call write_field(yy, 'yy.txt',ascii,ny)
@@ -71,6 +143,13 @@
 
 ! self energy part of l/r energy can be computed right away
 ! note that is does not contribute to any gradients
+  spt=atof(getval_nocase('support'))
+  oos=one/spt
+  eps=atof(getval_nocase('epsilon'))
+  oeps=one/eps
+!
   el_self = 0.5d0 * philr_selfc * sum(q**2) * oos * oeps;
-
- end subroutine setup
+!
+  if (fatal_warning(__COMM)) call terminate(whoami)
+!
+ end subroutine _ME
