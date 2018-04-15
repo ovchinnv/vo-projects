@@ -1,28 +1,23 @@
-FC=gfortran
-FCFLAGS=-c -O3 -fimplicit-none -ffixed-line-length-none -ffree-line-length-none -g
-FPP=cpp
-FPPFLAGS=-D_FILTER=_POLY3
-INCLUDES=-include source.def
-LD=$(FC)
-LDFLAGS=
+ROOT=..
+NAME=elec
+OBJS=$(addsuffix .o, vars setup filt3 direct3 direct3_nosym util)
+#OBJS=vars.o setup.o filt3.o direct3.o direct3_nosym.o util.o
+DEPS=parser constants output
 
-FILES=vars setup run filt3p direct3p direct3p_nosym util
-OBJS=$(addsuffix .o, $(FILES))
-SRC=$(addsuffix .f90, $(FILES))
-EXE=elec
+TESTOBJS:=$(filter-out run.o, $(OBJS)) test.o
 
-default : $(EXE)
-$(EXE) : $(OBJS)
-	$(LD) $(OBJS) -o $@
+LOCALDEPS=source.def filters.def
+LOCALMACROS+=$(addprefix -include , $(LOCALDEPS))
 
-$(SRC) : source.def
+LINKOBJS= $(NAME).o
 
-%.o : %.f90
-	$(FC) $(FCFLAGS) $< -o $@
-%.f90 : %.F90
-	$(FPP) $(FPPFLAGS) -P $(INCLUDES) $< > $@
-	
-clean :
-	rm -f $(OBJS) *.mod *.f90
-	
-$(OBJS) : vars.o Makefile
+EXE=run
+
+include $(ROOT)/Makefile.inc
+
+.PRECIOUS : test $(EXE)
+
+$(OBJS) : vars.o
+#test : $(TESTOBJS)
+#	$(LD) $(TESTOBJS) -o test
+#	./test

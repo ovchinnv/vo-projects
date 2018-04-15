@@ -1,5 +1,5 @@
 
-subroutine direct3p()
+subroutine direct3()
 ! ewald summation for long-range field split using a polynomial filter
  use vars
 
@@ -16,7 +16,7 @@ subroutine direct3p()
  grad_el=0d0; ! initialize gradient
 
  do in=0,nwave
-  __OUT(' Computing contribution from wavenumber ',in,' of ', nwave);
+  if (.not. quiet) __OUT(' Computing contribution from wavenumber ',in,' of ', nwave);
   ik=in*twopi*oLx;
   ik2=ik**2;
   ci=2-min(1,in) ; ! symmetry coefficients
@@ -34,12 +34,12 @@ subroutine direct3p()
     kabs=sqrt(kabs2);
     ck=2-min(1,kn) ;
 !
-    if (kabs < ktol ) then
+    if (kabs*spt < ktol ) then
 ! use Taylor expansion
-     efac = ftt(kabs)/kabs2/(ci*cj*ck); !
+     efac = ftt(kabs*spt)/kabs2/(ci*cj*ck); !
     else
 ! use exact FT
-     efac= ft(kabs)/kabs2/(ci*cj*ck);
+     efac= ft(kabs*spt)/kabs2/(ci*cj*ck);
     endif
 ! Compute potential energy and gradient at charge points
 ! self-interactions to be subtracted in a different step
@@ -128,4 +128,4 @@ subroutine direct3p()
 !
  __FREE(ss)
  __FREE(cs)
-end subroutine direct3p
+end subroutine direct3

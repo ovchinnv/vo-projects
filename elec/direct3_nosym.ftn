@@ -1,5 +1,5 @@
 
-subroutine direct3p_nosym()
+subroutine direct3_nosym()
 ! ewald summation for long-range field split using a polynomial filter
 ! for debugging purposes, treat all wavenumbers separately, in particular, the negative permutations
  use vars
@@ -75,4 +75,4 @@ subroutine direct3p_nosym()
 !
  __FREE(ss)
  __FREE(cs)
-end subroutine direct3p_nosym
+end subroutine direct3_nosym
