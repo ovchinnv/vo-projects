@@ -48,7 +48,7 @@ void testSerialization() {
 
     string script = "test.sm"; // file name of test script
     ofstream testfile;
-    testfile.open(script);
+    testfile.open(script.c_str());
     testfile << "smcv_init {\n";
     testfile << " : init maxcv 1\n";
     testfile << "}\n";

@@ -44,19 +44,20 @@ module sm_plugin
 #define __CFUN(__NAME, ...) function __NAME (__VA_ARGS__) bind(c, name=__STRING(__NAME))
 !
 #define _ME sm_init_plugin
- __CFUN(_ME, n, mass, charge, inputname, il, outputname, ol, alist, qper, box)
+ __CFUN(_ME, n, mass, charge, inputname, il, outputname, ol, alist, qper, box) result(initerr)
  __DEP_VECTORS
  __DEP_PARSER
  __DEP_FILES
  __DEP_MPI
 ! smcv modules :
  use cv_common, only : cv
+ use sm_var, only : smcv_initialized
 ! ftsm modules :
  use ftsm, only : ftsm_exec
- use ftsm_var, only : iatom_a ! needed to compute atoms used by ftsm
+ use ftsm_var, only : ftsm_initialized, iatom_a ! needed to compute atoms used by ftsm
  use ftsm_util, only : ftsm_compute_atomlist
 !
- int(__FCINT) :: _ME
+ int(__FCINT) :: initerr
  type(c_ptr), intent(out) :: alist ! send back a list of atom indices
  type(c_ptr), value, intent(in) :: inputname, outputname
  real(__FCFLOAT), intent(in), dimension(n) :: mass, charge
@@ -74,7 +75,7 @@ module sm_plugin
 !
  int :: i, fid, l
  __IAM(_ME)
- _ME=1
+ initerr=1
 !
 !==================================================
  if (sm_initialized) call sm_done_plugin() ! reinitialize to clean up from a previous run
@@ -109,6 +110,7 @@ module sm_plugin
   fl_name='FTSM'
  else
   __MESSAGE(whoami, 'STRING METHOD CONFIGURATION OPTIONS NOT PROVIDED. SKIPPING INTIALIZATION.');
+  initerr=0
    goto 999
  endif
 !
@@ -136,11 +138,16 @@ module sm_plugin
   if (.not. system_PDB_initialized) then
    structure_file=getval_nocase('structure', initctx);
    l=len_trim(structure_file)
-   __MESSAGE(whoami, 'READING STRUCTURE FROM FILE "'//structure_file(1:l)//'"');
-   call system_PDB_init(structure_file, 'PDB');
-   system_PDB_initialized=.true.
+! for the benefit of master plugin, check the l variable for zero length before proceeding:
+   if (l.le.0) then
+    call warning(whoami, 'STRUCTURE FILE NAME INVALID OR NOR SPECIFIED. ABORT.',-2);
+   else
+    __MESSAGE(whoami, 'READING STRUCTURE FROM FILE "'//structure_file(1:l)//'"');
+    call system_PDB_init(structure_file, 'PDB');
+    system_PDB_initialized=.true.
 ! save coordinates in rcomp
-   if (associated(rcomp) .and. associated(r)) rcomp=r
+    if (associated(rcomp) .and. associated(r)) rcomp=r
+   endif
   endif ! system_PDB_initialized
 !#end init 2
   minimal_system = .false.
@@ -186,29 +193,31 @@ module sm_plugin
    call warning(whoami, 'CONTEXT "'//initctx//'" DOES NOT CONTAIN EXECUTABLE STATEMENTS.', -1);
   else
    select case(sm_flavor);
-     case(ftsm_flavor);    call ftsm_exec(initctx)
+     case(ftsm_flavor);    call ftsm_exec(initctx); sm_initialized=ftsm_initialized;
      case(smcv_flavor);
       if (qper_parser_override) then ! should add option to override qper in input file ; esp. for acemd, where qper=.true.
        call cv%ucell%update_vectors(box) ; ! note that this is a hack since SMCV is not initialized yet
        call cv%ucell%print() ;
       endif
-      call smcv_exec(initctx)
+      call smcv_exec(initctx) ; sm_initialized=smcv_initialized
      case default ; __WRN(whoami, ' UNKNOWN STRING METHOD REQUESTED.')
    end select
   endif
 !
   call parser_clear_context(initctx)
-  if (fatal_warning()) return
+  if (fatal_warning().or..not.(sm_initialized .or. defer_init_until_dyna)) then
+   __WRN(whoami, 'COULD NOT INITIALIZE STRUNA PLUGIN.');
+  else
+   initerr=0
+  endif
 ! compute atomlist
 #include "../atomlist.def"
  endif ! defer
 !
- sm_initialized=.not.defer_init_until_dyna
  sm_iteration=-abs(__NAN)
 !
  999 continue
 !#end init 3
- _ME=0
 !
 end function _ME
 #undef _ME
@@ -218,9 +227,10 @@ end function _ME
 ! SMCV modules:
  use cv_common, only : cv
  use smcv_master, only : smcv_main
+ use sm_var, only : smcv_initialized
 ! FTSM modules:
  use ftsm, only : ftsm_main, ftsm_exec
- use ftsm_var, only : iatom_a ! needed to compute atoms used by ftsm
+ use ftsm_var, only : ftsm_initialized, iatom_a ! needed to compute atoms used by ftsm
  use ftsm_util, only : ftsm_compute_atomlist
 
  __DEP_PARSER
@@ -256,6 +266,8 @@ end function _ME
    fr(:,sm_atomlist(2:))=zero ! reset force
 !#main 1
   else
+! first, turn off "defer_init_until_dyna" flag to avoid repeat executions
+   defer_init_until_dyna=.false.
 ! complete initialization
    __MESSAGE(whoami, 'EXECUTING STRUNA INITIALIZATION STACK');
 ! load all coords (we do not know which ones we will need b/c initialization is incomplete)
@@ -264,7 +276,7 @@ end function _ME
     call warning(whoami, 'CONTEXT "'//trim(initctx)//'" DOES NOT CONTAIN EXECUTABLE STATEMENTS.', -1);
    else
     select case(sm_flavor);
-     case(ftsm_flavor);    call ftsm_exec(initctx)
+     case(ftsm_flavor);    call ftsm_exec(initctx) ; sm_initialized=ftsm_initialized
      case(smcv_flavor);
       if (qper_) then
        call cv%ucell%update_vectors(box) ; ! note that this is a hack since SMCV is not initialized yet
@@ -272,17 +284,22 @@ end function _ME
        qper_=.false. ! prevent repeat call
       endif
      call smcv_exec(initctx)
-     case default ; __WRN(whoami, ' UNKNOWN STRING METHOD REQUESTED.')
+     sm_initialized=smcv_initialized;
+     case default ; __WRN(whoami, 'UNKNOWN STRING METHOD REQUESTED.')
     end select
    endif
    call parser_clear_context(initctx)
-   if (fatal_warning()) return
+   if (fatal_warning() .or. .not.sm_initialized) then 
+    __WRN(whoami, 'COULD NOT INITIALIZE STRUNA PLUGIN.');
+    return
+   endif
 !
-   sm_initialized=.true.
 ! compute unique atomlist
 #include "../atomlist.def"
 ! now the atom list should be defined -- use it below for forces
    fr(:,sm_atomlist(2:))=zero ! reset force
+! if the initialization failed and fatal warnings are turned off, we will still return a valid atom list with zero length
+!   if (.not.sm_initialized) return
 !#end main 1
 !#main 2
   endif ! not sm_initialized
@@ -369,6 +386,7 @@ end function _ME
   call state_done() ! state module is not used with minimal system
  endif
 !
+ __MESSAGE(whoami, 'FINALIZING STRUNA PLUGIN.');
  call files_done()
 !#done 3
  __DEALL(sm_atomlist)

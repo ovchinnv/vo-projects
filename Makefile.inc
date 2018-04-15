@@ -27,8 +27,8 @@ FC=gfortran
 #FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -Wall -fopenmp 
 #FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  #-Wall  #-fopenmp 
 #FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fcheck=all
-#FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno
-FFLAGS=-O0 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fcheck=all #-fno-math-errno
+FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno
+#FFLAGS=-O0 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fcheck=all #-fno-math-errno
 #MPI_HOME=/usr/local/mpich2-gnu
 MPI_HOME=/usr/lib/openmpi
 OMP=-D__OMP -fopenmp
@@ -168,6 +168,8 @@ $(ROOT)/$(NAME).stamp:: $(OBJS) $(MODS) $(HEADS) $(DISTRIB) $(addprefix $(ROOT)/
 ########################## SOURCE CODE #######################
 %.h:%.H $(LOCALDEPS) $(GLOBALDEPS)
 	$(FPP) $(FPPFLAGS) $(DEFS) $(LOCALDEFS) $(GLOBALMACROS) $(LOCALMACROS) -P $< > $@
+%.hpp:%.H $(LOCALDEPS) $(GLOBALDEPS)
+	$(FPP) -D__CPLUSPLUS $(FPPFLAGS) $(DEFS) $(LOCALDEFS) $(GLOBALMACROS) $(LOCALMACROS) -P $< > $@
 %.F90:%.ftn $(LOCALDEPS) $(GLOBALDEPS) $(HEADS)
 	sed 's/\([^\#]\)\(\/\/\)/\1\^\^/g' $< | $(FPP) $(FPPFLAGS) $(DEFS) $(LOCALDEFS) -U__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(MSG) $(INCLUDES) -P | sed 's/\^\^/\/\//g' > $@
 %_.F90:%.ftn $(LOCALDEPS) $(GLOBALDEPS) $(HEADS)

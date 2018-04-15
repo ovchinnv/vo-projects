@@ -32,14 +32,14 @@ module __NM(plugin)
 #define __CFUN(__NAME, ...) function __NAME (__VA_ARGS__) bind(c, name=__STRING(__NAME))
 !
 #define _ME __NM(init_plugin)
- __CFUN(_ME, n, mass, charge, inputname, il, outputname, ol, alist, qper, box)
+ __CFUN(_ME, n, mass, charge, inputname, il, outputname, ol, alist, qper, box) result(initerr)
  __DEP_PARSER
  __DEP_FILES
 #ifdef __PARALLEL
  __DEP_MPI
 #endif
 !
- int(__FCINT) :: _ME
+ int(__FCINT) :: initerr
  int( __FCINT), intent(in), value :: n, il, ol
  type(c_ptr), value, intent(in) :: inputname, outputname
  real(__FCFLOAT), intent(in), dimension(n) :: mass, charge
@@ -57,7 +57,7 @@ module __NM(plugin)
 
  int :: fid
  __IAM(_ME)
- _ME=1
+ initerr=1
 !
  call c_f_pointer(outputname, ofname)
 !
@@ -100,6 +100,7 @@ module __NM(plugin)
  enddo
 !=========== end structure file
 ! initialize atom index lists
+! NOTE: IT IS ASSUMED THAT FORCED_ATOMS IS A SUBSET OF ATOMS
  call atoms%init()        ! all atoms needed by plugins
  call forced_atoms%init() ! forced atoms only (e.g. watershell plugin)
 !
@@ -118,18 +119,30 @@ module __NM(plugin)
  endif
 !
 ! compute list of all atoms required by plugin
- alist=__NM(compute_atomlist)()
-#ifdef __DDEBUG
- write(0,*) '# atoms in atomlists :', __NM(forced_atomlist(1)), __NM(atomlist(1))
-#endif
 ! if struna is used, then there is the possibility that initialization is deferred until the first dynamics step (e.g. is coodinates are required)
 ! in that case, we need to set alist to null which _should_ instruct the plugin code to provide all coordinates
 #ifdef __STRUNA
- if(sm_initialized.and.defer_init_until_dyna) alist=c_null_ptr
+ if(defer_init_until_dyna) then 
+  alist=c_null_ptr
+ else
+#endif
+ alist=__NM(compute_atomlist)()
+#ifdef __STRUNA
+ endif
+#ifdef __DDEBUG
+ write(0,*) '# atoms in atomlists :', __NM(forced_atomlist(1)), __NM(atomlist(1))
+#endif
 #endif
 !
- if (fatal_warning()) return
- _ME=0
+! 2/16/18 : not sure whether to terminate : would be best to signal the MD code
+! if (fatal_warning()) return
+! to do this here, call terminate
+ if (fatal_warning()) then ! return
+  call __NM(done_plugin)
+!  call terminate(whoami)
+ else
+  initerr=0
+ endif
 !
 end function _ME
 #undef _ME
@@ -163,7 +176,11 @@ end function _ME
  e=0d0
 !
 ! reset forces to zero
+#ifdef __DEBUG
+ fr=0d0
+#else
  fr(:,__NM(forced_atomlist(2:)))=0d0
+#endif
 ! update coordinates :
  r(:,__NM(atomlist(2:)))=r_plugin(:,__NM(atomlist(2:)))
 !
@@ -173,7 +190,7 @@ end function _ME
 ! (this is done inside string macro below) ; master atom list must also be recomputed (also inside macro)
 !======================
 #ifdef __STRUNA
- if (sm_initialized) then
+ if (sm_initialized.or.defer_init_until_dyna) then
   __STRUNA_MAIN
   fr(:,sm_atomlist(2:))=-fr(:,sm_atomlist(2:))
  endif

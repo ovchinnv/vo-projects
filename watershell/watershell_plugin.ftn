@@ -3,6 +3,7 @@
 module __NM(plugin)
  __DEP_OUTPUT
  __DEP_CONST
+ __DEP_VECTORS
  __CBIND
  use _N
 
@@ -11,8 +12,9 @@ module __NM(plugin)
  private
 !
  bool, save :: initialized=.false.
- int(__FCINT), target, allocatable :: atomlist(:)
+ int(__FCINT), target, allocatable :: atomlist(:), forced_atomlist(:)
  int, parameter :: foutput=999 ! output file unit
+ type (int_vector) :: atoms, forced_atoms
 !
 !
  contains
@@ -67,23 +69,20 @@ module __NM(plugin)
  if (existtag_nocase('minerrorlev'  ,__STRING(__OUTCTX))) call set_minerrorlev  (atoi(getval('minerrorlev',__STRING(__OUTCTX  ))))
 !=== ^ check output options
 !
- call __NM(initialize)()
-! compute atomlist and return
-! use vector uadd to include the (ostensibly nonsensical) possibility of overlapping selections
  call atoms%init()
- do i=1, nsurface
-  j=atoms%uadd(isurface_atoms(i))
- enddo
+ call forced_atoms%init()
+ call __NM(initialize)(atoms, forced_atoms)
 !
- do i=1, nsolvent
-  j=atoms%uadd(isolvent_atoms(i))
- enddo
+! compute atomlist and return
 !
  allocate(atomlist(atoms%last+1))
  atomlist(1)=atoms%last ! number of atoms first
  atomlist(2:)=atoms%i(1:atoms%last)
  alist=c_loc(atomlist)
- call atoms%done()
+!
+ allocate(forced_atomlist(forced_atoms%last+1))
+ forced_atomlist(1)=forced_atoms%last ! number of atoms first
+ forced_atomlist(2:)=forced_atoms%i(1:forced_atoms%last)
 !
  if (fatal_warning()) return
 !
@@ -121,18 +120,21 @@ end function _ME
 ! to the watershell (even though watershell already has them as members !)
 !
 ! reset forces to zero
- fr(:,isolvent_atoms)=zero
+#ifdef __DEBUG
+ fr=zero;
+#else
+ fr(:,forced_atomlist(2:))=zero
+#endif
 ! update coordinates :
- r(:,isurface_atoms)=r_plugin(:,isurface_atoms) ! possible type change
- r(:,isolvent_atoms)=r_plugin(:,isolvent_atoms)
+ r(:,atomlist(2:))=r_plugin(:,atomlist(2:)) ! possible type change
 !
  call __NM(main)(r, fr, e)
 ! update forces
 !write(666,*) fr(:,isolvent_atoms)
  if (qsingle) then
-  f_plugin_single(:,isolvent_atoms)=fr(:,isolvent_atoms)
+  f_plugin_single(:,forced_atomlist(2:))=fr(:,forced_atomlist(2:))
  else
-  f_plugin_double(:,isolvent_atoms)=fr(:,isolvent_atoms)
+  f_plugin_double(:,forced_atomlist(2:))=fr(:,forced_atomlist(2:))
  endif
 ! f_plugin(:,iforced_atoms)=fr(:,iforced_atoms)
 !
@@ -201,6 +203,8 @@ end function _ME
  call __NM(done)()
  call output_done()
  __DEALL(atomlist)
+ call atoms%done()
+ call forced_atoms%done()
  initialized=.false.
 end subroutine _ME
 #undef _ME

@@ -165,6 +165,8 @@ void CudaCalcStrunaForceKernel::initialize(const System& system, const StrunaFor
      box[6]=boxVectors[2][0]*nm2A;
      box[7]=boxVectors[2][1]*nm2A;
      box[8]=boxVectors[2][2]*nm2A;
+    } else {
+     for ( int i=0 ; i < 9 ; i++ ) { box[i]=0.0 ; } // initialize "by hand" for compatibility with older compilers
     }
     // Get particle masses and charges (if available)
     double *m=NULL; //mass
@@ -234,7 +236,7 @@ void CudaCalcStrunaForceKernel::executeOnWorkerThread() {
       *(rptr++) = pos[i][2]*nm2A;
      }
     // compute plugin forces and energy
-     ierr=sm_dyna_plugin(iteration, r, fr, &sm_energy, &atomlist, usesPeriodic, box); // might return valid atomlist
+     ierr=sm_dyna_plugin(iteration, r, fr, NULL, 0, &sm_energy, &atomlist, usesPeriodic, box); // might return valid atomlist
     // copy plugin forces
      if (atomlist!=NULL) { // atom indices provided; use them for adding forces
       for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
@@ -260,7 +262,7 @@ void CudaCalcStrunaForceKernel::executeOnWorkerThread() {
       *(rptr)   = pos[j][2]*nm2A;
      }
 //
-     ierr=sm_dyna_plugin(iteration, r, fr, &sm_energy, &atomlist, usesPeriodic, box); // atomlist should not be modified in this call
+     ierr=sm_dyna_plugin(iteration, r, fr, NULL, 0, &sm_energy, &atomlist, usesPeriodic, box); // atomlist should not be modified in this call
 //
      for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
       j=*aptr - 1;

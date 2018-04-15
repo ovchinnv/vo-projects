@@ -35,7 +35,7 @@
 #include "StrunaKernels.h"
 #include "openmm/Platform.h"
 #include <stdbool.h>
-#include "struna.h"
+#include "struna.hpp"
 #include <vector>
 
 namespace StrunaPlugin {
@@ -77,7 +77,7 @@ private:
     int natoms;    // number of particles
     int* atomlist; // list of atom indices involved in restraints
     double *r, *fr; // positions and forces
-    double box[9] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 } ; // box vectors
+    double box[9] ; // = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 } ; // box vectors ; old compilers complain about non-static initializers
 };
 
 } // namespace StrunaPlugin

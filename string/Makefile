@@ -24,6 +24,9 @@ endif
 	/bin/sh -c 'for file in `ls *.src 2>/dev/null`; do  ln -fs `pwd`/$$file ../$(CHARMM_DIR)/$$file; done'); \
 	done
 
+plugin:all
+	$(MAKE) -C $@
+
 clean::
 	for d in $(SUBDIRS); do (cd $$d; $(MAKE) clean); done
 	rm -f $(CHARMM_DIR)/*.src 2>/dev/null
