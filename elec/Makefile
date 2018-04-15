@@ -1,8 +1,9 @@
 FC=gfortran
-FCFLAGS=-c -O3 -fimplicit-none -ffixed-line-length-none -ffree-line-length-none -fcheck=all -g
+FCFLAGS=-c -O3 -fimplicit-none -ffixed-line-length-none -ffree-line-length-none # -fcheck=all -g
 FPP=cpp
 #FPPFLAGS=-D_FILTER=_POLY3
 FPPFLAGS=-D_FILTER=_GAUSS
+FPPFLAGS+=-D_NORMALIZE_FILTER
 
 LD=$(FC)
 LDFLAGS=

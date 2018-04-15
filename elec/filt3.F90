@@ -2,14 +2,14 @@
 subroutine filt3()
  use vars
 
- int :: nimg=2; ! number of images to consider
+ __IPAR(nimg,1)
  float :: support, support2
  float :: oos3 = oos**3
-! float r2q(npt);
-! float dxq(npt);
-! float dyq(npt);
-! float dzq(npt);
-
+#ifdef _NORMALIZE_FILTER
+ float :: temp(nx,ny,nz)
+ float :: fnorm ! discrete filter norm
+ float :: f ! instantaneous filter value
+#endif
  float xmin, xmax, ymin, ymax, zmin, zmax
  int imin, imax, jmin, jmax, kmin, kmax
  int ii, jj, kk, im, jm, km
@@ -34,6 +34,10 @@ subroutine filt3()
  elsr=0d0
  grad_elsr=0d0
 !
+#ifdef __NORMALIZE_FILTER
+ temp=0d0
+#endif
+!
  do i=1,npt ! charges
   if (.not.quiet) __OUT(' Gridding charge #', i,' of ', npt);
 ! determine limit indices on the (periodic) grid
@@ -55,17 +59,15 @@ subroutine filt3()
   kmin = INT( (zmin-z0)*odz ) + 1
   kmax = INT( (zmax-z0)*odz ) + 2
 !
-!write(0,*) support
-!write(0,*) xmin, xmax, imin, imax
-!write(0,*) ymin, ymax, jmin, jmax
-!write(0,*) zmin, zmax, kmin, kmax
-!
+#ifdef _NORMALIZE_FILTER
+  fnorm=0d0
+#endif
+! spread charge into temporary array and compute normalization
   do ii=imin,imax
    dx2=(dxx*(ii-1) - (x(i) - x0) )**2; ! actual x-distance between gridpoint and charge
-!   im=ii; do while (im<0) ; im=im+nx-1 ; enddo ; im=mod(ii-1,nx-1)+1 ! in case modulo not implemented
    im=modulo(ii-1,nx-1)+1 ! x-grid index in the primary cell
    do jj=jmin,jmax
-    dy2=dx2+(dyy*(jj-1) - (y(i) - y0))**2;
+    dy2=dx2+(dyy*(jj-1) - (y(i) - y0) )**2;
     if (dy2>support2) cycle
     jm=modulo(jj-1,ny-1)+1
     do kk=kmin,kmax
@@ -73,11 +75,31 @@ subroutine filt3()
      if (dz2>support2) cycle
      km=modulo(kk-1,nz-1)+1
      r=sqrt(dz2)*oos; ! normalize by support
+#ifdef __NORMALIZE_FILTER
+     f=filter(r);
+     temp(im,jm,km) = q(i) * f
+     __INCR(fnorm,f)
+#else
      __INCR(rho(im,jm,km), q(i) * filter(r))
-!write(0,*) ii, jj, kk, im, jm, km, r, filter(r)
+#endif
     enddo !kk
    enddo !jj
   enddo !ii
+!
+#ifdef _NORMALIZE_FILTER
+  if (fnorm>kzero) then ; fnorm=1d0/(dxx*dyy*dzz*fnorm*oos3) ; else ; fnorm=1d0 ; endif ! remember that the filter f is nondimensional; must be scaled by 1/s^3
+  do ii=imin,imax
+   im=modulo(ii-1,nx-1)+1 ! x-grid index in the primary cell
+   do jj=jmin,jmax
+    jm=modulo(jj-1,ny-1)+1
+    do kk=kmin,kmax
+     km=modulo(kk-1,nz-1)+1
+     __INCR(rho(im,jm,km), temp(im,jm,km) * fnorm)
+     temp(im,jm,km)=0d0
+    enddo !kk
+   enddo !jj
+  enddo !ii
+#endif
 !
 ! also need to compute short-range potential energy at grid points
 ! do this in a primitive O(n^2) loop

@@ -7,13 +7,17 @@
 ! __IPAR(ny,16)
 ! __IPAR(nz,16)
 !
+ __IPAR(nx,25)
+ __IPAR(ny,25)
+ __IPAR(nz,25)
+!
 ! __IPAR(nx,32)
 ! __IPAR(ny,32)
 ! __IPAR(nz,32)
 !
- __IPAR(nx,48)
- __IPAR(ny,48)
- __IPAR(nz,48)
+! __IPAR(nx,48)
+! __IPAR(ny,48)
+! __IPAR(nz,48)
 !
 ! __IPAR(nx,64)
 ! __IPAR(ny,64)
@@ -80,7 +84,7 @@
 ! should be softcoded below 
  __FPAR(eps,1d0); ! permittivity
  __FPAR(oeps,1d0/eps); ! permittivity
- __FPAR(spt,0.2d0); ! filter support -- should move this elsewhere and make soft
+ __FPAR(spt,0.25d0); ! filter support -- should move this elsewhere and make soft
  __FPAR(oos,1d0/spt);
 
 ! for long-range ewald
@@ -91,7 +95,7 @@
  __FPAR(ktol, 0.5d0*0.9d0**fpo) ! empirical error tolerance for when to switch to taylor expansion
 #endif
 ! __FPAR(ktol, 0.2d0) ! empirical error tolerance for when to switch to taylor expansion
- __FPAR(kzero, 1d-14);
+ __FPAR(kzero, 1d-10);
 !
  bool :: quiet=.false. ! flag to generate minimal output
 
