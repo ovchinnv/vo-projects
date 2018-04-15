@@ -13,11 +13,13 @@ LINKOBJS= constants.o parser.o output.o cmd.o prm.o files.o ivector.o isort.o
 
 EXE=run
 
+
 include $(ROOT)/Makefile.inc
 
 .PRECIOUS : test $(EXE)
 
 $(OBJS) : vars.o
-#test : $(TESTOBJS)
-#	$(LD) $(TESTOBJS) -o test
-#	./test
+
+test :: $(TESTOBJS) $(LINKOBJS)
+	$(LD) $(TESTOBJS) -o test
+	./test
