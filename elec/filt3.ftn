@@ -4,7 +4,7 @@ subroutine filt3()
  use vars
  __IMPNONE
 
- __IPAR(nimg,6)
+ int :: nimg=-1, njmg=-1, nkmg=-1
  float :: support, support2
  float :: oos3
 #ifdef _NORMALIZE_FILTER
@@ -19,8 +19,7 @@ subroutine filt3()
  int i, j
  float r
  float dx2, dy2, dz2, odx, ody, odz
- float dxq, dyq, dzq, pre
-float dbg
+ float dxq, dyq, dzq, dxmin, dymin, dzmin, pre
 
 #if _FILTER==_GAUSS
  support = _GAUSS_SUPPORT*spt
@@ -29,6 +28,16 @@ float dbg
 #endif
  support2=support**2
  oos3=oos**3
+ nimg=INT(2d0*support/Lx) ! ratio of support sphere diameter to domain size
+ njmg=INT(2d0*support/Ly)
+ nkmg=INT(2d0*support/Lz)
+!
+#ifdef __DEBUG
+ __DBG(' Filter support is', support);
+ __DBG(' Will search', nimg,'neighbor images in x-direction');
+ __DBG(' Will search', njmg,'neighbor images in y-direction');
+ __DBG(' Will search', nkmg,'neighbor images in z-direction');
+#endif
 !
  odx=1d0/dxx
  ody=1d0/dyy
@@ -62,6 +71,12 @@ float dbg
 !
   kmin = INT( (zmin-z0)*odz ) + 1
   kmax = INT( (zmax-z0)*odz ) + 2
+!
+#ifdef __DEBUG
+  __DBG(' X-grid virtual limits are',imin,imax);
+  __DBG(' Y-grid virtual limits are',jmin,jmax);
+  __DBG(' Z-grid virtual limits are',kmin,kmax);
+#endif
 !
 #ifdef _NORMALIZE_FILTER
   fnorm=0d0
@@ -107,25 +122,34 @@ float dbg
 !
 ! also need to compute short-range potential energy at grid points
 ! do this in a primitive O(n^2) loop
-!if (.false.) then
-  do j=i,npt
-  if (j==i) then ;   dbg=0.5d0 ; else ; dbg=1d0 ; endif
+  do j=i+1,npt
+! NOTE :  in this implementation, go over several images, rather than computing minimal image(s) ; should be changed ?
+! I think we compute the number of images in each direction as INT(spt/Lx), etc ; then we find the minimum distance and
+! consider the neighboring images
+! in addition, we might make the image search asymmetric, depending on the direction of the distance vector
+#define __DPBC(_ANS,_X1,_X2,_LX) _ANS=modulo( (_X1)-(_X2), (_LX) ) ; if(_ANS>half*_LX) __INCR(_ANS,-_LX);
+!
+   __DPBC(dxmin,x(i),x(j),Lx) ; if (abs(dxmin)>support) cycle
+   __DPBC(dymin,y(i),y(j),Ly) ; if (abs(dymin)>support) cycle
+   __DPBC(dzmin,z(i),z(j),Lz) ; if (abs(dzmin)>support) cycle
+!
    do img=-nimg,nimg
-    dxq = (x(i)-x(j)) + Lx*img
-    if (abs(dxq)>support) cycle
-    do jmg=-nimg,nimg
-     dyq = (y(i)-y(j)) + Ly*jmg
-     if (abs(dyq)>support) cycle
+    dxq = dxmin + Lx*img
+    if (img.ne.0 .and. abs(dxq)>support) cycle ! 0 case already considered
+    do jmg=-njmg,njmg
+     dyq = dymin + Ly*jmg
+     if (jmg.ne.0 .and. abs(dyq)>support) cycle
      dy2=dxq**2 + dyq**2
      if (dy2>support2) cycle
-     do kmg=-nimg,nimg
-      dzq = (z(i)-z(j)) + Lz*kmg
-      if (abs(dzq)>support) cycle
+     do kmg=-nkmg,nkmg
+      dzq = dzmin + Lz*kmg
+      if (kmg.ne.0 .and. abs(dzq)>support) cycle
       dz2=dy2 + dzq**2
-      if (dz2 > support2 .or. dz2 < kzero) cycle
+!      if (dz2 > support2 .or. dz2 < kzero) cycle
+      if (dz2 > support2) cycle ! here dz2 cannot be zero, because i=/=j
       r=sqrt(dz2)*oos
 ! short-range potential
-      __INCR( elsr , dbg*q(i) * q(j) * fshort(r) ) ; ! might have contributions from multiple images ; need to x oos, because r has been scaled above
+      __INCR( elsr , q(i) * q(j) * fshort(r) ) ; ! might have contributions from multiple images ; need to x oos, because r has been scaled above
 
 ! short-range potential gradients
       pre = q(i) * q(j) * fshortp(r) ; ! double check normalization by support : need to x oos^3
@@ -133,7 +157,7 @@ float dbg
       __INCR(elsr_dx(i) , pre*dxq)
       __INCR(elsr_dy(i) , pre*dyq)
       __INCR(elsr_dz(i) , pre*dzq)
-! reflect for other atom in pair
+! equal and opposite force for other atom in pair
       __INCR(elsr_dx(j) , -pre*dxq)
       __INCR(elsr_dy(j) , -pre*dyq)
       __INCR(elsr_dz(j) , -pre*dzq)
@@ -141,7 +165,36 @@ float dbg
     enddo !jmg
    enddo !img
   enddo ! j/npt
-!endif
+! separate treatment of i-j case for large filters
+  if (nimg+njmg+nkmg > 0) then
+   do img=-nimg,nimg
+    dxq = Lx*img
+    if (abs(dxq)>support) cycle ! 0 case already considered
+    do jmg=-njmg,njmg
+     dyq = Ly*jmg
+     if (abs(dyq)>support) cycle
+     dy2=dxq**2 + dyq**2
+     if (dy2>support2) cycle
+     do kmg=-nkmg,nkmg
+      dzq = Lz*kmg
+      if (abs(dzq)>support) cycle
+      dz2=dy2 + dzq**2
+      if (dz2 > support2 .or. dz2 < kzero) cycle
+      r=sqrt(dz2)*oos
+! short-range potential
+      pre = half * q(i)**2
+      __INCR( elsr , pre * fshort(r) )
+
+! short-range potential gradients
+      pre = pre * fshortp(r) ; ! double check normalization by support : need to x oos^3
+!
+      __INCR(elsr_dx(i) , pre*dxq)
+      __INCR(elsr_dy(i) , pre*dyq)
+      __INCR(elsr_dz(i) , pre*dzq)
+     enddo !kmg
+    enddo !jmg
+   enddo !img
+  endif
 !
  enddo ! i/npt
 
