@@ -19,4 +19,4 @@ include $(ROOT)/Makefile.inc
 
 .PRECIOUS : test $(EXE)
 
-$(OBJS) : vars.o
+$(filter-out vars.o, $OBJS) : vars.o

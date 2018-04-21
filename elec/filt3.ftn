@@ -46,11 +46,15 @@ subroutine filt3()
  rho=0d0 ! initialize
  elsr=0d0
  grad_elsr=0d0
+ elxl=0d0
+ grad_elxl=0d0
 !
 #ifdef _NORMALIZE_FILTER
  temp=0d0
 #endif
 !
+ __OUT('Gridding charges and computing short-range forces');
+ quiet=.true.
  do i=1,npt ! charges
   if (.not.quiet) __OUT(' Gridding charge #', i,' of ', npt);
 ! determine limit indices on the (periodic) grid
@@ -122,17 +126,17 @@ subroutine filt3()
 !
 ! also need to compute short-range potential energy at grid points
 ! do this in a primitive O(n^2) loop
+#define __DPBC(_ANS,_X1,_X2,_LX) _ANS=modulo( (_X1)-(_X2), (_LX) ) ; if(_ANS>half*_LX) __INCR(_ANS,-_LX);
   do j=i+1,npt
-! NOTE :  in this implementation, go over several images, rather than computing minimal image(s) ; should be changed ?
+! NOTE : in this implementation, go over several images, rather than computing minimal image(s) ; should be changed ?
 ! I think we compute the number of images in each direction as INT(spt/Lx), etc ; then we find the minimum distance and
 ! consider the neighboring images
 ! in addition, we might make the image search asymmetric, depending on the direction of the distance vector
-#define __DPBC(_ANS,_X1,_X2,_LX) _ANS=modulo( (_X1)-(_X2), (_LX) ) ; if(_ANS>half*_LX) __INCR(_ANS,-_LX);
-!
+! determine minimum-image displacements :
    __DPBC(dxmin,x(i),x(j),Lx) ; if (abs(dxmin)>support) cycle
    __DPBC(dymin,y(i),y(j),Ly) ; if (abs(dymin)>support) cycle
    __DPBC(dzmin,z(i),z(j),Lz) ; if (abs(dzmin)>support) cycle
-!
+
    do img=-nimg,nimg
     dxq = dxmin + Lx*img
     if (img.ne.0 .and. abs(dxq)>support) cycle ! 0 case already considered
@@ -165,11 +169,12 @@ subroutine filt3()
     enddo !jmg
    enddo !img
   enddo ! j/npt
-! separate treatment of i-j case for large filters
+! separate treatment of i=j case for large filter supports (recall that we are only excluding self-interactions in the primary image)
   if (nimg+njmg+nkmg > 0) then
+   pre = half * q(i)**2
    do img=-nimg,nimg
     dxq = Lx*img
-    if (abs(dxq)>support) cycle ! 0 case already considered
+    if (abs(dxq)>support) cycle
     do jmg=-njmg,njmg
      dyq = Ly*jmg
      if (abs(dyq)>support) cycle
@@ -182,19 +187,46 @@ subroutine filt3()
       if (dz2 > support2 .or. dz2 < kzero) cycle
       r=sqrt(dz2)*oos
 ! short-range potential
-      pre = half * q(i)**2
       __INCR( elsr , pre * fshort(r) )
-
-! short-range potential gradients
-      pre = pre * fshortp(r) ; ! double check normalization by support : need to x oos^3
 !
-      __INCR(elsr_dx(i) , pre*dxq)
-      __INCR(elsr_dy(i) , pre*dyq)
-      __INCR(elsr_dz(i) , pre*dzq)
+! short-range potential gradients should cancel out, so we end up only with a modification to self-energy
+!
+!      pre = pre * fshortp(r) ; ! double check normalization by support : need to x oos^3
+!
+!      __INCR(elsr_dx(i) , pre*dxq)
+!      __INCR(elsr_dy(i) , pre*dyq)
+!      __INCR(elsr_dz(i) , pre*dzq)
      enddo !kmg
     enddo !jmg
    enddo !img
   endif
+!
+#ifdef __NAIVE_EXCLUSIONS
+! process electrostatic exclusions in an unsophisticated way
+! Note that they are independent of the splitting in principle ; in practive one could envision more or less efficient ways of computing them
+! for example, if one knows that exclusions do not span nore than a filter support, you could include them in a short-range sum
+! for this to work, you have to go over all charge points included in the support of point i (assuming that i has a neighbor list N(i) := Spt(i)
+ do jj=nbx(i),nex(i) ! over segment of exclusion list that corresponds to particle i
+  j=xcl(jj)          ! index of excluded particle
+  __DPBC(dxq,x(i),x(j),Lx) ! determine minimum-image displacement
+  __DPBC(dyq,y(i),y(j),Ly)
+  __DPBC(dzq,z(i),z(j),Lz)
+  dz2 = dxq**2 + dyq**2 + dzq**2
+  pre=q(i)*q(j)/sqrt(dz2)
+  __INCR( elxl , pre  )
+  pre=-pre/dz2
+  __INCR(elxl_dx(i) ,  pre*dxq)
+! equal and opposite force for other atom in pair
+  __INCR(elxl_dx(j) , -pre*dxq)
+!
+  __INCR(elxl_dy(i) ,  pre*dyq)
+  __INCR(elxl_dy(j) , -pre*dxq)
+
+  __INCR(elxl_dz(i) ,  pre*dzq)
+  __INCR(elxl_dz(j) , -pre*dzq)
+!
+ enddo ! exclusion list of particle i
+#endif
 !
  enddo ! i/npt
 
@@ -206,8 +238,14 @@ subroutine filt3()
  rho(:,:,nz)=rho(:,:,1)
 !
  __SCALE(elsr, oos/(fourpi*eps)) ! no division by 2 because loop does not double count
+ __SCALE(elxl, 1d0/(fourpi*eps)) ! excluded energy
+
  __SCALE(elsr_dx, oos3/(fourpi*eps)) ! these normalizations are needed because the filter is normalized by support, but units must be physical
  __SCALE(elsr_dy, oos3/(fourpi*eps))
  __SCALE(elsr_dz, oos3/(fourpi*eps))
+!
+ __SCALE(elxl_dx, 1d0/(fourpi*eps))
+ __SCALE(elxl_dy, 1d0/(fourpi*eps))
+ __SCALE(elxl_dz, 1d0/(fourpi*eps))
 
 end subroutine filt3
