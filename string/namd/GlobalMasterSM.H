@@ -1,20 +1,4 @@
-/* C prototypes */
-// C, not Fortran!
-#ifdef int
-#undef int
-#endif
-#ifdef float
-#undef float
-#endif
-
-#ifdef __CPLUSPLUS
-#define __EXTERN extern "C"
-#else
-#define __EXTERN extern
-#endif
-__EXTERN __CINT sm_init_from_namd (const __CINT, const __CFLOAT *, const  __CFLOAT *, const __CCHAR * , const __CINT, const __CCHAR *, const __CINT,  __CINT **);
-__EXTERN   void sm_done_from_namd ();
-__EXTERN __CINT sm_dyna_from_namd ( const long int, const __CFLOAT *, __CFLOAT *, __CFLOAT *, __CINT ** );
+#include "../plugin/struna.H"
 
 #ifndef GLOBALMASTERSM_H
 #define GLOBALMASTERSM_H
@@ -33,9 +17,11 @@ class GlobalMasterSM : public GlobalMaster {
   void destroy();
   Molecule *molecule;
   SimParameters * params;
+  long int iteration; // not sure we need to keep a local counter
 //  SubmitReduction *reduction;
-  long int iteration;
   __CFLOAT sm_energy;
   __CINT *atomlist=NULL; // to maintain a list of atoms that are needed by plugin; memory managed by FORTRAN side
   __CFLOAT *r=NULL, *fr=NULL ; //positions and forces
+  __CFLOAT box[12] ; // three unit cell vectors followed by cell origin
+  __CBOOL usesPeriodic ;// whether the simulation uses PBC
 };
