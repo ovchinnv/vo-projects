@@ -167,4 +167,3 @@ pcolor(y*todeg,x*todeg,f'); shading interp ; colorbar
 
 %f4=[ f' f' ; f' f' ] ; % extend periodically
 %pcolor(f4) ; shading interp ; colorbar ;
-
