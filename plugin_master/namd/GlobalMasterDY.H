@@ -1,16 +1,16 @@
-#include "../plugin/struna.H"
+#include "../plugin.H"
 
-#ifndef GLOBALMASTERSM_H
-#define GLOBALMASTERSM_H
+#ifndef GLOBALMASTERDY_H
+#define GLOBALMASTERDY_H
 #endif
 
 class Molecule;
 class SubmitReduction;
 
-class GlobalMasterSM : public GlobalMaster {
+class GlobalMasterDY : public GlobalMaster {
  public:
-  GlobalMasterSM();
-  ~GlobalMasterSM();
+  GlobalMasterDY();
+  ~GlobalMasterDY();
  private:
   Bool initialized;
   void calculate();
