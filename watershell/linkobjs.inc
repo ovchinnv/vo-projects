@@ -3,6 +3,7 @@ LINKOBJS+=\
  erfsun_ref.o \
  erfsun_value.o \
  lu.o \
+ bestfit.o \
  constants.o\
  output.o \
  parser.o \

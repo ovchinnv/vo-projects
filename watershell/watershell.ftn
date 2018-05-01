@@ -329,9 +329,6 @@ module _N
 !
 #undef __INT
 !
-#undef __MINUSERR
-#define __LEZEROERR
-!
 #define __VAR distance_update_step
 #define __TAG __VAR
 #define __NAME memory constant for surface contour update
@@ -344,6 +341,9 @@ module _N
 #define __DOIFOK if (__VAR.le.zero) then ; __WRN(whoami, 'SURFACE UPDATE IS OFF.') ; \
  elseif (__VAR .gt. one ) then ; __WRN(whoami, ftoupper(__STRING(__NAME))//' SHOULD _NOT_ BE GREATER THAN ONE !') ; endif
 #include "parser/parser_macro2.src"
+!
+#undef __MINUSERR
+#define __LEZEROERR
 !
 #define __VAR target_surface_energy
 #define __TAG __VAR
@@ -589,7 +589,11 @@ module _N
  end __SUB(done)
 !================================================================
  __SUB(main)(r,fr,energy)
+#ifdef __F_T_COUPLED
  use lu
+#else
+ use bestfit, only : matinv3sym
+#endif
  float, intent(in) :: r(:,:)   ! coordinate array
  float, intent(out) :: fr(:,:) ! force array
  float, intent(out) :: energy
@@ -612,11 +616,17 @@ module _N
  float :: ir1,ir2,ir3,ir1s,ir2s,ir3s,ir12,ir13,ir23, oontorque
  float, dimension(3) :: ir_sum
  float, dimension(3) :: oforce ! existing force
- float, dimension(6,6) :: A ! matrix for torque removal
+#ifdef __F_T_COUPLED
+ float, dimension(6,6) :: A ! matrix for force and torque removal
+#else
+ float, dimension(3,3) :: B ! matrix for torque removal
+#endif
  float, dimension(6) :: rhs ! vector for net force and torque removal
 #endif
 #ifdef __OMP
-#define __REDUCE(_W) __INCR(_W,__U(_W)) ! thread reduction
+#//define __REDUCE(_W) __INCR(_W,__U(_W)) ! thread reduction
+#define __REDUCE(_W) _W=_W+__U(_W) ! thread reduction
+#define __AREDUCE(_W,_I) _W(_I)=_W(_I)+__U(_W)(_I)
  float :: __U(surface_energy)
  float :: __U(surface_force)
  float :: __U(density_beyond_contour)
@@ -765,7 +775,9 @@ module _N
   ir1=zero ; ir2=zero; ir3=zero; ir1s=zero ; ir2s=zero ; ir3s=zero ; ir12=zero ; ir23=zero ; ir13=zero ;
   net_force=zero
   net_torque=zero
+#ifdef __F_T_COUPLED
   A=zero
+#endif
  endif
 #endif
 !
@@ -776,7 +788,11 @@ module _N
 !$omp parallel &
 !$omp shared (dist_solv, ddist_solv, surface_distance, surface_force_constant, &
 #ifdef __RMFT
-!$omp remove_net_torque, net_force, net_torque, A, rhs, qforced_solv, r_com, &
+!$omp remove_net_torque, net_force, net_torque, &
+#ifdef __F_T_COUPLED
+!$omp A, &
+#endif
+!$omp rhs, qforced_solv, r_com, &
 !$omp ir1,ir2,ir3,ir1s,ir2s,ir3s,ir12,ir13,ir23, &
 #endif
 !$omp nsolvent, nsurface, nsolvent_outside, surface_force, surface_energy, isolvent_atoms, isurface_atoms, r_surf, r_solv, fr ) &
@@ -857,11 +873,14 @@ module _N
  enddo ! nsolvent
 #ifdef __OMP
 !$omp end do
-!$omp critical
+!!$omp critical
+!$omp atomic
  __REDUCE(nsolvent_outside)
+!$omp atomic
  __REDUCE(surface_energy)
+!$omp atomic
  __REDUCE(surface_force)
-!$omp end critical
+!!$omp end critical
 #endif
 #ifdef __DEBUG
 #ifdef __OMP
@@ -877,19 +896,40 @@ module _N
 #ifdef __RMFT
  if (remove_net_torque) then
 #ifdef __OMP
-!$omp critical
-  __REDUCE(net_force)
-  __REDUCE(net_torque)
+!!$omp critical
+!  __REDUCE(net_force)
+!  __REDUCE(net_torque)
+!$omp atomic
+  __AREDUCE(net_force,1)
+!$omp atomic
+  __AREDUCE(net_force,2)
+!$omp atomic
+  __AREDUCE(net_force,3)
+!$omp atomic
+  __AREDUCE(net_torque,1)
+!$omp atomic
+  __AREDUCE(net_torque,2)
+!$omp atomic
+  __AREDUCE(net_torque,3)
+!$omp atomic
   __REDUCE(ir1)
+!$omp atomic
   __REDUCE(ir2)
+!$omp atomic
   __REDUCE(ir3)
+!$omp atomic
   __REDUCE(ir1s)
+!$omp atomic
   __REDUCE(ir2s)
+!$omp atomic
   __REDUCE(ir3s)
+!$omp atomic
   __REDUCE(ir12)
+!$omp atomic
   __REDUCE(ir13)
+!$omp atomic
   __REDUCE(ir23)
-!$omp end critical
+!!$omp end critical
 ! solve for force correction
 ! construct matrix
 !$omp barrier ! this necessary to ensure that reduction is complete
@@ -962,17 +1002,16 @@ module _N
   endif ! remove_net_force
   rhs(4:6)=-net_torque;
 !
-! now, can compute A :
+! now, can compute force/torque matrix:
 ! note that for the special case __TORQUE_COM_SOLVENT && __TORQUE_FROM_SOLVENT, can invert matrix analytically,
 ! because the matrix is block diagonal; this should be true even with simple force removal from any atom set;
 ! this is because the torque is defined/removed about the COM of the solvent atom removal group UNLESS we use TORQUE_COM_SURFACE;
 ! in that case, there will be cross terms in the matrix, so that it is not block diagonal
-! we may implement this case separately later ; difference in the computational efficiency is expected to be small,
-! but we may be able to expose singularities, or other ill-conditioning, in a more transparant way
-!
+#ifdef __F_T_COUPLED
   A(1,1)=ntorque_atoms
   A(2,2)=ntorque_atoms
   A(3,3)=ntorque_atoms
+#endif
 ! modify irxx variables to include COM contribution
 ! NOTE : linear terms should be zero with __TORQUE_COM_SOLVENT
 ! keeping here explicitly fr a check, but will simplify in the future
@@ -985,10 +1024,10 @@ module _N
   __INCR(ir13, ntorque_atoms*r_com(1)*r_com(3)-(r_com(1)*ir3 + r_com(3)*ir1))
   __INCR(ir23, ntorque_atoms*r_com(2)*r_com(3)-(r_com(2)*ir3 + r_com(3)*ir2))
 ! linear terms : (they will disappear when using __TORQUE_COM_SOLVENT
+#ifdef __F_T_COUPLED
   __INCR(ir1,-ntorque_atoms*r_com(1))
   __INCR(ir2,-ntorque_atoms*r_com(2))
   __INCR(ir3,-ntorque_atoms*r_com(3))
-#undef ntorque_atoms
 ! now, compute the matrix from these variables
   A(5,1)= ir3
   A(6,1)=-ir2
@@ -1011,10 +1050,12 @@ module _N
   A(3,4)=-A(6,1); A(4,3)=A(3,4)
   A(3,5)=-A(6,2); A(5,3)=A(3,5)
 !       invert by LU
-!#ifdef __DEBUG
-!  write(555,'(6g12.5)') A
-!  write(555,'(6g12.5)') rhs
-!#endif
+#ifdef __DEBUG
+  write(555,'(6g12.5)') A
+  write(555,*)
+  write(555,'(6g12.5)') rhs
+  write(555,*)
+#endif
   call inv_lu(A, A, 6, i);
 #ifdef __DEBUG
   if (i.eq.1) then ! singular matrix  -- why ?
@@ -1031,6 +1072,31 @@ module _N
   endif
 #endif
   rhs=matmul(A, rhs);
+#ifdef __DEBUG
+  write(555,*) 'inverse and solution:'
+  write(555,'(6g12.5)') A
+  write(555,*)
+  write(555,'(6g12.5)') rhs
+  write(555,*)
+#endif
+
+#else // force and torque decoupled
+  B(1,1)= ir2s+ir3s
+  B(1,2)=-ir12
+  B(1,3)=-ir13
+  B(2,2)= ir1s+ir3s
+  B(2,3)=-ir23
+  B(3,3)= ir1s+ir2s
+! remaining entries from symmetry (unnecessary for symmetric routine)
+!  B(2,1)=B(1,2)
+!  B(3,1)=B(1,2)
+!  B(3,2)=B(2,3)
+  call matinv3sym(B,B)
+  __SCALE(rhs(1:3),oontorque) ! when force and torque are decoupled, the first block 3x3 matrix is diagonal ; 2nd and 3rd are zero and fourth is B above
+  rhs(4:6)=matmul(B,rhs(4:6))
+#endif
+#undef ntorque_atoms
+!
 #ifdef __SIMPLE_NET_FORCE_SOLVENT
 ! include implicit force mod in rhs (note that in this case netforce have been sign-inverted above)
   if (remove_net_force) then
@@ -1129,18 +1195,36 @@ module _N
   enddo
 #ifdef __OMP
 !$omp end do
-!$omp critical
-  __REDUCE(net_force)
-  __REDUCE(net_torque)
-!$omp end critical
-!$omp single
+!!$omp critical
+!  __REDUCE(net_force)
+!$omp atomic
+  __AREDUCE(net_force,1)
+!$omp atomic
+  __AREDUCE(net_force,2)
+!$omp atomic
+  __AREDUCE(net_force,3)
+!  __REDUCE(net_torque)
+!$omp atomic
+  __AREDUCE(net_torque,1)
+!$omp atomic
+  __AREDUCE(net_torque,2)
+!$omp atomic
+  __AREDUCE(net_torque,3)
+!!$omp end critical
 #endif __OMP
-!#ifdef __DEBUG
-! write(0,*) 'Net force on solvent after correction: ', sum(fr(:,isolvent_atoms),2)
-! write(0,*) 'Net force & torque after correction: ', net_force, net_torque
-!#endif
+!
+#ifdef __DEBUG
+#ifdef __OMP
+!$omp barrier ! this seems to be needed to make sure net_force is complete before output
+!$omp single
+#endif
+! write(0,*) 'Net force on solvent after correction (direct): ', sum(fr(:,isolvent_atoms),2)
+! write(0,*) 'Net force on surface after correction (direct): ', sum(fr(:,isurface_atoms),2)
+ write(0,*) 'Net force & torque after correction: ', net_force, net_torque
+ write(0,*) 'Net torque COM: ', r_com
 #ifdef __OMP
 !$omp end single
+#endif
 #endif
 !
 #ifdef __SHOW_TORQUE
