@@ -40,7 +40,6 @@ module _N
  public __NM(initialize)
  public __NM(main)
  public __NM(done)
- private __NM(write_restart_file)
 !
 ! hack to make variables from system visible from plugin
  public natom
@@ -66,9 +65,8 @@ module _N
  float :: surface_contour_value ! value of density isosurface which is defines the surface ; negative means to compute from structure
 !
  __PAR(iteration,int,izero)   ! iteration
+
 ! surface evolution and output parameters
- __PAR(distance_update_freq, int, ione)          ! frequency of updating distance value
- __PAR(distance_update_step, float, 0.001d0)     ! constant for update
  __PAR(structure_update_freq, int, ione)         ! frequency of updating coordinats from which the surface is generated
  __PAR(structure_update_memory, float, 0.999d0)  ! memory constant for exponential update
  __PAR(output_freq, int, 1000)              ! frequency of writing output file
@@ -84,6 +82,22 @@ module _N
  __PAR(remove_net_force, bool, .true.)   ! whether to remove net force ( ONLY ACTIVE IF removing net torque )
 #endif
  __PAR(qminimum_distance, bool, .false.) ! use the (cheaper) minimum distance method, rather than density method
+!
+#ifdef __BAROSTAT
+! === v barostat parameters v ====
+ __PAR(barostat, bool, .true.) ! optional, but if barostat=off then pressure control turned off
+ __PAR(pressure_target, float, one) ! units of atm
+ __PAR(pressure_update_memory, float, 0.999d0) ! how pressure is defined from force and area
+ __PAR(pressure_update_freq, int, 10) ! how often pressure is updated from force and area
+! distance update :
+ __PAR(distance_update_freq, int, 10)          ! frequency of updating distance value
+ __PAR(distance_update_step, float, 0.001d0)   ! constant for update
+! surface area computation parameters (hopefully, adjusting from defaults should be unnecessary)
+ __PAR(surface_area_grid_spacing, float, one)
+ __PAR(surface_area_grid_buffer, float, ten)
+ __PAR(surface_area_compute_freq, int, 2) ! surface area gets recomputed every structure_update_freq times this
+! === ^ barostat parameters ^ ====
+#endif
 !
 !  atom selections
  __PAR(surface_atom_selection, character(len=vartaglen), 'ANAME=CA')  ! protein CA trace
@@ -126,6 +140,9 @@ module _N
  float :: max_force(3) = (/zero, zero, zero/);
  float :: net_torque(3) = (/zero, zero, zero/);
 #endif
+! pressure variables
+ float :: surface_area
+ float :: pressure, pressure_ave
 !
  int :: fid
  bool :: qrestart=.false. ! whether we are restarting from a restart file
@@ -264,13 +281,85 @@ module _N
 #define __VAR	iteration
 #define __TAG	__VAR
 #define __NAME	starting iteration
-!
 #include "parser/parser_macro2.src"
+!
+#ifdef __BAROSTAT
+! barostat flag
+#undef __INT
+#define __BOOL
+#define __VAR	barostat
+#define __TAG	__VAR
+#define __NAME	flag to turn barostat on/off
+#define __DOIFOK if (.not.__VAR) __MESSAGE(whoami, 'BAROSTAT IS OFF. WILL IGNORE BAROSTAT-RELATED SETTINGS.')
+#include "parser/parser_macro2.src"
+#undef __BOOL
+#define __INT
+! initialize barostat-related parameters:
+ if (barostat) then
+#define __VAR	pressure_update_freq
+#define __TAG	__VAR
+#define __NAME	frequency of computing instantaneous shell pressure
+#define __DOIFOK if (__VAR.eq.izero) then; \
+                  __MESSAGE(whoami, 'PRESSURE UPDATE IS OFF. TURNING BAROSTAT OFF.'); \
+                  barostat=.false. ; \
+                 endif ! it does not make any sense to run barostat without a pressure calculation !
+#include "parser/parser_macro2.src"
+ endif ! barostat
+!
+ if (barostat) then ! repeat if because barostat may have been turned off
+#define __VAR	surface_area_compute_freq
+#define __TAG	__VAR
+#define __NAME	frequency of computing instantaneous shell surface area
+#define __DOIFOK if (__VAR.eq.izero) then; \ 
+                  __MESSAGE(whoami, 'SURFACE AREA COMPUTATION IS OFF. TURNING BAROSTAT OFF.'); \
+                  barostat=.false. ; \
+                 endif ! it does not make any sense to run barostat without a surface area calculation !
+#include "parser/parser_macro2.src"
+!
+#undef __INT // default is float
+!
+#define __VAR	pressure_target
+#define __TAG	__VAR
+#define __NAME	target pressure (in atm)
+#include "parser/parser_macro2.src"
+!
+#define __VAR	pressure_update_memory
+#define __TAG	__VAR
+#define __NAME	memory constant for pressure update
+#include "parser/parser_macro2.src"
+!
+! surface area computation parameters (hopefully, adjusting from defaults should be unnecessary)
+#define __LEZEROERR
+#define __VAR	surface_area_grid_spacing
+#define __TAG	__VAR
+#define __NAME	grid spacing for surface area computation
+#include "parser/parser_macro2.src"
+!
+! NOTE : should consider the possibility of periodicity
+#define __VAR	surface_area_grid_buffer
+#define __TAG	__VAR
+#define __NAME	grid buffer for surface area computation
+#define __DOIFOK if (__VAR.lt. __CONCAT(default_,__VAR) ) then ; \
+                      __WRN(whoami, 'SETTING A LOW VALUE FOR SURFACE AREA GRID BUFFER MAY CAUSE INACCURACIES.');\
+                 endif
+#include "parser/parser_macro2.src"
+!
+#define __VAR distance_update_step
+#define __TAG __VAR
+#define __NAME memory constant for updating target distance from surface
+#define __DOIFOK if (__VAR.le.zero) __WRN(whoami, 'UPDATE OF SURFACE CONTOUR REFERENCE VALUE IS OFF.')
+#include "parser/parser_macro2.src"
+!
+#define __INT
+!
 #define __VAR	distance_update_freq
 #define __TAG	__VAR
 #define __NAME	frequency of updating target distance from surface
 #define __DOIFOK if (__VAR.eq.izero) __MESSAGE(whoami, 'UPDATE OF SURFACE DISTANCE VALUE IS OFF.')
 #include "parser/parser_macro2.src"
+!
+ endif ! barostat
+#endif
 !
 #define __VAR	structure_update_freq
 #define __TAG	__VAR
@@ -328,12 +417,6 @@ module _N
 #endif
 !
 #undef __INT
-!
-#define __VAR distance_update_step
-#define __TAG __VAR
-#define __NAME memory constant for surface contour update
-#define __DOIFOK if (__VAR.le.zero) __WRN(whoami, 'UPDATE OF SURFACE CONTOUR REFERENCE VALUE IS OFF.')
-#include "parser/parser_macro2.src"
 !
 #define __VAR structure_update_memory
 #define __TAG __VAR
@@ -507,9 +590,30 @@ module _N
     __WRN(whoami, 'ERROR READING AVERAGE NET FORCE FROM LINE "'//trim(line)//'"')
    endif ! line ok
   else ! qrestart
-   net_force_ave=zero;
+   net_force_ave=zero; ! note that this value should not expected to be physical, since we do not have any statistics at the outset
   endif ! qrestart
  endif ! remove net_torque
+#endif
+!
+#ifdef __BAROSTAT
+! if using barostat, read current running pressure and surface area :
+ if (barostat) then
+  if (qrestart) then
+! (1) read pressure value
+   line=getval_nocase('pressure',__STRING(__RESTARTCTX))
+   if (len_trim(line).gt.0) then
+    read(line,*,iostat=ierr) pressure_ave
+    if (ierr.ne.0) then
+     __WRN(whoami, 'ERROR READING PRESSURE FROM LINE "'//trim(line)//'"')
+    endif
+   else
+    __WRN(whoami, 'ERROR READING PRESSURE FROM LINE "'//trim(line)//'"')
+   endif ! line ok
+  else ! qrestart
+   pressure_ave=-one; ! this value used for initialization is not physical
+  endif ! qrestart
+!
+ endif ! barostat
 #endif
 !
  rad_surf=radius(isurface_atoms)
@@ -545,6 +649,11 @@ module _N
 ! need to write out average force (since it is a time average)
  if (remove_net_torque) then
  _W 'average_net_force=(',net_force_ave,')'
+ endif
+#endif
+#ifdef __BAROSTAT
+ if (barostat) then
+ _W 'pressure=',pressure_ave
  endif
 #endif
 ! write the current reference atoms :
@@ -965,6 +1074,7 @@ module _N
  write(0,*) 'Force and torque before(2): ', net_force, net_torque
 #endif
 !
+! note : need a modification in the case that net_force_ave is zero (as in the beginning)
   if (remove_net_force) then
    net_force_ave = net_force_ave_update_memo * net_force_ave + ( one - net_force_ave_update_memo) * net_force ;
 #ifdef __SIMPLE_NET_FORCE_SOLVENT
@@ -1300,7 +1410,7 @@ module _N
  __INCR(nsolvent_outside, __U(nsolvent_outside))
  __INCR(surface_energy, __U(surface_energy))
  __INCR(surface_force, __U(surface_force))
- __INCR(density_beyond_contour, __U(density_beyond_contour)) ! not clear what to do with tis value, or whether it is useful
+ __INCR(density_beyond_contour, __U(density_beyond_contour)) ! not clear what to do with this value, or whether it is useful
 !$omp end critical
 !$omp end parallel
 #endif
@@ -1318,24 +1428,50 @@ module _N
  __SCALE(surface_force, -surface_force_constant) ! negative because of sign convention
  __SCALE(surface_energy, half*surface_force_constant)
 !
- __INCR(energy,surface_energy)
+ __INCR(energy,surface_energy) ! unclear whether useful
+!
+#ifdef __BAROSTAT
+! barostat-related code :
+ if (barostat) then
+!== compute surface area :
+  if (surface_area_compute_freq.gt.0) then
+   if __CHKUPDATE(surface_area_compute_freq) then
+    if (qminimum_distance) then
+     call __NM(compute_surface_area_mindist)()
+    else
+     call __NM(compute_surface_area)()
+    endif ! mindist
+   endif ! chkupdate
+  endif ! surface area compute
+!
+!== compute pressure :
+!
+  if (pressure_update_freq.gt.0) then
+   if __CHKUPDATE(pressure_update_freq) then
+    pressure=surface_force/surface_area
+! update running average
+    if (pressure_ave.gt.0) then
+     __INCR(pressure_ave, (1d0 - pressure_update_memory) * (pressure - pressure_ave))
+    else
+     pressure_ave=pressure ! initialization at the beginning
+    endif
+   endif ! chkupdate
+  endif ! pressure update
 !
 !=========================== evolve/update contour value using surface energy
+  if (distance_update_freq.gt.0) then
+   if __CHKUPDATE(distance_update_freq) then
 !
- if (distance_update_freq.gt.izero) then
-  if __CHKUPDATE(distance_update_freq) then
-! for now, a very simple update strategy
-! in the future will add estimation of pressure and surface tension
-!
-! if the surface energy is higher than the target, d0 < 0, and the surface distance (which is negative ) will decrease
-    d0 = ( target_surface_energy - oonsolvent_outside * surface_energy );
-    __INCR(surface_distance, distance_update_step * d0)
+    d0 = ( pressure_target - pressure_ave )
+    __INCR(surface_distance, distance_update_step * d0) ! note that surface_distance < 0 in our notation ; so too high p => dist decr.
     surface_contour_value = __RHO(surface_distance)
-
+!
+   endif
   endif
- endif
+ endif ! barostat-related
+#endif
 !============================================= output restart file
- if (output_freq.gt.izero) then
+ if (output_freq.gt.0) then
   if __CHKUPDATE(output_freq) then
 ! write a short update of simulation parameters:
   i=0 ;
@@ -1347,14 +1483,18 @@ module _N
   __OUT('Current avg. distance to protein:', current_surface_distance)
   __OUT('# Solute atoms used for density: ', nsurface)
   __OUT('# Solvent atoms outside / total: ', nsolvent_outside,'/',nsolvent)
+ if (.not. qminimum_distance) then ! not relevant to mindist algorithm
   __OUT('Surface contour value:           ', surface_contour_value)
-  __OUT('Target surface energy:           ', target_surface_energy)
-  __OUT('Current avg. surface energy:     ', surface_energy * oonsolvent_outside )
+ endif
 #if defined(__SHOW_TORQUE) && defined(__RMFT)
   if (remove_net_torque) then
    __OUT('Net force applied to system:    ', net_force)
    __OUT('Net torque applied to system:   ', net_torque)
   endif
+#endif
+#ifdef __BAROSTAT
+  __OUT('Target pressure:                 ', pressure_target)
+  __OUT('Simulation pressure:             ', pressure_ave )
 #endif
   __OUT('===================')
 !
@@ -1849,5 +1989,14 @@ module _N
 !
  end __SUB(compute_mindist_grad)
 !================================================================
+ __SUB(compute_surface_area)()
+
+ end __SUB(compute_surface_area)
+!================================================================
+ __SUB(compute_surface_area_mindist)()
+
+ end __SUB(compute_surface_area_mindist)
+!================================================================
+
 end module _N
 
