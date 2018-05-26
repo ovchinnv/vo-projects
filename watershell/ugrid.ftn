@@ -1,0 +1,161 @@
+#ifdef _N
+#undef _N
+#endif
+#define _N ugrid
+
+#ifdef __CLASS
+#define __TYPE class
+#else
+#define __TYPE type
+#endif
+
+module _N
+ __DEP_OUTPUT
+ __DEP_PARSER
+ __DEP_CONST
+ __IMPNONE
+ type grid
+  int :: ndim=0
+  int, dimension(:), pointer :: n=>NULL()
+  float, dimension(:,:), pointer :: limits=>NULL() ! domain limits : 1st dimension containt two limits, second dimension indexes grid dimension (e.g. 2D,  3D, etc)
+  float, dimension(:), pointer :: dr=>NULL() ! (uniform) grid spacing
+  float, dimension(:), pointer :: lengths=>NULL()
+  bool :: initialized = .false.
+#ifdef __CLASS
+  contains
+   generic, public :: initialize =>__NM(init_from_points), __NM(init_from_spacings)
+   procedure, private :: __NM(init_from_points)
+   procedure, private :: __NM(init_from_spacings)
+   procedure :: done => __NM(done)
+   procedure :: finalize => __NM(done)
+#endif
+ end type grid
+
+ interface __NM(initialize)
+  module procedure __NM(init_from_points)
+  module procedure __NM(init_from_spacings)
+ end interface __NM(initialize)
+!
+ private __NM(init_from_points)
+ private __NM(init_from_spacings)
+!
+ contains
+!========================================================
+  __SUB(init_from_points)(agrid, ndim_ , limits_, n_)
+  __IAM(__NM(initialize))
+  __TYPE (grid) :: agrid
+  int, intent(in) :: ndim_, n_(:)
+  float, intent(in) :: limits_(:,:)
+
+  int i, j
+! sanity checks :
+  __ASSERT(ndim_,>,0)
+  __ASSERT(size(n_),==,ndim_)
+  __ASSERT(all(n_>1),.eqv.,.true.)
+  __ASSERT(size(limits_,1),==,2)
+  __ASSERT(size(limits_,2),==,ndim_)
+  __ASSERT(all(limits_(2,:)>limits_(1,:)), .eqv. , .true.)
+! all ok: set/allocate vars
+  agrid%ndim=ndim_
+  allocate(agrid%n(agrid%ndim))
+  agrid%n=n_
+  allocate(agrid%limits(2,agrid%ndim))
+  agrid%limits=limits_
+  allocate(agrid%lengths(agrid%ndim))
+  allocate(agrid%dr(agrid%ndim))
+  agrid%lengths=( agrid%limits(2,:) - agrid%limits(1,:) )
+  agrid%dr = ( agrid%lengths ) / (agrid%n-1)
+
+! output summary :
+  i=0 ;
+#define __OUT(...)  __INC(i);write(_MSGBUF(i),*) __VA_ARGS__
+  __OUT('===================')
+  __OUT('Initialized grid in ', itoa(agrid%ndim), 'dimensions')
+  __OUT(' domain size : ')
+  do j=1,agrid%ndim
+   __OUT('  ',j,' : ', agrid%limits(1,j), '--', agrid%limits(2,j) )
+  enddo
+  __OUT(' discretization : ')
+  do j=1,agrid%ndim
+   __OUT('  ',j,' : ', agrid%n(j) )
+  enddo
+  __OUT(' spacing : ')
+  do j=1,agrid%ndim
+   __OUT('  ',j,' : ', agrid%dr(j) )
+  enddo
+  __OUT('===================')
+!
+  agrid%initialized=.true.
+!
+  end __SUB(init_from_points)
+!========================================================
+  __SUB(init_from_spacings)(agrid, ndim_ , limits_, spacings_, adjust_spacings_)
+  __IAM(__NM(initialize))
+  __TYPE (grid) :: agrid
+  int, intent(in) :: ndim_
+  float, intent(in) :: limits_(:,:), spacings_(:)
+  int i, j
+  __OPAR(adjust_spacings,bool)
+  __PRESENT(adjust_spacings, .false.)
+
+! sanity checks :
+  __ASSERT(ndim_,>,0)
+  if (size(spacings_)>1) then
+   __ASSERT(size(spacings_),==,ndim_)
+  endif
+  __ASSERT(all(spacings_>0),.eqv.,.true.)
+  __ASSERT(size(limits_,1),==,2)
+  __ASSERT(size(limits_,2),==,ndim_)
+  __ASSERT(all(limits_(2,:)-limits_(1,:) > spacings_), .eqv. , .true.)
+! all ok: set/allocate vars
+  agrid%ndim=ndim_
+  allocate(agrid%dr(agrid%ndim))
+  agrid%dr = spacings_ ! preliminary
+  allocate(agrid%lengths(agrid%ndim))
+  allocate(agrid%limits(2,agrid%ndim))
+  agrid%limits=limits_ ! preliminary, since the number of points in each dimension has to be an integer
+  agrid%lengths=( agrid%limits(2,:) - agrid%limits(1,:) ) ! preliminary
+  allocate(agrid%n(agrid%ndim))
+  agrid%n = nint(agrid%lengths/agrid%dr + half ) + ione
+  if (adjust_spacings) then
+   agrid%dr=agrid%lengths/agrid%n
+  else
+   agrid%lengths = agrid%dr * ( agrid%n - ione )
+   agrid%limits(1,:) = agrid%limits(1,:) - half * ( agrid%lengths - ( agrid%limits(2,:) - agrid%limits(1,:) ) ) ! split difference evenly at endpoints
+   agrid%limits(2,:) = agrid%limits(1,:) + agrid%lengths
+  endif
+
+! output summary :
+  i=0 ;
+#define __OUT(...)  __INC(i);write(_MSGBUF(i),*) __VA_ARGS__
+  __OUT('===================')
+  __OUT('Initialized grid in ', itoa(agrid%ndim), 'dimensions')
+  __OUT(' domain size (possibly adjusted) : ')
+  do j=1,agrid%ndim
+   __OUT('  ',j,' : ', agrid%limits(1,j), '--', agrid%limits(2,j) )
+  enddo
+  __OUT(' discretization : ')
+  do j=1,agrid%ndim
+   __OUT('  ',j,' : ', agrid%n(j) )
+  enddo
+  __OUT(' spacing (possibly adjusted) : ')
+  do j=1,agrid%ndim
+   __OUT('  ',j,' : ', agrid%dr(j) )
+  enddo
+  __OUT('===================')
+!
+  agrid%initialized=.true.
+!
+  end __SUB(init_from_spacings)
+!========================================================
+  __SUB(done)(agrid)
+  __TYPE (grid) :: agrid
+  __FREE(agrid%n)
+  __FREE(agrid%limits)
+  __FREE(agrid%dr)
+  __FREE(agrid%lengths)
+  agrid%ndim=0
+  agrid%initialized=.false.
+  end __SUB(done)
+!========================================================
+end module _N

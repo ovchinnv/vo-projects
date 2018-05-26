@@ -5,6 +5,7 @@ module __NM(plugin)
  __DEP_CONST
  __DEP_VECTORS
  __CBIND
+ use unitcell
  use _N
 
  __IMPNONE
@@ -15,6 +16,7 @@ module __NM(plugin)
  int(__FCINT), target, allocatable :: atomlist(:), forced_atomlist(:)
  int, parameter :: foutput=999 ! output file unit
  type (int_vector) :: atoms, forced_atoms
+ type (cell) :: ucell
 !
 !
  contains
@@ -24,7 +26,7 @@ module __NM(plugin)
 #define __CFUN(__NAME, ...) function __NAME (__VA_ARGS__) bind(c, name=__STRING(__NAME))
 !
 #define _ME __NM(init_from_plugin)
- __CFUN(_ME, inputname, il, outputname, ol, alist);
+ __CFUN(_ME, inputname, il, outputname, ol, alist, qper, box);
  __DEP_PARSER
  __DEP_FILES
  __DEP_VECTORS
@@ -36,6 +38,8 @@ module __NM(plugin)
  int( __FCINT), intent(in), value :: il, ol
  type(c_ptr), value, intent(in) :: inputname, outputname
  type(c_ptr), intent(out) :: alist ! send back a list of atom indices
+ logical(__FCBOOL), value, intent(in) :: qper
+ real(__FCFLOAT), intent(in), dimension(3,3) :: box ! lattice vectors
 !
  character(len=il), pointer :: ifname
  character(len=ol), pointer :: ofname
@@ -71,7 +75,12 @@ module __NM(plugin)
 !
  call atoms%init()
  call forced_atoms%init()
- call __NM(initialize)(atoms, forced_atoms)
+ if (qper) then 
+  call ucell%update_vectors(box)
+  call __NM(initialize)(atoms, forced_atoms, .true., ucell)
+ else
+  call __NM(initialize)(atoms, forced_atoms, .false.)
+ endif
 !
 ! compute atomlist and return
 !
@@ -93,7 +102,7 @@ end function _ME
 #undef _ME
 !===================================================================
 #define _ME __NM(dyna_from_plugin)
- __CFUN(_ME, iteration_, r_plugin, f_plugin_double, f_plugin_single, e, qsingle)
+ __CFUN(_ME, iteration_, r_plugin, f_plugin_double, f_plugin_single, e, qsingle, qper, box)
  __DEP_PARSER
  int(__FCINT) :: _ME
  int(C_LONG), value, intent(in) :: iteration_
@@ -102,6 +111,9 @@ end function _ME
  real(c_float),  intent(out), dimension(3, natom) :: f_plugin_single
  logical(__FCBOOL), value, intent(in) :: qsingle
  real(__FCFLOAT), intent(out) :: e
+ logical(__FCBOOL), value, intent(in) :: qper
+ logical(__FCBOOL) :: qper_ ! copy that I can modify
+ real(__FCFLOAT), intent(in), dimension(3,3) :: box ! lattice vectors
  __IAM(_ME)
 !
  _ME=1
