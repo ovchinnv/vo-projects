@@ -38,5 +38,5 @@ LINKOBJS+=\
  atompar.o \
  bonds.o \
  angles.o \
- dihedrals.o
- 
+ dihedrals.o \
+ unitcell.o
