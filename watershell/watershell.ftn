@@ -33,6 +33,7 @@ module _N
  __DEP_CONST
  __DEP_FILES
  __DEP_MPI
+ __DEP_RANDOM
  use ugrid
 #ifdef __BAROSTAT
  use unitcell
@@ -103,9 +104,12 @@ module _N
  __PAR(surface_area_grid_spacing, float, one)
  float :: oo_surface_area_grid_spacing
  __PAR(surface_area_grid_buffer, float, ten)
- __PAR(surface_area_compute_freq, int, 2) ! surface area gets recomputed every structure_update_freq times this
+ __PAR(surface_area_compute_freq, int, 1) ! surface area gets recomputed every pressure_freq times this
+ __PAR(surface_area_grid_check_freq, int, 1) ! if no pbc, sa grid gets checked/updated this times sa_compute_freq x pressure_freq
+ __PAR(surface_area_grid_recompute_change, float, three) ! domain size increase/decrease required to trigger grid recomputation
  float :: r_com_sa(3)=(/zero, zero, zero/) ! center of protein for gridding in SA computation
  float :: r_surf_minmax(3,2)=reshape((/zero, zero, zero, zero, zero, zero/),(/3,2/))
+ bool :: r_surf_changed=.true. ! cor convenience, use flag that keeps track of whether surface atoms have been updated
  type (grid) :: sagrid
 #ifdef __OMP
  integer*1, allocatable, dimension(:,:,:,:), target :: sarho_all_threads ! density array for surface are computation
@@ -342,8 +346,30 @@ module _N
                   barostat=.false. ; \
                  endif ! it does not make any sense to run barostat without a surface area calculation !
 #include "parser/parser_macro2.src"
+ endif ! barostat
+!
+ if (barostat) then
+#define __VAR	surface_area_grid_check_freq
+#define __TAG	__VAR
+#define __NAME	frequency of checking grid limits for computing shell surface area
+#define __DOIFOK if (qper_parser_override) then ;\
+                  __WRN(whoami, '"'//__STRING(__VAR)//'" HAS NO EFFECT WHEN PBC ARE USED.');\
+                 elseif (__VAR.eq.izero) then; \
+                  __WRN(whoami, 'WILL NOT UPDATE SURFACE AREA GRID DURING DYNAMICS (THIS IS NOT A GREAT IDEA).'); \
+                 endif
+#include "parser/parser_macro2.src"
 !
 #undef __INT // default is float
+!
+#define __LEZEROERR
+#define __VAR	surface_area_grid_recompute_change
+#define __TAG	__VAR
+#define __NAME	domain size difference required to trigger reinitialization of surface area grid
+#define __DOIFOK if (qper_parser_override) then ;\
+                  __WRN(whoami, '"'//__STRING(__VAR)//'" HAS NO EFFECT WHEN PBC ARE USED.');\
+                 endif
+#include "parser/parser_macro2.src"
+#undef __LEZEROERR
 !
 #define __VAR	pressure_target
 #define __TAG	__VAR
@@ -604,6 +630,9 @@ module _N
 ! take surface atom coordinates from structure (PDB) file
   r_surf=r(:,isurface_atoms)
  endif ! qrestart
+#ifdef __BAROSTAT
+ if (barostat) r_surf_changed=.true.
+#endif
 #ifdef __RMFT
 ! compute com if removing torque
  if (remove_net_torque) then 
@@ -654,10 +683,13 @@ module _N
   r_com_sa=oonsurface * sum(r_surf,2)
 #endif
 ! initialize grid-based SA computation
- if (qper_parser_override) then
+ if (qper_parser_override) then ! for periodic BC, use cell info
   call ucell%print()
-  r_surf_minmax(:,1) = r_com_sa - half * (/ucell%a, ucell%b, ucell%c/)
-  r_surf_minmax(:,2) = r_com_sa + half * (/ucell%a, ucell%b, ucell%c/)
+  r_surf_minmax(:,1) = half * (/ucell%a, ucell%b, ucell%c/) ! grid minima
+  r_surf_minmax(:,2) = half * (/ucell%a, ucell%b, ucell%c/) ! grid maxima
+ else
+  r_surf_minmax(:,1) = minval(r_surf,2) - r_com_sa - ( surface_distance + surface_area_grid_buffer)
+  r_surf_minmax(:,2) = maxval(r_surf,2) - r_com_sa + ( surface_distance + surface_area_grid_buffer)
  endif
 !
  call ugrid_initialize(sagrid, 3, r_surf_minmax, (/surface_area_grid_spacing/), adjust_spacings_=qper_parser_override) ! when using PBC, adjust spacing, not length
@@ -665,9 +697,11 @@ module _N
 #ifdef __OMP
  allocate(sarho_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),omp_get_num_threads()))
 #else
- allocate(sarho(sagrid%n(1),sagrid%n(2),sagrid%n(3))
+ allocate(sarho(sagrid%n(1),sagrid%n(2),sagrid%n(3)))
 #endif
-
+! initialize random number generator for small random grid displacements
+ if (.not.random_initialized) call random_init()
+!
  endif ! barostat
 #endif
 !
@@ -751,7 +785,7 @@ module _N
 #ifdef __OMP
  __DEALL(sarho_all_threads)
 #else
- __FREE(sarho)
+ __DEALL(sarho)
 #endif
  call ugrid_done(sagrid)
 #endif
@@ -760,7 +794,7 @@ module _N
 !
  end __SUB(done)
 !================================================================
- __SUB(main)(r,fr,energy)
+ __SUB(main)(r,fr,energy,qper_,ucell) ! NOTE : qper/ucell is not supposed to change; keeping here for sanity check
 #ifdef __F_T_COUPLED
  use lu
 #else
@@ -769,6 +803,10 @@ module _N
  float, intent(in) :: r(:,:)   ! coordinate array
  float, intent(out) :: fr(:,:) ! force array
  float, intent(out) :: energy
+
+ __OPAR(qper,bool)
+
+ type (cell), optional :: ucell
 ! int :: ibeg, iend ! atom indices for looping
  float :: distance_from_solute, distance_from_solute2, pre, d0
  float :: surface_energy, surface_force, density_beyond_contour
@@ -830,6 +868,9 @@ module _N
  if (structure_update_freq.gt.izero) then
   if __CHKUPDATE(structure_update_freq) then
    r_surf = structure_update_memory * r_surf + (one - structure_update_memory) * r(:,isurface_atoms)
+#ifdef __BAROSTAT
+   if (barostat) r_surf_changed=.true.
+#endif
 #ifdef __RMFT
 #ifdef __TORQUE_COM_SURFACE
 ! recompute COM if subtracting torque
@@ -1496,33 +1537,71 @@ module _N
 #ifdef __BAROSTAT
 ! barostat-related code :
  if (barostat) then
-!== compute surface area :
-  if (surface_area_compute_freq.gt.0) then
-   if __CHKUPDATE(surface_area_compute_freq*structure_update_freq) then
-!
-! compute com for SA gridding :
-!
-#if defined(__RMFT) && defined(__TORQUE_COM_SURFACE)
-    if (remove_net_torque) then
-     r_com_sa=r_com
-    else
-     r_com_sa=oonsurface * sum(r_surf,2)
-    endif
-#else
-    r_com_sa=oonsurface * sum(r_surf,2)
-#endif
-    if (qminimum_distance) then
-     call __NM(compute_surface_area_mindist)()
-    else
-     call __NM(compute_surface_area)()
-    endif ! mindist
-   endif ! chkupdate
-  endif ! surface area compute
-!
-!== compute pressure :
-!
+!== compute/update pressure :
   if (pressure_update_freq.gt.0) then
    if __CHKUPDATE(pressure_update_freq) then
+!
+!== first, compute surface area :
+    if (r_surf_changed.and.surface_area_compute_freq.gt.0) then ! note : a check to only recompute SA if surface atoms changed
+     if __CHKUPDATE(surface_area_compute_freq*pressure_update_freq) then
+! check periodicity flag
+      __PRESENT(qper,qper_parser_override)
+      if (qper.neqv.qper_parser_override) then
+       __WRN(whoami, 'CANNOT CHANGE PERIODICITY FLAG DURING DYNAMICS WITH WATERSHELL BAROSTAT. INITIAL :'//ltoa(qper_parser_override)//', CURRENT :'//ltoa(qper))
+      elseif (qper) then ! check that ucell, if passed in, did not change
+       if (present(ucell)) then
+        if &
+&        ((abs(ucell%a - sagrid%lengths(1)) .gt. __ERRTOL) .or. &
+&         (abs(ucell%b - sagrid%lengths(2)) .gt. __ERRTOL) .or. &
+&         (abs(ucell%c - sagrid%lengths(3)) .gt. __ERRTOL)) then
+          __WRN(whoami, 'CANNOT CHANGE UNIT CELL DIMENSIONS DURING DYNAMICS WITH WATERSHELL BAROSTAT.')
+          __ASSERT(abs(ucell%a - sagrid%lengths(1)),<, __ERRTOL)
+          __ASSERT(abs(ucell%b - sagrid%lengths(2)),<, __ERRTOL)
+          __ASSERT(abs(ucell%c - sagrid%lengths(3)),<, __ERRTOL)
+        endif
+       endif
+      endif
+#if defined(__RMFT) && defined(__TORQUE_COM_SURFACE)
+      if (remove_net_torque) then
+       r_com_sa=r_com
+      else
+       r_com_sa=oonsurface * sum(r_surf,2)
+      endif
+#else
+      r_com_sa=oonsurface * sum(r_surf,2)
+#endif
+! check that grid dimensions are still adequate : 
+      if (.not.qper_parser_override.and.surface_area_grid_check_freq.gt.0) then
+       if __CHKUPDATE(surface_area_grid_check_freq*surface_area_compute_freq*pressure_update_freq) then
+        r_surf_minmax(:,1) = minval(r_surf,2) - r_com_sa - (surface_distance+surface_area_grid_buffer)
+        r_surf_minmax(:,2) = maxval(r_surf,2) - r_com_sa + (surface_distance+surface_area_grid_buffer)
+        if (any(abs(r_surf_minmax(:,2) - r_surf_minmax(:,1) - sagrid%lengths).gt.surface_area_grid_recompute_change)) then
+         __MESSAGE(whoami, 'REINITIALIZING SURFACE AREA COMPUTATION GRID.');
+         call ugrid_finalize(sagrid)
+         call ugrid_initialize(sagrid, 3, r_surf_minmax, (/surface_area_grid_spacing/), adjust_spacings_=.false.)
+!
+#ifdef __OMP
+          __DEALL(sarho_all_threads)
+          allocate(sarho_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),omp_get_num_threads()))
+#else
+          __DEALL(sarho)
+          allocate(sarho(sagrid%n(1),sagrid%n(2),sagrid%n(3)))
+#endif
+        endif
+       endif
+      endif
+! compute com for SA gridding :
+      if (qminimum_distance) then
+       call __NM(compute_surface_area_mindist)()
+      else
+       call __NM(compute_surface_area)()
+      endif ! mindist
+#ifdef __BAROSTAT
+      if (barostat) r_surf_changed=.false.
+#endif
+     endif ! chkupdate
+    endif ! surface area compute
+!
     pressure=surface_force/surface_area
 ! update running average
     if (pressure_ave.gt.0) then
@@ -2072,17 +2151,32 @@ module _N
  __SUB(compute_surface_area_mindist)()
 #ifdef __OMP
  use omp_lib
+ int tid, numthreads, n
 #endif
- int i, tid, im, jm, km, ii, jj, kk, imin, imax, jmin, jmax, kmin, kmax, nx, ny, nz
+ int i, im, jm, km, ii, jj, kk, imin, imax, jmin, jmax, kmin, kmax, nx, ny, nz
  float x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, dx2, dy2, dz2, x0, y0, z0
- float support2
+ float support2, drand(3)
  integer*1, dimension(:,:,:), pointer :: __U(rho)
+ integer*1 rhomx, thisrho, igrad
+ float __U(grad)
 !
  support2=surface_distance**2
 !
- x0=sagrid%limits(1,1)
- y0=sagrid%limits(2,1)
- z0=sagrid%limits(3,1)
+! NOTE : the origin of the grid is the surface atoms' COM; since the grid is discrete, there is in principle
+! a discretiation error that arises from the precise location of the grid boundaries
+! this error will average out as the surface moves ; however, in some cases, the averaging out will probably
+! be slow ; in that case, it might be advantageous to add a uniformly distributed random perturbation to the grid origin, 
+! of the size dx/2, so that this particular contribution to the surface area averages out more quickly
+! note, an extreme pathological case is that of one atom or a rigid body ; in that case, the surface are will always be exactly the
+! same unless a random number is added to the grid origin
+#define random_channel 50
+!
+ call randomu_vector(drand, 3, random_channel)
+ drand=(drand-half)*surface_area_grid_spacing
+!
+ x0=sagrid%limits(1,1)+drand(1)
+ y0=sagrid%limits(2,1)+drand(2)
+ z0=sagrid%limits(3,1)+drand(3)
 !
  nx=sagrid%n(1)
  ny=sagrid%n(2)
@@ -2092,22 +2186,27 @@ module _N
 #define qpbcy qpbcx
 #define qpbcz qpbcx
 
+ surface_area=zero !initialize
+
 #ifdef __OMP
 !$omp parallel &
-!$omp shared(support2, sarho_all_threads) &
-!$omp private(x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, ii, dx2, dy2, dz2, jj, kk, imin, imax, jmin, jmax, kmin, kmax, tid, __U(rho), i)
+!$omp shared(support2, sarho_all_threads, n) &
+!$omp private(x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, ii, dx2, dy2, dz2, jj, kk, imin, imax, jmin, jmax, kmin, kmax, tid, &
+!$omp __U(rho), i, dgrad, __U(grad), rhomx, thisrho, igrad)
  tid=omp_get_thread_num() ! thread index
+ numthreads=omp_get_num_threads()
  __U(rho)=>sarho_all_threads(:,:,:,tid)
 #else
 #define rho sarho
 #endif
 ! assign to each thread a local copy of surface indicator
  __U(rho)=zero ! initialize
+ __U(grad)=zero
 ! NOTE : partially adapted from elec code
 !$omp do schedule(runtime)
  do i=1, nsurface
 ! determine support for this atom, i.e. all grid points which are within the cutoff
-  x=r_surf(1,i)
+  x=r_surf(1,i)-r_com_sa(1)
   xmin=x-surface_distance
   xmax=xmin + two*surface_distance
   imin = INT( (xmin-x0)*oo_surface_area_grid_spacing ) + 1 ! could be negative (i.e. off-the-grid), but the indices are consistent with the 1-based offset
@@ -2117,7 +2216,7 @@ module _N
    imax=min(imax,nx)
   endif
 ! same for y
-  y=r_surf(2,i)
+  y=r_surf(2,i)-r_com_sa(2)
   ymin=y-surface_distance
   ymax=ymin + two*surface_distance
   jmin = INT( (ymin-y0)*oo_surface_area_grid_spacing ) + 1
@@ -2127,7 +2226,7 @@ module _N
    jmax=min(jmax,ny)
   endif
 ! and for z
-  z=r_surf(3,i)
+  z=r_surf(3,i)-r_com_sa(3)
   zmin=z-surface_distance
   zmax=zmin + two*surface_distance
   kmin = INT( (zmin-z0)*oo_surface_area_grid_spacing ) + 1
@@ -2140,7 +2239,6 @@ module _N
   do ii=imin,imax
    dx2=(surface_area_grid_spacing*(ii-1) - (x - x0) )**2; ! actual x-distance between gridpoint and atom
    im=modulo(ii-1,nx-1)+1 ! works for PBC
-
    do jj=jmin,jmax
     dy2=dx2+(surface_area_grid_spacing*(jj-1) - (y - y0) )**2;
     if (dy2>support2) cycle
@@ -2153,17 +2251,47 @@ module _N
     enddo !kk
    enddo !jj
   enddo !ii
+ enddo ! nsurface atoms, i
+#ifdef __OMP
+!$omp end do
+! now reduce all indicator arrays to master array (0th thread)
+ n=1
+ do while (n.lt.numthreads)
+!$omp barrier ! make sure all threads have completed previous operation
+  if (mod(tid,2*n)==0 .and. (tid+n).lt.numthreads) then
+   __INCR(__U(rho), sarho_all_threads(:,:,:,tid+n))
+   __SCALE(n,2)
+  endif
+ enddo
+! now compute surface area integral
+#define rho(i,j,k) sarho_all_threads(i,j,k,1)
+!$omp do schedule(runtime)
+#endif
+ do kk=2,nz
+  do jj=2,ny
+   rhomx=rho(1,jj,kk)
+   do ii=2,nx ; thisrho=rho(ii,jj,kk)
+     igrad= &
+&     ( thisrho - rhomx )**2 + &
+&     ( thisrho - rho(ii,jj-1,kk) )**2 + &
+&     ( thisrho - rho(ii,jj,kk-1) )**2
+    __INCR(__U(grad),sqrt(one*igrad))
+    rhomx=thisrho
+   enddo
+  enddo
  enddo
 #ifdef __OMP
 !$omp end do
-! now reduce all indicator arrays to master array
+!$omp atomic
+#endif
+ surface_area=surface_area + __U(grad)
+#ifdef __OMP
 !$omp end parallel
 #endif
-
+ __SCALE(surface_area,surface_area_grid_spacing**2)
+!
  end __SUB(compute_surface_area_mindist)
 !================================================================
 #endif
 end module _N
-
-
 
