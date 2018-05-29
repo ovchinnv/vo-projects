@@ -26,7 +26,7 @@ CUINCLUDES+=-I/usr/local/cuda/samples/common/inc
 FC=gfortran
 #FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -Wall -fopenmp 
 #FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  #-Wall  #-fopenmp 
-#FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fcheck=all
+#FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fcheck=all -g
 FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno
 #FFLAGS=-O0 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fcheck=all #-fno-math-errno
 #MPI_HOME=/usr/local/mpich2-gnu
