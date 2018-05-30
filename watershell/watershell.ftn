@@ -36,7 +36,9 @@ module _N
  __DEP_CONST
  __DEP_FILES
  __DEP_MPI
+#ifdef __PERTURB_GRID
  __DEP_RANDOM
+#endif
  use ugrid
  use unitcell
 #ifdef __OMP
@@ -910,6 +912,8 @@ module _N
  endif ! remove net_torque
 #endif
 !
+#if defined(__BAROSTAT) || defined(__DASYSTAT)
+
 #ifdef __BAROSTAT
 ! if using barostat, read current running pressure
  if (barostat) then
@@ -927,7 +931,38 @@ module _N
   else ! qrestart
    pressure_ave=-one; ! this value used for initialization is not physical
   endif ! qrestart
-! set com for SA gridding
+ endif ! barostat
+#endif
+!
+#ifdef __DASYSTAT
+! read current running density
+ if (dasystat) then
+  if (qrestart) then
+! (1) read pressure value
+   line=getval_nocase('density',__STRING(__RESTARTCTX))
+   if (len_trim(line).gt.0) then
+    read(line,*,iostat=ierr) density_ave
+    if (ierr.ne.0) then
+     __WRN(whoami, 'ERROR READING DENSITY FROM LINE "'//trim(line)//'"')
+    endif
+   else
+    __WRN(whoami, 'ERROR READING DENSITY FROM LINE "'//trim(line)//'"')
+   endif ! line ok
+  else ! qrestart
+   density_ave=-one; ! this value used for initialization is not physical
+  endif ! qrestart
+ endif ! dasystat
+#endif
+
+! set com for SA/VOL gridding
+ if (&
+#ifdef __BAROSTAT
+&     barostat .or. &
+#endif
+#ifdef __DASYSTAT
+&     dasystat .or. &
+#endif
+&     .false. ) then
 #if defined(__RMFT) && defined(__TORQUE_COM_SURFACE)
   if (remove_net_torque) then
    r_com_sa=r_com
@@ -951,27 +986,54 @@ module _N
 !
 #ifdef __OMP
   allocate(sarho_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:omp_get_max_threads()-1))
+#ifdef __DASYSTAT
+  if (dasystat) allocate(inrho_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:omp_get_max_threads()-1))
+#endif
 #else
-  allocate(sarho(sagrid%n(1),sagrid%n(2),sagrid%n(3)))
+#ifdef __DASYSTAT
+  if (dasystat) allocate(inrho(sagrid%n(1),sagrid%n(2),sagrid%n(3)))
+#endif
 #endif
 ! initialize random number generator for small random grid displacements
+#ifdef __PERTURB_GRID
   if (.not.random_initialized) call random_init()
+#endif
+#ifdef __BAROSTAT
+  if (barostat) then
 ! compute initial surface area:
-  if (qminimum_distance) then
-   call __NM(compute_surface_area_mindist)()
-  else
-   call __NM(compute_surface_area)()
-  endif ! mindist
-  r_surf_changed=.false.
+   if (qminimum_distance) then
+    call __NM(compute_surface_area_mindist)()
+   else
+    call __NM(compute_surface_area)()
+   endif ! mindist
+  endif ! barostat
+#endif
 !
- endif ! barostat
+#ifdef __DASYSTAT
+  if (dasystat) then
+! compute initial volume
+   if (qminimum_distance) then
+    call __NM(compute_bulk_volume_mindist)()
+   else
+    call __NM(compute_bulk_volume)()
+   endif ! mindist
+  endif ! dasystat
+#endif
+!
+   r_surf_changed=.false.
+!
+ endif ! barostat or dasystat
 #endif
 !
  oo_surf_stdev=one/surf_stdev
  cutoff_surf  =cutoff_surf_stdev*surf_stdev
  cutoff_surf2 =cutoff_surf**2
 !
- if (.not.fatal_warning() .and. radii_initialized) __NM(initialized)=.true.
+ if (.not.fatal_warning() .and. radii_initialized &
+#ifdef __DASYSTAT
+ .and.(dmasses_initialized .or. .not. dasystat) &
+#endif
+& ) __NM(initialized)=.true.
 !
  end __SUB(initialize)
 !======================================
@@ -1004,6 +1066,12 @@ module _N
  if (barostat) then
  _W 'pressure=',pressure_ave, '# (units of atm)'
  _W 'pressure_num_samples=',pressure_num_samples
+ endif
+#endif
+#ifdef __DASYSTAT
+ if (dasystat) then
+ _W 'density=',density_ave, '# (units of g/mL)'
+ _W 'density_num_samples=',density_num_samples
  endif
 #endif
 ! write the current reference atoms :
@@ -1042,16 +1110,25 @@ module _N
  __FREE(solute_neighbor_mind)
 #endif
 #endif
-#ifdef __BAROSTAT
+#if defined(__BAROSTAT) || defined(__DASYSTAT)
 #ifdef __OMP
  __DEALL(sarho_all_threads)
+#ifdef __DASYSTAT
+ __DEALL(inrho_all_threads)
+#endif
 #else
  __DEALL(sarho)
+#ifdef __DASYSTAT
+ __DEALL(inrho)
+#endif
 #endif
  call ugrid_done(sagrid)
 #endif
 !
  __NM(initialized)=.false. ; radii_initialized=.false.
+#ifdef __DASYSTAT
+ dmasses_initialized=.false.
+#endif
 !
  end __SUB(done)
 !================================================================
@@ -1129,9 +1206,16 @@ module _N
  if (structure_update_freq.gt.izero) then
   if __CHKUPDATE(structure_update_freq) then
    r_surf = structure_update_memory * r_surf + (one - structure_update_memory) * r(:,isurface_atoms)
+!
+   if (&
 #ifdef __BAROSTAT
-   if (barostat) r_surf_changed=.true.
+&       barostat .or. &
 #endif
+#ifdef __DASYSTAT
+&       dasystat .or. &
+#endif
+&       .false. ) r_surf_changed=.true.
+!
 #ifdef __RMFT
 #ifdef __TORQUE_COM_SURFACE
 ! recompute COM if subtracting torque
@@ -2444,13 +2528,17 @@ __DBGVAR(pressure_ave)
 #endif
  int i, im, jm, km, ii, jj, kk, imin, imax, jmin, jmax, kmin, kmax, nx, ny, nz
  float x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, dx2, dy2, dz2, x0, y0, z0
- float support2, drand(3)
+ float support2
+#ifdef __PERTURB_GRID
+ float :: drand(3)
+#endif
  integer*1 rhomx, thisrho, igrad
  float __U(grad)
  __IAM(compute_surface_area_mindist)
 !
  support2=surface_distance**2
 !
+#ifdef __PERTURB_GRID
 ! NOTE : the origin of the grid is the surface atoms' COM; since the grid is discrete, there is in principle
 ! a discretiation error that arises from the precise location of the grid boundaries
 ! this error will average out as the surface moves ; however, in some cases, the averaging out will probably
@@ -2462,6 +2550,9 @@ __DBGVAR(pressure_ave)
 !
  call randomu_vector(drand, 3, random_channel)
  drand=(drand-half)*surface_area_grid_spacing
+#else
+#define drand(_A) 0d0
+#endif
 !
  x0=sagrid%limits(1,1)+drand(1)
  y0=sagrid%limits(1,2)+drand(2)
