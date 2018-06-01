@@ -38,6 +38,7 @@ module _N
  __DEP_MPI
 #ifdef __PERTURB_GRID
  __DEP_RANDOM
+#define random_channel 50
 #endif
  use ugrid
  use unitcell
@@ -189,7 +190,9 @@ module _N
  int, public :: nsurface=-1, nsolvent=-1
  int :: nsolvent_outside
 #ifdef __DASYSTAT
- float :: total_mass_nonbulk ! solvent mass that excludes solvent atoms that are too close to solute to be considered bulk, i.e. inside the inner surface
+ float :: solvent_mass         ! total mass of solvent atoms (constant throughout simulation)
+ float :: solvent_mass_outside ! mass of solvent atoms that are outside the shell surface
+ float :: solvent_mass_nonbulk ! solvent mass that excludes solvent atoms that are too close to solute to be considered bulk, i.e. inside the inner surface
 #endif
  float :: oonsurface, oonsolvent, oonsolvent_outside
  float :: current_surface_distance
@@ -211,6 +214,7 @@ module _N
  float :: pressure, pressure_ave ! will store in atm
 #endif
 #ifdef __DASYSTAT
+ float :: volume_bulk
  float :: density, density_ave ! mg/mL
 #endif
 #endif
@@ -2319,7 +2323,7 @@ __DBGVAR(pressure_ave)
 #ifdef __DASYSTAT
  float :: bulk_distance2
 #ifdef __OMP
- int :: __U(total_mass_nonbulk)
+ int :: __U(solvent_mass_nonbulk)
 #endif
 #endif
  bool :: qforced ! whether an atom is a forced atom
@@ -2343,9 +2347,9 @@ __DBGVAR(pressure_ave)
 #ifdef __DASYSTAT
  if (dasystat) then
   bulk_distance2=bulk_boundary_distance**2
-  total_mass_nonbulk=0
+  solvent_mass_nonbulk=0
 #ifdef __OMP
- __U(total_mass_nonbulk)=0
+ __U(solvent_mass_nonbulk)=0
 #endif
  endif ! dasystat
 #endif
@@ -2371,7 +2375,7 @@ __DBGVAR(pressure_ave)
 !$OMP ) &
 !$omp private ( rw, i, j, rp, dr, drmin, dr2, dr2min, qforced &
 #ifdef __DASYSTAT
-!$omp , __U(total_mass_nonbulk) &
+!$omp , __U(solvent_mass_nonbulk) &
 #endif
 #ifdef __SORT_LIST
 !$OMP ,dr2old, jj &
@@ -2412,7 +2416,7 @@ __DBGVAR(pressure_ave)
 #ifdef __DASYSTAT
     if (dasystat) then
      if (dr2 .lt. bulk_distance2) then ! the solvent atom is inside the shell, and also too close to the surface to be considered bulk
-      __INCR(__U(total_mass_nonbulk), mass_solv(i))
+      __INCR(__U(solvent_mass_nonbulk), mass_solv(i))
       qforced=.false.
 #ifdef __SORT_LIST
 ! put this atom first in the list to increase our chances of quitting early next time
@@ -2465,7 +2469,7 @@ __DBGVAR(pressure_ave)
 #ifdef __DASYSTAT
  if (dasystat) then
 !$omp atomic
-  __REDUCE(total_mass_nonbulk)
+  __REDUCE(solvent_mass_nonbulk)
  endif
 #endif
 !$omp end parallel
@@ -2489,7 +2493,7 @@ __DBGVAR(pressure_ave)
 !$OMP ) &
 !$omp private ( rw, i, j, rp, dr, drmin, dr2, dr2min, qforced &
 #ifdef __DASYSTAT
-!$omp , __U(total_mass_nonbulk) &
+!$omp , __U(solvent_mass_nonbulk) &
 #endif
 #ifdef __SORT_LIST
 !$OMP ,dr2old, jj &
@@ -2525,7 +2529,7 @@ __DBGVAR(pressure_ave)
 #ifdef __DASYSTAT
     if (dasystat) then
      if (qforced .and. dr2 .lt. bulk_distance2) then ! the solvent atom is inside the shell, and also too close to the surface to be considered bulk
-      __INCR(__U(total_mass_nonbulk), mass_solv(i))  ! qforced essential in the conditional above so that can only get one inc per solvent atom !
+      __INCR(__U(solvent_mass_nonbulk), mass_solv(i))  ! qforced essential in the conditional above so that can only get one inc per solvent atom !
       qforced=.false.
 #ifdef __SORT_LIST
 ! put this atom first in the list to increase our chances of quitting early next time
@@ -2586,7 +2590,7 @@ __DBGVAR(pressure_ave)
 #ifdef __DASYSTAT
  if (dasystat) then
 !$omp atomic
-  __REDUCE(total_mass_nonbulk)
+  __REDUCE(solvent_mass_nonbulk)
  endif
 #endif
 !$omp end parallel
@@ -2634,12 +2638,12 @@ __DBGVAR(pressure_ave)
  call randomu_vector(drand, 3, random_channel)
  drand=(drand-half)*surface_area_grid_spacing
 #else
-#define drand(_A) 0d0
+#define drand(_A)
 #endif
 !
- x0=sagrid%limits(1,1)+drand(1)
- y0=sagrid%limits(1,2)+drand(2)
- z0=sagrid%limits(1,3)+drand(3)
+ x0 = drand(1) + sagrid%limits(1,1)
+ y0 = drand(2) + sagrid%limits(1,2)
+ z0 = drand(3) + sagrid%limits(1,3)
 !
  nx=sagrid%n(1)
  ny=sagrid%n(2)
@@ -2778,7 +2782,198 @@ __DBGVAR(kmax)
 #endif
 !
  end __SUB(compute_surface_area_mindist)
+!
 !================================================================
+!
 #endif
-end module _N
+#ifdef __DASYSTAT
+#undef _S
+#define _S compute_bulk_volume
+ __SUB(_S)
 
+ __IAM(__NM(_S))
+
+ end __SUB(_S)
+!
+!================================================================
+!
+#undef _S
+#define _S compute_bulk_volume_mindist
+ __SUB(_S)
+!
+#ifdef __OMP
+ use omp_lib
+ int tid, numthreads, n
+ int :: __U(ivolume), __U(ivolume_nonbulk)
+#endif
+ int :: ivolume, ivolume_nonbulk
+ int i, im, jm, km, ii, jj, kk, imin, imax, jmin, jmax, kmin, kmax, nx, ny, nz
+ float x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, dx2, dy2, dz2, x0, y0, z0
+ float support2, bulk_support2
+#ifdef __PERTURB_GRID
+ float :: drand(3)
+#endif
+!
+ __IAM(__NM(_S))
+!
+ support2=surface_distance**2
+ bulk_support2=bulk_boundary_distance**2
+!
+#ifdef __PERTURB_GRID
+ call randomu_vector(drand, 3, random_channel)
+ drand=(drand-half)*surface_area_grid_spacing
+#else
+#define drand(_A)
+#endif
+!
+ x0 = drand(1) + sagrid%limits(1,1)
+ y0 = drand(2) + sagrid%limits(1,2)
+ z0 = drand(3) + sagrid%limits(1,3)
+!
+ nx=sagrid%n(1)
+ ny=sagrid%n(2)
+ nz=sagrid%n(3)
+!
+#define qpbcx qper_parser_override
+#define qpbcy qpbcx
+#define qpbcz qpbcx
+
+! initialize
+ volume_bulk=zero
+!
+#ifdef __OMP
+!$omp parallel &
+!$omp shared(support2, bulk_support2, sarho_all_threads, inrho_all_threads) &
+!$omp private(x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, ii, dx2, dy2, dz2, jj, kk, imin, imax, jmin, jmax, kmin, kmax, tid, &
+!$omp i, __U(ivolume), __U(ivolume_nonbulk), n)
+ tid=omp_get_thread_num() ! thread index
+ numthreads=omp_get_num_threads()
+#define rho(i,j,k) sarho_all_threads(i,j,k,tid)
+#define inrho(i,j,k) inrho_all_threads(i,j,k,tid)
+#else
+#define rho sarho
+#endif
+! assign to each thread a local copy of surface indicator
+ rho(:,:,:)=zero ! initialize
+ inrho(:,:,:)=zero
+ __U(ivolume)=0
+ __U(ivolume_nonbulk)=0
+! NOTE : partially adapted from elec code
+!$omp do schedule(runtime)
+ do i=1, nsurface
+! determine support for this atom, i.e. all grid points which are within the cutoff
+  x=r_surf(1,i)-r_com_sa(1)
+  xmin=x+surface_distance ! remember the sign convention
+  xmax=xmin - two*surface_distance
+  imin = INT( (xmin-x0)*oo_surface_area_grid_spacing ) + 1 ! could be negative (i.e. off-the-grid), but the indices are consistent with the 1-based offset
+  imax = INT( (xmax-x0)*oo_surface_area_grid_spacing ) + 2
+  if (.not.qpbcx) then
+   imin=max(imin,1)
+   imax=min(imax,nx)
+  endif
+__DBGVAR(x)
+__DBGVAR(xmin)
+__DBGVAR(x0)
+__DBGVAR(imin)
+__DBGVAR(imax)
+! same for y
+  y=r_surf(2,i)-r_com_sa(2)
+  ymin=y+surface_distance ! sign convention
+  ymax=ymin - two*surface_distance
+  jmin = INT( (ymin-y0)*oo_surface_area_grid_spacing ) + 1
+  jmax = INT( (ymax-y0)*oo_surface_area_grid_spacing ) + 2
+  if (.not.qpbcy) then
+   jmin=max(jmin,1)
+   jmax=min(jmax,ny)
+  endif
+__DBGVAR(y)
+__DBGVAR(ymin)
+__DBGVAR(y0)
+__DBGVAR(jmin)
+__DBGVAR(jmax)
+! and for z
+  z=r_surf(3,i)-r_com_sa(3)
+  zmin=z+surface_distance ! sign convention
+  zmax=zmin - two*surface_distance
+  kmin = INT( (zmin-z0)*oo_surface_area_grid_spacing ) + 1
+  kmax = INT( (zmax-z0)*oo_surface_area_grid_spacing ) + 2
+  if (.not.qpbcz) then
+   kmin=max(kmin,1)
+   kmax=min(kmax,nz)
+  endif
+__DBGVAR(z)
+__DBGVAR(zmin)
+__DBGVAR(z0)
+__DBGVAR(kmin)
+__DBGVAR(kmax)
+
+  do kk=kmin,kmax
+   dz2=(surface_area_grid_spacing*(kk-1) - (z - z0) )**2; ! actual z-distance between gridpoint and atom
+   km=modulo(kk-1,nz-1)+1 ! works for PBC
+   do jj=jmin,jmax
+    dy2=dz2+(surface_area_grid_spacing*(jj-1) - (y - y0) )**2;
+    if (dy2>support2) cycle
+    jm=modulo(jj-1,ny-1)+1
+    do ii=imin,imax
+     dx2=dy2+(surface_area_grid_spacing*(ii-1) - (x - x0) )**2;
+     if (dx2>support2) cycle
+     im=modulo(ii-1,nx-1)+1
+     rho(im,jm,km) = 1
+! compute inner density (note that memory access might be more efficient if I inverleave the two arrays in i)
+     if (dx2>bulk_support2) cycle
+     inrho(im,jm,km) = 1 ! non-bulk
+    enddo !ii
+   enddo !jj
+  enddo !kk
+ enddo ! nsurface atoms, i
+#ifdef __OMP
+!$omp end do
+! now reduce all indicator arrays to master array (0th thread)
+ n=1
+ do while (n.lt.numthreads)
+!$omp barrier ! make sure all threads have completed previous operation
+  if (mod(tid,2*n)==0 .and. (tid+n).lt.numthreads) then
+   rho(:,:,:)   = ior(  rho(:,:,:), sarho_all_threads(:,:,:,tid+n))
+   inrho(:,:,:) = ior(inrho(:,:,:), inrho_all_threads(:,:,:,tid+n))
+  endif
+  __SCALE(n,2)
+ enddo
+! now compute surface area integral
+#if defined rho
+#undef rho
+#endif
+#define rho(i,j,k) sarho_all_threads(i,j,k,0)
+#define inrho(i,j,k) inrho_all_threads(i,j,k,0)
+!$omp do schedule(runtime)
+#endif
+ do kk=2,nz
+  do jj=2,ny
+   do ii=2,nx
+     __INCR(__U(ivolume), rho(ii,jj,kk))
+     __INCR(__U(ivolume_nonbulk), inrho(ii,jj,kk))
+   enddo
+  enddo
+ enddo
+#ifdef __OMP
+!$omp end do
+!$omp atomic
+ __REDUCE(ivolume)
+!$omp atomic
+ __REDUCE(ivolume_nonbulk)
+#endif
+#ifdef __OMP
+!$omp end parallel
+#endif
+ volume_bulk=(ivolume-ivolume_nonbulk)*surface_area_grid_spacing**3
+#ifdef __DEBUG
+ __DBGVAR(volume_bulk)
+#endif
+
+ end __SUB(_S)
+
+#endif
+!
+!================================================================
+!
+end module _N
+!
