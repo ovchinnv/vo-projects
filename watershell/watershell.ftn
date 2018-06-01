@@ -600,11 +600,14 @@ module _N
 #define __TAG __VAR
 #define __NAME	Distance from protein to bulk boundary
 #define __DOALWAYS if (abs(__VAR).lt.__ERRTOL) then ; \
-                  __MESSAGE(whoami, 'LOCATION OF BULK BOUNDARY WILL BE SET FROM SOLVENT COORDINATES.') ; \
-                 else ;\
-                  __VAR=-(abs(__VAR)) ; \
-                  bulk_boundary_contour_value=__RHO(__VAR) ;\
-                 endif ! make sure to set to a negative value
+                    __MESSAGE(whoami, 'LOCATION OF BULK BOUNDARY WILL BE SET FROM SOLVENT COORDINATES.') ; \
+                   elseif(abs(__VAR).lt.abs(surface_distance)) then ;\
+                    __WRN(whoami, 'BULK BOUNDARY MUST BE INSIDE SHELL SURFACE. ABORT');\
+                    __ASSERT(abs(__VAR),<,abs(surface_distance)); \
+                   else ;\
+                    __VAR=-(abs(__VAR)) ; \
+                    bulk_boundary_contour_value=__RHO(__VAR) ;\
+                   endif ! make sure to set to a negative value
 #include "parser/parser_macro2.src"
 #define __MINUSERR
  endif
@@ -2313,6 +2316,12 @@ __DBGVAR(pressure_ave)
  float :: dr2old ! squared minimum distance difference from previous iteration
 #endif
  float :: rmaxsurf, surface_distance2
+#ifdef __DASYSTAT
+ float :: bulk_distance2
+#ifdef __OMP
+ int :: __U(nsolvent_nonbulk)
+#endif
+#endif
  bool :: qforced ! whether an atom is a forced atom
  __IAM(__NM(compute_mindist_grad))
 !
@@ -2331,6 +2340,15 @@ __DBGVAR(pressure_ave)
 !
 ! simple algorithm to find the closest atom
  surface_distance2=surface_distance**2
+#ifdef __DASYSTAT
+ if (dasystat) then
+  bulk_distance2=bulk_boundary_distance**2
+  nsolvent_nonbulk=0
+#ifdef __OMP
+ __U(nsolvent_nonbulk)=0
+#endif
+ endif ! dasystat
+#endif
 !
  if (quit_early) then
 #if defined(__SORT_LIST) & defined(__NEIGHBOR_LIST)
@@ -2341,6 +2359,9 @@ __DBGVAR(pressure_ave)
 #ifdef __OMP
 !$omp parallel &
 !$omp shared ( dist_solv, ddist_solv, r_solv, nsolvent, nsurface, surface_distance2 &
+#ifdef __DASYSTAT
+!$omp , bulk_distance2 &
+#endif
 #ifdef __SORT_LIST
 !$OMP , solute_neighbor_list &
 #ifdef __NEIGHBOR_LIST
@@ -2349,6 +2370,9 @@ __DBGVAR(pressure_ave)
 #endif
 !$OMP ) &
 !$omp private ( rw, i, j, rp, dr, drmin, dr2, dr2min, qforced &
+#ifdef __DASYSTAT
+!$omp , __U(nsolvent_nonbulk) &
+#endif
 #ifdef __SORT_LIST
 !$OMP ,dr2old, jj &
 #endif
@@ -2368,7 +2392,7 @@ __DBGVAR(pressure_ave)
 #else
    do jj=1, nsurface ! inner loop over solute atoms ! to check the entire surface atom list
 #endif
-    j=solute_neighbor_list(jj,i) ! note that this is really a (partially) distance sorted list of surface atoms for each solvent atom
+    j=solute_neighbor_list(jj,i) ! note that this is really a (partially) distance-sorted list of surface atoms for each solvent atom
 #else
    do j=1, nsurface ! inner loop over solute atoms, without regard to their location relative to the solvent atom i
 #endif
@@ -2385,17 +2409,37 @@ __DBGVAR(pressure_ave)
     dr2old=dr2
 #endif
 !
+#ifdef __DASYSTAT
+    if (dasystat) then
+     if (dr2 .lt. bulk_distance2) then ! the solvent atom is inside the shell, and also too close to the surface to be considered bulk
+      __INC(__U(nsolvent_nonbulk))
+      qforced=.false.
+#ifdef __SORT_LIST
+! put this atom first in the list to increase our chances of quitting early next time
+!      solute_neighbor_list(jj,i)=solute_neighbor_list(1,i)
+!      solute_neighbor_list(1,i)=j
+#endif
+      exit ! atom is considered inside, so no need to loop further
+     elseif (qforced .and. dr2 .lt. surface_distance2) then ! not bulk but possibly still inside ; if already marked inside (qforced=.false.) then skip !
+      qforced=.false.
+#ifdef __SORT_LIST
+! put this atom first in the list to increase our chances of quitting early next time
+!      solute_neighbor_list(jj,i)=solute_neighbor_list(1,i)
+!      solute_neighbor_list(1,i)=j
+#endif
+     endif
+    else &
+#endif
     if (dr2 .lt. surface_distance2) then ! the solvent atom is close enough to a surface atom to be considered inside
      qforced=.false.
-!     dr2min=zero
-!     drmin=zero
 #ifdef __SORT_LIST
 ! put this atom first in the list to increase our chances of quitting early next time
 !     solute_neighbor_list(jj,i)=solute_neighbor_list(1,i)
 !     solute_neighbor_list(1,i)=j
 #endif
-     exit ! atom is considered inside, so no need to loop further
+     exit ! atom is considered inside, so no need to loop further (because dasystat off, no need to check whether bulk)
     endif
+!
     if (dr2 .lt. dr2min) then
      dr2min=dr2
      drmin=dr
@@ -2418,6 +2462,12 @@ __DBGVAR(pressure_ave)
   enddo ! nsolvent
 #ifdef __OMP
 !$omp end do
+#ifdef __DASYSTAT
+ if (dasystat) then
+!$omp atomic
+  __REDUCE(nsolvent_nonbulk)
+ endif
+#endif
 !$omp end parallel
 #endif
  else ! quit_early
@@ -2430,11 +2480,17 @@ __DBGVAR(pressure_ave)
 #ifdef __OMP
 !$omp parallel &
 !$omp shared ( dist_solv, ddist_solv, r_solv, nsolvent, nsurface, surface_distance2 &
+#ifdef __DASYSTAT
+!$omp , bulk_distance2 &
+#endif
 #ifdef __SORT_LIST
 !$OMP , solute_neighbor_list &
 #endif
 !$OMP ) &
-!$omp private ( rw, i, j, rp, dr, drmin, dr2, dr2min &
+!$omp private ( rw, i, j, rp, dr, drmin, dr2, dr2min, qforced &
+#ifdef __DASYSTAT
+!$omp , __U(nsolvent_nonbulk) &
+#endif
 #ifdef __SORT_LIST
 !$OMP ,dr2old, jj &
 #endif
@@ -2466,7 +2522,28 @@ __DBGVAR(pressure_ave)
     dr2old=dr2
 #endif
 !
-    if (dr2 .lt. surface_distance2) then
+#ifdef __DASYSTAT
+    if (dasystat) then
+     if (qforced .and. dr2 .lt. bulk_distance2) then ! the solvent atom is inside the shell, and also too close to the surface to be considered bulk
+      __INC(__U(nsolvent_nonbulk))                   ! qforced essential in the conditional above so that can only get one inc per solvent atom !
+      qforced=.false.
+#ifdef __SORT_LIST
+! put this atom first in the list to increase our chances of quitting early next time
+!      solute_neighbor_list(jj,i)=solute_neighbor_list(1,i)
+!      solute_neighbor_list(1,i)=j
+#endif
+! atom is considered inside, but proceed to the end of list because we want to sort it
+     elseif (qforced .and. dr2 .lt. surface_distance2) then ! not bulk but possibly still inside ; if already marked inside (qforced=.false.) then skip !
+      qforced=.false.
+#ifdef __SORT_LIST
+! put this atom first in the list to increase our chances of quitting early next time
+!      solute_neighbor_list(jj,i)=solute_neighbor_list(1,i)
+!      solute_neighbor_list(1,i)=j
+#endif
+     endif ! dr2<dist
+    else & ! dasystat
+#endif
+    if (qforced .and. dr2 .lt. surface_distance2) then ! since we are not exiting, use qforced flag in the conditional
      qforced=.false. ! this atom is inside, however, proceed to the end of the surface atom list because we want to sort it
 #ifdef __SORT_LIST
 ! put this atom first in the list to increase our chances of quitting early next time
@@ -2506,6 +2583,12 @@ __DBGVAR(pressure_ave)
   enddo ! nsolvent
 #ifdef __OMP
 !$omp end do
+#ifdef __DASYSTAT
+ if (dasystat) then
+!$omp atomic
+  __REDUCE(nsolvent_nonbulk)
+ endif
+#endif
 !$omp end parallel
 #endif
 #ifdef __DDEBUG
