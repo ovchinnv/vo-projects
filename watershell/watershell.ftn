@@ -189,7 +189,7 @@ module _N
  int, public :: nsurface=-1, nsolvent=-1
  int :: nsolvent_outside
 #ifdef __DASYSTAT
- int :: nsolvent_nonbulk ! solvent atoms that are too close to solute to be considered bulk, i.e. inside the inner surface
+ float :: total_mass_nonbulk ! solvent mass that excludes solvent atoms that are too close to solute to be considered bulk, i.e. inside the inner surface
 #endif
  float :: oonsurface, oonsolvent, oonsolvent_outside
  float :: current_surface_distance
@@ -2319,7 +2319,7 @@ __DBGVAR(pressure_ave)
 #ifdef __DASYSTAT
  float :: bulk_distance2
 #ifdef __OMP
- int :: __U(nsolvent_nonbulk)
+ int :: __U(total_mass_nonbulk)
 #endif
 #endif
  bool :: qforced ! whether an atom is a forced atom
@@ -2343,9 +2343,9 @@ __DBGVAR(pressure_ave)
 #ifdef __DASYSTAT
  if (dasystat) then
   bulk_distance2=bulk_boundary_distance**2
-  nsolvent_nonbulk=0
+  total_mass_nonbulk=0
 #ifdef __OMP
- __U(nsolvent_nonbulk)=0
+ __U(total_mass_nonbulk)=0
 #endif
  endif ! dasystat
 #endif
@@ -2360,7 +2360,7 @@ __DBGVAR(pressure_ave)
 !$omp parallel &
 !$omp shared ( dist_solv, ddist_solv, r_solv, nsolvent, nsurface, surface_distance2 &
 #ifdef __DASYSTAT
-!$omp , bulk_distance2 &
+!$omp , bulk_distance2, mass_solv &
 #endif
 #ifdef __SORT_LIST
 !$OMP , solute_neighbor_list &
@@ -2371,7 +2371,7 @@ __DBGVAR(pressure_ave)
 !$OMP ) &
 !$omp private ( rw, i, j, rp, dr, drmin, dr2, dr2min, qforced &
 #ifdef __DASYSTAT
-!$omp , __U(nsolvent_nonbulk) &
+!$omp , __U(total_mass_nonbulk) &
 #endif
 #ifdef __SORT_LIST
 !$OMP ,dr2old, jj &
@@ -2412,7 +2412,7 @@ __DBGVAR(pressure_ave)
 #ifdef __DASYSTAT
     if (dasystat) then
      if (dr2 .lt. bulk_distance2) then ! the solvent atom is inside the shell, and also too close to the surface to be considered bulk
-      __INC(__U(nsolvent_nonbulk))
+      __INCR(__U(total_mass_nonbulk), mass_solv(i))
       qforced=.false.
 #ifdef __SORT_LIST
 ! put this atom first in the list to increase our chances of quitting early next time
@@ -2465,7 +2465,7 @@ __DBGVAR(pressure_ave)
 #ifdef __DASYSTAT
  if (dasystat) then
 !$omp atomic
-  __REDUCE(nsolvent_nonbulk)
+  __REDUCE(total_mass_nonbulk)
  endif
 #endif
 !$omp end parallel
@@ -2489,7 +2489,7 @@ __DBGVAR(pressure_ave)
 !$OMP ) &
 !$omp private ( rw, i, j, rp, dr, drmin, dr2, dr2min, qforced &
 #ifdef __DASYSTAT
-!$omp , __U(nsolvent_nonbulk) &
+!$omp , __U(total_mass_nonbulk) &
 #endif
 #ifdef __SORT_LIST
 !$OMP ,dr2old, jj &
@@ -2525,7 +2525,7 @@ __DBGVAR(pressure_ave)
 #ifdef __DASYSTAT
     if (dasystat) then
      if (qforced .and. dr2 .lt. bulk_distance2) then ! the solvent atom is inside the shell, and also too close to the surface to be considered bulk
-      __INC(__U(nsolvent_nonbulk))                   ! qforced essential in the conditional above so that can only get one inc per solvent atom !
+      __INCR(__U(total_mass_nonbulk), mass_solv(i))  ! qforced essential in the conditional above so that can only get one inc per solvent atom !
       qforced=.false.
 #ifdef __SORT_LIST
 ! put this atom first in the list to increase our chances of quitting early next time
@@ -2586,7 +2586,7 @@ __DBGVAR(pressure_ave)
 #ifdef __DASYSTAT
  if (dasystat) then
 !$omp atomic
-  __REDUCE(nsolvent_nonbulk)
+  __REDUCE(total_mass_nonbulk)
  endif
 #endif
 !$omp end parallel
