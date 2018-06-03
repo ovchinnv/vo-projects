@@ -123,7 +123,7 @@ module _N
  __PAR(density_target, float, 0.997) ! units of g/ml for pure water
  float, parameter :: g_per_amu = 1d0/avogadro
  float, parameter :: ml_per_angstrom3 = 1d-24
- float, parameter :: akma_to_gml = g_per_amu / ml_per_angstrom3 ! density conversion factor ; note that it is dimensional
+ float, parameter :: gml_per_akma = g_per_amu / ml_per_angstrom3 ! density conversion factor ; note that it is dimensional
  __PAR(density_num_samples, int, 0)    ! number of inst. density samples that make up average
  __PAR(density_max_samples, int, 1000) ! max number of inst. samples to keep in average
  __PAR(density_update_freq, int, 10)   ! how often pressure is updated from volume and mass
@@ -193,6 +193,7 @@ module _N
  float :: solvent_mass         ! total mass of solvent atoms (constant throughout simulation)
  float :: solvent_mass_outside ! mass of solvent atoms that are outside the shell surface
  float :: solvent_mass_nonbulk ! solvent mass that excludes solvent atoms that are too close to solute to be considered bulk, i.e. inside the inner surface
+! float :: solvent_mass_bulk    ! mass of solvent in the bulk shell
 #endif
  float :: oonsurface, oonsolvent, oonsolvent_outside
  float :: current_surface_distance
@@ -889,6 +890,7 @@ module _N
  rad_surf=radius(isurface_atoms)
 #ifdef __DASYSTAT
  mass_solv=dasystat_masses(isolvent_atoms)
+ solvent_mass=sum(mass_solv)
 #endif
 !
 #if defined(__BAROSTAT) || defined(__DASYSTAT)
@@ -1159,9 +1161,9 @@ __DBGVAR(r_com_sa)
  float, intent(in) :: r(:,:)   ! coordinate array
  float, intent(out) :: fr(:,:) ! force array
  float, intent(out) :: energy
-
+!
  __OPAR(qper,bool)
-
+!
  type (cell), optional :: ucell
 ! int :: ibeg, iend ! atom indices for looping
  float :: distance_from_solute, distance_from_solute2, pre, d0
@@ -1197,6 +1199,7 @@ __DBGVAR(r_com_sa)
  float :: __U(surface_force)
  float :: __U(density_beyond_contour)
  int :: __U(nsolvent_outside)
+ float :: __U(solvent_mass_outside)
 #ifdef __RMFT
  float, dimension(3) :: __U(net_force), __U(net_torque), __U(max_force) ! thread locals
  float :: __U(ir1),__U(ir2),__U(ir3),__U(ir1s),__U(ir2s),__U(ir3s),__U(ir12),__U(ir13),__U(ir23)
@@ -1348,6 +1351,10 @@ __DBGVAR(r_com_sa)
  surface_energy=zero
  surface_force=zero
  nsolvent_outside=izero
+#ifdef __DASYSTAT
+ solvent_mass_outside=zero
+#endif
+!
 #ifdef __RMFT
  if (remove_net_torque) then
   ir1=zero ; ir2=zero; ir3=zero; ir1s=zero ; ir2s=zero ; ir3s=zero ; ir12=zero ; ir23=zero ; ir13=zero ;
@@ -1373,17 +1380,27 @@ __DBGVAR(r_com_sa)
 !$omp rhs, qforced_solv, r_com, &
 !$omp ir1,ir2,ir3,ir1s,ir2s,ir3s,ir12,ir13,ir23, &
 #endif
-!$omp nsolvent, nsurface, nsolvent_outside, surface_force, surface_energy, isolvent_atoms, isurface_atoms, r_surf, r_solv, fr ) &
-!$omp private (i, d0, pre, __U(nsolvent_outside), __U(surface_energy), __U(surface_force)  &
+!$omp nsolvent, nsurface, nsolvent_outside, surface_force, surface_energy, &
+#ifdef __DASYSTAT
+!$omp solvent_mass_outside, mass_solv, &
+#endif
+!$omp isolvent_atoms, isurface_atoms, r_surf, r_solv, fr ) &
+!$omp private (i, d0, pre, __U(nsolvent_outside), __U(surface_energy), __U(surface_force) &
+#ifdef __DASYSTAT
+!$omp , __U(solvent_mass_outside)  &
+#endif
 #ifdef __RMFT
 !$omp ,ir, iforce, __U(net_force), __U(net_torque) &
 !$omp ,__U(ir1),__U(ir2),__U(ir3),__U(ir1s),__U(ir2s),__U(ir3s),__U(ir12),__U(ir13),__U(ir23) &
 #endif
 !$omp )
+#ifdef __OMP
  __U(surface_energy)=zero
  __U(surface_force)=zero
  __U(nsolvent_outside)=izero
-#ifdef __OMP
+#ifdef __DASYSTAT
+ if (dasystat) __U(solvent_mass_outside)=zero
+#endif
 #ifdef __RMFT
   if (remove_net_torque) then
    __U(net_force)=zero
@@ -1400,6 +1417,9 @@ __DBGVAR(r_com_sa)
    d0=dist_solv(i)
    __INC(__U(nsolvent_outside))
    pre = ( d0 - surface_distance ) ;
+#ifdef __DASYSTAT
+   if (dasystat) __INCR(__U(solvent_mass_outside), mass_solv(i))
+#endif
 !
 #ifdef __RMFT
    if (remove_net_torque) then ! for now, here; optimize later, if needed
@@ -1458,6 +1478,12 @@ __DBGVAR(r_com_sa)
  __REDUCE(surface_energy)
 !$omp atomic
  __REDUCE(surface_force)
+#ifdef __DASYSTAT
+if (dasystat) then
+!$omp atomic
+ __REDUCE(solvent_mass_outside)
+endif
+#endif
 !!$omp end critical
 #endif
 #ifdef __DEBUG
@@ -1876,12 +1902,20 @@ __DBGVAR(r_com_sa)
  enddo
 #ifdef __OMP
 !$omp end do
-!$omp critical
- __INCR(nsolvent_outside, __U(nsolvent_outside))
- __INCR(surface_energy, __U(surface_energy))
- __INCR(surface_force, __U(surface_force))
- __INCR(density_beyond_contour, __U(density_beyond_contour)) ! not clear what to do with this value, or whether it is useful
-!$omp end critical
+!!$omp critical
+!$omp atomic
+  __REDUCE(nsolvent_outside)
+!$omp atomic
+  __REDUCE(surface_energy)
+!$omp atomic
+  __REDUCE(surface_force)
+!$omp atomic
+  __REDUCE(density_beyond_contour)
+! __INCR(nsolvent_outside, __U(nsolvent_outside))
+! __INCR(surface_energy, __U(surface_energy))
+! __INCR(surface_force, __U(surface_force))
+! __INCR(density_beyond_contour, __U(density_beyond_contour)) ! not clear what to do with this value, or whether it is useful
+!!$omp end critical
 !$omp end parallel
 #endif
 !
@@ -1900,8 +1934,9 @@ __DBGVAR(r_com_sa)
 !
  __INCR(energy,surface_energy) ! unclear whether useful
 !
-#ifdef __BAROSTAT
 ! barostat-related code :
+! ==========================================================================================
+#ifdef __BAROSTAT
  if (barostat) then
 !== compute/update pressure :
   if (pressure_update_freq.gt.0) then
@@ -1933,7 +1968,7 @@ __DBGVAR(r_com_sa)
           __ASSERT(abs(ucell%c - sagrid%lengths(3)),<, __ERRTOL)
         endif
        endif
-      endif
+      endif ! qper
 #if defined(__RMFT) && defined(__TORQUE_COM_SURFACE)
       if (remove_net_torque) then
        r_com_sa=r_com
@@ -1972,7 +2007,7 @@ __DBGVAR(r_com_sa)
         endif
        endif
       endif
-! compute com for SA gridding :
+! compute SA
       if (qminimum_distance) then
        call __NM(compute_surface_area_mindist)()
       else
@@ -2011,6 +2046,124 @@ __DBGVAR(pressure_ave)
    endif
   endif
  endif ! barostat-related
+#endif
+! BAROSTAT-RELATED CODE ^
+! ==========================================================================================
+! DASYSTAT-RELATED CODE v (with much repetition from above, but otherwise too complicated to follow if intermingled with barostat)
+#ifdef __DASYSTAT
+ if (dasystat) then
+!== compute/update density :
+  if (density_update_freq.gt.0) then
+   if __CHKUPDATE(density_update_freq) then
+!
+#ifdef __DEBUG
+ __DBGVAR(r_surf_changed)
+ __DBGVAR(surface_area_compute_freq)
+ __DBGVAR(density_update_freq)
+ __DBGVAR(iteration)
+ __DBGVAR(__CHKUPDATE(surface_area_compute_freq*density_update_freq))
+#endif
+!== first, compute surface area :
+    if (r_surf_changed.and.surface_area_compute_freq.gt.0) then ! note : a check to only recompute SA if surface atoms changed
+     if __CHKUPDATE(surface_area_compute_freq*density_update_freq) then
+! check periodicity flag
+      __PRESENT(qper,qper_parser_override)
+      if (qper.neqv.qper_parser_override) then
+       __WRN(whoami, 'CANNOT CHANGE PERIODICITY FLAG DURING DYNAMICS WITH WATERSHELL DASYSTAT. INITIAL :'//ltoa(qper_parser_override)//', CURRENT :'//ltoa(qper))
+      elseif (qper) then ! check that ucell, if passed in, did not change
+       if (present(ucell)) then
+        if &
+&        ((abs(ucell%a - sagrid%lengths(1)) .gt. __ERRTOL) .or. &
+&         (abs(ucell%b - sagrid%lengths(2)) .gt. __ERRTOL) .or. &
+&         (abs(ucell%c - sagrid%lengths(3)) .gt. __ERRTOL)) then
+          __WRN(whoami, 'CANNOT CHANGE UNIT CELL DIMENSIONS DURING DYNAMICS WITH WATERSHELL DASYSTAT.')
+          __ASSERT(abs(ucell%a - sagrid%lengths(1)),<, __ERRTOL)
+          __ASSERT(abs(ucell%b - sagrid%lengths(2)),<, __ERRTOL)
+          __ASSERT(abs(ucell%c - sagrid%lengths(3)),<, __ERRTOL)
+        endif
+       endif
+      endif ! qper
+#if defined(__RMFT) && defined(__TORQUE_COM_SURFACE)
+      if (remove_net_torque) then
+       r_com_sa=r_com
+      else
+       r_com_sa=oonsurface * sum(r_surf,2)
+      endif
+#else
+      r_com_sa=oonsurface * sum(r_surf,2)
+#endif
+! check that grid dimensions are still adequate : 
+      if (.not.qper_parser_override.and.surface_area_grid_check_freq.gt.0) then
+       if __CHKUPDATE(surface_area_grid_check_freq*surface_area_compute_freq*density_update_freq) then
+        r_surf_minmax(1,:) = minval(r_surf,2) - r_com_sa - (abs(surface_distance)+surface_area_grid_buffer)
+        r_surf_minmax(2,:) = maxval(r_surf,2) - r_com_sa + (abs(surface_distance)+surface_area_grid_buffer)
+        if (any(abs(r_surf_minmax(2,:) - r_surf_minmax(1,:) - sagrid%lengths).gt.surface_area_grid_recompute_change)) then
+         __MESSAGE(whoami, 'REINITIALIZING SURFACE AREA COMPUTATION GRID.');
+         call ugrid_finalize(sagrid)
+         call ugrid_initialize(sagrid, 3, r_surf_minmax, (/surface_area_grid_spacing/), adjust_spacings_=.false.)
+!
+#ifdef __DEBUG
+         __DBGVAR(sagrid%n)
+         write(666,'(2G20.10)') r_surf_minmax
+         write(666,*) sagrid%initialized
+         write(666,*) sagrid%ndim
+         write(666,*) sagrid%n
+         close(666)
+#endif
+!
+#ifdef __OMP
+          __DEALL(sarho_all_threads)
+          allocate(sarho_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:omp_get_max_threads()-1))
+          __DEALL(inrho_all_threads)
+          allocate(inrho_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:omp_get_max_threads()-1))
+#else
+          __DEALL(sarho)
+          allocate(sarho(sagrid%n(1),sagrid%n(2),sagrid%n(3)))
+          __DEALL(inrho)
+          allocate(inrho(sagrid%n(1),sagrid%n(2),sagrid%n(3)))
+#endif
+        endif
+       endif
+      endif
+! compute volume
+      if (qminimum_distance) then
+       call __NM(compute_bulk_volume_mindist)()
+      else
+       call __NM(compute_bulk_volume)()
+      endif ! mindist
+!
+      r_surf_changed=.false.
+!
+     endif ! chkupdate
+    endif ! surface area/volume compute
+!
+    density = (solvent_mass - (solvent_mass_nonbulk + solvent_mass_outside))/volume_bulk*gml_per_akma ! note that for code generality this would have to be made nondimensional
+__DBGVAR(solvent_mass_mass)
+__DBGVAR(solvent_mass_nonbulk)
+__DBGVAR(solvent_mass_outside)
+__DBGVAR(volume_bulk)
+__DBGVAR(glm_per_akma)
+__DBGVAR(density)
+__DBGVAR(density_ave)
+!
+! update running average
+    if (density_num_samples<density_max_samples) __INC(density_num_samples)
+    d0=1d0/density_num_samples
+     __INCR(density_ave, d0 * (density - density_ave))
+   endif ! chkupdate
+  endif ! density update
+!
+!=========================== evolve/update contour/distance value
+  if (distance_update_freq.gt.0) then
+   if __CHKUPDATE(distance_update_freq) then
+!
+    d0 = ( density_target - density_ave )
+    __INCR(surface_distance, distance_update_step * d0) ! note that surface_distance < 0 in our notation ; so too high p => dist decr.
+    surface_contour_value = __RHO(surface_distance)
+!
+   endif
+  endif
+ endif ! dasystat-related
 #endif
 !============================================= output restart file
  if (output_freq.gt.0) then
@@ -2336,7 +2489,9 @@ __DBGVAR(pressure_ave)
 #ifdef __DASYSTAT
  float :: bulk_distance2
 #ifdef __OMP
- int :: __U(solvent_mass_nonbulk)
+ float :: __U(solvent_mass_nonbulk)
+! float :: __U(solvent_mass_outside)
+! float :: __U(solvent_mass_bulk)
 #endif
 #endif
  bool :: qforced ! whether an atom is a forced atom
@@ -2361,8 +2516,12 @@ __DBGVAR(pressure_ave)
  if (dasystat) then
   bulk_distance2=bulk_boundary_distance**2
   solvent_mass_nonbulk=0
+!  solvent_mass_outside=0
+!  solvent_mass_bulk=0
 #ifdef __OMP
  __U(solvent_mass_nonbulk)=0
+! __U(solvent_mass_outside)=0
+! __U(solvent_mass_bulk)=0
 #endif
  endif ! dasystat
 #endif
@@ -2437,8 +2596,9 @@ __DBGVAR(pressure_ave)
 !      solute_neighbor_list(1,i)=j
 #endif
       exit ! atom is considered inside, so no need to loop further
-     elseif (qforced .and. dr2 .lt. surface_distance2) then ! not bulk but possibly still inside ; if already marked inside (qforced=.false.) then skip !
+     elseif (qforced .and. dr2 .lt. surface_distance2) then ! not bulk but still inside ; if already marked inside (qforced=.false.) then skip !
       qforced=.false.
+!      __INCR(__solvent_mass_bulk, mass_solv(i)) ! direct sum ; algorithm not quite correct so commenting but not deleting
 #ifdef __SORT_LIST
 ! put this atom first in the list to increase our chances of quitting early next time
 !      solute_neighbor_list(jj,i)=solute_neighbor_list(1,i)
@@ -2550,7 +2710,7 @@ __DBGVAR(pressure_ave)
 !      solute_neighbor_list(1,i)=j
 #endif
 ! atom is considered inside, but proceed to the end of list because we want to sort it
-     elseif (qforced .and. dr2 .lt. surface_distance2) then ! not bulk but possibly still inside ; if already marked inside (qforced=.false.) then skip !
+     elseif (qforced .and. dr2 .lt. surface_distance2) then ! not bulk but still inside ; if already marked inside (qforced=.false.) then skip !
       qforced=.false.
 #ifdef __SORT_LIST
 ! put this atom first in the list to increase our chances of quitting early next time
@@ -2953,10 +3113,13 @@ __DBGVAR(kmax)
   __SCALE(n,2)
  enddo
 ! now compute surface area integral
-#if defined rho
+#ifdef rho
 #undef rho
 #endif
 #define rho(i,j,k) sarho_all_threads(i,j,k,0)
+#ifdef inrho
+#undef inrho
+#endif
 #define inrho(i,j,k) inrho_all_threads(i,j,k,0)
 !$omp do schedule(runtime)
 #endif
