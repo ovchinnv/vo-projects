@@ -215,7 +215,7 @@ module _N
  float :: pressure, pressure_ave ! will store in atm
 #endif
 #ifdef __DASYSTAT
- float :: volume_bulk
+ float :: volume_bulk=-1d0
  float :: density, density_ave ! mg/mL
 #endif
 #endif
@@ -501,7 +501,7 @@ module _N
 #define __VAR	surface_area_grid_spacing
 #define __TAG	__VAR
 #define __NAME	grid spacing for surface area computation
-#define __DOIFOK oo_surface_area_grid_spacing=one/surface_area_grid_spacing
+#define __DOALWAYS oo_surface_area_grid_spacing=one/surface_area_grid_spacing
 #include "parser/parser_macro2.src"
 !
 ! NOTE : should consider the possibility of periodicity
@@ -584,7 +584,7 @@ module _N
 #define __VAR	surface_area_grid_spacing
 #define __TAG	volume_grid_spacing
 #define __NAME	grid spacing for volume computation
-#define __DOIFOK oo_surface_area_grid_spacing=one/surface_area_grid_spacing
+#define __DOALWAYS oo_surface_area_grid_spacing=one/surface_area_grid_spacing
 #include "parser/parser_macro2.src"
 !
 ! NOTE : should consider the possibility of periodicity
@@ -605,8 +605,14 @@ module _N
 #define __TAG __VAR
 #define __NAME	Distance from protein to bulk boundary
 #define __DOALWAYS if (abs(__VAR).lt.__ERRTOL) then ; \
-                    __MESSAGE(whoami, 'LOCATION OF BULK BOUNDARY WILL BE SET FROM SOLVENT COORDINATES.') ; \
-                   elseif(abs(__VAR).lt.abs(surface_distance)) then ;\
+                    if (abs(surface_distance).gt.__ERRTOL) then;\
+                     __VAR = -0.5d0*abs(surface_distance);\
+                     bulk_boundary_contour_value=__RHO(__VAR);\
+                     __MESSAGE(whoami, 'SETTING LOCATION OF BULK BOUNDARY FROM SURFACE BOUNDARY TO '//ftoa(__VAR)) ; \
+                    else;\
+                     __MESSAGE(whoami, 'LOCATION OF BULK BOUNDARY WILL BE SET FROM SURFACE BOUNDARY.') ; \
+                    endif;\
+                   elseif((abs(__VAR).gt.abs(surface_distance)).and.(abs(surface_distance).gt.__ERRTOL)) then ;\
                     __WRN(whoami, 'BULK BOUNDARY MUST BE INSIDE SHELL SURFACE. ABORT');\
                     __ASSERT(abs(__VAR),<,abs(surface_distance)); \
                    else ;\
@@ -999,7 +1005,6 @@ __DBGVAR(r_surf_minmax)
 __DBGVAR(minval(r_surf,2))
 __DBGVAR(maxval(r_surf,2))
 __DBGVAR(r_com_sa)
-
 !
   call ugrid_initialize(sagrid, 3, r_surf_minmax, (/surface_area_grid_spacing/), adjust_spacings_=qper_parser_override) ! when using PBC, adjust spacing, not length
 !
@@ -1018,30 +1023,7 @@ __DBGVAR(r_com_sa)
 #ifdef __PERTURB_GRID
   if (.not.random_initialized) call random_init()
 #endif
-#ifdef __BAROSTAT
-  if (barostat) then
-! compute initial surface area:
-   if (qminimum_distance) then
-    call __NM(compute_surface_area_mindist)()
-   else
-    call __NM(compute_surface_area)()
-   endif ! mindist
-  endif ! barostat
-#endif
-!
-#ifdef __DASYSTAT
-  if (dasystat) then
-! compute initial volume
-   if (qminimum_distance) then
-    call __NM(compute_bulk_volume_mindist)()
-   else
-    call __NM(compute_bulk_volume)()
-   endif ! mindist
-  endif ! dasystat
-#endif
-!
-   r_surf_changed=.false.
-!
+! NOTE: not computing surface area or volume here, because the shell distances may not yet be defined
  endif ! barostat or dasystat
 #endif
 !
@@ -1294,13 +1276,30 @@ __DBGVAR(r_com_sa)
   surface_contour_value = __RHO(surface_distance) ! for mindist, determine this for information, even though not relevant to algorithm
   __MESSAGE(whoami, 'COMPUTED SURFACE DISTANCE AT '//ftoa(surface_distance)//' A FROM PROTEIN. CONTOUR VALUE IS '//ftoa(surface_contour_value))
   __DBGOUT( 'COMPUTED SD, SCV: ', surface_distance, surface_contour_value)
+!
+#ifdef __DASYSTAT
+! also check for distance to bulk boundary
+ if (dasystat) then
+  if ( abs(bulk_boundary_distance).lt.__ERRTOL ) then
+   bulk_boundary_distance = -0.5d0*abs(surface_distance)
+   bulk_boundary_contour_value = __RHO(bulk_boundary_distance)
+   __MESSAGE(whoami, 'SETTING LOCATION OF BULK BOUNDARY FROM SURFACE BOUNDARY TO '//ftoa(bulk_boundary_distance))
+  else
+   if(abs(bulk_boundary_distance).gt.abs(surface_distance)) then
+    __WRN(whoami, 'BULK BOUNDARY MUST BE INSIDE SHELL SURFACE. ABORT');
+    __ASSERT(abs(bulk_boundary_distance),<,abs(surface_distance));
+   endif
+  endif
+ endif
+#endif
+!
 ! at this point, qforced_solv is wrong : it will be true everywhere, because surface distance was undefined in the calc. loop
 ! recompute qforced_solv :
   if (qminimum_distance) then
-   qforced_solv=dist_solv.lt.surface_distance
+   qforced_solv=dist_solv.lt.surface_distance ! vector operation
 !============================================================
   else ! (NOT) qminimum_distance
-   qforced_solv=rho_solv.lt.surface_contour_value
+   qforced_solv=rho_solv.lt.surface_contour_value ! vector operation
   endif ! qminimum_distance
 !====== NOTE : if we requested to run without neighbor lists then need to reset solute_neighbor_mind to max
 !====== otherwise, the early exit version of force routine could miss crucial atoms (the mind list is _not_ updated b/c qnlist=0)
@@ -1323,7 +1322,7 @@ __DBGVAR(r_com_sa)
  &    (.not.qneighbor_list) .or. &
 #endif
 #endif
- &    (.not.__CHKUPDATE(full_sum_freq)))
+ &    (.not.__CHKUPDATE(full_sum_freq))) ! NOTE that it makes no sense to run full sum w/o neighbor sorting, which requires nbr. list !
    else
     call __NM(compute_mindist_grad)(.true.) ! always call quit-early version; however, the max. index will be set to nsurface, so traverse full list
    endif ! full sum
@@ -1950,7 +1949,7 @@ endif
  __DBGVAR(__CHKUPDATE(surface_area_compute_freq*pressure_update_freq))
 #endif
 !== first, compute surface area :
-    if (r_surf_changed.and.surface_area_compute_freq.gt.0) then ! note : a check to only recompute SA if surface atoms changed
+    if ((r_surf_changed.and.surface_area_compute_freq.gt.0).or.surface_area<zero) then ! note : a check to only recompute SA if surface atoms changed
      if __CHKUPDATE(surface_area_compute_freq*pressure_update_freq) then
 ! check periodicity flag
       __PRESENT(qper,qper_parser_override)
@@ -2064,7 +2063,7 @@ __DBGVAR(pressure_ave)
  __DBGVAR(__CHKUPDATE(surface_area_compute_freq*density_update_freq))
 #endif
 !== first, compute surface area :
-    if (r_surf_changed.and.surface_area_compute_freq.gt.0) then ! note : a check to only recompute SA if surface atoms changed
+    if ((r_surf_changed.and.surface_area_compute_freq.gt.0).or.volume_bulk<zero) then ! note : a check to only recompute SA if surface atoms changed
      if __CHKUPDATE(surface_area_compute_freq*density_update_freq) then
 ! check periodicity flag
       __PRESENT(qper,qper_parser_override)
@@ -2122,9 +2121,9 @@ __DBGVAR(pressure_ave)
           __DEALL(inrho)
           allocate(inrho(sagrid%n(1),sagrid%n(2),sagrid%n(3)))
 #endif
-        endif
-       endif
-      endif
+        endif ! reallocate
+       endif ! grid size check
+      endif ! grid size check
 ! compute volume
       if (qminimum_distance) then
        call __NM(compute_bulk_volume_mindist)()
@@ -2132,12 +2131,16 @@ __DBGVAR(pressure_ave)
        call __NM(compute_bulk_volume)()
       endif ! mindist
 !
+  __DBGVAR(volume_bulk)
+!
       r_surf_changed=.false.
 !
-     endif ! chkupdate
+     endif ! chkupdate area compute
     endif ! surface area/volume compute
 !
     density = (solvent_mass - (solvent_mass_nonbulk + solvent_mass_outside))/volume_bulk*gml_per_akma ! note that for code generality this would have to be made nondimensional
+__DBGVAR(surface_distance)
+__DBGVAR(bulk_boundary_distance)
 __DBGVAR(solvent_mass)
 __DBGVAR(solvent_mass_nonbulk)
 __DBGVAR(solvent_mass_outside)
@@ -2194,6 +2197,15 @@ __DBGVAR(density_ave)
    __OUT('Instantaneous pressure (atm):    ', pressure)
    __OUT('Total force on solvent shell :   ', surface_force)
    __OUT('Surface area of solvent shell :  ', surface_area)
+  endif
+#endif
+#ifdef __DASYSTAT
+  if (dasystat) then
+   __OUT('Target density (g/mL):           ', density_target)
+   __OUT('Simulation density (g/mL):       ', density_ave)
+   __OUT('Instantaneous density (g/mL):    ', density)
+   __OUT('Mass of bulk solvent (amu) :     ', solvent_mass-solvent_mass_outside-solvent_mass_nonbulk)
+   __OUT('Volume of bulk solvent (Ang^3) : ', volume_bulk)
   endif
 #endif
   __OUT('===================')
@@ -2553,7 +2565,6 @@ __DBGVAR(density_ave)
 !$OMP ,dr2old, jj &
 #endif
 !$OMP )
-!!$omp do schedule(runtime)
 !$omp do schedule(runtime)
 #endif
   do i=1, nsolvent ! outer loop over solvent atoms
@@ -2632,6 +2643,7 @@ __DBGVAR(density_ave)
    if (qforced) then
     dist_solv(i) = -sqrt(dr2min) ! negative distance by convention
     ddist_solv(:,i) = drmin      ! the minimum distance between this atom and a surface atom
+! note that, technically, this is also a non-bulk atom, since it is outside of the surface shell
    else
     dist_solv(i)=zero            ! atom is inside, so set min. distance to zero
    endif
@@ -2647,7 +2659,7 @@ __DBGVAR(density_ave)
 #endif
 !$omp end parallel
 #endif
- else ! quit_early
+ else ! (not) quit_early
 #if defined(__SORT_LIST) & defined(__NEIGHBOR_LIST)
 #ifdef __DDEBUG
   __DBGOUT('Called ', whoami,'(full loop) with neighbor_list_factor=',neighbor_list_factor)
@@ -2755,6 +2767,7 @@ __DBGVAR(density_ave)
    dist_solv(i) = -sqrt(dr2min) ! sign convention ; keep outside of if below to compute average dist
    if (qforced) then
     ddist_solv(:,i) = drmin ! for force calculation
+! note that, technically, this is also a non-bulk atom, since it is outside of the surface shell; but we also have mass_outside var
    endif
    qforced_solv(i)=qforced
   enddo ! nsolvent
@@ -3018,14 +3031,14 @@ __DBGVAR(kmax)
 #ifdef __OMP
 !$omp parallel &
 !$omp shared(support2, bulk_support2, sarho_all_threads, inrho_all_threads) &
-!$omp private(x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, ii, dx2, dy2, dz2, jj, kk, imin, imax, jmin, jmax, kmin, kmax, tid, &
+!$omp private(x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, dx2, dy2, dz2, ii, jj, kk, imin, imax, jmin, jmax, kmin, kmax, tid, &
 !$omp i, __U(ivolume), __U(ivolume_nonbulk), n)
  tid=omp_get_thread_num() ! thread index
  numthreads=omp_get_num_threads()
 #ifdef rho
 #undef rho
-#define rho(i,j,k) sarho_all_threads(i,j,k,tid)
 #endif
+#define rho(i,j,k) sarho_all_threads(i,j,k,tid)
 #ifdef inrho
 #undef inrho
 #endif
@@ -3051,8 +3064,11 @@ __DBGVAR(kmax)
    imin=max(imin,1)
    imax=min(imax,nx)
   endif
+__DBGVAR(surface_area_grid_spacing)
+__DBGVAR(oo_surface_area_grid_spacing)
 __DBGVAR(x)
 __DBGVAR(xmin)
+__DBGVAR(xmax)
 __DBGVAR(x0)
 __DBGVAR(imin)
 __DBGVAR(imax)
@@ -3068,6 +3084,7 @@ __DBGVAR(imax)
   endif
 __DBGVAR(y)
 __DBGVAR(ymin)
+__DBGVAR(ymax)
 __DBGVAR(y0)
 __DBGVAR(jmin)
 __DBGVAR(jmax)
@@ -3083,6 +3100,7 @@ __DBGVAR(jmax)
   endif
 __DBGVAR(z)
 __DBGVAR(zmin)
+__DBGVAR(zmax)
 __DBGVAR(z0)
 __DBGVAR(kmin)
 __DBGVAR(kmax)
@@ -3149,6 +3167,8 @@ __DBGVAR(kmax)
 #endif
  volume_bulk=(ivolume-ivolume_nonbulk)*surface_area_grid_spacing**3
 #ifdef __DEBUG
+ __DBGVAR(ivolume)
+ __DBGVAR(ivolume_nonbulk)
  __DBGVAR(volume_bulk)
 #endif
 
