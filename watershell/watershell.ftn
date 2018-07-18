@@ -235,14 +235,19 @@ module _N
  bool, intent(in) :: qper
  type (cell), intent(in), optional :: ucell
 
- character(len=vartaglen) :: keyword, context
+ character(len=vartaglen) :: keyword, context, contexts(2) ! all_context currently holds the input context and the restart file context
+ int :: ictx ! ugly variables for context searching in macro : (ictx: context # ; qctx, whether tag present in context)
+ bool :: qctx
+ int, parameter :: main_context=2, restart_context=1 ! the order serves to provide desired override behavior ; DO NO CHANGE UNLESS YOU KNOW WHAT YOU ARE DOING
  int :: l, ierr
  character(len=maxlinelen) :: line
  float, pointer :: farray(:) => NULL()
  __IAM(__NM(INITIALIZE))
 !
-#define __CONTEXT __STRING(__CTX)
- context=__CONTEXT ;
+ contexts(main_context)=__STRING(__CTX)
+ contexts(restart_context)=__STRING(__RESTARTCTX)
+!
+ context=contexts(main_context)
 #define __DEFAULT
 ! first, check if we have the watershell context present
  if (parser_find_context(__STRING(__CTX)).le.0) then
@@ -274,7 +279,7 @@ module _N
  &  quiet_=.false.)
   call files_close(fid)
 ! now comes a trick : change context name temporarily to process the restart file using the same calls
-  context= __STRING(__RESTARTCTX)
+  context=contexts(restart_context)
 !
  endif ! have restart file
 !
@@ -385,7 +390,7 @@ module _N
 #endif
 !
 ! ====== done with (possible) restart file data
- context=__CONTEXT ! reset context if changed
+ context=contexts(main_context) ! reset context if changed
 !
 #ifdef __BAROSTAT
 ! barostat flag :
@@ -625,7 +630,8 @@ module _N
                     __VAR=-(abs(__VAR)) ; \
                     bulk_boundary_contour_value=__RHO(__VAR) ;\
                    endif ! make sure to set to a negative value
-#include "parser/parser_macro2.src"
+! check in all contexts :
+#include "parser/parser_macro3.src"
 #define __MINUSERR
  endif
 #endif
@@ -1092,6 +1098,7 @@ __DBGVAR(r_com_sa,1)
  if (dasystat) then
  _W 'density=',density_ave, '# (units of g/mL)'
  _W 'density_num_samples=',density_num_samples
+ _W 'bulk_boundary_distance=',bulk_boundary_distance, ' # distance from soulute to bulk solvent'
  endif
 #endif
 ! write the current reference atoms :
