@@ -96,8 +96,11 @@ module _N
  __PAR(structure_update_freq, int, ione)         ! frequency of updating coordinates from which the surface is generated
  __PAR(structure_update_memory, float, 0.999d0)  ! memory constant for exponential update
  __PAR(output_freq, int, 1000)                   ! frequency of writing output file
- __PAR(full_sum_freq, int, 100)                  ! frequency of force calculation without density truncation
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
+ __PAR(full_sum_freq, int, 75)                   ! frequency of force calculation without density truncation
                                                  ! doing the full calculation allows all atoms to be sorted
+ __PAR(sort_neighbor_list_freq, int, 10000)            ! frequency of completely sorting the neighbor list
+#endif
  __PAR(restart_file, character(len=vartaglen), 'NONE') ! restart file name
  __PAR(structure_file, character(len=vartaglen),'NONE') ! coordinate file (e.g. PDB) with system information, such as atomic radii
  __PAR(output_file, character(len=vartaglen), 'watershell.restart.txt') ! output file name
@@ -711,11 +714,11 @@ module _N
 #undef __CHAR
 !
 #undef __WARNIFMISSING
-#if defined(__SORT_LIST) & defined(__NEIGHBOR_LIST)
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
 #define __INT
 #define __VAR	full_sum_freq
 #define __TAG	__VAR
-#define __NAME	frequency of force calculation without density truncation
+#define __NAME	frequency of force calculation without truncation of solvent neighbor list
 #define __DOALWAYS if (__VAR.le.zero) then ;\
                   __WRN(whoami, 'SOLVENT ATOM NEIGHBOR LISTS CANNOT BE USED WITH "'//__STRING(__VAR)//'"=0.') ;\
                   neighbor_list_factor=one ;\
@@ -729,9 +732,19 @@ module _N
 !       __DBGOUT('FULL_SUM_FREQ IS ',full_sum_freq)
        __DBGOUT('NEIGHBOR_LIST_FACTOR SET TO ',neighbor_list_factor) ! , seven + (full_sum_freq**2 * 2.0d-4)) 
 !#endif
+!
+#define __VAR	sort_neighbor_list_freq
+#define __TAG	__VAR
+#define __NAME	frequency of sorting solvent atom neighbor lists
+#define __DOIFOK if (__VAR.eq.zero) then ;\
+                  __WRN(whoami, 'WILL NOT SORT SOLVENT ATOM NEIGHBOR LISTS') ;\
+                 endif
+ if (qneighbor_list) then
+#include "parser/parser_macro2.src"
+ endif
+#undef __INT
 #endif
 !
-#undef __INT
 !
 #ifndef __WARNIFMISSING
 #define __WARNIFMISSING
@@ -1241,6 +1254,10 @@ __DBGVAR(r_com_sa,1)
  r_solv=r(:,isolvent_atoms)
 ! sort neighbor list on first iteration
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
+ if (qneighbor_list.and.sort_neighbor_list_freq.gt.izero) then
+   if (__CHKUPDATE(sort_neighbor_list_freq)) qneighbor_list_sorted=.false.
+ endif ! qneighbor_list
+!
  if (.not. qneighbor_list_sorted) then
   __ALLOC(distance(nsurface))
 #ifdef __OMP
@@ -1383,35 +1400,33 @@ __DBGVAR(r_com_sa,1)
 ! aa :  this is the most time consuming part of the force calculation ; perhaps we can do it on the GPU ? Or perhaps can regulate cost otherwise ?
   if (qminimum_distance) then
 !
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
    if (full_sum_freq.gt.izero) then
 ! CHKUPDATE false : to truncate sum if running density value exceeds reference
 ! ALSO if qneighbor_list = false, this algorithm will be used, looping over all solute/surface indices
 ! because in that case, the maximum index in solute_neighbor_mdist is nsurface
-    call __NM(compute_mindist_grad)( &
-#ifdef __SORT_LIST
-#ifdef __NEIGHBOR_LIST
- &    (.not.qneighbor_list) .or. &
-#endif
-#endif
- &    (.not.__CHKUPDATE(full_sum_freq))) ! NOTE that it makes no sense to run full sum w/o neighbor sorting, which requires nbr. list !
+    call __NM(compute_mindist_grad)((.not.qneighbor_list) .or. (.not.__CHKUPDATE(full_sum_freq))) 
+! NOTE that it makes no sense to run full sum w/o neighbor sorting, which requires nbr. list !
    else
+#endif
     call __NM(compute_mindist_grad)(.true.) ! always call quit-early version; however, the max. index will be set to nsurface, so traverse full list
-   endif ! full sum
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
+   endif ! full_sum_freq
+#endif
 !
   else ! original density-based calculation
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
    if (full_sum_freq.gt.izero) then
-    call __NM(compute_density_grad)( &
-#ifdef __SORT_LIST
-#ifdef __NEIGHBOR_LIST
- &    (.not.qneighbor_list) .or. &
-#endif
-#endif
+    call __NM(compute_density_grad)((.not.qneighbor_list) .or. (.not.__CHKUPDATE(full_sum_freq))) 
 ! as above for mindist
 ! truncate if running density value exceeds reference
- &    (.not.__CHKUPDATE(full_sum_freq))) 
    else
+#endif
     call __NM(compute_density_grad)(.true.)
+!
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
    endif
+#endif
   endif ! qminimum_distance
  endif ! compute reference surface distance
 !========================== compute contour value ^
