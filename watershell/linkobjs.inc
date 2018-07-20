@@ -3,6 +3,7 @@ LINKOBJS+=\
  erfsun_ref.o \
  erfsun_value.o \
  lu.o \
+ bestfit.o \
  constants.o\
  output.o \
  parser.o \
@@ -12,6 +13,7 @@ LINKOBJS+=\
  mpi_compat_stub.o \
  ivector.o \
  isort.o \
+ rsort_ind.o \
  state.o \
  fieldbcdef.o \
  system.o \
@@ -37,5 +39,5 @@ LINKOBJS+=\
  atompar.o \
  bonds.o \
  angles.o \
- dihedrals.o
- 
+ dihedrals.o \
+ unitcell.o

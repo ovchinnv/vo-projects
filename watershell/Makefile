@@ -1,9 +1,9 @@
 NAME=watershell
 ROOT=..
 HEADS=watershell.h
-OBJS= watershell.o watershell_plugin.o watershell_plugin_acemd.o
+OBJS= watershell.o watershell_plugin.o watershell_plugin_acemd.o ugrid.o
 
-DEPS=files dynamol continua output parser constants erf lu
+DEPS=files dynamol continua output parser constants erf lu unitcell
 
 LIB=libwatershell.so # libwatershell.a
 LIBS+=$(LIB)
@@ -20,9 +20,11 @@ $(LIB) : $(OBJS) $(COBJS) $(LOBJS) linkobjs.inc
 
 $(SOURCES) : $(LOCALDEPS)
 
+watershell.o : ugrid.o
+
 watershell_plugin.o : watershell.o
 
-watershell.F90 watershell_plugin.F90 : parser/parser_macro2.src
+watershell.F90 watershell_plugin.F90 : parser/parser_macro2.src parser/parser_macro3.src
 
 watershell_plugin_acemd.o : aceplug.h
 
