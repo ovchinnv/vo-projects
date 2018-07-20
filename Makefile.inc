@@ -27,7 +27,7 @@ FC=gfortran
 #FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -Wall -fopenmp 
 #FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  #-Wall  #-fopenmp 
 #FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fcheck=all
-FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno
+FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno # -fcheck=all -g
 #FFLAGS=-O0 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fcheck=all #-fno-math-errno
 #MPI_HOME=/usr/local/mpich2-gnu
 MPI_HOME=/usr/lib/openmpi
@@ -185,12 +185,12 @@ $(ROOT)/$(NAME).stamp:: $(OBJS) $(MODS) $(HEADS) $(DISTRIB) $(addprefix $(ROOT)/
 ########################## TEST PROGRAM ######################
 test.F90:test.ftn $(LOCALDEPS) $(GLOBALDEPS) $(ROOT)/test.msg
 	$(FPP) $(FPPFLAGS) $(DEFS) -U__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(TESTMSG) $(DEBUG) -P $< > $@
-test :: $(OBJS) test.o force_look
-	$(LD) $(LDFLAGS) test.o $(OBJS) $(LOBJS) $(LIBS) $(MPI_LIBS) $(DEBUG) -o test
+test :: $(TESTOBJS) test.o force_look
+	$(LD) $(LDFLAGS) test.o $(TESTOBJS) $(LOBJS) $(LIBS) $(MPI_LIBS) $(DEBUG) -o test
 	echo "==================================================="
 	echo "Running test :"
 	echo "==================================================="
-	time ./test > test.out 2>&1 ; cat test.out
+	time ./test $(TESTARGS)	> test.out 2>&1 ; cat test.out
 	echo "==================================================="
 	echo
 ######################### OTHER RULES ########################
