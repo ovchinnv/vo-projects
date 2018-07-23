@@ -13,6 +13,7 @@ LINKOBJS+=\
  mpi_compat_stub.o \
  ivector.o \
  isort.o \
+ rsort_ind.o \
  state.o \
  fieldbcdef.o \
  system.o \

@@ -1,0 +1,71 @@
+!/charmm
+
+output {
+ minwarnlev=-1 ! more permissive warnings
+}
+
+molecule {
+ structure_file=@{stringpdb}
+}
+
+smcv_init {
+ structure=@{stringpdb} ! not necessary if structure_file defined above
+ pbc=no
+ : init maxcv 4 ! best-fit rmsd & three position components
+! distance between COMs projected onto a vector
+ : add dist_com sele beta = @{bfgp} end sele beta = @{bfab} end force @{kdist} fbwidth @{fbw1} vector @{vec1} frame 0 ! this is the RC
+! distance within a plane orthogonal to the vector
+ : add dist_com sele beta = @{bfgp} end sele beta = @{bfab} end force @{kdist} fbwidth @{fbw2} vector @{vec1} ortho frame 0
+! orientation RMSD
+ : add rmsd orient sele beta = @{bfab} end rms sele beta = @{bfab} end force @{krmsd} mass noro comp ! comparison set has copy of initial structure
+! orientation RMSD 2 (antigen)
+ : add rmsd orient sele beta = @{bfgp} end rms sele beta = @{bfgp} end force @{krmsd} mass fbwidth @{fbw3} noro notr comp
+ : set weight 1 all
+ : list
+! : test grad step 0.01
+! read CV coordinates
+ : read name cv@{irestart}.dat col dyna ! cv for restarting (if needed)
+ : read name cv@{irep}.dat     col main ! target cv
+! stats
+ : stat hist hnam @{datadir}/hist@{irep}.dat @{histappend} hcol inst - ! cv time series
+        wiav winm @{datadir}/fbwin@{irep}    @{windowappend} -         ! window averages of cv over FB regions
+        rene renm @{datadir}/rene@{irep}.dat @{reneappend}             ! restraint energy
+
+! dynamics
+ : dyna -
+    rstr reeq @{freq} - ! restrained dynamics 
+    smd -               ! do not reset dyna/old set in the beginning
+    hisf 100 -          ! time slices
+    stat staf @{freq}   ! frequency of statistics output during dynamics
+}
+
+watershell {
+  radii=file
+  radiifile=struc/g120-ab-trunc-ressn.pdb
+  radiifiletype=PDB
+  radiicol=O
+
+  structure_update_freq=5
+  structure_update_memory=0.999 ! the closer to zero, the shorter the memory, the faster the evolution
+  distance_update_freq=0
+  surface_force_constant=1 ! 1 and above seems to be reasonable
+  surface_distance=7.5 ! if 0, determined automatically
+
+!  full_sum_freq=100
+!  remove_net_torque=yes ! may be a good idea to use this in all cases to minimize shearing forces
+!  neighbor_list=no
+!
+! use a simple minimum distance algorithm
+  minimum_distance=yes
+! more aggressive params to increase speed (only for regular method)
+  cutoff_surf_stdev=5
+
+  surface_atoms="ANAME=CA"
+  solvent_atoms="ANAME=OH2 OR ANAME=SOD OR ANAME=CLA"
+
+  restart_file=@{watershell_restart}
+  output_file=@{watershell_output}
+
+  output_freq=@{freq}
+
+ }

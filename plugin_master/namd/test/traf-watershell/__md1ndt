@@ -1,0 +1,158 @@
+#!/bin/vmd
+set mde namd2
+set psffile struc/traf-rank-wshell.psf
+set pdbfile struc/traf-rank-wshell.pdb
+set resfile struc/traf-rank-wshell.pdb
+set temperature 300
+set cutoff 9
+set switchdist 8.5
+set pairlistdist 10
+set a 64
+set b 64
+set c 64
+bincoordinates scratch/traf-rank0eq.coor
+binvelocities scratch/traf-rank0eq.vel
+set shake all
+set dt 2.0
+set hydrogenmass 1
+set pme on
+set pmefreq 2
+set parameters struc/traf-rank.par
+set cswitch off
+set nsteps 100000
+set freq 10000
+set outputName scratch/traf-rank1ndt
+set lang on
+set lfriction 0.1
+set baro off
+set bptime 500
+set ministeps 0
+DynamoPlugin on
+DynamoConfigFile watershell1.in
+DynamoLogFile watershell1.log
+#!/bin/vmd
+#############################################################
+structure          $psffile
+coordinates        $pdbfile
+#
+#
+if [info exists xscfile] {
+  set fd [open $xscfile r]
+  while { [gets $fd line] > -1 } { 
+   set a [lindex $line 1];
+   set b [lindex $line 5];
+   set c [lindex $line 9];
+  }
+  close $fd
+#
+#print "$a $b $c" ;
+#
+}
+if {$mde == "namd2"} {
+ paratypecharmm on
+}
+parameters          ${parameters}
+
+# Force-Field Parameters
+exclude             scaled1-4
+1-4scaling          1.0
+cutoff              $cutoff
+switching           on
+switchdist          $switchdist
+#pairlistdist        $pairlistdist ; # does not always help
+#margin 1
+#
+if [info exists pmefreq] {
+fullelectfrequency  $pmefreq
+}
+if [info exists nbondfreq] {
+ nonbondedfreq      $nbondfreq
+}
+if [info exists stepspercycle] {
+ stepspercycle      $stepspercycle
+}
+
+# Integrator Parameters
+timestep            $dt  ;# fs
+
+if {$mde == "acemd"} { ;# only for acemd
+ hydrogenscale       $hydrogenmass ;# scaling of H mass for faster integration
+}
+rigidbonds          $shake  ;# needed for 2fs steps
+#ignoremass          yes ;# do not identify hydrogens based on mass
+
+constraints         $cswitch
+consref             $resfile ;# reference positions file
+if { $mde == "namd2" } {
+ conskfile          $resfile
+ if [info exists conskcol] {
+  conskcol          $conskcol
+ } else {
+  conskcol           O ; # specify restraint fc column for NAMD
+ }
+}
+
+# Constant Temperature Control
+langevin            $lang    ;# do langevin dynamics
+#langevinFile        $resfile
+#langevinCol         Z
+langevindamping     $lfriction     ;# damping coefficient (gamma)
+langevintemp        $temperature
+#langevinHydrogen    off    ;# don't couple langevin bath to hydrogens
+berendsenpressure   $baro
+berendsenpressuretarget 1.01325
+berendsenpressurerelaxationtime $bptime
+berendsenpressurecompressibility 0.0000457
+vdwforceswitching   on ;# CHARMM vdw force switching function
+#
+#############################################################
+## OUTPUT PARAMETERS                                       ##
+#
+outputname          $outputName
+restartfreq         [expr {$freq*5} ]; # make less frequent to decrease likelihood of repeat craches
+dcdfreq             $freq
+if { $mde == "acemd" } {
+ energyfreq          $freq
+# energyfreq          1
+} elseif { $mde == "namd2" } {
+ xstFreq             $freq
+ outputEnergies      $freq
+ outputPressure      $freq
+ outputTiming        $freq
+};
+#########################################################################
+# Periodic Boundary Conditions
+# PME (for full-system periodic electrostatics)
+pme                 $pme
+if { $pme == "on" } {
+ pmegridspacing      1.0
+#
+ useconstantratio   off ;# on for membranes
+ if { $mde == "acemd" } {
+  useflexiblecell    no
+ } elseif { $mde == "namd2" } {
+  useflexiblecell    yes
+ };
+
+ set sx $a
+ set sy $b
+ set sz $c
+
+ if { $mde == "acemd" } {
+  celldimension        $sx               $sy                         $sz ;
+ } elseif { $mde == "namd2" } {
+  cellBasisVector1     $sx               0.                          0.
+  cellBasisVector2     0.                $sy                         0.
+  cellBasisVector3     0.                0.                          $sz
+  cellOrigin           0.                0.                          0.
+ };
+};
+
+
+############################################################################
+# Run
+# minimization
+minimize $ministeps
+
+# dynamics
+run $nsteps

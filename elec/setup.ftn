@@ -29,7 +29,7 @@
   __IAM(_ME)
 
   int :: numarg, flen, fid=-1
-  character(len=vartaglen) :: keyword, filename, fname, chargefile
+  character(len=vartaglen) :: filename, fname, chargefile, xclfile, keyword
 
 
   if (__ME.le.0) then 
@@ -60,7 +60,7 @@
 !
    fid=-1; ! to assign handle
    call files_open(fid, chargefile, 'FORMATTED', 'READ')
-!
+   if (fatal_warning(__COMM)) call terminate(whoami)
 ! read to the end of file to determine number of particles
 !
    lines=0
@@ -72,17 +72,48 @@
    __OUT('file "', trim(chargefile), '" contains ',lines,'lines' )
 ! now read data
    allocate(x(lines), y(lines), z(lines), q(lines))
-   rewind(fid)
+   if (lines>0) rewind(fid)
    do i=1, lines
     read(fid,*,iostat=iostatus) x(i), y(i), z(i), q(i)
    enddo
    call files_close(fid)
    npt=lines
-   __OUT('read ', npt, ' coordinates and charges')
-  endif
-! perturb charge for FD ; this is a way to valudate del_dx, etc.
-! x(2)=x(2)+0.001;
-
+   __OUT('Read ', npt, ' coordinates and charges')
+! == deal with nonbonded exclusions
+! pointers into exslusion list, wich also determine the list size
+   __ALLOC(nbx(npt))
+   __ALLOC(nex(npt))
+! == check for exclusions file
+   if (existtag_nocase('exclusionfile')) then
+    xclfile=getval_nocase('exclusionfile')
+!
+    fid=-1; ! to assign handle
+    call files_open(fid, xclfile, 'FORMATTED', 'READ')
+    if (fatal_warning(__COMM)) call terminate(whoami)
+    read(fid,*,iostat=iostatus) nex
+    if (iostatus.ne.0) then ; __ERR('Could not read nonbonded exclusion index list'); __DIE ; endif
+    nbx(1)=1;
+    do i=2, npt ; nbx(i)=nex(i-1)+1; enddo ! note that we are assuming a concatenated sorted list of atom exclusion lists
+    __ALLOC(xcl(nex(npt))) ! last element in the list is also the list size
+    read(fid,*,iostat=iostatus) xcl
+    if (iostatus.ne.0) then 
+     __ERR('Could not read nonbonded exclusion list'); 
+     __DIE
+    else
+     __OUT('Read ', nex(npt), 'nonbonded exclusions');
+#ifdef __DEBUG
+     __OUT('The exclusion list is:')
+     do i=1,npt
+      if(nbx(i)<=nex(i)) then ;  __OUT('Exclusions for atom #',i,':',xcl(nbx(i):nex(i))) ; endif
+     enddo
+#endif
+    endif
+!
+   else ! set safe defaults
+    nbx=1
+    nex=0
+   endif ! exclusion file exists
+  endif ! __ME==0
 ! ===== grid dimensions
   nx=atoi(getval_nocase('nx'))
   ny=atoi(getval_nocase('ny'))
@@ -139,19 +170,55 @@
   elsr_dx=>grad_elsr(:,1)
   elsr_dy=>grad_elsr(:,2)
   elsr_dz=>grad_elsr(:,3)
+! excluded potential
+  __ALLOC(grad_elxl(npt,3));
+  elxl_dx=>grad_elxl(:,1)
+  elxl_dy=>grad_elxl(:,2)
+  elxl_dz=>grad_elxl(:,3)
+!
   __ALLOC(lap(nx,ny,nz)); ! laplacian for FD Poisson
-
-! self energy part of l/r energy can be computed right away
-! note that is does not contribute to any gradients
+!
   spt=atof(getval_nocase('support'))
+  __OUT('Filter support is ', spt)
+!
+! note the differing definitions of 1/support (oos) for Gauss vs poly filters :
+#if _FILTER==_GAUSS
+  if (existtag_nocase('ewaldkappa')) then
+   ewaldkappa=atof(getval_nocase('ewaldkappa'))
+  else
+   ewaldkappa=ewaldkappa_default
+  endif
+  oos=(two*ewaldkappa)
+  __OUT('Ewald kappa set to', ewaldkappa, 'which corresponds to a StdDev of',1./oos)
+  __OUT('Gaussian truncation is at', spt*oos, 'supports');
+#else
   oos=one/spt
-  eps=atof(getval_nocase('epsilon'))
+#endif
+!
+! get electrostatic permittivity :
+  if (existtag_nocase('epsilon')) then
+   keyword=getval_nocase('epsilon')
+  else
+   __OUT('Dielectric permittivity not specified. Assuming CHARMM value')
+   keyword='CHARMM'
+  endif
+  call toupper(keyword)
+  select case(keyword)
+   case('CHARMM','CHM','CHRM','CHARM') ; eps=one/(CCELEC_charmm*four*pi)   ; __OUT('Using CHARMM permittivity.');
+   case('NAMD','NAMD2')                ; eps=four*pi/CCELEC_namd     ; __OUT('Using NAMD permittivity.');
+   case('AMBER','AMB') ;               ; eps=four*pi/CCELEC_amber    ; __OUT('Using AMBER permittivity.');
+   case('DISCOVER','DISC') ;           ; eps=four*pi/CCELEC_discover ; __OUT('Using DISCOVER permittivity.');
+   case default ; eps=atof(keyword)
+  end select
+!
   oeps=one/eps
 !
+! self energy part of l/r energy can be computed right away
+! note that is does not contribute to any gradients
   el_self = 0.5d0 * philr_selfc * sum(q**2) * oos * oeps;
 !
 ! wavenumber range
-  nwave=atoi(getval_nocase('nwave'))
+  nwave=atoi(getval_nocase('ewaldkmax'))
 !
   if (fatal_warning(__COMM)) call terminate(whoami)
 !
