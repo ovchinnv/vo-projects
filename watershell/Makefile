@@ -24,7 +24,7 @@ watershell.o : ugrid.o
 
 watershell_plugin.o : watershell.o
 
-watershell.F90 watershell_plugin.F90 : parser/parser_macro2.src parser/parser_macro3.src
+watershell.F90 watershell_plugin.F90 : parser/parser_macro2.src parser/parser_macro3.src watershell_rmft_aux1.ftn
 
 watershell_plugin_acemd.o : aceplug.h
 
