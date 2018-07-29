@@ -160,8 +160,10 @@ module _N
  type (grid) :: sagrid
 #ifdef __OMP
  integer*1, allocatable, dimension(:,:,:,:), target :: sarho_all_threads ! density array for surface are computation
+ real*4, allocatable, dimension(:,:,:,:), target :: sarhof_all_threads   ! density array for surface are computation
 #else
  integer*1, allocatable, dimension(:,:,:), target :: sarho
+ real*4, allocatable, dimension(:,:,:), target :: sarhof
 #endif
 #endif
 !
@@ -1048,10 +1050,11 @@ __DBGVAR(r_com_sa,1)
 !
   call ugrid_initialize(sagrid, 3, r_surf_minmax, (/surface_area_grid_spacing/), adjust_spacings_=qper_parser_override) ! when using PBC, adjust spacing, not length
 !
+  if (qminimum_distance) then
 #ifdef __OMP
-  allocate(sarho_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:omp_get_max_threads()-1))
+   allocate(sarho_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:omp_get_max_threads()-1))
 #ifdef __DASYSTAT
-  if (dasystat) allocate(inrho_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:omp_get_max_threads()-1))
+   if (dasystat) allocate(inrho_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:omp_get_max_threads()-1))
 #endif
 #else
   allocate(sarho(sagrid%n(1),sagrid%n(2),sagrid%n(3)))
@@ -1059,6 +1062,13 @@ __DBGVAR(r_com_sa,1)
   if (dasystat) allocate(inrho(sagrid%n(1),sagrid%n(2),sagrid%n(3)))
 #endif
 #endif
+  else
+#ifdef __OMP
+   allocate(sarhof_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:omp_get_max_threads()-1))
+#else
+   allocate(sarhof(sagrid%n(1),sagrid%n(2),sagrid%n(3)))
+#endif
+  endif
 ! initialize random number generator for small random grid displacements
 #ifdef __PERTURB_GRID
   if (.not.random_initialized) call random_init()
@@ -1164,11 +1174,13 @@ __DBGVAR(r_com_sa,1)
 #if defined(__BAROSTAT) || defined(__DASYSTAT)
 #ifdef __OMP
  __DEALL(sarho_all_threads)
+ __DEALL(sarhof_all_threads)
 #ifdef __DASYSTAT
  __DEALL(inrho_all_threads)
 #endif
 #else
  __DEALL(sarho)
+ __DEALL(sarhof)
 #ifdef __DASYSTAT
  __DEALL(inrho)
 #endif
@@ -1683,6 +1695,14 @@ endif
  endif ! qminimum_dist
 !
 ! compute current surface distance from pre :
+! NOTE: check below to make sure consistent for erf/density ; yes it is;
+! we are using the boundary potential : k/2 x [ L^-1 (rho) - d0 ] ^ 2 ;
+! d0 is the quasi-distance to boundary
+! L^-1(rho) is the logistic function approximant
+! the forces on the bdry are still k ( L^-1(rho) - d0 );
+! the forces on the atoms are obtained by differentiation w.r.t position (x) :
+! F(x) = - k ( L^-1(rho) - d0 ) * logistic_const / (1-L) / L * grad (rho)
+
  if (nsolvent_outside .gt. 0) then
   oonsolvent_outside=one/nsolvent_outside
  else
@@ -1693,7 +1713,7 @@ endif
  __SCALE(surface_force, -surface_force_constant) ! negative because of sign convention
  __SCALE(surface_energy, half*surface_force_constant)
 !
- __INCR(energy,surface_energy) ! unclear whether useful
+ __INCR(energy,surface_energy)
 !
 ! barostat-related code :
 ! ==========================================================================================
@@ -1756,13 +1776,24 @@ endif
          close(666)
 #endif
 !
+          if (qminimum_distance) then
 #ifdef __OMP
-          __DEALL(sarho_all_threads)
-          allocate(sarho_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:omp_get_max_threads()-1))
+           __DEALL(sarho_all_threads)
+           allocate(sarho_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:omp_get_max_threads()-1))
 #else
           __DEALL(sarho)
-          allocate(sarho(sagrid%n(1),sagrid%n(2),sagrid%n(3)))
+           allocate(sarho(sagrid%n(1),sagrid%n(2),sagrid%n(3)))
 #endif
+          else
+#ifdef __OMP
+           __DEALL(sarhof_all_threads)
+           allocate(sarhof_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:omp_get_max_threads()-1))
+#else
+          __DEALL(sarhof)
+           allocate(sarhof(sagrid%n(1),sagrid%n(2),sagrid%n(3)))
+#endif
+          endif
+!
         endif
        endif
       endif
@@ -1868,6 +1899,7 @@ __DBGVAR(pressure_ave,1)
          close(666)
 #endif
 !
+         if (qminimum_distance) then
 #ifdef __OMP
           __DEALL(sarho_all_threads)
           allocate(sarho_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:omp_get_max_threads()-1))
@@ -1879,6 +1911,15 @@ __DBGVAR(pressure_ave,1)
           __DEALL(inrho)
           allocate(inrho(sagrid%n(1),sagrid%n(2),sagrid%n(3)))
 #endif
+         else
+#ifdef __OMP
+          __DEALL(sarhof_all_threads)
+          allocate(sarhof_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:omp_get_max_threads()-1))
+#else
+          __DEALL(sarhof)
+          allocate(sarhof(sagrid%n(1),sagrid%n(2),sagrid%n(3)))
+#endif
+         endif
         endif ! reallocate
        endif ! grid size check
       endif ! grid size check
@@ -2110,7 +2151,7 @@ __DBGVAR(solvent_mass_nonbulk,1)
     if (dr2 .gt. rmaxsurf**2) cycle
 ! _nonce cycle ! aa get 54
 ! proceed with calculation
-    rsurf=rsurf * oo_surf_stdev ! NOTE: redefining rsurf to get rid o variable rsurfn (rsurf <== rsurfn)
+    rsurf=rsurf * oo_surf_stdev ! NOTE: redefining rsurf to get rid of variable rsurfn (rsurf <== rsurfn)
     dr2 = sqrt(dr2) * oo_surf_stdev
 ! _nonce cycle ! aa
 ! a and b
@@ -2795,11 +2836,210 @@ __DBGVAR(kmax,2)
 #undef _S
 #define _S compute_bulk_volume
  __SUB(_S)
-
+!
+#ifdef __OMP
+ use omp_lib
+ int tid, numthreads, n
+ int :: __U(ivolume), __U(ivolume_nonbulk)
+#endif
+ int :: ivolume, ivolume_nonbulk
+ int i, im, jm, km, ii, jj, kk, imin, imax, jmin, jmax, kmin, kmax, nx, ny, nz
+ float x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, dx2, dy2, dz2, x0, y0, z0
+ float support, support2, rsurf, a, b, ooc, expa, expb
+#ifdef __PERTURB_GRID
+ float :: drand(3)
+#endif
+!
  __IAM(__NM(_S))
+!
+! make use of existing definitions in compute_desity_grad routine above
+! different erf implementations/approximations
+ float :: erfsun ! external erf function; code by Sun Microsystems
+! if openmp is used, cannot call the function erfo7, so hack to call inlined macro here
+#ifndef __OMP
+ float :: erfo7  ! approximation to within O(-7)
+#endif
+ float :: erfo5  ! approximation to within O(-5) [contains an exponential term]
+!
+#ifdef __PERTURB_GRID
+ call randomu_vector(drand, 3, random_channel)
+ drand=(drand-half)*surface_area_grid_spacing
+#else
+#define drand(_A)
+#endif
+!
+ x0 = drand(1) + sagrid%limits(1,1)
+ y0 = drand(2) + sagrid%limits(1,2)
+ z0 = drand(3) + sagrid%limits(1,3)
+!
+ nx=sagrid%n(1)
+ ny=sagrid%n(2)
+ nz=sagrid%n(3)
+!
+#define qpbcx qper_parser_override
+#define qpbcy qpbcx
+#define qpbcz qpbcx
+
+! initialize
+ ivolume=0
+ ivolume_nonbulk=0
+!
+#ifdef __OMP
+!$omp parallel &
+!$omp shared(sarho_all_threads, ivolume, ivolume_nonbulk) &
+!$omp private(x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, dx2, dy2, dz2, ii, jj, kk, imin, imax, jmin, jmax, kmin, kmax, tid, &
+!$omp i, __U(ivolume), __U(ivolume_nonbulk), n, support, support2, rsurf, a, b, ooc, expa, expb)
+ tid=omp_get_thread_num() ! thread index
+ numthreads=omp_get_num_threads()
+#ifdef rho
+#undef rho
+#endif
+#define rho(i,j,k) sarho_all_threads(i,j,k,tid)
+#else
+#define rho sarho
+#endif
+! assign to each thread a local copy of surface indicator
+ rho(:,:,:)=zero ! initialize
+ __U(ivolume)=0
+ __U(ivolume_nonbulk)=0
+!$omp do schedule(runtime)
+ do i=1, nsurface
+! determine support for this atom, i.e. all grid points which are within the filter support
+  rsurf = ( rad_surf(i) + surf_padding )
+  support = ( rsurf + cutoff_surf )
+  support2=support**2
+  x=r_surf(1,i)-r_com_sa(1)
+  xmin=x-support
+  xmax=xmin + two*support
+  imin = INT( (xmin-x0)*oo_surface_area_grid_spacing ) + 1 ! could be negative (i.e. off-the-grid), but the indices are consistent with the 1-based offset
+  imax = INT( (xmax-x0)*oo_surface_area_grid_spacing ) + 2
+  if (.not.qpbcx) then
+   imin=max(imin,1)
+   imax=min(imax,nx)
+  endif
+__DBGVAR(surface_area_grid_spacing,2)
+__DBGVAR(oo_surface_area_grid_spacing,2)
+__DBGVAR(x,2)
+__DBGVAR(xmin,2)
+__DBGVAR(xmax,2)
+__DBGVAR(x0,2)
+__DBGVAR(imin,2)
+__DBGVAR(imax,2)
+! same for y
+  y=r_surf(2,i)-r_com_sa(2)
+  ymin=y-support
+  ymax=ymin + two*support
+  jmin = INT( (ymin-y0)*oo_surface_area_grid_spacing ) + 1
+  jmax = INT( (ymax-y0)*oo_surface_area_grid_spacing ) + 2
+  if (.not.qpbcy) then
+   jmin=max(jmin,1)
+   jmax=min(jmax,ny)
+  endif
+__DBGVAR(y,2)
+__DBGVAR(ymin,2)
+__DBGVAR(ymax,2)
+__DBGVAR(y0,2)
+__DBGVAR(jmin,2)
+__DBGVAR(jmax,2)
+! and for z
+  z=r_surf(3,i)-r_com_sa(3)
+  zmin=z-support
+  zmax=zmin + two*support
+  kmin = INT( (zmin-z0)*oo_surface_area_grid_spacing ) + 1
+  kmax = INT( (zmax-z0)*oo_surface_area_grid_spacing ) + 2
+  if (.not.qpbcz) then
+   kmin=max(kmin,1)
+   kmax=min(kmax,nz)
+  endif
+__DBGVAR(z,2)
+__DBGVAR(zmin,2)
+__DBGVAR(zmax,2)
+__DBGVAR(z0,2)
+__DBGVAR(kmin,2)
+__DBGVAR(kmax,2)
+
+  do kk=kmin,kmax
+   dz2=(surface_area_grid_spacing*(kk-1) - (z - z0) )**2; ! actual z-distance between gridpoint and atom
+   km=modulo(kk-1,nz-1)+1 ! works for PBC
+   do jj=jmin,jmax
+    dy2=dz2+(surface_area_grid_spacing*(jj-1) - (y - y0) )**2;
+    if (dy2>support2) cycle
+    jm=modulo(jj-1,ny-1)+1
+    do ii=imin,imax
+     dx2=dy2+(surface_area_grid_spacing*(ii-1) - (x - x0) )**2;
+     if (dx2>support2) cycle
+     im=modulo(ii-1,nx-1)+1
+! update density
+     if (rho(im,jm,km).lt.surface_contour_value) then
+      rsurf=rsurf * oo_surf_stdev
+      dx2 = sqrt(dx2) * oo_surf_stdev
+      a = osq2 * (dx2 + rsurf)
+      b = osq2 * (dx2 - rsurf)
+      ooc = one / dx2
+      expa = exp ( - a**2 )
+      expb = exp ( - b**2 )
+! update density
+#ifdef __ERFHYBRID
+      __erfo7i(a,erfa)
+      __erfo7i(b,erfb)
+      __INCR(rho(im,jm,km), half * ( erfa - erfb ) + osq2pi * ooc * ( expa - expb )   )
+#else
+      __INCR(rho(im,jm,km), half * ( __erf(a) - __erf(b) ) + osq2pi * ooc * ( expa - expb )   )
+#endif
+     endif ! rho<contour value
+    enddo !ii
+   enddo !jj
+  enddo !kk
+ enddo ! nsurface atoms, i
+#ifdef __OMP
+!$omp end do
+! now reduce all indicator arrays to master array (0th thread)
+ n=1
+ do while (n.lt.numthreads)
+!$omp barrier ! make sure all threads have completed previous operation
+  if (mod(tid,2*n)==0 .and. (tid+n).lt.numthreads) then
+   __INCR(rho(:,:,:), sarho_all_threads(:,:,:,tid+n))
+  endif
+  __SCALE(n,2)
+ enddo
+! now compute surface area integral
+#ifdef rho
+#undef rho
+#endif
+#define rho(i,j,k) sarho_all_threads(i,j,k,0)
+ a=__OORHO(surface_contour_value)
+ b=__OORHO(bulk_boundary_contour_value)
+!$omp barrier ! make sure thread reduction is complete, otherwise volumes will be too small
+!$omp do schedule(runtime)
+#endif
+ do kk=2,nz
+  do jj=2,ny
+   do ii=2,nx
+! not clear how to do this in the fastest way possible
+! perhaps an if/else statement would be faster, densities that map to the outside of the main shell, also map to the outside of
+! the nonbulk (i.e. interfacial) region
+     __INCR(__U(ivolume), min(1,INT(rho(ii,jj,kk)*b)))
+     __INCR(__U(ivolume_nonbulk), max(1,INT(rho(ii,jj,kk)*bulk_boundary_contour_value)))
+   enddo
+  enddo
+ enddo
+#ifdef __OMP
+!$omp end do
+!$omp atomic
+ __REDUCE(ivolume)
+!$omp atomic
+ __REDUCE(ivolume_nonbulk)
+#endif
+#ifdef __OMP
+!$omp end parallel
+#endif
+ volume_bulk=(ivolume-ivolume_nonbulk)*surface_area_grid_spacing**3
+!
+ __DBGVAR(ivolume,1)
+ __DBGVAR(ivolume_nonbulk,1)
+ __DBGVAR(volume_bulk,1)
 
  end __SUB(_S)
-!
 !================================================================
 !
 #undef _S
