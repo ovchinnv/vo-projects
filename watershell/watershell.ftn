@@ -27,6 +27,7 @@
 ! neighbor list length
 #// to check a subset of surface atom list
 #define __NEIGHBOR_LIST_LENGTH_MINDIST max(1,min(nsurface, INT(solute_neighbor_mind(i) * neighbor_list_factor) ))
+#define __NEIGHBOR_LIST_LENGTH_DENSITY __NEIGHBOR_LIST_LENGTH_MINDIST
 #endif
 
 module _N
@@ -1242,7 +1243,9 @@ __DBGVAR(r_com_sa,1)
  float :: __U(surface_force)
 ! float :: __U(density_beyond_contour)
  int :: __U(nsolvent_outside)
+#ifdef __DASYSTAT
  float :: __U(solvent_mass_outside)
+#endif
 #ifdef __RMFT
  float, dimension(3) :: __U(net_force), __U(net_torque), __U(max_force) ! thread locals
  float :: __U(ir1),__U(ir2),__U(ir3),__U(ir1s),__U(ir2s),__U(ir3s),__U(ir12),__U(ir13),__U(ir23)
@@ -1590,6 +1593,9 @@ endif
 #ifdef __OMP
 !$omp parallel &
 !$omp shared (rho_solv, drho_solv, surface_contour_value, surface_distance, logistic_constant, surface_force_constant, &
+#ifdef __DASYSTAT
+!$omp solvent_mass_outside, solvent_mass, &
+#endif
 #ifdef __RMFT
 !$omp remove_net_torque, net_force, net_torque, &
 #ifdef __F_T_COUPLED
@@ -1600,6 +1606,9 @@ endif
 #endif
 !$omp nsolvent_outside, surface_force, surface_energy, isolvent_atoms, fr) & !!! , density_beyond_contour) &
 !$omp private (i, d0, pre, __U(nsolvent_outside), __U(surface_energy), __U(surface_force) & !!! , __U(density_beyond_contour)) &
+#ifdef __DASYSTAT
+!$omp , __U(solvent_mass_outside) &
+#endif
 #ifdef __RMFT
 !$omp ,ir, iforce, __U(net_force), __U(net_torque) &
 !$omp ,__U(ir1),__U(ir2),__U(ir3),__U(ir1s),__U(ir2s),__U(ir3s),__U(ir12),__U(ir13),__U(ir23) &
@@ -1610,6 +1619,9 @@ endif
  __U(surface_energy)=zero
  __U(surface_force)=zero
  __U(nsolvent_outside)=izero
+#ifdef __DASYSTAT
+ __U(solvent_mass_outside)=zero
+#endif
 #ifdef __RMFT
   if (remove_net_torque) then
    __U(net_force)=zero
@@ -1620,8 +1632,11 @@ endif
 !$omp do schedule(runtime)
 #endif
  do i=1, nsolvent
-  if ( rho_solv(i) .lt. surface_contour_value) then
+  if ( qforced_solv(i) ) then
    __INC(__U(nsolvent_outside))
+#ifdef __DASYSTAT
+   if(dasystat) __INCR(__U(solvent_mass_outside), mass_solv(i))
+#endif
 !   __INCR(__U(density_beyond_contour), rho_solv(i)) ! not clear whether useful
    d0=__OORHO( rho_solv(i))
    pre = ( __RHO_INVERSE2 ( d0 ) - surface_distance ) ;
@@ -1686,6 +1701,12 @@ endif
 !  __REDUCE(nsolvent_outside)
 !  __REDUCE(surface_energy)
 !  __REDUCE(surface_force)
+#ifdef __DASYSTAT
+if (dasystat) then
+!$omp atomic
+ __REDUCE(solvent_mass_outside)
+endif
+#endif
 #endif
 #include "watershell_rmft_aux1.ftn"
 #ifdef __OMP
@@ -2041,6 +2062,12 @@ __DBGVAR(solvent_mass_nonbulk,1)
  float :: isgn_, x_, erfa, erfb
 #endif
  float :: rmaxsurf, rsurf ! , rsurfn
+#ifdef __DASYSTAT
+#ifdef __OMP
+ float :: __U(solvent_mass_nonbulk)
+#endif
+ bool :: qbulk
+#endif
  bool :: qforced
  __IAM(__NM(compute_density_grad))
 !
@@ -2077,24 +2104,37 @@ __DBGVAR(solvent_mass_nonbulk,1)
 #define erfo7 __erfo7
 #endif
 !
+#ifdef __DASYSTAT
+ if (dasystat) then
+  solvent_mass_nonbulk=zero
+ endif ! dasystat
+#endif
  if (qtruncate_sum) then
 #ifdef __OMP
 !$omp parallel &
 !$omp shared ( rho_solv, drho_solv, r_solv, r_surf, rad_surf, surf_padding, nsolvent, nsurface, cutoff_surf, oo_surf_stdev &
+#ifdef __DASYSTAT
+!$omp , solvent_mass_nonbulk, mass_solv &
+#endif
 #ifdef __SORT_LIST
-!$OMP , solute_neighbor_list &
+!$omp , solute_neighbor_list &
 #ifdef __NEIGHBOR_LIST
-!$OMP , solute_neighbor_mind &
+!$omp , solute_neighbor_mind &
 #endif
 #endif
-!$OMP ) &
+!$omp ) &
 !$omp private ( rw, i, j, rp, rsurf, rmaxsurf, dr, dr2, ooc, expa, expb, qforced &
-#ifdef __SORT_LIST
-!$OMP ,dr2old, jj &
+#ifdef __DASYSTAT
+!$omp , __U(solvent_mass_nonbulk) &
 #endif
-!$OMP )
-!!$omp do schedule(runtime)
-!$omp do ! schedule(runtime)
+#ifdef __SORT_LIST
+!$omp ,dr2old, jj &
+#endif
+!$omp )
+#ifdef __DASYSTAT
+ if (dasystat) __U(solvent_mass_nonbulk)=zero
+#endif
+!$omp do schedule(runtime)
 #endif
   do i=1, nsolvent ! outer loop over solvent atoms
 ! does not help below
@@ -2111,7 +2151,7 @@ __DBGVAR(solvent_mass_nonbulk,1)
 #ifdef __SORT_LIST
    dr2old=-1.d0 ; ! set to a small number to guarantee that no swap is done on first iteration
 #ifdef __NEIGHBOR_LIST
-   do jj=1,max(1,min(nsurface, solute_neighbor_mind(i) * (min(INT(neighbor_list_factor),2)) ))
+   do jj=1, __NEIGHBOR_LIST_LENGTH_DENSITY
 #else
    do jj=1, nsurface ! inner loop over solute atoms
 #endif
@@ -2129,7 +2169,7 @@ __DBGVAR(solvent_mass_nonbulk,1)
 !
 ! _nonce cycle ! aa get 111
     rsurf    = ( rad_surf(j) + surf_padding )
-    rmaxsurf = ( cutoff_surf  + rsurf  ) ! note that this can be precomputed
+    rmaxsurf = ( cutoff_surf + rsurf  ) ! note that this can be precomputed
 !
 !_nonce  cycle ! aa get 105
     dr = rp-rw ;
@@ -2172,17 +2212,38 @@ __DBGVAR(solvent_mass_nonbulk,1)
 #else
     __INCR(rho_solv(i), half * ( __erf(a) - __erf(b) ) + osq2pi * ooc * ( expa - expb )   )
 #endif
-! _nonce cycle ! aa get 24
-!    if (qtruncate_sum .and.&
+!
+#ifdef __DASYSTAT
+    if (dasystat) then
+     if(rho_solv(i).gt.bulk_boundary_contour_value) then ! atom is inside bulk boundary
+      __INCR(__U(solvent_mass_nonbulk), mass_solv(i))
+      qforced=.false.
+      exit ! density threshold exceeded ; will not apply force to this atom
+     elseif(qforced) then
+      if (rho_solv(i).gt.surface_contour_value) then ! not bulk, but still inside ; if already marked (qforced=t, skip)
+       qforced=.false. ! however, do not quit because we still do not know whether we are iside bulk
+      else
+! otherwise, compute gradient contribution : (note that I am flipping the direction of dr (in the notes it is r0-r)
+       __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurf + half * (expa - expb) * ooc) )
+! add gradient contribution
+       __INCR(drho_solv(:,i),dr)
+      endif ! rho > surface contour value
+     endif ! rho > bulk contour value
+    else & ! dasystat
+#endif
     if(rho_solv(i).gt.surface_contour_value) then
      qforced=.false.
      exit ! density threshold exceeded ; will not apply force to this atom
-    endif
+    else
 ! otherwise, compute gradient contribution : (note that I am flipping the direction of dr (in the notes it is r0-r)
-    __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurf + half * (expa - expb) * ooc) )
+     __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurf + half * (expa - expb) * ooc) )
 ! add gradient contribution
-    __INCR(drho_solv(:,i),dr)
-! _nonce
+     __INCR(drho_solv(:,i),dr)
+    endif
+#if defined(__SORT_LIST) && defined( __NEIGHBOR_LIST)
+! if we are here, that means that the jj index contributes to the calculation ; check it if it is inside the index support ; if not, increase index support
+    if (jj>solute_neighbor_mind(i)) solute_neighbor_mind(i)=jj
+#endif
    enddo ! nsurface
    qforced_solv(i)=qforced
   enddo ! nsolvent
@@ -2199,25 +2260,36 @@ __DBGVAR(solvent_mass_nonbulk,1)
 #ifdef __OMP
 !$omp parallel &
 !$omp shared ( rho_solv, drho_solv, r_solv, r_surf, rad_surf, surf_padding, nsolvent, nsurface, cutoff_surf, oo_surf_stdev &
+#ifdef __DASYSTAT
+!$omp , solvent_mass_nonbulk &
+#endif
 #ifdef __SORT_LIST
-!$OMP , solute_neighbor_list &
+!$omp , solute_neighbor_list &
 #ifdef __NEIGHBOR_LIST
-!$OMP , solute_neighbor_mind &
+!$omp , solute_neighbor_mind &
 #endif
 #ifdef __SORT_LIST
 #endif
 #endif
-!$OMP ) &
+!$omp ) &
 !$omp private ( rw, i, j, rp, rsurf, rmaxsurf, dr, dr2, ooc, expa, expb, qforced &
-#ifdef __SORT_LIST
-!$OMP ,dr2old, jj &
+#ifdef __DASYSTAT
+!$omp , __U(solvent_mass_nonbulk), qbulk &
 #endif
-!$OMP )
-!!$omp do schedule(dynamic)
-!$omp do ! schedule(runtime)
+#ifdef __SORT_LIST
+!$omp ,dr2old, jj &
+#endif
+!$omp )
+#ifdef __DASYSTAT
+ if (dasystat) __U(solvent_mass_nonbulk)=zero
+#endif
+!$omp do schedule(runtime)
 #endif
   do i=1, nsolvent ! outer loop over solvent atoms
    qforced=.true.
+#ifdef __DASYSTAT
+    if (dasystat) qbulk=.true.
+#endif
    rho_solv(i)=zero ;
    drho_solv(:,i)=zero
    rw=r_solv(:,i);
@@ -2242,11 +2314,48 @@ __DBGVAR(solvent_mass_nonbulk,1)
     dr2old=dr2
 #endif
     if (dr2 .gt. rmaxsurf**2) cycle ! solute atom outside cutoff for this solvent atom -- skip it
-!   atom is within the cutoff; record its index before computing density contribution (note: recording index before swap above)
+!   atom is within the cutoff; record its index before computing density contribution
 #if defined(__SORT_LIST) & defined(__NEIGHBOR_LIST)
     solute_neighbor_mind(i)=jj
+!   since jj is increasing, solute_neighbor_mindist(i) will store the largest index for any atom within the cutoff (otherwise we cycle above)
+!   because the list is supposed to be sorted (in actuality it is not because the sort is approximate) this is a measure
+!   of how far we have to go to compute all the interactions within the cutoff ; so we store this number
 #endif
 !
+#ifdef __DASYSTAT
+    if (dasystat) then
+     if (qbulk) then
+      rsurf=rsurf * oo_surf_stdev
+      dr2 = sqrt(dr2) * oo_surf_stdev
+      a = osq2 * (dr2 + rsurf)
+      b = osq2 * (dr2 - rsurf)
+      ooc = one / dr2
+      expa = exp ( - a**2 )
+      expb = exp ( - b**2 )
+! update density
+#ifdef __ERFHYBRID
+      __erfo7i(a,erfa)
+      __erfo7i(b,erfb)
+      __INCR(rho_solv(i), half * ( erfa - erfb ) + osq2pi * ooc * ( expa - expb )   )
+#else
+      __INCR(rho_solv(i), half * ( __erf(a) - __erf(b) ) + osq2pi * ooc * ( expa - expb )   )
+#endif
+      if (rho_solv(i).gt.bulk_boundary_contour_value) then
+       __INCR(__U(solvent_mass_nonbulk), mass_solv(i))
+       qbulk=.false. ! no need to compute erf further
+       qforced=.false.
+      elseif(qforced) then ! in the bulk, and possibly outside main shell
+       if (rho_solv(i).gt.surface_contour_value) then
+        qforced=.false.
+       else
+        __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurf + half * (expa - expb) * ooc) )
+! add gradient contribution
+        __INCR(drho_solv(:,i),dr)
+       endif ! rho > surface value
+      endif ! rho > bulk value
+     endif ! qbulk
+    else &
+#endif
     if (qforced) then
      rsurf=rsurf * oo_surf_stdev
      dr2 = sqrt(dr2) * oo_surf_stdev
@@ -2277,6 +2386,12 @@ __DBGVAR(solvent_mass_nonbulk,1)
   enddo ! nsolvent
 #ifdef __OMP
 !$omp end do
+#ifdef __DASYSTAT
+ if (dasystat) then
+!$omp atomic
+  __REDUCE(solvent_mass_nonbulk)
+ endif
+#endif
 !$omp end parallel
 #endif
 #if defined(__NEIGHBOR_LIST) & defined(__SORT_LIST)
@@ -2548,7 +2663,7 @@ __DBGVAR(solvent_mass_nonbulk,1)
 !
 #ifdef __DASYSTAT
     if (dasystat) then
-     if (qbulk .and. dr2 .lt. bulk_distance2) then ! the solvent atom is inside the shell, and also too close to the surface to be considered bulk
+     if (qbulk .and. dr2 .lt. bulk_distance2) then ! the solvent atom is too close to the surface to be considered bulk
       __INCR(__U(solvent_mass_nonbulk), mass_solv(i))
       qbulk=.false. ! mark atom as non-bulk
       qforced=.false. ! also, mark as a non-forced atom
@@ -2845,7 +2960,7 @@ __DBGVAR(kmax,2)
  int :: ivolume, ivolume_nonbulk
  int i, im, jm, km, ii, jj, kk, imin, imax, jmin, jmax, kmin, kmax, nx, ny, nz
  float x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, dx2, dy2, dz2, x0, y0, z0
- float support, support2, rsurf, a, b, ooc, expa, expb
+ float support, support2, rsurf, a, b, ooc, expa, expb, oos, oobs
 #ifdef __PERTURB_GRID
  float :: drand(3)
 #endif
@@ -2883,6 +2998,9 @@ __DBGVAR(kmax,2)
 ! initialize
  ivolume=0
  ivolume_nonbulk=0
+!
+ oos=__OORHO(surface_contour_value)
+ oobs=__OORHO(bulk_boundary_contour_value)
 !
 #ifdef __OMP
 !$omp parallel &
@@ -3007,8 +3125,6 @@ __DBGVAR(kmax,2)
 #undef rho
 #endif
 #define rho(i,j,k) sarho_all_threads(i,j,k,0)
- a=__OORHO(surface_contour_value)
- b=__OORHO(bulk_boundary_contour_value)
 !$omp barrier ! make sure thread reduction is complete, otherwise volumes will be too small
 !$omp do schedule(runtime)
 #endif
@@ -3018,8 +3134,8 @@ __DBGVAR(kmax,2)
 ! not clear how to do this in the fastest way possible
 ! perhaps an if/else statement would be faster, densities that map to the outside of the main shell, also map to the outside of
 ! the nonbulk (i.e. interfacial) region
-     __INCR(__U(ivolume), min(1,INT(rho(ii,jj,kk)*b)))
-     __INCR(__U(ivolume_nonbulk), max(1,INT(rho(ii,jj,kk)*bulk_boundary_contour_value)))
+     __INCR(__U(ivolume), min(1,INT(rho(ii,jj,kk)*oos)))
+     __INCR(__U(ivolume_nonbulk), max(1,INT(rho(ii,jj,kk)*oobs)))
    enddo
   enddo
  enddo
