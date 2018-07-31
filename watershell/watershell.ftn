@@ -2057,6 +2057,13 @@ __DBGVAR(solvent_mass_nonbulk,1)
 #ifdef __SORT_LIST
  int :: jj
  float :: dr2old ! squared distance difference from previous iteration
+#if defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+ float :: neighbor_list_length
+ int :: neighbor_list_misses
+#ifdef __OMP
+ int :: __U(neighbor_list_misses)
+#endif
+#endif
 #endif
 #ifdef __ERFHYBRID
  float :: isgn_, x_, erfa, erfb
@@ -2257,6 +2264,15 @@ __DBGVAR(solvent_mass_nonbulk,1)
 !$omp end parallel
 #endif
  else ! qtruncate sum
+#if defined(__SORT_LIST) & defined(__NEIGHBOR_LIST)
+#ifdef __DDEBUG
+  __DBGOUT('Called ', whoami,'(full loop) with neighbor_list_factor=',neighbor_list_factor)
+#endif
+#ifdef __NEIGHBOR_LIST_CHECK
+  neighbor_list_misses=0
+#endif
+#endif
+!=====================================================================================
 #ifdef __OMP
 !$omp parallel &
 !$omp shared ( rho_solv, drho_solv, r_solv, r_surf, rad_surf, surf_padding, nsolvent, nsurface, cutoff_surf, oo_surf_stdev &
@@ -2267,8 +2283,9 @@ __DBGVAR(solvent_mass_nonbulk,1)
 !$omp , solute_neighbor_list &
 #ifdef __NEIGHBOR_LIST
 !$omp , solute_neighbor_mind &
+#ifdef __NEIGHBOR_LIST_CHECK
+!$omp , neighbor_list_misses &
 #endif
-#ifdef __SORT_LIST
 #endif
 #endif
 !$omp ) &
@@ -2278,10 +2295,16 @@ __DBGVAR(solvent_mass_nonbulk,1)
 #endif
 #ifdef __SORT_LIST
 !$omp ,dr2old, jj &
+#if defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+!$omp , __U(neighbor_list_misses), neighbor_list_length &
+#endif
 #endif
 !$omp )
 #ifdef __DASYSTAT
  if (dasystat) __U(solvent_mass_nonbulk)=zero
+#endif
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+ __U(neighbor_list_misses)=0
 #endif
 !$omp do schedule(runtime)
 #endif
@@ -2295,6 +2318,9 @@ __DBGVAR(solvent_mass_nonbulk,1)
    rw=r_solv(:,i);
 #ifdef __SORT_LIST
    dr2old=-1.d0 ; ! set to a small number to guarantee that no swap is done on first iteration
+#if defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+   neighbor_list_length = __NEIGHBOR_LIST_LENGTH_DENSITY
+#endif
    do jj=1, nsurface ! inner loop over solute atoms
     j=solute_neighbor_list(jj,i)
 #else
@@ -2382,6 +2408,10 @@ __DBGVAR(solvent_mass_nonbulk,1)
     endif ! qforced
 ! _nonce
    enddo ! nsurface
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+! check for _potential_ neighbor list violations :
+   if (qforced .and. solute_neighbor_mind(i) > neighbor_list_length ) __INC(__U(neighbor_list_misses)) ! count only if qforced, ok?
+#endif
    qforced_solv(i)=qforced
   enddo ! nsolvent
 #ifdef __OMP
@@ -2392,14 +2422,33 @@ __DBGVAR(solvent_mass_nonbulk,1)
   __REDUCE(solvent_mass_nonbulk)
  endif
 #endif
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+ __REDUCE(neighbor_list_misses)
+#endif
 !$omp end parallel
 #endif
 #if defined(__NEIGHBOR_LIST) & defined(__SORT_LIST)
-#ifdef __DDEBUG
- write(666,'(7000(I4,"("I4")"))') (solute_neighbor_mind(i), solute_neighbor_list(solute_neighbor_mind(i),i), i=1,nsolvent)
+!#ifdef __DDEBUG
+! write(666,'(7000(I4,"("I4")"))') (solute_neighbor_mind(i), solute_neighbor_list(solute_neighbor_mind(i),i), i=1,nsolvent)
 ! close(666)
+!#endif
 #endif
+! should we output the violations here ?
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+ if (neighbor_list_misses>0) then
+  if (neighbor_list_misses==1) then
+   __WRN(whoami, 'DETECTED '//itoa(neighbor_list_misses)//' POSSIBLE NEIGHBOR LIST MISS. NEIGHBOR LIST FACTOR IS '//ftoa(neighbor_list_factor))
+  else
+   __WRN(whoami, 'DETECTED '//itoa(neighbor_list_misses)//' POSSIBLE NEIGHBOR LIST MISSES. NEIGHBOR LIST FACTOR IS '//ftoa(neighbor_list_factor))
+  endif
+! increase neighbor_list_factor
+  __INCR(neighbor_list_factor, neighbor_list_factor_grow)
+ else
+  __INCR(neighbor_list_factor, neighbor_list_factor_shrink)
+! decrease neighbor_list_factor
+ endif
 #endif
+!
  endif ! truncate sum
 !
  end __SUB(compute_density_grad)
@@ -2604,8 +2653,11 @@ __DBGVAR(solvent_mass_nonbulk,1)
 #endif
 #ifdef __SORT_LIST
 !$omp , solute_neighbor_list &
-#if defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
-!$omp , solute_neighbor_mind, neighbor_list_misses &
+#ifdef __NEIGHBOR_LIST
+!$omp , solute_neighbor_mind &
+#ifdef __NEIGHBOR_LIST_CHECK
+!$omp , neighbor_list_misses &
+#endif
 #endif
 #endif
 !$omp ) &
