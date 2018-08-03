@@ -27,6 +27,15 @@
 ! neighbor list length
 #// to check a subset of surface atom list
 #define __NEIGHBOR_LIST_LENGTH_MINDIST max(1,min(nsurface, INT(solute_neighbor_mind(i) * neighbor_list_factor) ))
+#define __NEIGHBOR_LIST_LENGTH_DENSITY __NEIGHBOR_LIST_LENGTH_MINDIST
+#endif
+
+#ifdef __UNWRAP_PBC
+#// note that I assume that _PER is positive, no checks are done
+#define __PBCDIST(_DIST,_PER) _DIST=modulo(_DIST, _PER);if(_DIST .gt. half*(_PER)) __DECR(_DIST,_PER)
+#define __PBC_DIST(_DIST,_PER) __PBCDIST(_DIST,_PER)
+#define __DISTPBC(_DIST,_PER) __PBCDIST(_DIST,_PER)
+#define __DIST_PBC(_DIST,_PER) __PBCDIST(_DIST,_PER)
 #endif
 
 module _N
@@ -160,8 +169,10 @@ module _N
  type (grid) :: sagrid
 #ifdef __OMP
  integer*1, allocatable, dimension(:,:,:,:), target :: sarho_all_threads ! density array for surface are computation
+ real*4, allocatable, dimension(:,:,:,:), target :: sarhof_all_threads   ! density array for surface are computation
 #else
  integer*1, allocatable, dimension(:,:,:), target :: sarho
+ real*4, allocatable, dimension(:,:,:), target :: sarhof
 #endif
 #endif
 !
@@ -213,6 +224,12 @@ module _N
  float :: r_com(3) =(/zero, zero, zero/); ! center of mass (geometry) for torque computation
 #ifdef __SIMPLE_NET_FORCE_SURFACE
  float :: r_com_inst(3) =(/zero, zero, zero/); ! inst. center of mass (geometry) for torque computation
+#if defined (__OMP) && defined (__PBC_UNWRAP)
+ float :: __U(r_com_inst)(3)=(/zero, zero, zero/) ! thread locals
+#endif
+#endif
+#ifdef __UNWRAP_PBC
+ float :: r_pbc_reference(3)=(/zero, zero, zero/) ! to unwrap water coordinates for torque correction
 #endif
  float :: net_force(3) = (/zero, zero, zero/);
  float :: net_force_ave(3) = (/zero, zero, zero/); ! running average of net force
@@ -232,6 +249,10 @@ module _N
 #endif
 #endif
 !
+#if defined(__BAROSTAT) || defined(__DASYSTAT) || defined(__UNWRAP_PBC)
+ type (cell) :: ucell
+#endif
+!
  int :: fid
  bool :: qrestart=.false. ! whether we are restarting from a restart file
 !
@@ -241,11 +262,11 @@ module _N
 != subroutines
  contains
 !========
- __SUB(initialize) (atoms, forced_atoms, qper, ucell)
+ __SUB(initialize) (atoms, forced_atoms, qper, mdcell)
  __DEP_VECTORS
  type (int_vector) :: atoms, forced_atoms
  bool, intent(in) :: qper
- type (cell), intent(in), optional :: ucell
+ type (cell), intent(in), optional :: mdcell
 
  character(len=vartaglen) :: keyword, context, contexts(2) ! all_context currently holds the input context and the restart file context
  int :: ictx ! ugly variables for context searching in macro : (ictx: context # ; qctx, whether tag present in context)
@@ -440,7 +461,7 @@ module _N
 #endif
 
 #define __INT
-#if defined(__BAROSTAT) || defined(__DASYSTAT)
+#if defined(__BAROSTAT) || defined(__DASYSTAT) || defined(__UNWRAP_PBC)
 !
  if ( &
 #ifdef __BAROSTAT
@@ -449,13 +470,20 @@ module _N
 #ifdef __DASYSTAT
  & dasystat .or. &
 #endif
+#ifdef __UNWRAP_PBC
+ & .true. .or. &
+#endif
  & .false.)  then
 !
 ! check for periodicity override from parser :
   __GET_OPT_PAR_B(pbc, qper_parser_override, qper, __STRING(__WATERSHELLCTX)); ! if not present use qper that is passed in
-  if (qper_parser_override.and..not.present(ucell)) then
-   __WARN(whoami, 'PBC OVERRIDE IN USE BUT UNIT CELL NOT PROVIDED. WILL NOT USE PBC.')
-   qper_parser_override=.false.
+  if (qper_parser_override) then
+   if (present(mdcell)) then
+    ucell=mdcell
+   else
+    __WARN(whoami, 'PBC OVERRIDE IN USE BUT UNIT CELL NOT PROVIDED. WILL NOT USE PBC.')
+    qper_parser_override=.false.
+   endif ! present mdcell
   endif
  endif ! barostat or dasystat
 #endif
@@ -947,13 +975,20 @@ module _N
 #ifdef __DASYSTAT
 &     dasystat .or. &
 #endif
-&     .false. ) r_surf_changed=.true.
+&     .false. ) r_surf_changed=.true. ! we only need this variable for barostat/dasystat
 #endif
 #ifdef __RMFT
 ! compute com if removing torque
  if (remove_net_torque) then 
 #ifdef __TORQUE_COM_SURFACE
   r_com = oonsurface * sum(r_surf,2)
+#ifdef __UNWRAP_PBC
+  if (qper_parser_override) r_pbc_reference=r_com
+#endif
+#else
+#ifdef __UNWRAP_PBC
+ if (qper_parser_override) r_pbc_reference = oonsurface * sum(r_surf,2)
+#endif
 #endif
   if (qrestart) then ! read average force
    line=getval_nocase('average_net_force',__STRING(__RESTARTCTX))
@@ -1048,10 +1083,11 @@ __DBGVAR(r_com_sa,1)
 !
   call ugrid_initialize(sagrid, 3, r_surf_minmax, (/surface_area_grid_spacing/), adjust_spacings_=qper_parser_override) ! when using PBC, adjust spacing, not length
 !
+  if (qminimum_distance) then
 #ifdef __OMP
-  allocate(sarho_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:omp_get_max_threads()-1))
+   allocate(sarho_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:omp_get_max_threads()-1))
 #ifdef __DASYSTAT
-  if (dasystat) allocate(inrho_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:omp_get_max_threads()-1))
+   if (dasystat) allocate(inrho_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:omp_get_max_threads()-1))
 #endif
 #else
   allocate(sarho(sagrid%n(1),sagrid%n(2),sagrid%n(3)))
@@ -1059,6 +1095,13 @@ __DBGVAR(r_com_sa,1)
   if (dasystat) allocate(inrho(sagrid%n(1),sagrid%n(2),sagrid%n(3)))
 #endif
 #endif
+  else
+#ifdef __OMP
+   allocate(sarhof_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:omp_get_max_threads()-1))
+#else
+   allocate(sarhof(sagrid%n(1),sagrid%n(2),sagrid%n(3)))
+#endif
+  endif
 ! initialize random number generator for small random grid displacements
 #ifdef __PERTURB_GRID
   if (.not.random_initialized) call random_init()
@@ -1164,11 +1207,13 @@ __DBGVAR(r_com_sa,1)
 #if defined(__BAROSTAT) || defined(__DASYSTAT)
 #ifdef __OMP
  __DEALL(sarho_all_threads)
+ __DEALL(sarhof_all_threads)
 #ifdef __DASYSTAT
  __DEALL(inrho_all_threads)
 #endif
 #else
  __DEALL(sarho)
+ __DEALL(sarhof)
 #ifdef __DASYSTAT
  __DEALL(inrho)
 #endif
@@ -1183,7 +1228,7 @@ __DBGVAR(r_com_sa,1)
 !
  end __SUB(done)
 !================================================================
- __SUB(main)(r,fr,energy,qper_,ucell) ! NOTE : qper/ucell is not supposed to change; keeping here for sanity check
+ __SUB(main)(r,fr,energy,qper_,mdcell) ! NOTE : qper/ucell is not supposed to change; keeping here for sanity check
 #ifdef __F_T_COUPLED
  use lu
 #else
@@ -1195,10 +1240,10 @@ __DBGVAR(r_com_sa,1)
 !
  __OPAR(qper,bool)
 !
- type (cell), optional :: ucell
+ type (cell), optional :: mdcell
 ! int :: ibeg, iend ! atom indices for looping
  float :: distance_from_solute, distance_from_solute2, pre, d0
- float :: surface_energy, surface_force, density_beyond_contour
+ float :: surface_energy, surface_force ! , density_beyond_contour ! useful ?
 #ifdef __RMFT
 ! to update coefficients for computing torque matrix ; doing this way to separate com contribution :
 #define __UPDATE_TMAT_C \
@@ -1228,9 +1273,11 @@ __DBGVAR(r_com_sa,1)
 #define __AREDUCE(_W,_I) _W(_I)=_W(_I)+__U(_W)(_I)
  float :: __U(surface_energy)
  float :: __U(surface_force)
- float :: __U(density_beyond_contour)
+! float :: __U(density_beyond_contour)
  int :: __U(nsolvent_outside)
+#ifdef __DASYSTAT
  float :: __U(solvent_mass_outside)
+#endif
 #ifdef __RMFT
  float, dimension(3) :: __U(net_force), __U(net_torque), __U(max_force) ! thread locals
  float :: __U(ir1),__U(ir2),__U(ir3),__U(ir1s),__U(ir2s),__U(ir3s),__U(ir12),__U(ir13),__U(ir23)
@@ -1238,7 +1285,12 @@ __DBGVAR(r_com_sa,1)
 #endif
 #endif
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
+#ifdef __OMP
+ float, allocatable :: distance_all_threads(:,:)
+ int :: tid
+#else
  float, allocatable :: distance(:)
+#endif
  int :: ierr
 #endif
  int :: i, ii
@@ -1259,44 +1311,159 @@ __DBGVAR(r_com_sa,1)
  endif ! qneighbor_list
 !
  if (.not. qneighbor_list_sorted) then
-  __ALLOC(distance(nsurface))
 #ifdef __OMP
-!$omp do schedule(runtime) private(ierr)
+!$omp parallel private(ierr,tid,i,ii &
+#ifdef __PBC_UNWRAP
+!$omp ,d0 &
 #endif
-  do i=1, nsolvent
-   do ii=1, nsurface
-    distance(ii)=zero
+!$omp )
+  __ALLOC(distance_all_threads(nsurface,0:omp_get_max_threads()-1))
+  tid=omp_get_thread_num()
+#define distance(_ii) distance_all_threads(_ii,tid)
+#else
+  __ALLOC(distance(nsurface))
+#endif
+
+#ifdef __PBC_UNWRAP
+  if(qper_parser_override) then
+#endif
 !
-    d0=r_surf(1,ii)-r_solv(1,i) ! can add periodicity treatment here
-    __INCR(distance(ii),d0*d0)
-!
-    d0=r_surf(2,ii)-r_solv(2,i)
-    __INCR(distance(ii),d0*d0)
-!
-    d0=r_surf(3,ii)-r_solv(3,i)
-    __INCR(distance(ii),d0*d0)
-   enddo
+#ifdef __OMP
+!$omp do schedule(runtime)
+#endif
+   do i=1, nsolvent
+    do ii=1, nsurface
+#ifdef __PBC_UNWRAP
+     distance(ii)=zero
+! x
+     d0=r_surf(1,ii)-r_solv(1,i)
+     __DIST_PBC(d0,ucell%a)
+     __INCR(distance(ii),d0*d0)
+! y
+     d0=r_surf(2,ii)-r_solv(2,i)
+     __DIST_PBC(d0,ucell%b)
+     __INCR(distance(ii),d0*d0)
+! z
+     d0=r_surf(3,ii)-r_solv(3,i)
+     __DIST_PBC(d0,ucell%c)
+     __INCR(distance(ii),d0*d0)
+#else
+     distance(ii) = sum ( (r_surf(:,ii)-r_solv(:,i))**2 )
+#endif
+    enddo ! nsurface
 !  sort neighbor list:
-   call rsort_ind('i',nsurface,distance,solute_neighbor_list(:,i),ierr)
-   solute_neighbor_mind(i)=min(nsurface,2)
-  enddo
+    call rsort_ind('i',nsurface,distance(:),solute_neighbor_list(:,i),ierr)
+    solute_neighbor_mind(i)=min(nsurface,2)
+   enddo ! nsolvent
 #ifdef __OMP
 !$omp end do
 #endif
+#ifdef __PBC_UNWRAP
+  else ! qper_parser_override
+#ifdef __OMP
+!$omp do schedule(runtime)
+#endif
+   do i=1, nsolvent
+    do ii=1, nsurface
+     distance(ii) = sum ( (r_surf(:,ii)-r_solv(:,i))**2 )
+    enddo ! nsurface
+!  sort neighbor list:
+    call rsort_ind('i',nsurface,distance(:),solute_neighbor_list(:,i),ierr)
+    solute_neighbor_mind(i)=min(nsurface,2)
+   enddo ! nsolvent
+#ifdef __OMP
+!$omp end do
+#endif
+  endif ! qper_parser_override
+#endif
+#ifdef __OMP
+  __DEALL(distance_all_threads)
+#undef distance
+!$omp end parallel
+#else
   __DEALL(distance)
+#endif
   qneighbor_list_sorted=.true.
- endif
+ endif ! sorted
 #endif
 !
 #ifdef __RMFT
 #ifdef __SIMPLE_NET_FORCE_SURFACE
- if (remove_net_torque) r_com_inst = oonsurface * sum(r(:,isurface_atoms),2) ; ! need instant com for SIMPLE_NET_FORCE_SURFACE, b/c forces applied to prot. atoms
+ if (remove_net_torque) then
+#ifdef __UNWRAP_PBC
+  if (qper_parser_override) then 
+   r_com_inst=zero
+#ifdef __OMP
+!$omp parallel private(__U(r_com_inst), pre)
+   __U(r_com_inst)=zero
+!$omp do schedule(runtime)
+#endif
+   do i=1, nsurface
+    ii=isurface_atoms(i)
+!x
+    pre=r(1,ii)-r_surf(1,i); __PBCDIST(pre,ucell%a)
+    __INCR(__U(r_com_inst)(1), pre + r_surf(1,i))
+!y
+    pre=r(2,ii)-r_surf(2,i); __PBCDIST(pre,ucell%b)
+    __INCR(__U(r_com_inst)(2), pre + r_surf(2,i))
+!z
+    pre=r(3,ii)-r_surf(3,i); __PBCDIST(pre,ucell%c)
+    __INCR(__U(r_com_inst)(3), pre + r_surf(3,i))
+   enddo
+#ifdef __OMP
+!$omp end do
+!$omp atomic
+   __AREDUCE(r_com_inst,1)
+!$omp atomic
+   __AREDUCE(r_com_inst,2)
+!$omp atomic
+   __AREDUCE(r_com_inst,3)
+!$omp end parallel
+#endif
+   __SCALE(r_com_inst,oonsurface)
+  else
+#endif
+  r_com_inst = oonsurface * sum(r(:,isurface_atoms),2) ; ! need instant com for SIMPLE_NET_FORCE_SURFACE, b/c forces applied to prot. atoms
+ endif
+#ifdef __UNWRAP_PBC
+ endif
+#endif
+
 #endif
 #endif
 !============================================= update reference coordinates
  if (structure_update_freq.gt.izero) then
   if __CHKUPDATE(structure_update_freq) then
-   r_surf = structure_update_memory * r_surf + (one - structure_update_memory) * r(:,isurface_atoms)
+
+#ifdef __PBC_UNWRAP
+   if (qper_parser_override) then
+    d0=one-structure_update_memory
+#ifdef __OMP
+!$omp parallel private(pre,ii)
+!$omp do schedule(runtime)
+#endif
+    do i=1, nsurface
+     ii=isurface_atoms(i)
+! x
+     pre=r(1,ii)-r_surf(1,i); __PBCDIST(pre,ucell%a)
+     __INCR(r_surf(1,ii), d0*pre)
+! y
+     pre=r(2,ii)-r_surf(2,i); __PBCDIST(pre,ucell%b)
+     __INCR(r_surf(2,ii), d0*pre)
+! z
+     pre=r(3,ii)-r_surf(3,i); __PBCDIST(pre,ucell%c)
+     __INCR(r_surf(3,ii), d0*pre)
+    enddo
+#ifdef __OMP
+!$omp end do
+!$omp end parallel
+#endif
+   else
+#endif
+    r_surf = structure_update_memory * r_surf + (one - structure_update_memory) * r(:,isurface_atoms)
+#ifdef __PBC_UNWRAP
+   endif
+#endif
 !
 #if defined(__BAROSTAT) || defined (__DASYSTAT)
    if (&
@@ -1306,7 +1473,7 @@ __DBGVAR(r_com_sa,1)
 #ifdef __DASYSTAT
 &       dasystat .or. &
 #endif
-&       .false. ) r_surf_changed=.true.
+&       .false. ) r_surf_changed=.true. ! we only need this variable for barostat/dasystat
 #endif
 !
 #ifdef __RMFT
@@ -1320,6 +1487,13 @@ __DBGVAR(r_com_sa,1)
     r_com = oonsurface * sum(r_surf,2) ;
 #endif
    endif ! remove_net_torque
+#ifdef __UNWRAP_PBC
+   r_pbc_reference=r_com
+#endif
+#else
+#ifdef __UNWRAP_PBC
+   r_pbc_reference = oonsurface * sum(r_surf,2)
+#endif
 #endif
 #endif
   endif
@@ -1334,7 +1508,7 @@ __DBGVAR(r_com_sa,1)
 !========================== compute contour value if needed
 ! if surface distance value is zero, estimate a reasonable value from current coordinates
  if ( abs(surface_distance) .lt. __ERRTOL) then
-  if (qminimum_distance) then
+  if (qminimum_distance) then ! simple algorithm
    call __NM(compute_mindist_grad)(.false.) ! need entire sum
    do i=1, nsolvent
     d0 = dist_solv(i)
@@ -1343,7 +1517,7 @@ __DBGVAR(r_com_sa,1)
     __INCR(distance_from_solute2, d0**2)
    enddo
    pre=0.25d0 ! prefactor for scaling std in computing reference distance
-  else ! (NOT) qminimum_distance
+  else ! (NOT) qminimum_distance -- original erf algorithm
    call __NM(compute_density_grad)(.false.) ! need entire sum
    do i=1, nsolvent
 ! convert to distance
@@ -1378,7 +1552,7 @@ __DBGVAR(r_com_sa,1)
     __ASSERT(abs(bulk_boundary_distance),<,abs(surface_distance));
    endif
   endif
- endif
+ endif ! dasystat
 #endif
 !
 ! at this point, qforced_solv is wrong : it will be true everywhere, because surface distance was undefined in the calc. loop
@@ -1398,7 +1572,7 @@ __DBGVAR(r_com_sa,1)
 !=========================================================================
  else ! compute reference surface distance
 ! aa :  this is the most time consuming part of the force calculation ; perhaps we can do it on the GPU ? Or perhaps can regulate cost otherwise ?
-  if (qminimum_distance) then
+  if (qminimum_distance) then ! simple min-dist calculation
 !
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
    if (full_sum_freq.gt.izero) then
@@ -1414,7 +1588,7 @@ __DBGVAR(r_com_sa,1)
    endif ! full_sum_freq
 #endif
 !
-  else ! original density-based calculation
+  else ! original density-based (erf) calculation
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
    if (full_sum_freq.gt.izero) then
     call __NM(compute_density_grad)((.not.qneighbor_list) .or. (.not.__CHKUPDATE(full_sum_freq))) 
@@ -1432,7 +1606,7 @@ __DBGVAR(r_com_sa,1)
 !========================== compute contour value ^
 !========================== compute forces :
 ! to do : calculate density integral using only atoms beyond contour (to estimate surface area)
- density_beyond_contour=zero
+! density_beyond_contour=zero ! useful ?
  surface_energy=zero
  surface_force=zero
  nsolvent_outside=izero
@@ -1479,7 +1653,6 @@ __DBGVAR(r_com_sa,1)
 !$omp ,__U(ir1),__U(ir2),__U(ir3),__U(ir1s),__U(ir2s),__U(ir3s),__U(ir12),__U(ir13),__U(ir23) &
 #endif
 !$omp )
-#ifdef __OMP
  __U(surface_energy)=zero
  __U(surface_force)=zero
  __U(nsolvent_outside)=izero
@@ -1493,8 +1666,7 @@ __DBGVAR(r_com_sa,1)
    __U(ir1)=zero;__U(ir2)=zero;__U(ir3)=zero;__U(ir1s)=zero;__U(ir2s)=zero;__U(ir3s)=zero;__U(ir12)=zero;__U(ir13)=zero;__U(ir23)=zero
   endif
 #endif
-#endif
-
+!
 !$omp do schedule(runtime)
 #endif
  do i=1, nsolvent
@@ -1509,7 +1681,23 @@ __DBGVAR(r_com_sa,1)
 #ifdef __RMFT
    if (remove_net_torque) then ! for now, here; optimize later, if needed
     ir=r_solv(:,i); ! removed r_com subtraction for extra flexibility ; to be accounted for later
-
+#ifdef __UNWRAP_PBC
+    if (qper_parser_override) then
+!x
+     __DECR(ir(1),r_pbc_reference(1))
+     __PBCDIST(ir(1), ucell%a)
+     __INCR(ir(1), r_pbc_reference(1))
+!y
+     __DECR(ir(2),r_pbc_reference(2))
+     __PBCDIST(ir(2), ucell%b)
+     __INCR(ir(2), r_pbc_reference(2))
+!z
+     __DECR(ir(3),r_pbc_reference(3))
+     __PBCDIST(ir(3), ucell%c)
+     __INCR(ir(3), r_pbc_reference(3))
+    endif
+#endif
+!
 #ifdef __TORQUE_FROM_FORCED_SOLVENT
     __UPDATE_TMAT_C
 #endif
@@ -1547,6 +1735,23 @@ __DBGVAR(r_com_sa,1)
    if (remove_net_torque) then ! for now, here; optimize later
 #ifdef __TORQUE_FROM_FREE_SOLVENT
     ir=r_solv(:,i);
+#ifdef __UNWRAP_PBC
+    if (qper_parser_override) then
+!x
+     __DECR(ir(1),r_pbc_reference(1))
+     __PBCDIST(ir(1), ucell%a)
+     __INCR(ir(1), r_pbc_reference(1))
+!y
+     __DECR(ir(2),r_pbc_reference(2))
+     __PBCDIST(ir(2), ucell%b)
+     __INCR(ir(2), r_pbc_reference(2))
+!z
+     __DECR(ir(3),r_pbc_reference(3))
+     __PBCDIST(ir(3), ucell%c)
+     __INCR(ir(3), r_pbc_reference(3))
+    endif
+#endif
+!
     __UPDATE_TMAT_C
 #endif
    endif ! remove_net_torque
@@ -1556,7 +1761,6 @@ __DBGVAR(r_com_sa,1)
  enddo ! nsolvent
 #ifdef __OMP
 !$omp end do
-!!$omp critical
 !$omp atomic
  __REDUCE(nsolvent_outside)
 !$omp atomic
@@ -1569,382 +1773,10 @@ if (dasystat) then
  __REDUCE(solvent_mass_outside)
 endif
 #endif
-!!$omp end critical
 #endif
-#ifdef __DEBUG
-#ifdef __OMP
-!$omp single
-#endif
- write(0,*) 'Net force on solvent before correction: ', sum(fr(:,isolvent_atoms),2)
- write(0,*) 'Net force on surface before correction: ', sum(fr(:,isurface_atoms),2)
-#ifdef __OMP
-!$omp end single
-#endif
-#endif
-#ifdef __RMFT
- if (remove_net_torque) then
-#ifdef __OMP
-!!$omp critical
-!  __REDUCE(net_force)
-!  __REDUCE(net_torque)
-!$omp atomic
-  __AREDUCE(net_force,1)
-!$omp atomic
-  __AREDUCE(net_force,2)
-!$omp atomic
-  __AREDUCE(net_force,3)
-!$omp atomic
-  __AREDUCE(net_torque,1)
-!$omp atomic
-  __AREDUCE(net_torque,2)
-!$omp atomic
-  __AREDUCE(net_torque,3)
-!$omp atomic
-  __REDUCE(ir1)
-!$omp atomic
-  __REDUCE(ir2)
-!$omp atomic
-  __REDUCE(ir3)
-!$omp atomic
-  __REDUCE(ir1s)
-!$omp atomic
-  __REDUCE(ir2s)
-!$omp atomic
-  __REDUCE(ir3s)
-!$omp atomic
-  __REDUCE(ir12)
-!$omp atomic
-  __REDUCE(ir13)
-!$omp atomic
-  __REDUCE(ir23)
-!!$omp end critical
-! solve for force correction
-! construct matrix
-!$omp barrier ! this necessary to ensure that reduction is complete
-!!$omp flush(ir1, ir2, ir3, ir1s, ir2s, ir3s, ir12, ir13, ir23, net_torque, net_force) ! does NOT -- do not get correction
-!$omp single
-#endif
+! code section for torque removal; sorry, not a subroutine, but repeated below, hence outside
+#include "watershell_rmft_aux1.ftn"
 !
-#ifdef __TORQUE_FROM_ALL_SOLVENT
-#define ntorque_atoms nsolvent
-#elif defined(__TORQUE_FROM_FORCED_SOLVENT)
-#define ntorque_atoms nsolvent_outside
-#elif defined(__TORQUE_FROM_FREE_SOLVENT)
-#define ntorque_atoms (nsolvent-nsolvent_outside)
-#endif
-  oontorque=one/max(1,ntorque_atoms)
-!
-! == add contribution to torque from center-of-mass :
-!
-#ifdef __TORQUE_COM_SOLVENT
-  r_com(1)=ir1*oontorque
-  r_com(2)=ir2*oontorque
-  r_com(3)=ir3*oontorque
-#elif defined(__SIMPLE_NET_FORCE_SOLVENT)
-  ir_sum(1)=ir1*oontorque
-  ir_sum(2)=ir2*oontorque
-  ir_sum(3)=ir3*oontorque
-#endif
-  __INCR(net_torque(1),  -r_com(2) * net_force(3) + r_com(3) * net_force(2))
-  __INCR(net_torque(2),  -r_com(3) * net_force(1) + r_com(1) * net_force(3))
-  __INCR(net_torque(3),  -r_com(1) * net_force(2) + r_com(2) * net_force(1))
-!
-#ifdef __DEBUG
- write(0,*) 'Force and torque before(2): ', net_force, net_torque
-#endif
-!
-! note : need a modification in the case that net_force_ave is zero (as in the beginning)
-  if (remove_net_force) then
-   net_force_ave = net_force_ave_update_memo * net_force_ave + ( one - net_force_ave_update_memo) * net_force ;
-#ifdef __SIMPLE_NET_FORCE_SOLVENT
-   net_force = - net_force_ave*oontorque  ! split net_force between correction atoms
-! correct torque the implicit addition of net force (which we have not done yet !), i.e.
-! by subtracting the net_force as above, we add torque to the system, which we need to account for (i.e. subtract) ; hence below;
-! note that the added force is uniform across correction atoms, and therefore the cross product can be factored out
-! NOTE that when using __TORQUE_COM_SOLVENT, no new torque would be added, so skip for that case
-#ifdef __TORQUE_COM_SURFACE
-   __INCR(net_torque(1),  (ir_sum(2)-r_com(2)) * net_force(3) - (ir_sum(3)-r_com(3)) * net_force(2))
-   __INCR(net_torque(2),  (ir_sum(3)-r_com(3)) * net_force(1) - (ir_sum(1)-r_com(1)) * net_force(3))
-   __INCR(net_torque(3),  (ir_sum(1)-r_com(1)) * net_force(2) - (ir_sum(2)-r_com(2)) * net_force(1))
-#endif
-   rhs(1:3)=0d0
-#elif defined(__SIMPLE_NET_FORCE_SURFACE)
-   net_force = - net_force_ave  ! split net_force between correction atoms
-! NOTE that r_com is the COM of the smoothed coordinates, but we apply correction forces to actual atoms
-! NOTE that I am not dividing by nsurface ; this is because below we have r_com (vs. r_com_inst) which is an average
-   ir_sum=r_com_inst-r_com; ! r_com_inst is here because force is constant and can be taken out of sum, then coords add up to N x rcominst
-! NOTE that when using __TORQUE_COM_SURFACE, we are subtracting the r_com contribution just added above, replacing it with rcom_inst
-   __INCR(net_torque(1),  ir_sum(2) * net_force(3) - ir_sum(3) * net_force(2))
-   __INCR(net_torque(2),  ir_sum(3) * net_force(1) - ir_sum(1) * net_force(3))
-   __INCR(net_torque(3),  ir_sum(1) * net_force(2) - ir_sum(2) * net_force(1))
-   rhs(1:3)=0d0
-! update surface atom forces here
-   __SCALE(net_force, oonsurface) ! force per atom
-   __INCR(fr(1,isurface_atoms), net_force(1))
-   __INCR(fr(2,isurface_atoms), net_force(2))
-   __INCR(fr(3,isurface_atoms), net_force(3))
-#else
-   rhs(1:3)=-net_force_ave
-#endif
-  else
-   rhs(1:3)=0d0
-   net_force_ave=0d0
-  endif ! remove_net_force
-  rhs(4:6)=-net_torque;
-!
-! now, can compute force/torque matrix:
-! note that for the special case __TORQUE_COM_SOLVENT && __TORQUE_FROM_SOLVENT, can invert matrix analytically,
-! because the matrix is block diagonal; this should be true even with simple force removal from any atom set;
-! this is because the torque is defined/removed about the COM of the solvent atom removal group UNLESS we use TORQUE_COM_SURFACE;
-! in that case, there will be cross terms in the matrix, so that it is not block diagonal
-#ifdef __F_T_COUPLED
-  A(1,1)=ntorque_atoms
-  A(2,2)=ntorque_atoms
-  A(3,3)=ntorque_atoms
-#endif
-! modify irxx variables to include COM contribution
-! NOTE : linear terms should be zero with __TORQUE_COM_SOLVENT
-! keeping here explicitly fr a check, but will simplify in the future
-! squared terms :
-  __INCR(ir1s, r_com(1)*(ntorque_atoms*r_com(1)-2d0*ir1))
-  __INCR(ir2s, r_com(2)*(ntorque_atoms*r_com(2)-2d0*ir2))
-  __INCR(ir3s, r_com(3)*(ntorque_atoms*r_com(3)-2d0*ir3))
-! cross-terms :
-  __INCR(ir12, ntorque_atoms*r_com(1)*r_com(2)-(r_com(1)*ir2 + r_com(2)*ir1))
-  __INCR(ir13, ntorque_atoms*r_com(1)*r_com(3)-(r_com(1)*ir3 + r_com(3)*ir1))
-  __INCR(ir23, ntorque_atoms*r_com(2)*r_com(3)-(r_com(2)*ir3 + r_com(3)*ir2))
-! linear terms : (they will disappear when using __TORQUE_COM_SOLVENT
-#ifdef __F_T_COUPLED
-  __INCR(ir1,-ntorque_atoms*r_com(1))
-  __INCR(ir2,-ntorque_atoms*r_com(2))
-  __INCR(ir3,-ntorque_atoms*r_com(3))
-! now, compute the matrix from these variables
-  A(5,1)= ir3
-  A(6,1)=-ir2
-  A(6,2)= ir1
-  A(4,4)= ir2s+ir3s
-  A(5,4)=-ir12
-  A(6,4)=-ir13
-  A(5,5)= ir1s+ir3s
-  A(6,5)=-ir23
-  A(6,6)= ir1s+ir2s
-! remaining entries from symmetry :
-  A(1,5)=A(5,1) ! symmetry of main matrix
-  A(1,6)=A(6,1)
-  A(2,6)=A(6,2)
-  A(4,5)=A(5,4)
-  A(4,6)=A(6,4)
-  A(5,6)=A(6,5)
-!
-  A(2,4)=-A(5,1); A(4,2)=A(2,4)
-  A(3,4)=-A(6,1); A(4,3)=A(3,4)
-  A(3,5)=-A(6,2); A(5,3)=A(3,5)
-!       invert by LU
-#ifdef __DEBUG
-  write(555,'(6g12.5)') A
-  write(555,*)
-  write(555,'(6g12.5)') rhs
-  write(555,*)
-#endif
-  call inv_lu(A, A, 6, i);
-#ifdef __DEBUG
-  if (i.eq.1) then ! singular matrix  -- why ?
-   write(666,*) 'Iteration:', iteration
-   write(666,'(6g22.15)') A
-   write(666,*)
-   write(666,'(6g22.15)') rhs
-   write(666,*) 'surface coords:'
-   write(666,*) r_surf
-   write(666,*) 'solvent coords:'
-   write(666,*) r_solv
-   close(666)
-   stop ! crash so we can look at the matrix !
-  endif
-#endif
-  rhs=matmul(A, rhs);
-#ifdef __DEBUG
-  write(555,*) 'inverse and solution:'
-  write(555,'(6g12.5)') A
-  write(555,*)
-  write(555,'(6g12.5)') rhs
-  write(555,*)
-#endif
-
-#else // force and torque decoupled
-  B(1,1)= ir2s+ir3s
-  B(1,2)=-ir12
-  B(1,3)=-ir13
-  B(2,2)= ir1s+ir3s
-  B(2,3)=-ir23
-  B(3,3)= ir1s+ir2s
-!
-#ifdef __DEBUG
-  B(2,1)=B(1,2)
-  B(3,1)=B(1,3)
-  B(3,2)=B(2,3)
-  write(555,'(3g12.5)') B
-  write(555,*)
-  write(555,'(6g12.5)') rhs
-  write(555,*)
-#endif
-! remaining entries from symmetry (unnecessary for symmetric routine)
-!  B(2,1)=B(1,2)
-!  B(3,1)=B(1,2)
-!  B(3,2)=B(2,3)
-  call matinv3sym(B,B)
-  __SCALE(rhs(1:3),oontorque) ! when force and torque are decoupled, the first block 3x3 matrix is diagonal ; 2nd and 3rd are zero and fourth is B above
-  rhs(4:6)=matmul(B,rhs(4:6))
-!
-#ifdef __DEBUG
-  write(555,*) 'inverse and solution:'
-  write(555,'(3g12.5)') B
-  write(555,*)
-  write(555,'(6g12.5)') rhs
-  write(555,*)
-#endif
-#endif
-#undef ntorque_atoms
-!
-#ifdef __SIMPLE_NET_FORCE_SOLVENT
-! include implicit force mod in rhs (note that in this case netforce have been sign-inverted above)
-  if (remove_net_force) then
-   __INCR(rhs(1),net_force(1))
-   __INCR(rhs(2),net_force(2))
-   __INCR(rhs(3),net_force(3))
-  endif
-#endif
-#ifdef __OMP
-!$omp end single
-! apply force correction in parallel
-!$omp barrier
-!$omp do schedule(runtime)
-#endif
-  do i=1,nsolvent
-#ifndef __TORQUE_FROM_ALL_SOLVENT
-   if (&
-#ifdef __TORQUE_FROM_FREE_SOLVENT
-&       .not.&
-#elif defined(__TORQUE_FROM_FORCED_SOLVENT)
-! nothing !
-#endif
-&      qforced_solv(i)) then
-#endif
-    ir=r_solv(:,i)-r_com
-    iforce(1) = rhs(1) + ir(3)*rhs(5) - ir(2)*rhs(6)
-    iforce(2) = rhs(2) - ir(3)*rhs(4) + ir(1)*rhs(6)
-    iforce(3) = rhs(3) + ir(2)*rhs(4) - ir(1)*rhs(5)
-!    __INCR(fr(:,isolvent_atoms(i)),iforce)
-    __INCR(fr(1,isolvent_atoms(i)),iforce(1))
-    __INCR(fr(2,isolvent_atoms(i)),iforce(2))
-    __INCR(fr(3,isolvent_atoms(i)),iforce(3))
-! compute maximum force :
-!#ifdef __DEBUG
-!    if (dot_product(iforce, iforce).gt.d0) then  ; d0 = dot_product(iforce, iforce); __U(net_force)=iforce ; endif
-!#endif
-#ifndef __TORQUE_FROM_ALL_SOLVENT
-   endif ! not qforced
-#endif
-  enddo
-#ifdef __OMP
-!$omp end do
-#ifdef __DEBUG
-!    if (dot_product(__U(net_force), __U(net_force)).gt.(dot_product(net_force, net_force))) net_force = __U(net_force)
-!$omp barrier
-#endif
-!$omp single
-#endif
-! print max force :
-!#ifdef __DEBUG
-!  write(777,*) 'Iteration: ', iteration
-!  write(777,'(7g12.5)') dot_product(rhs,rhs), rhs
-!  write(777,'(7g12.5)') dot_product(net_force,net_force), net_force
-!#endif
-#ifdef __OMP
-!$omp end single
-#endif
-! check net force
-#if defined(__DEBUG) || defined(__SHOW_TORQUE)
-#ifdef __SHOW_TORQUE
-#ifndef __DEBUG
-  if (output_freq.gt.zero) then
-  if (__CHKUPDATE(output_freq)) then
-#endif
-#endif
-
-  net_force=zero
-  net_torque=zero
-!
-#ifdef __OMP
-  __U(net_force)=zero
-  __U(net_torque)=zero
-!$omp do schedule(runtime)
-#endif
-  do i=1, nsolvent
-! compute total torque and force after correction :
-    iforce=fr(:,isolvent_atoms(i))
-    ir=r_solv(:,i)-r_com
-    __INCR(__U(net_force),iforce)
-    __INCR(__U(net_torque)(1), ir(2) * iforce(3) - ir(3) * iforce(2))
-    __INCR(__U(net_torque)(2), ir(3) * iforce(1) - ir(1) * iforce(3))
-    __INCR(__U(net_torque)(3), ir(1) * iforce(2) - ir(2) * iforce(1))
-  enddo
-#ifdef __OMP
-!$omp end do
-!$omp do schedule(runtime)
-#endif
-  do i=1, nsurface
-! compute torque and force after correction :
-    iforce=fr(:,isurface_atoms(i))
-    ir=r(:,isurface_atoms(i))-r_com
-    __INCR(__U(net_force),iforce)
-    __INCR(__U(net_torque)(1), ir(2) * iforce(3) - ir(3) * iforce(2))
-    __INCR(__U(net_torque)(2), ir(3) * iforce(1) - ir(1) * iforce(3))
-    __INCR(__U(net_torque)(3), ir(1) * iforce(2) - ir(2) * iforce(1))
-  enddo
-#ifdef __OMP
-!$omp end do
-!!$omp critical
-!  __REDUCE(net_force)
-!$omp atomic
-  __AREDUCE(net_force,1)
-!$omp atomic
-  __AREDUCE(net_force,2)
-!$omp atomic
-  __AREDUCE(net_force,3)
-!  __REDUCE(net_torque)
-!$omp atomic
-  __AREDUCE(net_torque,1)
-!$omp atomic
-  __AREDUCE(net_torque,2)
-!$omp atomic
-  __AREDUCE(net_torque,3)
-!!$omp end critical
-#endif __OMP
-!
-#ifdef __DEBUG
-#ifdef __OMP
-!$omp barrier ! this seems to be needed to make sure net_force is complete before output
-!$omp single
-#endif
- write(0,*) 'Net force on solvent after correction (direct): ', sum(fr(:,isolvent_atoms),2)
- write(0,*) 'Net force on surface after correction (direct): ', sum(fr(:,isurface_atoms),2)
- write(0,*) 'Net force & torque after correction: ', net_force, net_torque
- write(0,*) 'Net torque COM: ', r_com
-#ifdef __OMP
-!$omp end single
-#endif
-#endif
-!
-#ifdef __SHOW_TORQUE
-#ifndef __DEBUG
-  endif
-  endif
-#endif
-#endif
-#endif // __DEBUG or __SHOW_TORQUE
-!
- endif ! remove_net_torque
-#endif // __RMFT
 #ifdef __OMP
 !$omp end parallel
 #endif
@@ -1953,58 +1785,170 @@ endif
 #ifdef __OMP
 !$omp parallel &
 !$omp shared (rho_solv, drho_solv, surface_contour_value, surface_distance, logistic_constant, surface_force_constant, &
-!$omp nsolvent_outside, density_beyond_contour, surface_force, surface_energy, isolvent_atoms, fr) &
-!$omp private (i, d0, pre, __U(nsolvent_outside), __U(surface_energy), __U(surface_force), __U(density_beyond_contour))
- __U(density_beyond_contour)=zero
+#ifdef __DASYSTAT
+!$omp solvent_mass_outside, solvent_mass, &
+#endif
+#ifdef __RMFT
+!$omp remove_net_torque, net_force, net_torque, &
+#ifdef __F_T_COUPLED
+!$omp A, &
+#endif
+!$omp rhs, qforced_solv, r_com, &
+!$omp ir1,ir2,ir3,ir1s,ir2s,ir3s,ir12,ir13,ir23, &
+#endif
+!$omp nsolvent_outside, surface_force, surface_energy, isolvent_atoms, fr) & !!! , density_beyond_contour) &
+!$omp private (i, d0, pre, __U(nsolvent_outside), __U(surface_energy), __U(surface_force) & !!! , __U(density_beyond_contour)) &
+#ifdef __DASYSTAT
+!$omp , __U(solvent_mass_outside) &
+#endif
+#ifdef __RMFT
+!$omp ,ir, iforce, __U(net_force), __U(net_torque) &
+!$omp ,__U(ir1),__U(ir2),__U(ir3),__U(ir1s),__U(ir2s),__U(ir3s),__U(ir12),__U(ir13),__U(ir23) &
+#endif
+!$omp )
+!
+! __U(density_beyond_contour)=zero ! not clear whether useful
  __U(surface_energy)=zero
  __U(surface_force)=zero
  __U(nsolvent_outside)=izero
+#ifdef __DASYSTAT
+ __U(solvent_mass_outside)=zero
+#endif
+#ifdef __RMFT
+  if (remove_net_torque) then
+   __U(net_force)=zero
+   __U(net_torque)=zero
+   __U(ir1)=zero;__U(ir2)=zero;__U(ir3)=zero;__U(ir1s)=zero;__U(ir2s)=zero;__U(ir3s)=zero;__U(ir12)=zero;__U(ir13)=zero;__U(ir23)=zero
+  endif
+#endif
 !$omp do schedule(runtime)
 #endif
  do i=1, nsolvent
-  if ( rho_solv(i) .lt. surface_contour_value) then
+  if ( qforced_solv(i) ) then
    __INC(__U(nsolvent_outside))
-   __INCR(__U(density_beyond_contour), rho_solv(i))
+#ifdef __DASYSTAT
+   if(dasystat) __INCR(__U(solvent_mass_outside), mass_solv(i))
+#endif
+!   __INCR(__U(density_beyond_contour), rho_solv(i)) ! not clear whether useful
    d0=__OORHO( rho_solv(i))
    pre = ( __RHO_INVERSE2 ( d0 ) - surface_distance ) ;
 !
+#ifdef __RMFT
+   if (remove_net_torque) then ! for now, here; optimize later, if needed
+    ir=r_solv(:,i); ! removed r_com subtraction for extra flexibility ; to be accounted for later
+#ifdef __UNWRAP_PBC
+    if (qper_parser_override) then
+!x
+     __DECR(ir(1),r_pbc_reference(1))
+     __PBCDIST(ir(1), ucell%a)
+     __INCR(ir(1), r_pbc_reference(1))
+!y
+     __DECR(ir(2),r_pbc_reference(2))
+     __PBCDIST(ir(2), ucell%b)
+     __INCR(ir(2), r_pbc_reference(2))
+!z
+     __DECR(ir(3),r_pbc_reference(3))
+     __PBCDIST(ir(3), ucell%c)
+     __INCR(ir(3), r_pbc_reference(3))
+    endif
+#endif
+!
+#ifdef __TORQUE_FROM_FORCED_SOLVENT
+    __UPDATE_TMAT_C
+#endif
+!
 ! add atomic force
-   d0=logistic_constant*d0*(__OORHO(one-rho_solv(i))) ! derivative of the inverse of logistic function
+    d0=logistic_constant*d0*(__OORHO(one-rho_solv(i))) ! derivative of the inverse of logistic function
+    iforce = - surface_force_constant * pre * d0 * drho_solv(:,i) ! (-) because surface_distance is negative ; grad points toward protein
 !   fr(:,isolvent_atoms(i)) = - surface_force_constant * pre * d0 * drho_solv(:,i) ! (-) because surface_distance is negative ; grad points toward protein
-   d0 = - surface_force_constant * pre * d0
-   __INCR(fr(1,isolvent_atoms(i)), d0 * drho_solv(1,i))
-   __INCR(fr(2,isolvent_atoms(i)), d0 * drho_solv(2,i))
-   __INCR(fr(3,isolvent_atoms(i)), d0 * drho_solv(3,i))
+    __INCR(fr(1,isolvent_atoms(i)),iforce(1))
+    __INCR(fr(2,isolvent_atoms(i)),iforce(2))
+    __INCR(fr(3,isolvent_atoms(i)),iforce(3))
+! update net force & torque (torque missing COM contribution, to be added in later)
+    __INCR(__U(net_force)(1),iforce(1))
+    __INCR(__U(net_force)(2),iforce(2))
+    __INCR(__U(net_force)(3),iforce(3))
+    __INCR(__U(net_torque)(1), ir(2) * iforce(3) - ir(3) * iforce(2))
+    __INCR(__U(net_torque)(2), ir(3) * iforce(1) - ir(1) * iforce(3))
+    __INCR(__U(net_torque)(3), ir(1) * iforce(2) - ir(2) * iforce(1))
+   else ! keep net force/torque
+#endif
+    d0 = - surface_force_constant * pre * d0
+    __INCR(fr(1,isolvent_atoms(i)), d0 * drho_solv(1,i))
+    __INCR(fr(2,isolvent_atoms(i)), d0 * drho_solv(2,i))
+    __INCR(fr(3,isolvent_atoms(i)), d0 * drho_solv(3,i))
+#ifdef __RMFT
+   endif
+#endif
+
 ! sum "energy"
 ! NOT clear whether the surface_force or energy are meaningful
    __INCR(__U(surface_force), pre) ! x k, below
    __INCR(__U(surface_energy), pre**2) ! x k/2, below
-  else
+  else ! for atoms that are not forced
+#ifdef __RMFT
+#ifdef __TORQUE_FROM_FREE_SOLVENT
+   if (remove_net_torque) then ! for now, here; optimize later
+    ir=r_solv(:,i);
+#ifdef __UNWRAP_PBC
+    if (qper_parser_override) then
+!x
+     __DECR(ir(1),r_pbc_reference(1))
+     __PBCDIST(ir(1), ucell%a)
+     __INCR(ir(1), r_pbc_reference(1))
+!y
+     __DECR(ir(2),r_pbc_reference(2))
+     __PBCDIST(ir(2), ucell%b)
+     __INCR(ir(2), r_pbc_reference(2))
+!z
+     __DECR(ir(3),r_pbc_reference(3))
+     __PBCDIST(ir(3), ucell%c)
+     __INCR(ir(3), r_pbc_reference(3))
+    endif
+#endif
+!
+    __UPDATE_TMAT_C
+   endif ! remove_net_torque
+#endif
+#endif
 !   fr(:,isolvent_atoms(i))=zero ! make sure this gets done somewhere
-  endif
- enddo
+  endif ! density check
+ enddo ! nsolvent
 #ifdef __OMP
 !$omp end do
-!!$omp critical
 !$omp atomic
   __REDUCE(nsolvent_outside)
 !$omp atomic
   __REDUCE(surface_energy)
 !$omp atomic
   __REDUCE(surface_force)
+!  __REDUCE(density_beyond_contour) ! not clear if useful
+!  __REDUCE(nsolvent_outside)
+!  __REDUCE(surface_energy)
+!  __REDUCE(surface_force)
+#ifdef __DASYSTAT
+if (dasystat) then
 !$omp atomic
-  __REDUCE(density_beyond_contour)
-! __INCR(nsolvent_outside, __U(nsolvent_outside))
-! __INCR(surface_energy, __U(surface_energy))
-! __INCR(surface_force, __U(surface_force))
-! __INCR(density_beyond_contour, __U(density_beyond_contour)) ! not clear what to do with this value, or whether it is useful
-!!$omp end critical
+ __REDUCE(solvent_mass_outside)
+endif
+#endif
+#endif
+#include "watershell_rmft_aux1.ftn"
+#ifdef __OMP
 !$omp end parallel
 #endif
 !
  endif ! qminimum_dist
 !
 ! compute current surface distance from pre :
+! NOTE: check below to make sure consistent for erf/density ; yes it is;
+! we are using the boundary potential : k/2 x [ L^-1 (rho) - d0 ] ^ 2 ;
+! d0 is the quasi-distance to boundary
+! L^-1(rho) is the logistic function approximant
+! the forces on the bdry are still k ( L^-1(rho) - d0 );
+! the forces on the atoms are obtained by differentiation w.r.t position (x) :
+! F(x) = - k ( L^-1(rho) - d0 ) * logistic_const / (1-L) / L * grad (rho)
+
  if (nsolvent_outside .gt. 0) then
   oonsolvent_outside=one/nsolvent_outside
  else
@@ -2015,7 +1959,7 @@ endif
  __SCALE(surface_force, -surface_force_constant) ! negative because of sign convention
  __SCALE(surface_energy, half*surface_force_constant)
 !
- __INCR(energy,surface_energy) ! unclear whether useful
+ __INCR(energy,surface_energy)
 !
 ! barostat-related code :
 ! ==========================================================================================
@@ -2037,16 +1981,16 @@ endif
       __PRESENT(qper,qper_parser_override)
       if (qper.neqv.qper_parser_override) then
        __WRN(whoami, 'CANNOT CHANGE PERIODICITY FLAG DURING DYNAMICS WITH WATERSHELL BAROSTAT. INITIAL :'//ltoa(qper_parser_override)//', CURRENT :'//ltoa(qper))
-      elseif (qper) then ! check that ucell, if passed in, did not change
-       if (present(ucell)) then
+      elseif (qper) then ! check that mdcell, if passed in, did not change
+       if (present(mdcell)) then
         if &
-&        ((abs(ucell%a - sagrid%lengths(1)) .gt. __ERRTOL) .or. &
-&         (abs(ucell%b - sagrid%lengths(2)) .gt. __ERRTOL) .or. &
-&         (abs(ucell%c - sagrid%lengths(3)) .gt. __ERRTOL)) then
+&        ((abs(mdcell%a - sagrid%lengths(1)) .gt. __ERRTOL) .or. &
+&         (abs(mdcell%b - sagrid%lengths(2)) .gt. __ERRTOL) .or. &
+&         (abs(mdcell%c - sagrid%lengths(3)) .gt. __ERRTOL)) then
           __WRN(whoami, 'CANNOT CHANGE UNIT CELL DIMENSIONS DURING DYNAMICS WITH WATERSHELL BAROSTAT.')
-          __ASSERT(abs(ucell%a - sagrid%lengths(1)),<, __ERRTOL)
-          __ASSERT(abs(ucell%b - sagrid%lengths(2)),<, __ERRTOL)
-          __ASSERT(abs(ucell%c - sagrid%lengths(3)),<, __ERRTOL)
+          __ASSERT(abs(mdcell%a - sagrid%lengths(1)),<, __ERRTOL)
+          __ASSERT(abs(mdcell%b - sagrid%lengths(2)),<, __ERRTOL)
+          __ASSERT(abs(mdcell%c - sagrid%lengths(3)),<, __ERRTOL)
         endif
        endif
       endif ! qper
@@ -2078,13 +2022,24 @@ endif
          close(666)
 #endif
 !
+          if (qminimum_distance) then
 #ifdef __OMP
-          __DEALL(sarho_all_threads)
-          allocate(sarho_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:omp_get_max_threads()-1))
+           __DEALL(sarho_all_threads)
+           allocate(sarho_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:omp_get_max_threads()-1))
 #else
           __DEALL(sarho)
-          allocate(sarho(sagrid%n(1),sagrid%n(2),sagrid%n(3)))
+           allocate(sarho(sagrid%n(1),sagrid%n(2),sagrid%n(3)))
 #endif
+          else
+#ifdef __OMP
+           __DEALL(sarhof_all_threads)
+           allocate(sarhof_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:omp_get_max_threads()-1))
+#else
+          __DEALL(sarhof)
+           allocate(sarhof(sagrid%n(1),sagrid%n(2),sagrid%n(3)))
+#endif
+          endif
+!
         endif
        endif
       endif
@@ -2149,16 +2104,16 @@ __DBGVAR(pressure_ave,1)
       __PRESENT(qper,qper_parser_override)
       if (qper.neqv.qper_parser_override) then
        __WRN(whoami, 'CANNOT CHANGE PERIODICITY FLAG DURING DYNAMICS WITH WATERSHELL DASYSTAT. INITIAL :'//ltoa(qper_parser_override)//', CURRENT :'//ltoa(qper))
-      elseif (qper) then ! check that ucell, if passed in, did not change
-       if (present(ucell)) then
+      elseif (qper) then ! check that mdcell, if passed in, did not change
+       if (present(mdcell)) then
         if &
-&        ((abs(ucell%a - sagrid%lengths(1)) .gt. __ERRTOL) .or. &
-&         (abs(ucell%b - sagrid%lengths(2)) .gt. __ERRTOL) .or. &
-&         (abs(ucell%c - sagrid%lengths(3)) .gt. __ERRTOL)) then
+&        ((abs(mdcell%a - sagrid%lengths(1)) .gt. __ERRTOL) .or. &
+&         (abs(mdcell%b - sagrid%lengths(2)) .gt. __ERRTOL) .or. &
+&         (abs(mdcell%c - sagrid%lengths(3)) .gt. __ERRTOL)) then
           __WRN(whoami, 'CANNOT CHANGE UNIT CELL DIMENSIONS DURING DYNAMICS WITH WATERSHELL DASYSTAT.')
-          __ASSERT(abs(ucell%a - sagrid%lengths(1)),<, __ERRTOL)
-          __ASSERT(abs(ucell%b - sagrid%lengths(2)),<, __ERRTOL)
-          __ASSERT(abs(ucell%c - sagrid%lengths(3)),<, __ERRTOL)
+          __ASSERT(abs(mdcell%a - sagrid%lengths(1)),<, __ERRTOL)
+          __ASSERT(abs(mdcell%b - sagrid%lengths(2)),<, __ERRTOL)
+          __ASSERT(abs(mdcell%c - sagrid%lengths(3)),<, __ERRTOL)
         endif
        endif
       endif ! qper
@@ -2190,6 +2145,7 @@ __DBGVAR(pressure_ave,1)
          close(666)
 #endif
 !
+         if (qminimum_distance) then
 #ifdef __OMP
           __DEALL(sarho_all_threads)
           allocate(sarho_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:omp_get_max_threads()-1))
@@ -2201,6 +2157,15 @@ __DBGVAR(pressure_ave,1)
           __DEALL(inrho)
           allocate(inrho(sagrid%n(1),sagrid%n(2),sagrid%n(3)))
 #endif
+         else
+#ifdef __OMP
+          __DEALL(sarhof_all_threads)
+          allocate(sarhof_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:omp_get_max_threads()-1))
+#else
+          __DEALL(sarhof)
+          allocate(sarhof(sagrid%n(1),sagrid%n(2),sagrid%n(3)))
+#endif
+         endif
         endif ! reallocate
        endif ! grid size check
       endif ! grid size check
@@ -2317,11 +2282,24 @@ __DBGVAR(solvent_mass_nonbulk,1)
 #ifdef __SORT_LIST
  int :: jj
  float :: dr2old ! squared distance difference from previous iteration
+#if defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+ float :: neighbor_list_length
+ int :: neighbor_list_misses
+#ifdef __OMP
+ int :: __U(neighbor_list_misses)
+#endif
+#endif
 #endif
 #ifdef __ERFHYBRID
  float :: isgn_, x_, erfa, erfb
 #endif
  float :: rmaxsurf, rsurf ! , rsurfn
+#ifdef __DASYSTAT
+#ifdef __OMP
+ float :: __U(solvent_mass_nonbulk)
+#endif
+ bool :: qbulk
+#endif
  bool :: qforced
  __IAM(__NM(compute_density_grad))
 !
@@ -2358,24 +2336,37 @@ __DBGVAR(solvent_mass_nonbulk,1)
 #define erfo7 __erfo7
 #endif
 !
+#ifdef __DASYSTAT
+ if (dasystat) then
+  solvent_mass_nonbulk=zero
+ endif ! dasystat
+#endif
  if (qtruncate_sum) then
 #ifdef __OMP
 !$omp parallel &
 !$omp shared ( rho_solv, drho_solv, r_solv, r_surf, rad_surf, surf_padding, nsolvent, nsurface, cutoff_surf, oo_surf_stdev &
+#ifdef __DASYSTAT
+!$omp , solvent_mass_nonbulk, mass_solv &
+#endif
 #ifdef __SORT_LIST
-!$OMP , solute_neighbor_list &
+!$omp , solute_neighbor_list &
 #ifdef __NEIGHBOR_LIST
-!$OMP , solute_neighbor_mind &
+!$omp , solute_neighbor_mind &
 #endif
 #endif
-!$OMP ) &
+!$omp ) &
 !$omp private ( rw, i, j, rp, rsurf, rmaxsurf, dr, dr2, ooc, expa, expb, qforced &
-#ifdef __SORT_LIST
-!$OMP ,dr2old, jj &
+#ifdef __DASYSTAT
+!$omp , __U(solvent_mass_nonbulk) &
 #endif
-!$OMP )
-!!$omp do schedule(runtime)
-!$omp do ! schedule(runtime)
+#ifdef __SORT_LIST
+!$omp ,dr2old, jj &
+#endif
+!$omp )
+#ifdef __DASYSTAT
+ if (dasystat) __U(solvent_mass_nonbulk)=zero
+#endif
+!$omp do schedule(runtime)
 #endif
   do i=1, nsolvent ! outer loop over solvent atoms
 ! does not help below
@@ -2392,7 +2383,7 @@ __DBGVAR(solvent_mass_nonbulk,1)
 #ifdef __SORT_LIST
    dr2old=-1.d0 ; ! set to a small number to guarantee that no swap is done on first iteration
 #ifdef __NEIGHBOR_LIST
-   do jj=1,max(1,min(nsurface, solute_neighbor_mind(i) * (min(INT(neighbor_list_factor),2)) ))
+   do jj=1, __NEIGHBOR_LIST_LENGTH_DENSITY
 #else
    do jj=1, nsurface ! inner loop over solute atoms
 #endif
@@ -2410,10 +2401,17 @@ __DBGVAR(solvent_mass_nonbulk,1)
 !
 ! _nonce cycle ! aa get 111
     rsurf    = ( rad_surf(j) + surf_padding )
-    rmaxsurf = ( cutoff_surf  + rsurf  ) ! note that this can be precomputed
+    rmaxsurf = ( cutoff_surf + rsurf  ) ! note that this can be precomputed
 !
 !_nonce  cycle ! aa get 105
     dr = rp-rw ;
+#ifdef __UNWRAP_PBC
+    if (qper_parser_override) then
+     __DIST_PBC(dr(1),ucell%a)
+     __DIST_PBC(dr(2),ucell%b)
+     __DIST_PBC(dr(3),ucell%c)
+    endif
+#endif
 ! _nonce  cycle ! aa get 105
 !__DBGOUT('i ', i, ' RW: ', rw)
 !__DBGOUT('j ', j, ' RP: ', rp)
@@ -2432,7 +2430,7 @@ __DBGVAR(solvent_mass_nonbulk,1)
     if (dr2 .gt. rmaxsurf**2) cycle
 ! _nonce cycle ! aa get 54
 ! proceed with calculation
-    rsurf=rsurf * oo_surf_stdev ! NOTE: redefining rsurf to get rid o variable rsurfn (rsurf <== rsurfn)
+    rsurf=rsurf * oo_surf_stdev ! NOTE: redefining rsurf to get rid of variable rsurfn (rsurf <== rsurfn)
     dr2 = sqrt(dr2) * oo_surf_stdev
 ! _nonce cycle ! aa
 ! a and b
@@ -2453,17 +2451,38 @@ __DBGVAR(solvent_mass_nonbulk,1)
 #else
     __INCR(rho_solv(i), half * ( __erf(a) - __erf(b) ) + osq2pi * ooc * ( expa - expb )   )
 #endif
-! _nonce cycle ! aa get 24
-!    if (qtruncate_sum .and.&
+!
+#ifdef __DASYSTAT
+    if (dasystat) then
+     if(rho_solv(i).gt.bulk_boundary_contour_value) then ! atom is inside bulk boundary
+      __INCR(__U(solvent_mass_nonbulk), mass_solv(i))
+      qforced=.false.
+      exit ! density threshold exceeded ; will not apply force to this atom
+     elseif(qforced) then
+      if (rho_solv(i).gt.surface_contour_value) then ! not bulk, but still inside ; if already marked (qforced=t, skip)
+       qforced=.false. ! however, do not quit because we still do not know whether we are iside bulk
+      else
+! otherwise, compute gradient contribution : (note that I am flipping the direction of dr (in the notes it is r0-r)
+       __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurf + half * (expa - expb) * ooc) )
+! add gradient contribution
+       __INCR(drho_solv(:,i),dr)
+      endif ! rho > surface contour value
+     endif ! rho > bulk contour value
+    else & ! dasystat
+#endif
     if(rho_solv(i).gt.surface_contour_value) then
      qforced=.false.
      exit ! density threshold exceeded ; will not apply force to this atom
-    endif
+    else
 ! otherwise, compute gradient contribution : (note that I am flipping the direction of dr (in the notes it is r0-r)
-    __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurf + half * (expa - expb) * ooc) )
+     __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurf + half * (expa - expb) * ooc) )
 ! add gradient contribution
-    __INCR(drho_solv(:,i),dr)
-! _nonce
+     __INCR(drho_solv(:,i),dr)
+    endif
+#if defined(__SORT_LIST) && defined( __NEIGHBOR_LIST)
+! if we are here, that means that the jj index contributes to the calculation ; check it if it is inside the index support ; if not, increase index support
+    if (jj>solute_neighbor_mind(i)) solute_neighbor_mind(i)=jj
+#endif
    enddo ! nsurface
    qforced_solv(i)=qforced
   enddo ! nsolvent
@@ -2477,33 +2496,63 @@ __DBGVAR(solvent_mass_nonbulk,1)
 !$omp end parallel
 #endif
  else ! qtruncate sum
+#if defined(__SORT_LIST) & defined(__NEIGHBOR_LIST)
+#ifdef __DDEBUG
+  __DBGOUT('Called ', whoami,'(full loop) with neighbor_list_factor=',neighbor_list_factor)
+#endif
+#ifdef __NEIGHBOR_LIST_CHECK
+  neighbor_list_misses=0
+#endif
+#endif
+!=====================================================================================
 #ifdef __OMP
 !$omp parallel &
 !$omp shared ( rho_solv, drho_solv, r_solv, r_surf, rad_surf, surf_padding, nsolvent, nsurface, cutoff_surf, oo_surf_stdev &
+#ifdef __DASYSTAT
+!$omp , solvent_mass_nonbulk &
+#endif
 #ifdef __SORT_LIST
-!$OMP , solute_neighbor_list &
+!$omp , solute_neighbor_list &
 #ifdef __NEIGHBOR_LIST
-!$OMP , solute_neighbor_mind &
+!$omp , solute_neighbor_mind &
+#ifdef __NEIGHBOR_LIST_CHECK
+!$omp , neighbor_list_misses &
 #endif
-#ifdef __SORT_LIST
 #endif
 #endif
-!$OMP ) &
+!$omp ) &
 !$omp private ( rw, i, j, rp, rsurf, rmaxsurf, dr, dr2, ooc, expa, expb, qforced &
-#ifdef __SORT_LIST
-!$OMP ,dr2old, jj &
+#ifdef __DASYSTAT
+!$omp , __U(solvent_mass_nonbulk), qbulk &
 #endif
-!$OMP )
-!!$omp do schedule(dynamic)
-!$omp do ! schedule(runtime)
+#ifdef __SORT_LIST
+!$omp ,dr2old, jj &
+#if defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+!$omp , __U(neighbor_list_misses), neighbor_list_length &
+#endif
+#endif
+!$omp )
+#ifdef __DASYSTAT
+ if (dasystat) __U(solvent_mass_nonbulk)=zero
+#endif
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+ __U(neighbor_list_misses)=0
+#endif
+!$omp do schedule(runtime)
 #endif
   do i=1, nsolvent ! outer loop over solvent atoms
    qforced=.true.
+#ifdef __DASYSTAT
+    if (dasystat) qbulk=.true.
+#endif
    rho_solv(i)=zero ;
    drho_solv(:,i)=zero
    rw=r_solv(:,i);
 #ifdef __SORT_LIST
    dr2old=-1.d0 ; ! set to a small number to guarantee that no swap is done on first iteration
+#if defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+   neighbor_list_length = __NEIGHBOR_LIST_LENGTH_DENSITY
+#endif
    do jj=1, nsurface ! inner loop over solute atoms
     j=solute_neighbor_list(jj,i)
 #else
@@ -2513,6 +2562,13 @@ __DBGVAR(solvent_mass_nonbulk,1)
     rsurf    = ( rad_surf(j) + surf_padding )
     rmaxsurf = ( cutoff_surf  + rsurf  )
     dr = rp-rw ;
+#ifdef __UNWRAP_PBC
+    if (qper_parser_override) then
+     __DIST_PBC(dr(1),ucell%a)
+     __DIST_PBC(dr(2),ucell%b)
+     __DIST_PBC(dr(3),ucell%c)
+    endif
+#endif
     dr2=sum(dr**2);
 #ifdef __SORT_LIST
 !   bubble sort between this and previous atom based on distance
@@ -2523,11 +2579,48 @@ __DBGVAR(solvent_mass_nonbulk,1)
     dr2old=dr2
 #endif
     if (dr2 .gt. rmaxsurf**2) cycle ! solute atom outside cutoff for this solvent atom -- skip it
-!   atom is within the cutoff; record its index before computing density contribution (note: recording index before swap above)
+!   atom is within the cutoff; record its index before computing density contribution
 #if defined(__SORT_LIST) & defined(__NEIGHBOR_LIST)
     solute_neighbor_mind(i)=jj
+!   since jj is increasing, solute_neighbor_mindist(i) will store the largest index for any atom within the cutoff (otherwise we cycle above)
+!   because the list is supposed to be sorted (in actuality it is not because the sort is approximate) this is a measure
+!   of how far we have to go to compute all the interactions within the cutoff ; so we store this number
 #endif
 !
+#ifdef __DASYSTAT
+    if (dasystat) then
+     if (qbulk) then
+      rsurf=rsurf * oo_surf_stdev
+      dr2 = sqrt(dr2) * oo_surf_stdev
+      a = osq2 * (dr2 + rsurf)
+      b = osq2 * (dr2 - rsurf)
+      ooc = one / dr2
+      expa = exp ( - a**2 )
+      expb = exp ( - b**2 )
+! update density
+#ifdef __ERFHYBRID
+      __erfo7i(a,erfa)
+      __erfo7i(b,erfb)
+      __INCR(rho_solv(i), half * ( erfa - erfb ) + osq2pi * ooc * ( expa - expb )   )
+#else
+      __INCR(rho_solv(i), half * ( __erf(a) - __erf(b) ) + osq2pi * ooc * ( expa - expb )   )
+#endif
+      if (rho_solv(i).gt.bulk_boundary_contour_value) then
+       __INCR(__U(solvent_mass_nonbulk), mass_solv(i))
+       qbulk=.false. ! no need to compute erf further
+       qforced=.false.
+      elseif(qforced) then ! in the bulk, and possibly outside main shell
+       if (rho_solv(i).gt.surface_contour_value) then
+        qforced=.false.
+       else
+        __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurf + half * (expa - expb) * ooc) )
+! add gradient contribution
+        __INCR(drho_solv(:,i),dr)
+       endif ! rho > surface value
+      endif ! rho > bulk value
+     endif ! qbulk
+    else &
+#endif
     if (qforced) then
      rsurf=rsurf * oo_surf_stdev
      dr2 = sqrt(dr2) * oo_surf_stdev
@@ -2554,18 +2647,47 @@ __DBGVAR(solvent_mass_nonbulk,1)
     endif ! qforced
 ! _nonce
    enddo ! nsurface
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+! check for _potential_ neighbor list violations :
+   if (qforced .and. solute_neighbor_mind(i) > neighbor_list_length ) __INC(__U(neighbor_list_misses)) ! count only if qforced, ok?
+#endif
    qforced_solv(i)=qforced
   enddo ! nsolvent
 #ifdef __OMP
 !$omp end do
+#ifdef __DASYSTAT
+ if (dasystat) then
+!$omp atomic
+  __REDUCE(solvent_mass_nonbulk)
+ endif
+#endif
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+ __REDUCE(neighbor_list_misses)
+#endif
 !$omp end parallel
 #endif
 #if defined(__NEIGHBOR_LIST) & defined(__SORT_LIST)
-#ifdef __DDEBUG
- write(666,'(7000(I4,"("I4")"))') (solute_neighbor_mind(i), solute_neighbor_list(solute_neighbor_mind(i),i), i=1,nsolvent)
+!#ifdef __DDEBUG
+! write(666,'(7000(I4,"("I4")"))') (solute_neighbor_mind(i), solute_neighbor_list(solute_neighbor_mind(i),i), i=1,nsolvent)
 ! close(666)
+!#endif
 #endif
+! should we output the violations here ?
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+ if (neighbor_list_misses>0) then
+  if (neighbor_list_misses==1) then
+   __WRN(whoami, 'DETECTED '//itoa(neighbor_list_misses)//' POSSIBLE NEIGHBOR LIST MISS. NEIGHBOR LIST FACTOR IS '//ftoa(neighbor_list_factor))
+  else
+   __WRN(whoami, 'DETECTED '//itoa(neighbor_list_misses)//' POSSIBLE NEIGHBOR LIST MISSES. NEIGHBOR LIST FACTOR IS '//ftoa(neighbor_list_factor))
+  endif
+! increase neighbor_list_factor
+  __INCR(neighbor_list_factor, neighbor_list_factor_grow)
+ else
+  __INCR(neighbor_list_factor, neighbor_list_factor_shrink)
+! decrease neighbor_list_factor
+ endif
 #endif
+!
  endif ! truncate sum
 !
  end __SUB(compute_density_grad)
@@ -2675,6 +2797,13 @@ __DBGVAR(solvent_mass_nonbulk,1)
     rp=r_surf(:,j) ! protein atom coordinate
 !
     dr = rp-rw ;
+#ifdef __UNWRAP_PBC
+    if (qper_parser_override) then
+     __DIST_PBC(dr(1),ucell%a)
+     __DIST_PBC(dr(2),ucell%b)
+     __DIST_PBC(dr(3),ucell%c)
+    endif
+#endif
     dr2=sum(dr**2);
 #ifdef __SORT_LIST
 !   bubble sort between this and previous atom based on distance
@@ -2770,8 +2899,11 @@ __DBGVAR(solvent_mass_nonbulk,1)
 #endif
 #ifdef __SORT_LIST
 !$omp , solute_neighbor_list &
-#if defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
-!$omp , solute_neighbor_mind, neighbor_list_misses &
+#ifdef __NEIGHBOR_LIST
+!$omp , solute_neighbor_mind &
+#ifdef __NEIGHBOR_LIST_CHECK
+!$omp , neighbor_list_misses &
+#endif
 #endif
 #endif
 !$omp ) &
@@ -2817,6 +2949,13 @@ __DBGVAR(solvent_mass_nonbulk,1)
     rp=r_surf(:,j) ! protein atom coordinate
 !
     dr = rp-rw ;
+#ifdef __UNWRAP_PBC
+    if (qper_parser_override) then
+     __DIST_PBC(dr(1),ucell%a)
+     __DIST_PBC(dr(2),ucell%b)
+     __DIST_PBC(dr(3),ucell%c)
+    endif
+#endif
     dr2=sum(dr**2);
 #ifdef __SORT_LIST
 !   bubble sort between this and previous atom based on distance
@@ -2829,7 +2968,7 @@ __DBGVAR(solvent_mass_nonbulk,1)
 !
 #ifdef __DASYSTAT
     if (dasystat) then
-     if (qbulk .and. dr2 .lt. bulk_distance2) then ! the solvent atom is inside the shell, and also too close to the surface to be considered bulk
+     if (qbulk .and. dr2 .lt. bulk_distance2) then ! the solvent atom is too close to the surface to be considered bulk
       __INCR(__U(solvent_mass_nonbulk), mass_solv(i))
       qbulk=.false. ! mark atom as non-bulk
       qforced=.false. ! also, mark as a non-forced atom
@@ -3117,11 +3256,211 @@ __DBGVAR(kmax,2)
 #undef _S
 #define _S compute_bulk_volume
  __SUB(_S)
-
+!
+#ifdef __OMP
+ use omp_lib
+ int tid, numthreads, n
+ int :: __U(ivolume), __U(ivolume_nonbulk)
+#endif
+ int :: ivolume, ivolume_nonbulk
+ int i, im, jm, km, ii, jj, kk, imin, imax, jmin, jmax, kmin, kmax, nx, ny, nz
+ float x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, dx2, dy2, dz2, x0, y0, z0
+ float support, support2, rsurf, a, b, ooc, expa, expb, oos, oobs
+#ifdef __PERTURB_GRID
+ float :: drand(3)
+#endif
+!
  __IAM(__NM(_S))
+!
+! make use of existing definitions in compute_desity_grad routine above
+! different erf implementations/approximations
+ float :: erfsun ! external erf function; code by Sun Microsystems
+! if openmp is used, cannot call the function erfo7, so hack to call inlined macro here
+#ifndef __OMP
+ float :: erfo7  ! approximation to within O(-7)
+#endif
+ float :: erfo5  ! approximation to within O(-5) [contains an exponential term]
+!
+#ifdef __PERTURB_GRID
+ call randomu_vector(drand, 3, random_channel)
+ drand=(drand-half)*surface_area_grid_spacing
+#else
+#define drand(_A)
+#endif
+!
+ x0 = drand(1) + sagrid%limits(1,1)
+ y0 = drand(2) + sagrid%limits(1,2)
+ z0 = drand(3) + sagrid%limits(1,3)
+!
+ nx=sagrid%n(1)
+ ny=sagrid%n(2)
+ nz=sagrid%n(3)
+!
+#define qpbcx qper_parser_override
+#define qpbcy qpbcx
+#define qpbcz qpbcx
+
+! initialize
+ ivolume=0
+ ivolume_nonbulk=0
+!
+ oos=__OORHO(surface_contour_value)
+ oobs=__OORHO(bulk_boundary_contour_value)
+!
+#ifdef __OMP
+!$omp parallel &
+!$omp shared(sarho_all_threads, ivolume, ivolume_nonbulk) &
+!$omp private(x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, dx2, dy2, dz2, ii, jj, kk, imin, imax, jmin, jmax, kmin, kmax, tid, &
+!$omp i, __U(ivolume), __U(ivolume_nonbulk), n, support, support2, rsurf, a, b, ooc, expa, expb)
+ tid=omp_get_thread_num() ! thread index
+ numthreads=omp_get_num_threads()
+#ifdef rho
+#undef rho
+#endif
+#define rho(i,j,k) sarho_all_threads(i,j,k,tid)
+#else
+#define rho sarho
+#endif
+! assign to each thread a local copy of surface indicator
+ rho(:,:,:)=zero ! initialize
+ __U(ivolume)=0
+ __U(ivolume_nonbulk)=0
+!$omp do schedule(runtime)
+ do i=1, nsurface
+! determine support for this atom, i.e. all grid points which are within the filter support
+  rsurf = ( rad_surf(i) + surf_padding )
+  support = ( rsurf + cutoff_surf )
+  support2=support**2
+  x=r_surf(1,i)-r_com_sa(1)
+  xmin=x-support
+  xmax=xmin + two*support
+  imin = INT( (xmin-x0)*oo_surface_area_grid_spacing ) + 1 ! could be negative (i.e. off-the-grid), but the indices are consistent with the 1-based offset
+  imax = INT( (xmax-x0)*oo_surface_area_grid_spacing ) + 2
+  if (.not.qpbcx) then
+   imin=max(imin,1)
+   imax=min(imax,nx)
+  endif
+__DBGVAR(surface_area_grid_spacing,2)
+__DBGVAR(oo_surface_area_grid_spacing,2)
+__DBGVAR(x,2)
+__DBGVAR(xmin,2)
+__DBGVAR(xmax,2)
+__DBGVAR(x0,2)
+__DBGVAR(imin,2)
+__DBGVAR(imax,2)
+! same for y
+  y=r_surf(2,i)-r_com_sa(2)
+  ymin=y-support
+  ymax=ymin + two*support
+  jmin = INT( (ymin-y0)*oo_surface_area_grid_spacing ) + 1
+  jmax = INT( (ymax-y0)*oo_surface_area_grid_spacing ) + 2
+  if (.not.qpbcy) then
+   jmin=max(jmin,1)
+   jmax=min(jmax,ny)
+  endif
+__DBGVAR(y,2)
+__DBGVAR(ymin,2)
+__DBGVAR(ymax,2)
+__DBGVAR(y0,2)
+__DBGVAR(jmin,2)
+__DBGVAR(jmax,2)
+! and for z
+  z=r_surf(3,i)-r_com_sa(3)
+  zmin=z-support
+  zmax=zmin + two*support
+  kmin = INT( (zmin-z0)*oo_surface_area_grid_spacing ) + 1
+  kmax = INT( (zmax-z0)*oo_surface_area_grid_spacing ) + 2
+  if (.not.qpbcz) then
+   kmin=max(kmin,1)
+   kmax=min(kmax,nz)
+  endif
+__DBGVAR(z,2)
+__DBGVAR(zmin,2)
+__DBGVAR(zmax,2)
+__DBGVAR(z0,2)
+__DBGVAR(kmin,2)
+__DBGVAR(kmax,2)
+
+  do kk=kmin,kmax
+   dz2=(surface_area_grid_spacing*(kk-1) - (z - z0) )**2; ! actual z-distance between gridpoint and atom
+   km=modulo(kk-1,nz-1)+1 ! works for PBC
+   do jj=jmin,jmax
+    dy2=dz2+(surface_area_grid_spacing*(jj-1) - (y - y0) )**2;
+    if (dy2>support2) cycle
+    jm=modulo(jj-1,ny-1)+1
+    do ii=imin,imax
+     dx2=dy2+(surface_area_grid_spacing*(ii-1) - (x - x0) )**2;
+     if (dx2>support2) cycle
+     im=modulo(ii-1,nx-1)+1
+! update density
+     if (rho(im,jm,km).lt.surface_contour_value) then
+      rsurf=rsurf * oo_surf_stdev
+      dx2 = sqrt(dx2) * oo_surf_stdev
+      a = osq2 * (dx2 + rsurf)
+      b = osq2 * (dx2 - rsurf)
+      ooc = one / dx2
+      expa = exp ( - a**2 )
+      expb = exp ( - b**2 )
+! update density
+#ifdef __ERFHYBRID
+      __erfo7i(a,erfa)
+      __erfo7i(b,erfb)
+      __INCR(rho(im,jm,km), half * ( erfa - erfb ) + osq2pi * ooc * ( expa - expb )   )
+#else
+      __INCR(rho(im,jm,km), half * ( __erf(a) - __erf(b) ) + osq2pi * ooc * ( expa - expb )   )
+#endif
+     endif ! rho<contour value
+    enddo !ii
+   enddo !jj
+  enddo !kk
+ enddo ! nsurface atoms, i
+#ifdef __OMP
+!$omp end do
+! now reduce all indicator arrays to master array (0th thread)
+ n=1
+ do while (n.lt.numthreads)
+!$omp barrier ! make sure all threads have completed previous operation
+  if (mod(tid,2*n)==0 .and. (tid+n).lt.numthreads) then
+   __INCR(rho(:,:,:), sarho_all_threads(:,:,:,tid+n))
+  endif
+  __SCALE(n,2)
+ enddo
+! now compute surface area integral
+#ifdef rho
+#undef rho
+#endif
+#define rho(i,j,k) sarho_all_threads(i,j,k,0)
+!$omp barrier ! make sure thread reduction is complete, otherwise volumes will be too small
+!$omp do schedule(runtime)
+#endif
+ do kk=2,nz
+  do jj=2,ny
+   do ii=2,nx
+! not clear how to do this in the fastest way possible
+! perhaps an if/else statement would be faster, densities that map to the outside of the main shell, also map to the outside of
+! the nonbulk (i.e. interfacial) region
+     __INCR(__U(ivolume), min(1,INT(rho(ii,jj,kk)*oos)))
+     __INCR(__U(ivolume_nonbulk), max(1,INT(rho(ii,jj,kk)*oobs)))
+   enddo
+  enddo
+ enddo
+#ifdef __OMP
+!$omp end do
+!$omp atomic
+ __REDUCE(ivolume)
+!$omp atomic
+ __REDUCE(ivolume_nonbulk)
+#endif
+#ifdef __OMP
+!$omp end parallel
+#endif
+ volume_bulk=(ivolume-ivolume_nonbulk)*surface_area_grid_spacing**3
+!
+ __DBGVAR(ivolume,1)
+ __DBGVAR(ivolume_nonbulk,1)
+ __DBGVAR(volume_bulk,1)
 
  end __SUB(_S)
-!
 !================================================================
 !
 #undef _S
