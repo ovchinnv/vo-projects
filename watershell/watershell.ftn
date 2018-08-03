@@ -30,6 +30,14 @@
 #define __NEIGHBOR_LIST_LENGTH_DENSITY __NEIGHBOR_LIST_LENGTH_MINDIST
 #endif
 
+#ifdef __UNWRAP_PBC
+#// note that I assume that _PER is positive, no checks are done
+#define __PBCDIST(_DIST,_PER) _DIST=modulo(_DIST, _PER);if(_DIST .gt. half*(_PER)) __DECR(_DIST,_PER)
+#define __PBC_DIST(_DIST,_PER) __PBCDIST(_DIST,_PER)
+#define __DISTPBC(_DIST,_PER) __PBCDIST(_DIST,_PER)
+#define __DIST_PBC(_DIST,_PER) __PBCDIST(_DIST,_PER)
+#endif
+
 module _N
 
  use system, only : r, rcomp, fr, radius, natom, system_PDB_initialized, system_PDB_init, system_done, system_getind, &
@@ -216,6 +224,12 @@ module _N
  float :: r_com(3) =(/zero, zero, zero/); ! center of mass (geometry) for torque computation
 #ifdef __SIMPLE_NET_FORCE_SURFACE
  float :: r_com_inst(3) =(/zero, zero, zero/); ! inst. center of mass (geometry) for torque computation
+#if defined (__OMP) && defined (__PBC_UNWRAP)
+ float :: __U(r_com_inst)(3)=(/zero, zero, zero/) ! thread locals
+#endif
+#endif
+#ifdef __UNWRAP_PBC
+ float :: r_pbc_reference(3)=(/zero, zero, zero/) ! to unwrap water coordinates for torque correction
 #endif
  float :: net_force(3) = (/zero, zero, zero/);
  float :: net_force_ave(3) = (/zero, zero, zero/); ! running average of net force
@@ -235,6 +249,10 @@ module _N
 #endif
 #endif
 !
+#if defined(__BAROSTAT) || defined(__DASYSTAT) || defined(__UNWRAP_PBC)
+ type (cell) :: ucell
+#endif
+!
  int :: fid
  bool :: qrestart=.false. ! whether we are restarting from a restart file
 !
@@ -244,11 +262,11 @@ module _N
 != subroutines
  contains
 !========
- __SUB(initialize) (atoms, forced_atoms, qper, ucell)
+ __SUB(initialize) (atoms, forced_atoms, qper, mdcell)
  __DEP_VECTORS
  type (int_vector) :: atoms, forced_atoms
  bool, intent(in) :: qper
- type (cell), intent(in), optional :: ucell
+ type (cell), intent(in), optional :: mdcell
 
  character(len=vartaglen) :: keyword, context, contexts(2) ! all_context currently holds the input context and the restart file context
  int :: ictx ! ugly variables for context searching in macro : (ictx: context # ; qctx, whether tag present in context)
@@ -443,7 +461,7 @@ module _N
 #endif
 
 #define __INT
-#if defined(__BAROSTAT) || defined(__DASYSTAT)
+#if defined(__BAROSTAT) || defined(__DASYSTAT) || defined(__UNWRAP_PBC)
 !
  if ( &
 #ifdef __BAROSTAT
@@ -452,13 +470,20 @@ module _N
 #ifdef __DASYSTAT
  & dasystat .or. &
 #endif
+#ifdef __UNWRAP_PBC
+ & .true. .or. &
+#endif
  & .false.)  then
 !
 ! check for periodicity override from parser :
   __GET_OPT_PAR_B(pbc, qper_parser_override, qper, __STRING(__WATERSHELLCTX)); ! if not present use qper that is passed in
-  if (qper_parser_override.and..not.present(ucell)) then
-   __WARN(whoami, 'PBC OVERRIDE IN USE BUT UNIT CELL NOT PROVIDED. WILL NOT USE PBC.')
-   qper_parser_override=.false.
+  if (qper_parser_override) then
+   if (present(mdcell)) then
+    ucell=mdcell
+   else
+    __WARN(whoami, 'PBC OVERRIDE IN USE BUT UNIT CELL NOT PROVIDED. WILL NOT USE PBC.')
+    qper_parser_override=.false.
+   endif ! present mdcell
   endif
  endif ! barostat or dasystat
 #endif
@@ -950,13 +975,20 @@ module _N
 #ifdef __DASYSTAT
 &     dasystat .or. &
 #endif
-&     .false. ) r_surf_changed=.true.
+&     .false. ) r_surf_changed=.true. ! we only need this variable for barostat/dasystat
 #endif
 #ifdef __RMFT
 ! compute com if removing torque
  if (remove_net_torque) then 
 #ifdef __TORQUE_COM_SURFACE
   r_com = oonsurface * sum(r_surf,2)
+#ifdef __UNWRAP_PBC
+  if (qper_parser_override) r_pbc_reference=r_com
+#endif
+#else
+#ifdef __UNWRAP_PBC
+ if (qper_parser_override) r_pbc_reference = oonsurface * sum(r_surf,2)
+#endif
 #endif
   if (qrestart) then ! read average force
    line=getval_nocase('average_net_force',__STRING(__RESTARTCTX))
@@ -1196,7 +1228,7 @@ __DBGVAR(r_com_sa,1)
 !
  end __SUB(done)
 !================================================================
- __SUB(main)(r,fr,energy,qper_,ucell) ! NOTE : qper/ucell is not supposed to change; keeping here for sanity check
+ __SUB(main)(r,fr,energy,qper_,mdcell) ! NOTE : qper/ucell is not supposed to change; keeping here for sanity check
 #ifdef __F_T_COUPLED
  use lu
 #else
@@ -1208,7 +1240,7 @@ __DBGVAR(r_com_sa,1)
 !
  __OPAR(qper,bool)
 !
- type (cell), optional :: ucell
+ type (cell), optional :: mdcell
 ! int :: ibeg, iend ! atom indices for looping
  float :: distance_from_solute, distance_from_solute2, pre, d0
  float :: surface_energy, surface_force ! , density_beyond_contour ! useful ?
@@ -1253,7 +1285,12 @@ __DBGVAR(r_com_sa,1)
 #endif
 #endif
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
+#ifdef __OMP
+ float, allocatable :: distance_all_threads(:,:)
+ int :: tid
+#else
  float, allocatable :: distance(:)
+#endif
  int :: ierr
 #endif
  int :: i, ii
@@ -1274,44 +1311,159 @@ __DBGVAR(r_com_sa,1)
  endif ! qneighbor_list
 !
  if (.not. qneighbor_list_sorted) then
-  __ALLOC(distance(nsurface))
 #ifdef __OMP
-!$omp do schedule(runtime) private(ierr)
+!$omp parallel private(ierr,tid,i,ii &
+#ifdef __PBC_UNWRAP
+!$omp ,d0 &
 #endif
-  do i=1, nsolvent
-   do ii=1, nsurface
-    distance(ii)=zero
+!$omp )
+  __ALLOC(distance_all_threads(nsurface,0:omp_get_max_threads()-1))
+  tid=omp_get_thread_num()
+#define distance(_ii) distance_all_threads(_ii,tid)
+#else
+  __ALLOC(distance(nsurface))
+#endif
+
+#ifdef __PBC_UNWRAP
+  if(qper_parser_override) then
+#endif
 !
-    d0=r_surf(1,ii)-r_solv(1,i) ! can add periodicity treatment here
-    __INCR(distance(ii),d0*d0)
-!
-    d0=r_surf(2,ii)-r_solv(2,i)
-    __INCR(distance(ii),d0*d0)
-!
-    d0=r_surf(3,ii)-r_solv(3,i)
-    __INCR(distance(ii),d0*d0)
-   enddo
+#ifdef __OMP
+!$omp do schedule(runtime)
+#endif
+   do i=1, nsolvent
+    do ii=1, nsurface
+#ifdef __PBC_UNWRAP
+     distance(ii)=zero
+! x
+     d0=r_surf(1,ii)-r_solv(1,i)
+     __DIST_PBC(d0,ucell%a)
+     __INCR(distance(ii),d0*d0)
+! y
+     d0=r_surf(2,ii)-r_solv(2,i)
+     __DIST_PBC(d0,ucell%b)
+     __INCR(distance(ii),d0*d0)
+! z
+     d0=r_surf(3,ii)-r_solv(3,i)
+     __DIST_PBC(d0,ucell%c)
+     __INCR(distance(ii),d0*d0)
+#else
+     distance(ii) = sum ( (r_surf(:,ii)-r_solv(:,i))**2 )
+#endif
+    enddo ! nsurface
 !  sort neighbor list:
-   call rsort_ind('i',nsurface,distance,solute_neighbor_list(:,i),ierr)
-   solute_neighbor_mind(i)=min(nsurface,2)
-  enddo
+    call rsort_ind('i',nsurface,distance(:),solute_neighbor_list(:,i),ierr)
+    solute_neighbor_mind(i)=min(nsurface,2)
+   enddo ! nsolvent
 #ifdef __OMP
 !$omp end do
 #endif
+#ifdef __PBC_UNWRAP
+  else ! qper_parser_override
+#ifdef __OMP
+!$omp do schedule(runtime)
+#endif
+   do i=1, nsolvent
+    do ii=1, nsurface
+     distance(ii) = sum ( (r_surf(:,ii)-r_solv(:,i))**2 )
+    enddo ! nsurface
+!  sort neighbor list:
+    call rsort_ind('i',nsurface,distance(:),solute_neighbor_list(:,i),ierr)
+    solute_neighbor_mind(i)=min(nsurface,2)
+   enddo ! nsolvent
+#ifdef __OMP
+!$omp end do
+#endif
+  endif ! qper_parser_override
+#endif
+#ifdef __OMP
+  __DEALL(distance_all_threads)
+#undef distance
+!$omp end parallel
+#else
   __DEALL(distance)
+#endif
   qneighbor_list_sorted=.true.
- endif
+ endif ! sorted
 #endif
 !
 #ifdef __RMFT
 #ifdef __SIMPLE_NET_FORCE_SURFACE
- if (remove_net_torque) r_com_inst = oonsurface * sum(r(:,isurface_atoms),2) ; ! need instant com for SIMPLE_NET_FORCE_SURFACE, b/c forces applied to prot. atoms
+ if (remove_net_torque) then
+#ifdef __UNWRAP_PBC
+  if (qper_parser_override) then 
+   r_com_inst=zero
+#ifdef __OMP
+!$omp parallel private(__U(r_com_inst), pre)
+   __U(r_com_inst)=zero
+!$omp do schedule(runtime)
+#endif
+   do i=1, nsurface
+    ii=isurface_atoms(i)
+!x
+    pre=r(1,ii)-r_surf(1,i); __PBCDIST(pre,ucell%a)
+    __INCR(__U(r_com_inst)(1), pre + r_surf(1,i))
+!y
+    pre=r(2,ii)-r_surf(2,i); __PBCDIST(pre,ucell%b)
+    __INCR(__U(r_com_inst)(2), pre + r_surf(2,i))
+!z
+    pre=r(3,ii)-r_surf(3,i); __PBCDIST(pre,ucell%c)
+    __INCR(__U(r_com_inst)(3), pre + r_surf(3,i))
+   enddo
+#ifdef __OMP
+!$omp end do
+!$omp atomic
+   __AREDUCE(r_com_inst,1)
+!$omp atomic
+   __AREDUCE(r_com_inst,2)
+!$omp atomic
+   __AREDUCE(r_com_inst,3)
+!$omp end parallel
+#endif
+   __SCALE(r_com_inst,oonsurface)
+  else
+#endif
+  r_com_inst = oonsurface * sum(r(:,isurface_atoms),2) ; ! need instant com for SIMPLE_NET_FORCE_SURFACE, b/c forces applied to prot. atoms
+ endif
+#ifdef __UNWRAP_PBC
+ endif
+#endif
+
 #endif
 #endif
 !============================================= update reference coordinates
  if (structure_update_freq.gt.izero) then
   if __CHKUPDATE(structure_update_freq) then
-   r_surf = structure_update_memory * r_surf + (one - structure_update_memory) * r(:,isurface_atoms)
+
+#ifdef __PBC_UNWRAP
+   if (qper_parser_override) then
+    d0=one-structure_update_memory
+#ifdef __OMP
+!$omp parallel private(pre,ii)
+!$omp do schedule(runtime)
+#endif
+    do i=1, nsurface
+     ii=isurface_atoms(i)
+! x
+     pre=r(1,ii)-r_surf(1,i); __PBCDIST(pre,ucell%a)
+     __INCR(r_surf(1,ii), d0*pre)
+! y
+     pre=r(2,ii)-r_surf(2,i); __PBCDIST(pre,ucell%b)
+     __INCR(r_surf(2,ii), d0*pre)
+! z
+     pre=r(3,ii)-r_surf(3,i); __PBCDIST(pre,ucell%c)
+     __INCR(r_surf(3,ii), d0*pre)
+    enddo
+#ifdef __OMP
+!$omp end do
+!$omp end parallel
+#endif
+   else
+#endif
+    r_surf = structure_update_memory * r_surf + (one - structure_update_memory) * r(:,isurface_atoms)
+#ifdef __PBC_UNWRAP
+   endif
+#endif
 !
 #if defined(__BAROSTAT) || defined (__DASYSTAT)
    if (&
@@ -1321,7 +1473,7 @@ __DBGVAR(r_com_sa,1)
 #ifdef __DASYSTAT
 &       dasystat .or. &
 #endif
-&       .false. ) r_surf_changed=.true.
+&       .false. ) r_surf_changed=.true. ! we only need this variable for barostat/dasystat
 #endif
 !
 #ifdef __RMFT
@@ -1335,6 +1487,13 @@ __DBGVAR(r_com_sa,1)
     r_com = oonsurface * sum(r_surf,2) ;
 #endif
    endif ! remove_net_torque
+#ifdef __UNWRAP_PBC
+   r_pbc_reference=r_com
+#endif
+#else
+#ifdef __UNWRAP_PBC
+   r_pbc_reference = oonsurface * sum(r_surf,2)
+#endif
 #endif
 #endif
   endif
@@ -1522,7 +1681,23 @@ __DBGVAR(r_com_sa,1)
 #ifdef __RMFT
    if (remove_net_torque) then ! for now, here; optimize later, if needed
     ir=r_solv(:,i); ! removed r_com subtraction for extra flexibility ; to be accounted for later
-
+#ifdef __UNWRAP_PBC
+    if (qper_parser_override) then
+!x
+     __DECR(ir(1),r_pbc_reference(1))
+     __PBCDIST(ir(1), ucell%a)
+     __INCR(ir(1), r_pbc_reference(1))
+!y
+     __DECR(ir(2),r_pbc_reference(2))
+     __PBCDIST(ir(2), ucell%b)
+     __INCR(ir(2), r_pbc_reference(2))
+!z
+     __DECR(ir(3),r_pbc_reference(3))
+     __PBCDIST(ir(3), ucell%c)
+     __INCR(ir(3), r_pbc_reference(3))
+    endif
+#endif
+!
 #ifdef __TORQUE_FROM_FORCED_SOLVENT
     __UPDATE_TMAT_C
 #endif
@@ -1560,6 +1735,23 @@ __DBGVAR(r_com_sa,1)
    if (remove_net_torque) then ! for now, here; optimize later
 #ifdef __TORQUE_FROM_FREE_SOLVENT
     ir=r_solv(:,i);
+#ifdef __UNWRAP_PBC
+    if (qper_parser_override) then
+!x
+     __DECR(ir(1),r_pbc_reference(1))
+     __PBCDIST(ir(1), ucell%a)
+     __INCR(ir(1), r_pbc_reference(1))
+!y
+     __DECR(ir(2),r_pbc_reference(2))
+     __PBCDIST(ir(2), ucell%b)
+     __INCR(ir(2), r_pbc_reference(2))
+!z
+     __DECR(ir(3),r_pbc_reference(3))
+     __PBCDIST(ir(3), ucell%c)
+     __INCR(ir(3), r_pbc_reference(3))
+    endif
+#endif
+!
     __UPDATE_TMAT_C
 #endif
    endif ! remove_net_torque
@@ -1644,7 +1836,23 @@ endif
 #ifdef __RMFT
    if (remove_net_torque) then ! for now, here; optimize later, if needed
     ir=r_solv(:,i); ! removed r_com subtraction for extra flexibility ; to be accounted for later
-
+#ifdef __UNWRAP_PBC
+    if (qper_parser_override) then
+!x
+     __DECR(ir(1),r_pbc_reference(1))
+     __PBCDIST(ir(1), ucell%a)
+     __INCR(ir(1), r_pbc_reference(1))
+!y
+     __DECR(ir(2),r_pbc_reference(2))
+     __PBCDIST(ir(2), ucell%b)
+     __INCR(ir(2), r_pbc_reference(2))
+!z
+     __DECR(ir(3),r_pbc_reference(3))
+     __PBCDIST(ir(3), ucell%c)
+     __INCR(ir(3), r_pbc_reference(3))
+    endif
+#endif
+!
 #ifdef __TORQUE_FROM_FORCED_SOLVENT
     __UPDATE_TMAT_C
 #endif
@@ -1682,6 +1890,23 @@ endif
 #ifdef __TORQUE_FROM_FREE_SOLVENT
    if (remove_net_torque) then ! for now, here; optimize later
     ir=r_solv(:,i);
+#ifdef __UNWRAP_PBC
+    if (qper_parser_override) then
+!x
+     __DECR(ir(1),r_pbc_reference(1))
+     __PBCDIST(ir(1), ucell%a)
+     __INCR(ir(1), r_pbc_reference(1))
+!y
+     __DECR(ir(2),r_pbc_reference(2))
+     __PBCDIST(ir(2), ucell%b)
+     __INCR(ir(2), r_pbc_reference(2))
+!z
+     __DECR(ir(3),r_pbc_reference(3))
+     __PBCDIST(ir(3), ucell%c)
+     __INCR(ir(3), r_pbc_reference(3))
+    endif
+#endif
+!
     __UPDATE_TMAT_C
    endif ! remove_net_torque
 #endif
@@ -1756,16 +1981,16 @@ endif
       __PRESENT(qper,qper_parser_override)
       if (qper.neqv.qper_parser_override) then
        __WRN(whoami, 'CANNOT CHANGE PERIODICITY FLAG DURING DYNAMICS WITH WATERSHELL BAROSTAT. INITIAL :'//ltoa(qper_parser_override)//', CURRENT :'//ltoa(qper))
-      elseif (qper) then ! check that ucell, if passed in, did not change
-       if (present(ucell)) then
+      elseif (qper) then ! check that mdcell, if passed in, did not change
+       if (present(mdcell)) then
         if &
-&        ((abs(ucell%a - sagrid%lengths(1)) .gt. __ERRTOL) .or. &
-&         (abs(ucell%b - sagrid%lengths(2)) .gt. __ERRTOL) .or. &
-&         (abs(ucell%c - sagrid%lengths(3)) .gt. __ERRTOL)) then
+&        ((abs(mdcell%a - sagrid%lengths(1)) .gt. __ERRTOL) .or. &
+&         (abs(mdcell%b - sagrid%lengths(2)) .gt. __ERRTOL) .or. &
+&         (abs(mdcell%c - sagrid%lengths(3)) .gt. __ERRTOL)) then
           __WRN(whoami, 'CANNOT CHANGE UNIT CELL DIMENSIONS DURING DYNAMICS WITH WATERSHELL BAROSTAT.')
-          __ASSERT(abs(ucell%a - sagrid%lengths(1)),<, __ERRTOL)
-          __ASSERT(abs(ucell%b - sagrid%lengths(2)),<, __ERRTOL)
-          __ASSERT(abs(ucell%c - sagrid%lengths(3)),<, __ERRTOL)
+          __ASSERT(abs(mdcell%a - sagrid%lengths(1)),<, __ERRTOL)
+          __ASSERT(abs(mdcell%b - sagrid%lengths(2)),<, __ERRTOL)
+          __ASSERT(abs(mdcell%c - sagrid%lengths(3)),<, __ERRTOL)
         endif
        endif
       endif ! qper
@@ -1879,16 +2104,16 @@ __DBGVAR(pressure_ave,1)
       __PRESENT(qper,qper_parser_override)
       if (qper.neqv.qper_parser_override) then
        __WRN(whoami, 'CANNOT CHANGE PERIODICITY FLAG DURING DYNAMICS WITH WATERSHELL DASYSTAT. INITIAL :'//ltoa(qper_parser_override)//', CURRENT :'//ltoa(qper))
-      elseif (qper) then ! check that ucell, if passed in, did not change
-       if (present(ucell)) then
+      elseif (qper) then ! check that mdcell, if passed in, did not change
+       if (present(mdcell)) then
         if &
-&        ((abs(ucell%a - sagrid%lengths(1)) .gt. __ERRTOL) .or. &
-&         (abs(ucell%b - sagrid%lengths(2)) .gt. __ERRTOL) .or. &
-&         (abs(ucell%c - sagrid%lengths(3)) .gt. __ERRTOL)) then
+&        ((abs(mdcell%a - sagrid%lengths(1)) .gt. __ERRTOL) .or. &
+&         (abs(mdcell%b - sagrid%lengths(2)) .gt. __ERRTOL) .or. &
+&         (abs(mdcell%c - sagrid%lengths(3)) .gt. __ERRTOL)) then
           __WRN(whoami, 'CANNOT CHANGE UNIT CELL DIMENSIONS DURING DYNAMICS WITH WATERSHELL DASYSTAT.')
-          __ASSERT(abs(ucell%a - sagrid%lengths(1)),<, __ERRTOL)
-          __ASSERT(abs(ucell%b - sagrid%lengths(2)),<, __ERRTOL)
-          __ASSERT(abs(ucell%c - sagrid%lengths(3)),<, __ERRTOL)
+          __ASSERT(abs(mdcell%a - sagrid%lengths(1)),<, __ERRTOL)
+          __ASSERT(abs(mdcell%b - sagrid%lengths(2)),<, __ERRTOL)
+          __ASSERT(abs(mdcell%c - sagrid%lengths(3)),<, __ERRTOL)
         endif
        endif
       endif ! qper
@@ -2180,6 +2405,13 @@ __DBGVAR(solvent_mass_nonbulk,1)
 !
 !_nonce  cycle ! aa get 105
     dr = rp-rw ;
+#ifdef __UNWRAP_PBC
+    if (qper_parser_override) then
+     __DIST_PBC(dr(1),ucell%a)
+     __DIST_PBC(dr(2),ucell%b)
+     __DIST_PBC(dr(3),ucell%c)
+    endif
+#endif
 ! _nonce  cycle ! aa get 105
 !__DBGOUT('i ', i, ' RW: ', rw)
 !__DBGOUT('j ', j, ' RP: ', rp)
@@ -2330,6 +2562,13 @@ __DBGVAR(solvent_mass_nonbulk,1)
     rsurf    = ( rad_surf(j) + surf_padding )
     rmaxsurf = ( cutoff_surf  + rsurf  )
     dr = rp-rw ;
+#ifdef __UNWRAP_PBC
+    if (qper_parser_override) then
+     __DIST_PBC(dr(1),ucell%a)
+     __DIST_PBC(dr(2),ucell%b)
+     __DIST_PBC(dr(3),ucell%c)
+    endif
+#endif
     dr2=sum(dr**2);
 #ifdef __SORT_LIST
 !   bubble sort between this and previous atom based on distance
@@ -2558,6 +2797,13 @@ __DBGVAR(solvent_mass_nonbulk,1)
     rp=r_surf(:,j) ! protein atom coordinate
 !
     dr = rp-rw ;
+#ifdef __UNWRAP_PBC
+    if (qper_parser_override) then
+     __DIST_PBC(dr(1),ucell%a)
+     __DIST_PBC(dr(2),ucell%b)
+     __DIST_PBC(dr(3),ucell%c)
+    endif
+#endif
     dr2=sum(dr**2);
 #ifdef __SORT_LIST
 !   bubble sort between this and previous atom based on distance
@@ -2703,6 +2949,13 @@ __DBGVAR(solvent_mass_nonbulk,1)
     rp=r_surf(:,j) ! protein atom coordinate
 !
     dr = rp-rw ;
+#ifdef __UNWRAP_PBC
+    if (qper_parser_override) then
+     __DIST_PBC(dr(1),ucell%a)
+     __DIST_PBC(dr(2),ucell%b)
+     __DIST_PBC(dr(3),ucell%c)
+    endif
+#endif
     dr2=sum(dr**2);
 #ifdef __SORT_LIST
 !   bubble sort between this and previous atom based on distance
