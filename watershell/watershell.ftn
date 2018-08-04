@@ -1361,7 +1361,7 @@ __DBGVAR(r_com_sa,1)
     enddo ! nsurface
 !  sort neighbor list:
     call rsort_ind('i',nsurface,distance(:),solute_neighbor_list(:,i),ierr)
-    solute_neighbor_mind(i)=min(nsurface,2)
+!   solute_neighbor_mind(i)=min(nsurface,2) ! aa wrong for erf
    enddo ! nsolvent
 #if defined(__OMP) & defined(__FORCE_OMP)
 !$omp end do
@@ -1534,6 +1534,9 @@ __DBGVAR(r_com_sa,1)
    enddo
    pre=0.25d0 ! prefactor for scaling std in computing reference distance
   else ! (NOT) qminimum_distance -- original erf algorithm
+! first, set surface_contour value to an upper bound to make sure that the 
+! no atoms can be marked as "inside" atoms; this ensures that the density routine cannot quit early
+   surface_contour_value=nsurface
    call __NM(compute_density_grad)(.false.) ! need entire sum
    do i=1, nsolvent
 ! convert to distance
@@ -1571,7 +1574,7 @@ __DBGVAR(r_com_sa,1)
  endif ! dasystat
 #endif
 !
-! at this point, qforced_solv is wrong : it will be true everywhere, because surface distance was undefined in the calc. loop
+! at this point, qforced_solv is wrong : it will be true everywhere, because surface distance was undefined (=0) in the calc. loop
 ! recompute qforced_solv :
   if (qminimum_distance) then
    qforced_solv=dist_solv.lt.surface_distance ! vector operation
@@ -2287,12 +2290,15 @@ __DBGVAR(solvent_mass_nonbulk,1)
 !
  end __SUB(main)
 !================================================================
- __SUB(compute_density_grad)(qtruncate_sum)
+ __SUB(compute_density_grad)(qtruncate_loop)
 #ifdef __OMP
  use omp_lib
 #endif
 !
- bool :: qtruncate_sum ! whether we can stop computation for each atom once the density reaches a threshold value
+ bool :: qtruncate_loop ! whether we can stop looping over solute atoms once the density reaches a threshold value
+! ^ this allows the neighbor lists to be sorted only ; if __SORT_LIST is undefined then there is not effect
+!   the density calculation is still truncated once the atom is determined to be inside
+!   to avoid the truncation, you must define an upper bound to the surface contour, which is nsurface
  int :: i, j
  float :: rp(3), rw(3), dr(3), dr2, a, b, expa, expb, ooc
 #ifdef __SORT_LIST
@@ -2357,7 +2363,7 @@ __DBGVAR(solvent_mass_nonbulk,1)
   solvent_mass_nonbulk=zero
  endif ! dasystat
 #endif
- if (qtruncate_sum) then
+ if (qtruncate_loop) then
 #ifdef __OMP
 !$omp parallel &
 !$omp shared ( rho_solv, drho_solv, r_solv, r_surf, rad_surf, surf_padding, nsolvent, nsurface, cutoff_surf, oo_surf_stdev &
@@ -2511,7 +2517,7 @@ __DBGVAR(solvent_mass_nonbulk,1)
 !$omp end do
 !$omp end parallel
 #endif
- else ! qtruncate sum
+ else ! qtruncate loop
 #if defined(__SORT_LIST) & defined(__NEIGHBOR_LIST)
 #ifdef __DDEBUG
   __DBGOUT('Called ', whoami,'(full loop) with neighbor_list_factor=',neighbor_list_factor)
