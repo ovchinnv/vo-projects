@@ -1285,7 +1285,7 @@ __DBGVAR(r_com_sa,1)
 #endif
 #endif
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
-#ifdef __OMP
+#if defined(__OMP) & defined(__FORCE_OMP)
  float, allocatable :: distance_all_threads(:,:)
  int :: tid
 #else
@@ -1311,13 +1311,13 @@ __DBGVAR(r_com_sa,1)
  endif ! qneighbor_list
 !
  if (.not. qneighbor_list_sorted) then
-#ifdef __OMP
+#if defined(__OMP) & defined(__FORCE_OMP)
+  __ALLOC(distance_all_threads(nsurface,0:omp_get_max_threads()-1))
 !$omp parallel private(ierr,tid,i,ii &
 #ifdef __PBC_UNWRAP
 !$omp ,d0 &
 #endif
 !$omp )
-  __ALLOC(distance_all_threads(nsurface,0:omp_get_max_threads()-1))
   tid=omp_get_thread_num()
 #define distance(_ii) distance_all_threads(_ii,tid)
 #else
@@ -1328,7 +1328,7 @@ __DBGVAR(r_com_sa,1)
   if(qper_parser_override) then
 #endif
 !
-#ifdef __OMP
+#if defined(__OMP) & defined(__FORCE_OMP)
 !$omp do schedule(runtime)
 #endif
    do i=1, nsolvent
@@ -1348,38 +1348,54 @@ __DBGVAR(r_com_sa,1)
      __DIST_PBC(d0,ucell%c)
      __INCR(distance(ii),d0*d0)
 #else
-     distance(ii) = sum ( (r_surf(:,ii)-r_solv(:,i))**2 )
+!     distance(ii) = sum ( (r_surf(:,ii)-r_solv(:,i))**2 )
+! slightly faster :
+     distance(ii)=zero
+     d0=r_surf(1,ii)-r_solv(1,i)
+     __INCR(distance(ii),d0*d0)
+     d0=r_surf(2,ii)-r_solv(2,i)
+     __INCR(distance(ii),d0*d0)
+     d0=r_surf(3,ii)-r_solv(3,i)
+     __INCR(distance(ii),d0*d0)
 #endif
     enddo ! nsurface
 !  sort neighbor list:
     call rsort_ind('i',nsurface,distance(:),solute_neighbor_list(:,i),ierr)
     solute_neighbor_mind(i)=min(nsurface,2)
    enddo ! nsolvent
-#ifdef __OMP
+#if defined(__OMP) & defined(__FORCE_OMP)
 !$omp end do
 #endif
 #ifdef __PBC_UNWRAP
   else ! qper_parser_override
-#ifdef __OMP
+#if defined(__OMP) & defined(__FORCE_OMP)
 !$omp do schedule(runtime)
 #endif
    do i=1, nsolvent
     do ii=1, nsurface
-     distance(ii) = sum ( (r_surf(:,ii)-r_solv(:,i))**2 )
+!     distance(ii) = sum ( (r_surf(:,ii)-r_solv(:,i))**2 )
+! slightly faster :
+     distance(ii)=zero
+     d0=r_surf(1,ii)-r_solv(1,i)
+     __INCR(distance(ii),d0*d0)
+     d0=r_surf(2,ii)-r_solv(2,i)
+     __INCR(distance(ii),d0*d0)
+     d0=r_surf(3,ii)-r_solv(3,i)
+     __INCR(distance(ii),d0*d0)
     enddo ! nsurface
 !  sort neighbor list:
     call rsort_ind('i',nsurface,distance(:),solute_neighbor_list(:,i),ierr)
     solute_neighbor_mind(i)=min(nsurface,2)
    enddo ! nsolvent
-#ifdef __OMP
+#if defined(__OMP) & defined(__FORCE_OMP)
 !$omp end do
 #endif
   endif ! qper_parser_override
 #endif
-#ifdef __OMP
+#if defined(__OMP) & defined(__FORCE_OMP)
+!$omp end parallel
   __DEALL(distance_all_threads)
 #undef distance
-!$omp end parallel
 #else
   __DEALL(distance)
 #endif
@@ -1545,7 +1561,7 @@ __DBGVAR(r_com_sa,1)
   if ( abs(bulk_boundary_distance).lt.__ERRTOL ) then
    bulk_boundary_distance = -(__BULK_DISTANCE_SCALE)*abs(surface_distance)
    bulk_boundary_contour_value = __RHO(bulk_boundary_distance)
-   __MESSAGE(whoami, 'SETTING LOCATION OF BULK BOUNDARY FROM SURFACE BOUNDARY TO '//ftoa(bulk_boundary_distance))
+   __MESSAGE(whoami, 'SETTING LOCATION OF BULK BOUNDARY FROM SURFACE BOUNDARY TO '//ftoa(bulk_boundary_distance)//' A FROM PROTEIN. CONTOUR VALUE IS '//ftoa(bulk_boundary_contour_value))
   else
    if(abs(bulk_boundary_distance).gt.abs(surface_distance)) then
     __WRN(whoami, 'BULK BOUNDARY MUST BE INSIDE SHELL SURFACE. ABORT');
@@ -2509,7 +2525,7 @@ __DBGVAR(solvent_mass_nonbulk,1)
 !$omp parallel &
 !$omp shared ( rho_solv, drho_solv, r_solv, r_surf, rad_surf, surf_padding, nsolvent, nsurface, cutoff_surf, oo_surf_stdev &
 #ifdef __DASYSTAT
-!$omp , solvent_mass_nonbulk &
+!$omp , solvent_mass_nonbulk, mass_solv &
 #endif
 #ifdef __SORT_LIST
 !$omp , solute_neighbor_list &
@@ -3317,9 +3333,9 @@ __DBGVAR(kmax,2)
 #ifdef rho
 #undef rho
 #endif
-#define rho(i,j,k) sarho_all_threads(i,j,k,tid)
+#define rho(i,j,k) sarhof_all_threads(i,j,k,tid)
 #else
-#define rho sarho
+#define rho sarhof
 #endif
 ! assign to each thread a local copy of surface indicator
  rho(:,:,:)=zero ! initialize
@@ -3393,11 +3409,11 @@ __DBGVAR(kmax,2)
      if (dx2>support2) cycle
      im=modulo(ii-1,nx-1)+1
 ! update density
-     if (rho(im,jm,km).lt.surface_contour_value) then
-      rsurf=rsurf * oo_surf_stdev
+     if (rho(im,jm,km).lt.bulk_boundary_contour_value) then
+      support=rsurf * oo_surf_stdev ! reuse support var
       dx2 = sqrt(dx2) * oo_surf_stdev
-      a = osq2 * (dx2 + rsurf)
-      b = osq2 * (dx2 - rsurf)
+      a = osq2 * (dx2 + support)
+      b = osq2 * (dx2 - support)
       ooc = one / dx2
       expa = exp ( - a**2 )
       expb = exp ( - b**2 )
@@ -3407,7 +3423,7 @@ __DBGVAR(kmax,2)
       __erfo7i(b,erfb)
       __INCR(rho(im,jm,km), half * ( erfa - erfb ) + osq2pi * ooc * ( expa - expb )   )
 #else
-      __INCR(rho(im,jm,km), half * ( __erf(a) - __erf(b) ) + osq2pi * ooc * ( expa - expb )   )
+!      __INCR(rho(im,jm,km), half * ( __erf(a) - __erf(b) ) + osq2pi * ooc * ( expa - expb )   )
 #endif
      endif ! rho<contour value
     enddo !ii
@@ -3421,7 +3437,7 @@ __DBGVAR(kmax,2)
  do while (n.lt.numthreads)
 !$omp barrier ! make sure all threads have completed previous operation
   if (mod(tid,2*n)==0 .and. (tid+n).lt.numthreads) then
-   __INCR(rho(:,:,:), sarho_all_threads(:,:,:,tid+n))
+!   __INCR(rho(:,:,:), sarhof_all_threads(:,:,:,tid+n))
   endif
   __SCALE(n,2)
  enddo
@@ -3429,7 +3445,7 @@ __DBGVAR(kmax,2)
 #ifdef rho
 #undef rho
 #endif
-#define rho(i,j,k) sarho_all_threads(i,j,k,0)
+#define rho(i,j,k) sarhof_all_threads(i,j,k,0)
 !$omp barrier ! make sure thread reduction is complete, otherwise volumes will be too small
 !$omp do schedule(runtime)
 #endif
@@ -3440,7 +3456,7 @@ __DBGVAR(kmax,2)
 ! perhaps an if/else statement would be faster, densities that map to the outside of the main shell, also map to the outside of
 ! the nonbulk (i.e. interfacial) region
      __INCR(__U(ivolume), min(1,INT(rho(ii,jj,kk)*oos)))
-     __INCR(__U(ivolume_nonbulk), max(1,INT(rho(ii,jj,kk)*oobs)))
+     __INCR(__U(ivolume_nonbulk), min(1,INT(rho(ii,jj,kk)*oobs)))
    enddo
   enddo
  enddo
