@@ -27,7 +27,8 @@
 ! neighbor list length
 #// to check a subset of surface atom list
 #define __NEIGHBOR_LIST_LENGTH_MINDIST max(1,min(nsurface, INT(solute_neighbor_mind(i) * neighbor_list_factor) ))
-#define __NEIGHBOR_LIST_LENGTH_DENSITY __NEIGHBOR_LIST_LENGTH_MINDIST
+#//define __NEIGHBOR_LIST_LENGTH_DENSITY __NEIGHBOR_LIST_LENGTH_MINDIST
+#define __NEIGHBOR_LIST_LENGTH_DENSITY max(1,min(nsurface, INT (half * solute_neighbor_mind(i) * neighbor_list_factor) ))
 #endif
 
 #ifdef __UNWRAP_PBC
@@ -1285,11 +1286,12 @@ __DBGVAR(r_com_sa,1)
 #endif
 #endif
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
+ int :: ind, istep ! variables for binary search
 #if defined(__OMP) & defined(__FORCE_OMP)
- float, allocatable :: distance_all_threads(:,:)
+ float, allocatable :: distance2_all_threads(:,:)
  int :: tid
 #else
- float, allocatable :: distance(:)
+ float, allocatable :: distance2(:)
 #endif
  int :: ierr
 #endif
@@ -1311,17 +1313,20 @@ __DBGVAR(r_com_sa,1)
  endif ! qneighbor_list
 !
  if (.not. qneighbor_list_sorted) then
+!
+ if (.not. qminimum_distance) pre=(maxval(rad_surf) + surf_padding + cutoff_surf)**2
+!
 #if defined(__OMP) & defined(__FORCE_OMP)
-  __ALLOC(distance_all_threads(nsurface,0:omp_get_max_threads()-1))
-!$omp parallel private(ierr,tid,i,ii &
+  __ALLOC(distance2_all_threads(nsurface,0:omp_get_max_threads()-1))
+!$omp parallel private(ierr,tid,i,ii,ind,istep &
 #ifdef __PBC_UNWRAP
 !$omp ,d0 &
 #endif
 !$omp )
   tid=omp_get_thread_num()
-#define distance(_ii) distance_all_threads(_ii,tid)
+#define distance2(_ii) distance2_all_threads(_ii,tid)
 #else
-  __ALLOC(distance(nsurface))
+  __ALLOC(distance2(nsurface))
 #endif
 
 #ifdef __PBC_UNWRAP
@@ -1334,34 +1339,60 @@ __DBGVAR(r_com_sa,1)
    do i=1, nsolvent
     do ii=1, nsurface
 #ifdef __PBC_UNWRAP
-     distance(ii)=zero
+     distance2(ii)=zero
 ! x
      d0=r_surf(1,ii)-r_solv(1,i)
      __DIST_PBC(d0,ucell%a)
-     __INCR(distance(ii),d0*d0)
+     __INCR(distance2(ii),d0*d0)
 ! y
      d0=r_surf(2,ii)-r_solv(2,i)
      __DIST_PBC(d0,ucell%b)
-     __INCR(distance(ii),d0*d0)
+     __INCR(distance2(ii),d0*d0)
 ! z
      d0=r_surf(3,ii)-r_solv(3,i)
      __DIST_PBC(d0,ucell%c)
-     __INCR(distance(ii),d0*d0)
+     __INCR(distance2(ii),d0*d0)
 #else
-!     distance(ii) = sum ( (r_surf(:,ii)-r_solv(:,i))**2 )
+!     distance2(ii) = sum ( (r_surf(:,ii)-r_solv(:,i))**2 )
 ! slightly faster :
-     distance(ii)=zero
+     distance2(ii)=zero
      d0=r_surf(1,ii)-r_solv(1,i)
-     __INCR(distance(ii),d0*d0)
+     __INCR(distance2(ii),d0*d0)
      d0=r_surf(2,ii)-r_solv(2,i)
-     __INCR(distance(ii),d0*d0)
+     __INCR(distance2(ii),d0*d0)
      d0=r_surf(3,ii)-r_solv(3,i)
-     __INCR(distance(ii),d0*d0)
+     __INCR(distance2(ii),d0*d0)
 #endif
     enddo ! nsurface
 !  sort neighbor list:
-    call rsort_ind('i',nsurface,distance(:),solute_neighbor_list(:,i),ierr)
-!   solute_neighbor_mind(i)=min(nsurface,2) ! aa wrong for erf
+    call rsort_ind('i',nsurface,distance2(:),solute_neighbor_list(:,i),ierr)
+!
+    if (qminimum_distance) then
+     solute_neighbor_mind(i)=min(nsurface,2) ! fo mindist only
+    elseif (nsurface>0) then
+! for the erf/density method, we need to find the largest index in the set of atoms supported by filter:
+! use this search macro:
+#define __MXLOC(_A,_a,_len,_ind,_istep) \
+ _ind=(1+_len)/2;\
+ _istep=(1+_ind)/2;\
+ do;\
+  if (_A(_ind)>(_a)) then;\
+   _ind=max(1,_ind-_istep); \
+  else; \
+   _ind=min((_len),_ind+_istep); \
+  endif;\
+  if (_istep<2) exit;\
+  _istep=(_istep+1)/2;\
+ enddo;\
+ if ( _A(_ind)>(_a) .and. _ind>1) _ind=_ind-1
+!
+     __MXLOC( distance2, pre, nsurface, ind, istep )
+!
+     solute_neighbor_mind(i)=ind
+    endif
+ __DBGVAR(pre,1)
+ __DBGVAR(distance2(1:10),1)
+ __DBGVAR(solute_neighbor_mind(i),1)
    enddo ! nsolvent
 #if defined(__OMP) & defined(__FORCE_OMP)
 !$omp end do
@@ -1373,19 +1404,24 @@ __DBGVAR(r_com_sa,1)
 #endif
    do i=1, nsolvent
     do ii=1, nsurface
-!     distance(ii) = sum ( (r_surf(:,ii)-r_solv(:,i))**2 )
+!     distance2(ii) = sum ( (r_surf(:,ii)-r_solv(:,i))**2 )
 ! slightly faster :
-     distance(ii)=zero
+     distance2(ii)=zero
      d0=r_surf(1,ii)-r_solv(1,i)
-     __INCR(distance(ii),d0*d0)
+     __INCR(distance2(ii),d0*d0)
      d0=r_surf(2,ii)-r_solv(2,i)
-     __INCR(distance(ii),d0*d0)
+     __INCR(distance2(ii),d0*d0)
      d0=r_surf(3,ii)-r_solv(3,i)
-     __INCR(distance(ii),d0*d0)
+     __INCR(distance2(ii),d0*d0)
     enddo ! nsurface
 !  sort neighbor list:
-    call rsort_ind('i',nsurface,distance(:),solute_neighbor_list(:,i),ierr)
-    solute_neighbor_mind(i)=min(nsurface,2)
+    call rsort_ind('i',nsurface,distance2(:),solute_neighbor_list(:,i),ierr)
+    if (qminimum_distance) then
+     solute_neighbor_mind(i)=min(nsurface,2) ! for mindist only
+    elseif (nsurface>0) then
+     __MXLOC( distance2, pre, nsurface, ind, istep )
+     solute_neighbor_mind(i)=ind
+    endif
    enddo ! nsolvent
 #if defined(__OMP) & defined(__FORCE_OMP)
 !$omp end do
@@ -1394,10 +1430,10 @@ __DBGVAR(r_com_sa,1)
 #endif
 #if defined(__OMP) & defined(__FORCE_OMP)
 !$omp end parallel
-  __DEALL(distance_all_threads)
-#undef distance
+  __DEALL(distance2_all_threads)
+#undef distance2
 #else
-  __DEALL(distance)
+  __DEALL(distance2)
 #endif
   qneighbor_list_sorted=.true.
  endif ! sorted
@@ -1545,7 +1581,7 @@ __DBGVAR(r_com_sa,1)
     __INCR(distance_from_solute, d0)
     __INCR(distance_from_solute2, d0**2)
    enddo
-   pre=0.1d0
+   pre=0.5d0
   endif ! qmin distance
 ! set contour value to average value + (a) x stdev ; a set empirically
   __SCALE(distance_from_solute,oonsolvent);
@@ -2441,7 +2477,18 @@ __DBGVAR(solvent_mass_nonbulk,1)
 !    if (any(abs(dr) .gt. rmaxsurf)) cycle ! not necessary, might actually slow the code
     dr2=sum(dr**2);
 #ifdef __SORT_LIST
-!   bubble sort between this and previous atom base on distance
+! bubble sort between this and previous atom base on distance
+! one issue here is that rmaxsurf depends on the atom radius ; 
+! i.e. perhaps sorting should take that into account ?
+! speccifically, should we compare :
+!
+! ( dr - rmax ) < ( drold - rmaxold) ? swap : continue
+!
+! Note that, in the above, the sign matters
+! The point is that atoms with a larger radius contribute more to the density
+! even though the distance between their center to the solvent atom is larger
+! For now, will keep as is, since the adaptive algorithm should correct for the sort inaccuracy, but may be fixed in the future
+!
     if (dr2 .lt. dr2old) then ! bubble sort
      solute_neighbor_list(jj,i)=solute_neighbor_list(jj-1,i)
      solute_neighbor_list(jj-1,i)=j
