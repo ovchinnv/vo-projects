@@ -1,4 +1,4 @@
-#define _N cv_rmsd2av
+#define _N CV_RMSD2AV
 !
 !     CV_RMSD2AV.MOD
 !
@@ -167,15 +167,15 @@ __CHARMM_ONLY##IF STRINGM
        bool :: deriv    ! whether or not to calculate derivatives w.r.t. x
        bool :: addforce ! whether or not to add forces on simulation atoms
 !    locals
-       float, parameter :: tol=1.0d-10
        int, parameter :: maxiter = 20 ! maximum iterations for aligned average structure computation
-       bool :: qorient, qtrans, qrota
-       int :: j, k, ii, ind, nforced, norient
-       float :: d, f, wgt, err, theta
-       float :: dummy
+       bool :: qtrans, qrota, qorient
+       int :: j, k, ii, jj, ind, nforced, norient, nset
+       float :: d, f, wgt, err, dummy, theta, tol, tol2
        int, pointer :: priv(:)
        int, pointer :: inds(:,:)
        float, pointer :: r(:,:,:), w(:), r_rot(:,:,:), rave(:,:), rave_new(:,:), u(:,:,:), r_com(:,:)
+!
+       __IAM(__NM(CALC))
 !
        nforced=cv%priv(i)%p(1)
        nset=cv%priv(i)%p(2)
@@ -185,11 +185,11 @@ __CHARMM_ONLY##IF STRINGM
 !
        allocate(inds(nforced,nset))
        allocate(w(nforced))
-       allocate(r(nforced,3,nset+2)
+       allocate(r(nforced,3,nset+2))
        rave=>r(:,:,nset+1)
        rave_new=>r(:,:,nset+2)
        rave_new=zero
-       if (qtrans) allocate(r_com(3,nset))
+       if (qorient) allocate(r_com(3,nset))
        if (qrota) then
         allocate(u(3,3,nset))
         allocate(r_rot(nforced,3,nset)) ! allocate rotated coordinates
@@ -209,6 +209,8 @@ __CHARMM_ONLY##IF STRINGM
 !
        if (calctheta) then
         d=one/nset
+        tol=__ERRTOL
+        tol2=tol**2
 !      load coordinates
 !========================================================
         do j=1,nset
@@ -220,7 +222,7 @@ __CHARMM_ONLY##IF STRINGM
          enddo
         enddo
 !       translate forced atoms to centroid
-        if (qtrans) then
+        if (qorient) then
          do j=1, nset
           r_com(1,j) = dot_product(w, r(:,1,j)); __DECR(r(:,1,j), r_com(1,j))
           r_com(2,j) = dot_product(w, r(:,2,j)); __DECR(r(:,2,j), r_com(2,j))
@@ -239,18 +241,20 @@ __CHARMM_ONLY##IF STRINGM
           rave_new = d * sum(r_rot,3) ; ! recompute average
           err=rmsd(rave_new,rave,w,.false.)   ; ! compute MS difference between old and new averages
           rave=rave_new ! update rave
-          if (err.lt.errtol2) exit    ; ! bail if within tolerance
+          if (err.lt.tol2) exit    ; ! bail if within tolerance
          enddo ! k/maxiter
 !
-         if (err.gt.errtol_) & ! all threads execute
+         if (err.gt.tol2) & ! all threads execute
            __WRN(whoami, 'NO CONVERGENCE AFTER MAXIMUM NUMBER OF ITERATIONS.')
 ! rotate rave into the frames of r`s
 !
+         if (qtrans) r_com=zero ! trick to avoid if statement in the r_com subtraction below
+!
          do j=1, nset
-          r_rot(:,:,j)=zero
-          do i=1, 3
-           do k=1, 3
-            __INCR(r_rot(:,i,j) , u(i,k,j) * rave(:,k))
+          do ii=1,3
+           r_rot(:,ii,j)=-r_com(ii,j) ! restore COM if qtrans=.false.
+           do k=1,3
+            __INCR(r_rot(:,ii,j) , u(ii,k,j) * rave(:,k))
            enddo
           enddo
           __DECR(r(:,:,j), r_rot(:,:,j))  ! now, r is a displacement from average coords ( in the local frame of reference )
@@ -269,6 +273,7 @@ __CHARMM_ONLY##IF STRINGM
 ! r is already the displacement, so use the zero dummy array 'rave_new'
          __INCR(theta,rmsd(r(:,:,j),rave_new,w,.false.))! energy proportional to rmsd^2 (.false. means do not take sqrt -- i.e. msd)
         enddo
+        theta=sqrt(theta)
 !========================================================
         cv%r(i,previnst)=cv%r(i,instant)
         cv%r(i,instant)=theta
@@ -278,21 +283,23 @@ __CHARMM_ONLY##IF STRINGM
          do jj=2,priv(1)+1
           j=priv(jj)
           do ii=1,2
-           cv%gradx(i,j,ii)=zero;cv%grady(i,j,ii)=zero;cv%gradz(i,j,ii)=zero
+           cv%gradx(i,j,ii)=zero
+           cv%grady(i,j,ii)=zero
+           cv%gradz(i,j,ii)=zero
           enddo
          enddo
 ! NOTE : it is possible that two different pairs k,j will map to the same ind, which could impact OPENMP parallelization
          do j=1,nset
           do k=1,nforced
            ind=inds(k,j)
-           cv%gradx(i,ind,1)=r(k,1,j)*w(k)
-           cv%grady(i,ind,1)=r(k,2,j)*w(k)
-           cv%gradz(i,ind,1)=r(k,3,j)*w(k)
+           __INCR(cv%gradx(i,ind,1), r(k,1,j)*w(k))
+           __INCR(cv%grady(i,ind,1), r(k,2,j)*w(k))
+           __INCR(cv%gradz(i,ind,1), r(k,3,j)*w(k))
           enddo
          enddo
 !
 !     scale derivatives by 1/theta and populate mass-weighted der. arrays
-         if (theta.gt.tol) then
+         if (theta.gt.__ERRTOL) then
           d=one/theta
          else
           d=one ! avoid singularity at near zero separation
@@ -302,18 +309,18 @@ __CHARMM_ONLY##IF STRINGM
          do ii=2, priv(1)+1
           jj=priv(ii)
           j=cv%amap%i(jj) ! psf index
-          w=sqrt(one/mass(j))
+          wgt=sqrt(one/mass(j))
           cv%gradx(i,jj,1)=cv%gradx(i,jj,1)*d
-          cv%gradx(i,jj,2)=cv%gradx(i,jj,1)*w
+          cv%gradx(i,jj,2)=cv%gradx(i,jj,1)*wgt
 !
           cv%grady(i,jj,1)=cv%grady(i,jj,1)*d
-          cv%grady(i,jj,2)=cv%grady(i,jj,1)*w
+          cv%grady(i,jj,2)=cv%grady(i,jj,1)*wgt
 !
           cv%gradz(i,jj,1)=cv%gradz(i,jj,1)*d
-          cv%gradz(i,jj,2)=cv%gradz(i,jj,1)*w
+          cv%gradz(i,jj,2)=cv%gradz(i,jj,1)*wgt
          enddo
         endif ! deriv
-       else
+       else  ! calctheta
         theta=cv%r(i,instant) ! assume valid theta has been computed in cv%r(i,instant)
        endif ! calctheta
 !
@@ -339,7 +346,7 @@ __CHARMM_ONLY##IF STRINGM
        endif ! addforce
 !     free memory
        deallocate(inds,r,w)
-       if (qtrans) then
+       if (qorient) then
         deallocate(r_com)
        endif
 !
