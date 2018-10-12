@@ -86,8 +86,8 @@ __CHARMM_ONLY##IF STRINGM
         if (cv%type(l).eq.rmsd) then
          found=(nforced.eq.cv%priv(l)%p(1).and.                         & ! number of RMSD atoms
      &          nset.eq.cv%priv(l)%p(2).and.                            & ! number of atom coordinate sets
-     &          qtrans.eq.cv%priv(l)%p(3).and.                          & ! translational superposition
-     &          qrota.eq.cv%priv(l)%p(4))                               !& ! rotational superposition
+     &          qtrans.eq.cv%priv(l)%p(3).and.                          & ! translational superposition used
+     &          qrota.eq.cv%priv(l)%p(4))                                 ! rotational superposition used
 !
          ind=5
          do i=1,nset
@@ -367,68 +367,61 @@ __CHARMM_ONLY##IF STRINGM
 !
  __DECLARE_MSGBUF
 !
-       int :: i, j, type, ii, jj, iatom
+       int :: i, j, k, type, ii, jj, iatom
        character(len=8) :: sid, rid, ren, ac
 !
-       int :: norient, nforced
-       bool :: qtrans, qrota, qdiffrot
-       int, pointer, dimension(:) :: ind_o, ind_f
+       int :: nforced, nset
+       bool :: qtrans, qrota
+       int, pointer, dimension(:,:) :: inds
        __IAM(__NM(LIST))
 !
        if (MPI_COMM_STRNG.eq.MPI_COMM_NULL) return ! only replica heads stay
 !
 !    check type just in case
        type=cv%type(i)
-       if (type.ne.rmsd) then
+       if (type.ne.rmsd2av) then
         __WRN(whoami,' WRONG CV TYPE RECEIVED.')
        endif
 !
        if (ME_STRNG.eq.0) then
-        norient=cv%priv(i)%p(1)
-        nforced=cv%priv(i)%p(2)
+        nforced=cv%priv(i)%p(1)
+        nset=cv%priv(i)%p(2)
         qtrans=(cv%priv(i)%p(3).ne.0)
         qrota=(cv%priv(i)%p(4).ne.0)
-        qdiffrot=(cv%priv(i)%p(5).ne.0)
 !
 ! note that I currently cannot tell whether mass-weighting is requested
 ! am also not printing the weights
 !
-        ii=6; jj=ii+norient-1; ! both ii and jj must be defined for the two cases below
+        allocate(inds(nforced, nset))
+! indices
+        ii=5; jj=ii+nforced*nset-1
+        inds=reshape(cv%priv(i)%p(ii:jj),(/nforced, nset/))
 !
-        if (qtrans.or.qrota) then
-         allocate(ind_o(norient))
-         ind_o=cv%priv(i)%p(ii:jj)
-         write(_MSGBUF,'(A)') _TAB//' RMSD FROM REFERENCE, ORIENTATION ATOMS' ; __PRINT(_MSGBUF)
-         do j=1, norient;
-          iatom=cv%amap%i(ind_o(j))
-          __ATOMID(iatom, sid, rid, ren, ac)
-          write(_MSGBUF,667) _TAB,j, iatom, sid, rid, ren, ac             ; __PRINT(_MSGBUF)
-         enddo
-         deallocate(ind_o)
-         if (qtrans) then
-          write(_MSGBUF,'(A)') _TAB//' SUPERPOSITION INCLUDES TRANSLATIONAL ALIGNMENT'; __PRINT(_MSGBUF)
-         endif
-         if (qrota) then
-          write(_MSGBUF,'(A)') _TAB//' SUPERPOSITION INCLUDES ROTATIONAL ALIGNMENT'; __PRINT(_MSGBUF)
-         endif
-!
-         if (.not.qdiffrot) then
-          write(_MSGBUF,'(A)')_TAB//' FORCED AND ORIENTATION ATOMS ARE THE SAME'  ; __PRINT(_MSGBUF)
-         endif
-!
-        endif ! qtrans .or. qrota
-!
-        if (qdiffrot.or. .not.(qtrans .or. qrota) ) then
-         allocate(ind_f(nforced))
-         ii=jj+1; jj=ii+nforced-1; ind_f=cv%priv(i)%p(ii:jj)
-         write(_MSGBUF,'(A)') _TAB//' RMSD FROM REFERENCE, FORCED ATOMS'     ; __PRINT(_MSGBUF)
-         do j=1, nforced;
-          iatom=cv%amap%i(ind_f(j)) ! actual psf index
-          __ATOMID(iatom, sid, rid, ren, ac)
-          write(_MSGBUF,667) _TAB,j, iatom, sid, rid, ren, ac            ; __PRINT(_MSGBUF)
-         enddo
-         deallocate(ind_f)
+        ii=1
+        write(_MSGBUF(ii),'(A)') _TAB//' RMSD FROM AVERAGE STRUCTURE' ; __INC(ii)
+        write(_MSGBUF(ii),'(A,I5)' )_TAB//' NUMBER OF COORDINATE SETS : ',nset ; __INC(ii)
+        if (qtrans) then
+         write(_MSGBUF(ii),'(A)') _TAB//' SUPERPOSITION INCLUDES TRANSLATIONAL ALIGNMENT' ; __INC(ii)
         endif
+        if (qrota) then
+         write(_MSGBUF(ii),'(A)') _TAB//' SUPERPOSITION INCLUDES ROTATIONAL ALIGNMENT' ; __INC(ii)
+        endif
+        if (qtrans.or.qrota) then
+         write(_MSGBUF(ii),'(A)')_TAB//' FORCED AND ORIENTATION ATOMS ARE THE SAME' ; __INC(ii)
+        endif
+        __PRINT(_MSGBUF)
+!
+        do k=1, nset
+         write(_MSGBUF,'(A,I5,A)') _TAB//' COORDINATE SET #',k,':' ; __PRINT(_MSGBUF)
+         do j=1, nforced
+           iatom=cv%amap%i(inds(j,k))
+           __ATOMID(iatom, sid, rid, ren, ac)
+           write(_MSGBUF,667) _TAB,j, iatom, sid, rid, ren, ac             ; __PRINT(_MSGBUF)
+         enddo
+        enddo
+!
+        deallocate(inds)
+!
        endif ! ME_STRING
 !
  667  format(A,2I8,' ',4A)
