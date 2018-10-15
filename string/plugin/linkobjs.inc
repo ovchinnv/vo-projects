@@ -18,8 +18,10 @@ LINKOBJS+=\
  parser.o \
  cmd.o prm.o \
  ivector.o \
+ i8vector.o \
  ivector_list.o \
  isort.o \
+ i8sort.o \
  rvector.o \
  rvector_list.o \
  rsort.o \
