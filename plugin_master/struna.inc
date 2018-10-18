@@ -1,6 +1,6 @@
 ifeq ($(STRUNA),1)
 
-DEPS+=string
+DEPS+=string string/plugin
 include $(ROOT)/string/plugin/linkobjs.inc
 
 LOCALMACROS+=-D__STRUNA -include struna.defs

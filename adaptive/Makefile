@@ -2,7 +2,7 @@ NAME=adaptive
 ROOT=..
 OBJS=adaptive_kforce.o
 
-DEPS=output constants griddata parser files random
+DEPS=output constants griddata parser files random string/smcv
 
 LOCALMACROS+=-include source.defs
 LOCALDEPS+=source.defs
