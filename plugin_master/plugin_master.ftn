@@ -11,9 +11,13 @@ module __NM(plugin)
  __DEP_WATERSHELL
  __DEP_STRUNA
 
-
+#if ( defined(__ADAPTIVE_KCV) && defined(__STRUNA))
+ use adaptive_kforce
+ use cv_common, only: cv, cv_energy=>energy
+ use cv_types
+#endif
+!
  __IMPNONE
-
 
  private
 !
@@ -25,6 +29,13 @@ module __NM(plugin)
 ! plugin variables
  __VARS_WATERSHELL
  __VARS_STRUNA
+!
+#if ( defined(__ADAPTIVE_KCV) && defined(__STRUNA))
+ int :: cvind = -1, l, adaptive_freq
+ character(vartaglen) :: keyword
+ int*8 :: ad_iteration
+ int, parameter :: default_adaptive_freq=1
+#endif
 !
  contains
 ! a collection of subroutines to call the watershell code from a plugin
@@ -129,6 +140,11 @@ module __NM(plugin)
 !==========================
  __STRUNA_INITIALIZE
 !==========================
+! NOTE: adaptive k initialization must come after the string method because it checks the CV list
+#if ( defined(__ADAPTIVE_KCV) && defined(__STRUNA))
+ if (.not. defer_init_until_dyna ) call __NM(adaptive_initialize)
+#endif
+!==========================
 ! set mass and charge after all modules initialized
 ! currently, mass and charge can only be passed in from external code:
  if (system_PDB_initialized.or.system_initialized) then
@@ -137,7 +153,7 @@ module __NM(plugin)
  endif
 !
 ! compute list of all atoms required by plugin
-! if struna is used, then there is the possibility that initialization is deferred until the first dynamics step (e.g. is coodinates are required)
+! if struna is used, then there is the possibility that initialization is deferred until the first dynamics step (e.g. if coodinates are required)
 ! in that case, we need to set alist to null which _should_ instruct the plugin code to provide all coordinates
 #ifdef __STRUNA
  if(defer_init_until_dyna) then 
@@ -211,6 +227,12 @@ end function _ME
  if (sm_initialized.or.defer_init_until_dyna) then
   __STRUNA_MAIN
   fr(:,sm_atomlist(2:))=-fr(:,sm_atomlist(2:))
+#ifdef __ADAPTIVE_KCV
+ if (defer_init_until_dyna) call __NM(adaptive_initialize)()
+ ad_iteration=iteration_
+ if (mod(ad_iteration, adaptive_freq).eq.izero) &
+&  call adaptive_kforce_main(cv%r(cvind,cv_energy), cv%k(cvind), ad_iteration)
+#endif
  endif
 #endif
 !======================
@@ -245,6 +267,9 @@ end function _ME
 #ifdef __STRUNA
  if (sm_initialized) then
   __STRUNA_DONE
+#ifdef __ADAPTIVE_KCV
+  call adaptive_kforce_done()
+#endif
  endif
 #endif
 !
@@ -285,5 +310,41 @@ __DBGOUT(whoami, i, 'atoms found')
 !
  alist=c_loc(__NM(atomlist)) ! return pointer to caller code 
  end function _ME
+!===================================================================
+#if ( defined(__ADAPTIVE_KCV) && defined(__STRUNA) )
+ __SUB(adaptive_initialize)()
+ __DEP_PARSER
+ __IAM(adaptive_initialize)
+  if (sm_initialized) then
+#define context "adaptive_kforce"
+#define __LEZEROERR
+#define __WARNIFMISSING
+! cv index
+#define __INT
+#define __VAR cvind
+#define __TAG cvind
+#define __NAME Index of collective variable whose force constant to modify
+#define __DOIFOK if ( cvind < 1 .or. cvind > cv%num_cv ) then ;\
+        __WRN(whoami, 'ADAPTIVE CV INDEX IS OUT OF BOUNDS. ABORT.'); \ 
+        else ; \
+        __MESSAGE(whoami, 'WILL ADAPTIVELY ADJUST CV #'//itoa(cvind)//' ('//ftoupper(cv_type_names(cv%type(cvind)))//')'); \
+        endif
+#include "parser/parser_macro2.src"
+  __ASSERT(cvind,>,1)
+  __ASSERT(cvind,<,cv%num_cv)
+! plugin frequency
+#undef __WARNIFMISSING
+#define __DEFAULT
+#define __VAR adaptive_freq
+#define __TAG evolution_frequency
+#define __NAME Number of iterations between adaptive calls
+#include "parser/parser_macro2.src"
+!
+  call adaptive_kforce_initialize()
+  else ! struna not initiliazed
+   __WRN(whoami, 'STRUNA NOT INTIALIZED. NO CV FORCE CONSTANTS TO ADJUST.')
+  endif
+ end __SUB(adaptive_initialize)
+#endif
 !===================================================================
 end module __NM(plugin)

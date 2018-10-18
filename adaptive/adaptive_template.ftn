@@ -31,15 +31,16 @@ module _N
  __PAR(__CONCAT(max,_NAME),float,100)
  __PAR(_NAME,float,__CONCAT(default_min,_NAME))       ! current value
  __PAR(timestep,float,1.0d-4) ! integration step
- __PAR(iteration,int,izero)   ! iteration
+ __PAR(bdtemp, float, 300d0) ! temperature for Brownian dynamics evolution of adaptive quantity _NAME
+ __PAR(iteration,int*8,izero)   ! iteration
  __PAR(gridsize,int,1000)     ! size for grid (note that this is the number of points ; number of bins would be gridsize-1 )
 !
  __PAR(dgrid,float,abs(__XMAP(__CONCAT(default_max,_NAME))-__XMAP(__CONCAT(default_min,_NAME)))/(default_gridsize-1))
 !                                                                                           ! ( note that it is easier to set the gridsize )
  __PAR(damping_average,float,one/ten) ! damping constant for computing averages (C_\gamma in Zhang & Ma)
 !
- __PAR(mapped_dist, character(len=vartaglen), 'POWERLAW') ! prescribed distribution of 
- __PAR(mapped_dist_exp, float, -one) ! coefficent in the distribution of inverse temperature
+ __PAR(dist, character(len=vartaglen), 'POWERLAW') ! prescribed distribution of (untransformed) _NAME
+ __PAR(dist_exp, float, -one) ! powerlaw coefficent in the distribution of (untransformed) _NAME
  __PAR(interp_width, int, 10)  ! number of bins over which the linear fit of average conjugate/dual
  __PAR(average_update_freq, int, 1)   ! frequency of updating average of dual
  __PAR(__CONCAT(_NAME,_update_freq), int, 1)   ! frequency of evolution
@@ -65,6 +66,7 @@ module _N
  int :: irand=0 ! pointer into random number array eta
  float :: eta(0:nrandmax-1)
  float, parameter :: ookb=one/kboltzmann
+ float :: bet
  float :: sqrt2dt  = sqrt(two * default_timestep) ! precomputed sqrt(2 x dt) for BD integrator
 !
 ! for time series (history) output
@@ -84,7 +86,7 @@ module _N
  __SUB(initialize) ()
  character(len=vartaglen) :: keyword, context
  int :: l
- __IAM(__NM(INITIALIZE))
+ __IAM(__NM(initialize))
 !
 #define __CONTEXT __STRING(__CTX)
  context=__CONTEXT ;
@@ -152,7 +154,6 @@ module _N
 #define __NAME	starting iteration
 #include "parser/parser_macro2.src"
 !
-! temperature parameters (note that the temperature cannot be zero; otherwise beta=\infty)
 !
 #define __LEZEROERR
 #undef __INT
@@ -199,17 +200,17 @@ module _N
 ! distribution parameters
 #undef __INT
 #define __CHAR
-#define __VAR	mapped_dist
-#define __TAG	__CONCAT3(mapped_,_NAME,_distribution)
-#define __NAME	mapped _NAME distribution
+#define __VAR	dist
+#define __TAG	__CONCAT(_NAME,_distribution)
+#define __NAME	_NAME distribution
 #include "parser/parser_macro2.src"
 !
- call toupper(mapped_dist)
- select case(mapped_dist)
+ call toupper(dist)
+ select case(dist)
   case('CONSTANT', 'CONST','UNIFORM', 'UNIF') ; mapdist=constant; 
   case('PLAW','POWER','POWERLAW') ; mapdist=powerlaw;
   case default;
-   __WRN(whoami, ' UNKNOWN DISTRIBUTION SPECIFIED ('//trim(mapped_dist)//')')
+   __WRN(whoami, ' UNKNOWN DISTRIBUTION SPECIFIED ('//trim(dist)//')')
  end select
 !
 #undef __CHAR
@@ -224,15 +225,15 @@ module _N
 #undef __MINUSERR
 #undef __LEZEROERR
 #undef __INT
-#define __VAR	mapped_dist_exp
-#define __TAG	__CONCAT3(mapped_,_NAME,_distribution_exponent)
-#define __NAME	exponent for mapped _NAME distribution
+#define __VAR	dist_exp
+#define __TAG	__CONCAT(_NAME,_distribution_exponent)
+#define __NAME	exponent for_NAME distribution
 #include "parser/parser_macro2.src"
 !
  if (mapdist.eq.constant) then
-  if (existtag_nocase(__STRING(__CONCAT3(mapped_,_NAME,_distribution_exponent)), context)) then
+  if (existtag_nocase(__STRING(__CONCAT(_NAME,_distribution_exponent)), context)) then
    __WRN(whoami, ' FOR UNIFORM DISTRIBUTION EXPONENT IS SET TO ZERO.')
-   mapped_dist_exp=zero
+   dist_exp=zero
   endif
  endif
 !
@@ -308,6 +309,14 @@ module _N
 #define __DOIFOK  sqrt2dt=sqrt(two*timestep) ! precompute sqrt(2dt)
 #include "parser/parser_macro2.src"
  __DBGOUT(' integration step =',timestep)
+!
+! Evolution temperature (can be specified independently of the simulation temperature, although the calculation would not be in equilibrium)
+!
+#define __VAR	bdtemp
+#define __TAG	temperature
+#define __NAME	_NAME evolution temperature
+#define __DOIFOK bet=ookb/bdtemp
+#include "parser/parser_macro2.src"
 !======================================
 ! call lower-level initialization
 
@@ -338,22 +347,19 @@ module _N
  end __SUB(initialize)
 
 !======================================
- __SUB(main) (dual, param , temperature, mditeration_)
- float, intent(in) :: dual, temperature
+ __SUB(main) (dual, param, mditeration_)
+ float, intent(in) :: dual
  float, intent(inout) :: param ! new value of _NAME (if requested) will be returned in the same variable
- float :: dpar, bet
- __OPAR(mditeration,int)
+ float :: dpar
+ __OPAR(mditeration,int*8)
  __IAM(__NM(compute))
 
 ! check initialization :
  if (.not. __NM(initialized)) then
-  __WRN(whoami, ftoupper(__STRING(__CTX NOT INITIALIZED. NOTHING DONE)))
+  __WRN(whoami, ftoupper(__STRING(_N NOT INITIALIZED. NOTHING DONE)))
   return
  endif
 !
- __ASSERT(temperature,>,__FERRTOL)
- bet=ookb/temperature
-
  __INC(iteration)
  __PRESENT(mditeration,izero)
  __DBGOUT('iteration = ', iteration)
@@ -369,12 +375,12 @@ module _N
   if __CHKUPDATE(average_update_freq) &
   & call __CONCAT3(gridscalar,_MAPTYPE,_update_averages)(param,dual)
  endif
-!========================================== compute new temperature
+!========================================== compute new _NAME
  if (__CONCAT3(_NAME,_,update_freq).gt.izero) then
   if __CHKUPDATE(__CONCAT3(_NAME,_,update_freq)) then
 ! determine whether we need to generate random numbers:
    if (irand.eq.0) call randomg_vector(eta, nrand) ! draw nrand normal deviates
-! compute new temperature
+! compute new _NAME
 
  __DBGOUT('current dual = ', dual)
  __DBGOUT('interpolated dual = ', __CONCAT3(gridscalar,_MAPTYPE,_lookup_average_value(_NAME)))
@@ -382,7 +388,7 @@ module _N
 
 ! integrate in transformed (mapped) coordinates using euler integrator of SDE
 ! compute increment :
-   dpar = timestep * __DXMAP(param) *  ( __DRIFT(dual, param) + mapped_dist_exp / param ) & ! drift
+   dpar = timestep * __DXMAP(param) *  ( __DRIFT(dual, param) + dist_exp / param ) & ! drift
    &    + sqrt2dt * eta(irand) * __DIFF(param)
 ! transform, add evolve, and transform back
    _NAME = __XIMAP(__XMAP(_NAME) + dpar)
@@ -402,7 +408,7 @@ module _N
   endif
  endif
 !
-!============================================= save temperature time series
+!============================================= save _NAME time series
  if (stat_add_freq.gt.izero) then
   if __CHKUPDATE(stat_add_freq) then
 
@@ -420,7 +426,7 @@ module _N
   endif
  endif
 !
-!============================================= output temperature time series
+!============================================= output _NAME time series
  if (stat_output_freq.gt.izero) then
   if __CHKUPDATE(stat_output_freq) then
 !
@@ -515,8 +521,8 @@ module _N
  _W __STRING(_NAME=),_NAME,' # current value'
  _W __STRING(__CONCAT(minimum_,_NAME)=),__CONCAT(min,_NAME)
  _W __STRING(__CONCAT(maximum_,_NAME)=),__CONCAT(max,_NAME)
- _W __STRING(__CONCAT3(mapped_,_NAME,_distribution)=),trim(mapped_dist)
- _W __STRING(__CONCAT3(mapped_,_NAME,_distribution_exponent)=),mapped_dist_exp, ' # exponent for power-law distribution'
+ _W __STRING(__CONCAT(_NAME,_distribution)=),trim(dist)
+ _W __STRING(__CONCAT(_NAME,_distribution_exponent)=),dist_exp, ' # exponent for power-law distribution'
  _W __STRING(__CONCAT3(mapped_,_NAME,_gridsize)=),gridsize,' # number of points used for mapped grid discretization'
  _W 'average_damping_constant=',damping_average,' # constant used in adaptive averaging (Cg)'
  _W 'interp_width=',interp_width,' # number of bins on either side of current bin for interpolation'
