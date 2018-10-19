@@ -19,7 +19,7 @@ __CHARMM_ONLY##IF STRINGM
 !
       contains
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       function cv_rmsd_add(ind_o,ind_f,r_o,r_f,ow,fw,_COMMON_ARGS,qrota_,qtrans_) result(l) ! note: i is the atom index in the PSF
+       function cv_rmsd_add(ind_o,ind_f,r_o,r_f,ow,fw,_COMMON_ARGS,qrota_,qtrans_) result(l)
 ! a note on convention : qorient = qrota .or. qtrans ; the two operands indicate (separately) whether
 ! rotational and translation fitting are to be performed, respectively
        use cv_types
@@ -233,7 +233,7 @@ __CHARMM_ONLY##IF STRINGM
        int :: j, k, ii, jj, ind, norient, nforced, obeg, oend, p, q
        float :: d, f, w, r1(3), r2(3), r_com(3), rt_com(3), theta, u(3,3)
 #ifdef __OMP
-       float :: __U(r_com)(3)
+       float :: __U(r_com)(3), __U(r1)(3)
 #endif
        float :: dummy
        int, pointer :: priv(:)
@@ -323,27 +323,19 @@ __CHARMM_ONLY##IF STRINGM
          ii=jj+1; jj=ii+nforced-1;  rt_f(:,j)=cv%priv(i)%pr(ii:jj)
         enddo
 ! f. weights
-         ii=jj+norient+1; jj=ii+nforced-1;  fw(:)=cv%priv(i)%pr(ii:jj)
-       endif
+        ii=jj+norient+1; jj=ii+nforced-1;  fw(:)=cv%priv(i)%pr(ii:jj)
+       endif ! qorient
 !
 !    set this CV energy to zero by default
 !       cv%r(i,energy)=zero
 !
 #ifdef __OMP
-!$omp parallel private(j, k, ind, ii, jj, w, p, q, d) &
-!$omp shared(i, obeg, oend, __U(r_com))
-#endif __OMP
 #ifdef __DDEBUG
-#ifdef __OMP
-!$omp parallel
-!$omp single
  write(0,*) 'OMP: Available processors: ',omp_get_num_procs();
  write(0,*) 'OMP: Maximum threads:      ',omp_get_max_threads();
  write(0,*) 'OMP: Current threads:      ',omp_get_num_threads();
  write(0,*) 'OMP: This thread:          ',omp_get_thread_num();
-!$omp end single
-!$omp end parallel
-#endif __OMP
+#endif // __OMP
 #endif
 !
        if (calctheta) then
@@ -352,7 +344,8 @@ __CHARMM_ONLY##IF STRINGM
         if (qorient) then
          obeg=1; oend=norient ! orientation atom index limits
 #ifdef __OMP
-!$omp do schedule(runtime)
+!$omp parallel private(ind,k,j,__U(r_com))
+!$omp do schedule(static)
 #endif
          do k=1,norient
           ind=cv%amap%i(ind_o(k))
@@ -366,7 +359,7 @@ __CHARMM_ONLY##IF STRINGM
 !
          if (qdiffrot) then ! also use forced atoms (otherwise, they are the same as ro -- see above!)
 #ifdef __OMP
-!$omp do schedule(runtime)
+!$omp do schedule(static)
 #endif
           do k=1,nforced
            ind=cv%amap%i(ind_f(k))
@@ -377,13 +370,17 @@ __CHARMM_ONLY##IF STRINGM
 #ifdef __OMP
 !$omp end do
 #endif
-         endif
+         endif ! qdiffrot
 !       translate forced atoms to centroid
          if (qtrans) then
+#ifdef __OMP
+!$omp single
+#endif
           r_com=zero
 #ifdef __OMP
+!$omp end single
           __U(r_com)=zero
-!$omp do
+!$omp do schedule(static)
           do k=1, norient; do j=1,3
            __INCR(__U(r_com)(j), ow(k)*r_o(k,j))
           enddo          ; enddo
@@ -394,10 +391,12 @@ __CHARMM_ONLY##IF STRINGM
           __AREDUCE(r_com,2)
 !$omp atomic
           __AREDUCE(r_com,3)
+!$omp barrier
+!!$omp flush ! this does not work to flush r_com; I need a barrier ; would be good to understand why
 !!$omp critical
 !          __REDUCE(r_com)
 !!$omp end critical
-!$omp do
+!$omp do schedule(static)
           do k=1, norient
            __INCR(r_o(k,1),-r_com(1))
            __INCR(r_o(k,2),-r_com(2))
@@ -406,7 +405,7 @@ __CHARMM_ONLY##IF STRINGM
 !$omp end do
 !
           if (qdiffrot) then ! also use forced atoms (otherwise, they are the same as ro -- see above!)
-!$omp do
+!$omp do schedule(static)
            do k=1, nforced
             __INCR(r_f(k,1),-r_com(1))
             __INCR(r_f(k,2),-r_com(2))
@@ -416,20 +415,23 @@ __CHARMM_ONLY##IF STRINGM
           endif ! qdiffrot
 #else
           do j=1,3 ; do k=1, norient;
-           r_com(j) = r_com(j)+ow(k)*r_o(k,j)
+           __INCR(r_com(j), ow(k)*r_o(k,j))
           enddo ;    enddo
 !
-          r_o(:,1)=r_o(:,1)-r_com(1)
-          r_o(:,2)=r_o(:,2)-r_com(2)
-          r_o(:,3)=r_o(:,3)-r_com(3)
+          __INCR(r_o(:,1),-r_com(1))
+          __INCR(r_o(:,2),-r_com(2))
+          __INCR(r_o(:,3),-r_com(3))
 !
           if (qdiffrot) then ! also use forced atoms (otherwise, they are the same as ro -- see above!)
-           r_f(:,1)=r_f(:,1)-r_com(1)
-           r_f(:,2)=r_f(:,2)-r_com(2)
-           r_f(:,3)=r_f(:,3)-r_com(3)
+           __INCR(r_f(:,1),-r_com(1))
+           __INCR(r_f(:,2),-r_com(2))
+           __INCR(r_f(:,3),-r_com(3))
           endif ! qdiffrot
 #endif
          endif ! qtrans
+#ifdef __OMP
+!$omp end parallel
+#endif
 !
 ! write(666,*) rt_com
 ! write(666,*) sum(rt_o,1)/norient
@@ -440,10 +442,8 @@ __CHARMM_ONLY##IF STRINGM
 ! write(666,*) rmsd(r_f,rt_f,fw)
 !     compute rotation matrix (and its gradient, if needed)
 !     note that RMSbestfit subtracts com, so we do not have to do this here (with rt_o)
+!
          if (qrota) then
-#ifdef __OMP
-!$omp single
-#endif
           if (qdiffrot.and.deriv) then
            allocate(ugrad(3,3,3,norient))
            call RMSBestFit(rt_o,r_o,ow,u,obeg,oend,ugrad)
@@ -454,24 +454,22 @@ __CHARMM_ONLY##IF STRINGM
           if (qtrans) then ! translational superposition -- coms subtracted out above (rt com is zero with qtrans)
            rt_rot_f=zero;
            do k=1,3; do j=1,3
-            rt_rot_f(:,j)=rt_rot_f(:,j)+rt_f(:,k)*u(j,k)
+            __INCR(rt_rot_f(:,j), rt_f(:,k)*u(j,k))
            enddo;    enddo
           else ! translate rt to com, rotate, then translate back
            do j=1,3
             rt_rot_f(:,j)=rt_com(j)
             do k=1,3
-             rt_rot_f(:,j)=rt_rot_f(:,j) + ( rt_f(:,k)-rt_com(k) )*u(j,k)
+             __INCR(rt_rot_f(:,j), ( rt_f(:,k)-rt_com(k) )*u(j,k) )
             enddo ! k
            enddo ! j
           endif ! qtrans
-#ifdef __OMP
-!$omp end single
-#endif
          endif ! qrota
 !========================================================
         else ! not qorient
 #ifdef __OMP
-!$omp do schedule(runtime)
+!$omp parallel private(ind)
+!$omp do schedule(static)
 #endif
          do k=1,nforced
           ind=cv%amap%i(ind_f(k))
@@ -481,28 +479,24 @@ __CHARMM_ONLY##IF STRINGM
          enddo
 #ifdef __OMP
 !$omp end do
+!$omp end parallel
 #endif
         endif ! qorient
 !========================================================
 !
 !    compute the RMSD
-#ifdef __OMP
-!$omp single
-#endif
         theta=rmsd(r_f, rt_rot_f, fw)
 !
         cv%r(i,previnst)=cv%r(i,instant)
         cv%r(i,instant)=theta
-#ifdef __OMP
-!$omp end single
-#endif
 !
         if (deriv) then
-#ifdef __OMP
-!$omp single
-#endif
 !     initialize derivative arrays
          priv=>cv%priv(i)%amap_ptr ! this should copy the pointers statically; the pointers point to the _same_ data
+#ifdef __OMP
+!$omp parallel private(j,ii)
+!$omp do schedule(static)
+#endif
          do jj=2,priv(1)+1         ! only a subset of indices needs to be considered
           j=priv(jj)
           do ii=1,2
@@ -510,38 +504,48 @@ __CHARMM_ONLY##IF STRINGM
           enddo
          enddo
 #ifdef __OMP
-!$omp end single
+!$omp end do
+!$omp end parallel
 #endif
 !
          if (qdiffrot) then
           if (qtrans) then
-#ifdef __OMP
-!$omp single
-#endif
 !     compute COM contribution to gradient for orientation atoms:
 !     also apply forces to forcing atoms
-           r1(:)=zero;
+           r1=zero;
+#ifdef __OMP
+!$omp parallel private(ind, d, __U(r1), j, k)
+           __U(r1)=zero;
+!$omp do schedule(static)
+#endif
            do k=1, nforced;
-            ind=ind_f(k)
+            ind=ind_f(k) ! openmp-safe because there is a 1-1 map between k and ind(k)
 !x
             d = fw(k) * (r_f(k,1)-rt_rot_f(k,1))
             __INCR(cv%gradx(i,ind,1), d)
-            __INCR(r1(1),d)
+            __INCR(__U(r1)(1),d)
 !y
             d = fw(k) * (r_f(k,2)-rt_rot_f(k,2))
             __INCR(cv%grady(i,ind,1), d)
-            __INCR(r1(2),d)
+            __INCR(__U(r1)(2),d)
 !z
             d = fw(k) * (r_f(k,3)-rt_rot_f(k,3))
             __INCR(cv%gradz(i,ind,1), d)
-            __INCR(r1(3),d)
+            __INCR(__U(r1)(3),d)
            enddo
 #ifdef __OMP
-!$omp end single
+!$omp end do
+!$omp atomic
+       __AREDUCE(r1,1)
+!$omp atomic
+       __AREDUCE(r1,2)
+!$omp atomic
+       __AREDUCE(r1,3)
+!$omp barrier
 #endif
 !     add forces to orientation atoms
 #ifdef __OMP
-!$omp do schedule(runtime)
+!$omp do schedule(static)
 #endif
            do j=obeg, oend
             ind=ind_o(j)
@@ -551,17 +555,36 @@ __CHARMM_ONLY##IF STRINGM
            enddo
 #ifdef __OMP
 !$omp end do
+!$omp end parallel
 #endif
           endif ! qtrans
 !
           if (qrota) then ! quadratic computed only for rotational superposition
            if (qtrans) then ! translational superposition implies that COMs have been removed
 !
+#ifdef __OMP  // note reversed loop order
+!$omp parallel private(ind, d, j, k, r2, p, q)
+!$omp do schedule(static)
+            do k=obeg, oend
+             ind=ind_o(k)
+             do j=1, nforced
+              r2=fw(j)*r_f(j,:)
+!    note: am actually computing -forces here
+              do p=1,3
+               do q=1,3
+                d=r2(p)*rt_f(j,q)
+                __INCR(cv%gradx(i,ind,1), - ugrad(p,q,1,k) * d)
+                __INCR(cv%grady(i,ind,1), - ugrad(p,q,2,k) * d)
+                __INCR(cv%gradz(i,ind,1), - ugrad(p,q,3,k) * d)
+               enddo ! q
+              enddo ! p
+             enddo ! j -- forced atoms
+            enddo ! k (orientation atoms)
+!$omp end do
+!$omp end parallel
+#else
             do j=1, nforced
              r2=fw(j)*r_f(j,:)
-#ifdef __OMP
-!$omp do schedule(runtime)
-#endif
              do k=obeg, oend
               ind=ind_o(k)
 !    note: am actually computing -forces here
@@ -574,17 +597,42 @@ __CHARMM_ONLY##IF STRINGM
                enddo ! q
               enddo ! p
              enddo ! k (orientation atoms)
-#ifdef __OMP
-!$omp end do
+            enddo ! j -- forced atoms
 #endif
-            enddo ! j
 !
            else ! not qtrans but qrota: need to subtract com from rt
+#ifdef __OMP // note reversed loop order vs. serial
+!$omp parallel private(ind, d, j, k, r2, p, q)
+!$omp do schedule(static)
+            do k=obeg, oend
+             ind=ind_o(k)
+             do j=1, nforced
+              r2=fw(j) * ( r_f(j,:) - rt_com ) ! rt_com needs to be included here also
+!    note: am actually computing -forces here
+              do p=1,3
+               do q=1,3
+                d=r2(p) * ( rt_f(j,q) - rt_com(q) )
+                __INCR(cv%gradx(i,ind,1), - ugrad(p,q,1,k) * d)
+                __INCR(cv%grady(i,ind,1), - ugrad(p,q,2,k) * d)
+                __INCR(cv%gradz(i,ind,1), - ugrad(p,q,3,k) * d)
+               enddo ! q
+              enddo ! p
+             enddo ! j (forcing atoms)
+            enddo ! k (orientation atoms)
+!$omp end do
+!$omp do schedule(static)
+!     also add forces on the forcing/RMSD atoms:
+            do j=1, nforced
+             ind=ind_f(j)
+             __INCR(cv%gradx(i,ind,1), (r_f(j,1)-rt_rot_f(j,1))*fw(j))
+             __INCR(cv%grady(i,ind,1), (r_f(j,2)-rt_rot_f(j,2))*fw(j))
+             __INCR(cv%gradz(i,ind,1), (r_f(j,3)-rt_rot_f(j,3))*fw(j))
+            enddo ! j (forcing atoms)
+!$omp end do
+!$omp end parallel
+#else
             do j=1, nforced
              r2=fw(j) * ( r_f(j,:) - rt_com ) ! rt_com needs to be included here also
-#ifdef __OMP
-!$omp do schedule(runtime)
-#endif
              do k=obeg, oend
               ind=ind_o(k)
 !    note: am actually computing -forces here
@@ -598,14 +646,12 @@ __CHARMM_ONLY##IF STRINGM
               enddo ! p
              enddo ! k (orientation atoms)
 !     also add forces on the forcing/RMSD atoms:
-#ifdef __OMP
-!$omp end do
-#endif
              ind=ind_f(j)
              __INCR(cv%gradx(i,ind,1), (r_f(j,1)-rt_rot_f(j,1))*fw(j))
              __INCR(cv%grady(i,ind,1), (r_f(j,2)-rt_rot_f(j,2))*fw(j))
              __INCR(cv%gradz(i,ind,1), (r_f(j,3)-rt_rot_f(j,3))*fw(j))
             enddo ! j (forcing atoms)
+#endif
            endif ! qtrans
           endif !qrota
 !
@@ -613,7 +659,8 @@ __CHARMM_ONLY##IF STRINGM
 !     apply forces to the forcing atoms
 !     orientation atoms will feel a coupling force to rotations if qtrans=.false.
 #ifdef __OMP
-!$omp do schedule(runtime)
+!$omp parallel private(ind)
+!$omp do schedule(static)
 #endif
           do j=1,nforced
            ind=ind_f(j)
@@ -623,6 +670,7 @@ __CHARMM_ONLY##IF STRINGM
           enddo
 #ifdef __OMP
 !$omp end do
+!$omp end parallel
 #endif __OMP
          endif ! qdiffrot
 !
@@ -636,7 +684,8 @@ __CHARMM_ONLY##IF STRINGM
 !      write(0,*) d !aa
          priv=>cv%priv(i)%amap_ptr
 #ifdef __OMP
-!$omp do schedule(runtime)
+!$omp parallel private(jj,j,w) shared(d)
+!$omp do schedule(static)
 #endif
          do ii=2, priv(1)+1
           jj=priv(ii)
@@ -653,37 +702,28 @@ __CHARMM_ONLY##IF STRINGM
          enddo
 #ifdef __OMP
 !$omp end do
+!$omp end parallel
 #endif
         endif ! deriv
        else
-#ifdef __OMP
-!$omp single
-#endif
         theta=cv%r(i,instant) ! assume valid theta has been computed in cv%r(i,instant)
-#ifdef __OMP
-!$omp end single
-#endif
        endif ! calctheta
 !
 !      NOTE that the forces calculated here are NOT acting on the CV, as in
 !      the evolution subroutine, but on the simulation atoms
-#ifdef __OMP
-!$omp single
-#endif
        dummy=cv%r(i,zcur)-theta ! zcur contains reference coords (combination of main+comp)
 ! FB modification (FB statistics updated outside):
        dummy=max(zero, dummy - cv%fbwidth(i)) + min(zero, dummy + cv%fbwidth(i))
 !
        __CALC_CV_FORCE_ENERGY
-#ifdef __OMP
-!$omp end single
-#endif
+!
        if (addforce) then
         if (present(fext)) f=fext ! override for planar sampling
 !
         priv=>cv%priv(i)%amap_ptr
 #ifdef __OMP
-!$omp do schedule(runtime)
+!$omp parallel private(jj,j)
+!$omp do schedule(static)
 #endif
         do ii=2, priv(1)+1
          jj=priv(ii)
@@ -694,11 +734,9 @@ __CHARMM_ONLY##IF STRINGM
         enddo
 #ifdef __OMP
 !$omp end do
-#endif
-       endif ! addforce
-#ifdef __OMP
 !$omp end parallel
 #endif
+       endif ! addforce
 !     free memory
        if (qorient) then
         deallocate(ind_o,r_o,rt_o,ow)

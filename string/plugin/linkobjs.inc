@@ -18,8 +18,10 @@ LINKOBJS+=\
  parser.o \
  cmd.o prm.o \
  ivector.o \
+ i8vector.o \
  ivector_list.o \
  isort.o \
+ i8sort.o \
  rvector.o \
  rvector_list.o \
  rsort.o \
@@ -47,6 +49,7 @@ LINKOBJS+=\
  cv_dist_com.o \
  cv_drmsd.o \
  cv_rmsd.o \
+ cv_rmsd2av.o \
  cv_proj.o \
  cv_cvrms.o \
  ftsm_var.o ftsm.o \

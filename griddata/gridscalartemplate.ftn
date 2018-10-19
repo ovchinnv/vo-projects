@@ -1,0 +1,309 @@
+#define _N __CONCAT(gridscalar,_TAG)
+
+! representation of gridded scalar data on a domain; the domain is parametrized by x, but gridding here can be mapped to
+! a difrerent variable for convenience (xmap) ; for example, we can use the temperature for x, but internally, we use
+! xmap =: 1/(kTemp), i.e. beta ; in that case _XMAP(x) = one/(kboltz * x)
+
+module _N
+
+ __DEP_OUTPUT
+ __DEP_CONSTANTS
+ use gridscalartype
+
+ __IMPNONE
+ private
+
+ type(gscalar) :: scalar
+ bool :: initialized = .false.
+ float, pointer, dimension(:) :: xxmap, ssum, s2sum, savg, s2avg, wgt, nsamp ! mapped domain, scalar sum, squared scalar sum, averages, weighted nsamp, actual nsamp
+ float :: dxmap=-one ;
+ float :: oodxmap=-one ; ! a precomputed constant for determining bin size
+ float :: Cg=zero
+ int :: interp_width=5 ! number of bins over which to fit an interpolating curve
+! storage for interpolation
+ float, pointer, dimension(:,:) :: interp_data
+!
+ int, public, parameter :: ndim=7
+
+ public __NM(init)
+ public __NM(done)
+ public __NM(update_averages)
+ public __NM(lookup_average_value)
+ public __NM(griddata_ptr)         ! return pointer to grid data
+ public __NM(apply_bc)
+
+ contains 
+!=====================================================
+  __SUB(init) (xmin, xmax, gridsize, damping_constant, interp_bin_width, ini_data)
+   __IAM(__NM(init))
+   float, intent(in) :: xmin, xmax
+   int, intent(in) :: gridsize
+   int, intent(in), optional :: interp_bin_width ! number of bins on either side of central bin that form the support for interpolation
+   float, optional, intent(in) :: damping_constant
+   float, optional, dimension(ndim*gridsize), intent(in), target :: ini_data
+   float, pointer :: data(:)
+   float :: xmapmin, xmapmax
+   int :: i
+!
+   __ASSERT(gridsize,>,1)
+!
+   if (present(ini_data)) then
+! attempt to initialize from provided initial data
+    __MESSAGE(whoami, ' INITIALIZING FROM RESTART DATA AND IGNORING MIN/MAX DOMAIN LIMITS')
+! some checks:
+! size
+    __ASSERT(size(ini_data),==,ndim*gridsize)
+! positive temps
+    xxmap=>ini_data(1:gridsize)
+#ifdef __XMAPGTZERO
+    __ASSERT(minval(xxmap),>,zero)
+#elif defined(__XMAPGEZERO)
+    __ASSERT(minval(xxmap),>=,zero)
+#endif
+! make sure monotone increasing :
+    __ASSERT(minval(xxmap(2:)-xxmap(1:gridsize-1)),>,zero)
+! nonnegative sample numbers
+     wgt  =>ini_data(5*gridsize+1:6*gridsize)
+    __ASSERT(minval(wgt),>=,zero)
+     nsamp=>ini_data(6*gridsize+1:7*gridsize)
+    __ASSERT(minval(nsamp),>=,zero)
+
+    allocate(data(ndim*gridsize)); data=ini_data
+
+   else ! initialization data not present
+#ifdef __XGTZERO
+    __ASSERT(xmax,>,zero)
+    __ASSERT(xmin,>,zero)
+#elif defined(__XGEZERO)
+    __ASSERT(xmax,>=,zero)
+    __ASSERT(xmin,>=,zero)
+#endif
+    __ASSERT(xmax,>,xmin)
+!
+    allocate(data(ndim*gridsize))
+    data=zero ;
+! generate grid
+    xxmap=>data(1:gridsize)
+    xmapmin=__XMAP(xmin)
+    xmapmax=__XMAP(xmax)
+    dxmap=abs(xmapmax-xmapmin)/(gridsize-1)
+    xxmap(1)=min(xmapmin, xmapmax) ! __XMAP could preserve monotonicity, but reverse min/max
+!
+    do i=2, gridsize
+     xxmap(i)=xxmap(i-1)+dxmap
+    enddo
+! make sure monotone increasing (this could be violated if the mapping if not monotone)
+    __ASSERT(minval(xxmap(2:)-xxmap(1:gridsize-1)),>,zero)
+!
+   endif
+!
+!   set damping constant
+   if (present(damping_constant)) then
+    __ASSERT(damping_constant,>=,zero)
+! VO 5/2017 : dropping the requirement that the damping constant must be less than one
+! this means that for Cg = n, gamma = 1-Cg/n will be negative, but we can bound it below by zero (see below)
+! larger Cg values allow greater initial transients to be thrown out
+!    __ASSERT(damping_constant,<=,one)
+    Cg=damping_constant
+   endif
+!   set interpolation bin width
+!   note that the bin width could be larger than the gridsize -- there is no check -- in which case, we are fitting _all_ data to a line
+   if (present(interp_bin_width)) then
+    __ASSERT(interp_bin_width,>=,zero)
+    interp_width=interp_bin_width
+   endif
+!
+!
+   __DBGOUT('calling gridscalartype_init with ', ndim, ' variables and ', gridsize,' grid points')
+!
+   call gridscalartype_init(scalar, gridsize, ndim, data)
+
+   dxmap = xxmap(2)-xxmap(1)
+   oodxmap = one / dxmap
+
+   deallocate(data) ! no longer need data after gscalar initialization
+!
+   xxmap => scalar%data(           1:  gridsize)
+   ssum  => scalar%data(  gridsize+1:2*gridsize)
+   s2sum => scalar%data(2*gridsize+1:3*gridsize)
+   savg  => scalar%data(3*gridsize+1:4*gridsize)
+   s2avg => scalar%data(4*gridsize+1:5*gridsize)
+   wgt   => scalar%data(5*gridsize+1:6*gridsize)
+   nsamp => scalar%data(6*gridsize+1:          )
+!
+!  storage for interpolation
+   allocate(interp_data( min(scalar%size,2*interp_width+1), 3 )) ;
+!
+   initialized=.true.
+!
+  end __SUB(init)
+!================================================
+  __SUB(done)
+  call gridscalartype_done(scalar)
+  __FREE(interp_data)
+  nullify(xxmap, ssum, s2sum, savg, s2avg, wgt, nsamp)
+  dxmap=-one
+  oodxmap=-one
+  Cg=zero
+  initialized=.false.
+  end __SUB(done)
+!================================================
+  __SUB(update_averages) (x, v)
+  __IAM(__NM(update_averages))
+  float, intent(in) :: v, x
+  float :: y, omg, t
+  int :: ibin
+!
+! get inverse temperature
+#ifdef __XGTZERO
+  __ASSERT(x,>,zero);
+#elif defined(__XGEZERO)
+  __ASSERT(x,>=,zero);
+#endif
+
+  y=__XMAP(x)
+! find bin, assuming uniform grid
+  ibin = INT(oodxmap*(y-xxmap(1)))+1
+!
+__DBGOUT('dxmap=',dxmap)
+__DBGOUT('x=',x)
+__DBGOUT('xxmap=',y)
+__DBGOUT('xxmapgrid(1)=',xxmap(1))
+__DBGOUT('xxmapgrid(end)=',xxmap(scalar%size))
+!
+  __ASSERT(ibin,>,0)
+  __ASSERT(ibin,<=,scalar%size)
+
+ __DBGOUT('updating averages in bin ',ibin)
+
+! update sums in bin #ibin
+! procedure of Zhang/Ma 2010
+! Note that the procedure accumulates very large sums, and may overflow;
+! a less naive implementation may be needed
+!
+  __INC (nsamp(ibin))
+  omg=min(Cg/nsamp(ibin),one)
+  __INCR(ssum(ibin),  v   - omg* ssum(ibin)) ! same as : ssum = g*ssum + v
+  __INCR(s2sum(ibin), v*v - omg*s2sum(ibin))
+  __INCR(wgt(ibin),   one - omg*  wgt(ibin))
+! update averages
+  __ASSERT(wgt(ibin),>,__ERRTOL)
+  t=one/wgt(ibin)
+  savg(ibin)=t*ssum(ibin)
+  s2avg(ibin)=t*s2sum(ibin)
+!
+ __DBGOUT('ssum = ',ssum(ibin))
+ __DBGOUT('savg = ',savg(ibin))
+ __DBGOUT('wgt = ', wgt(ibin))
+ __DBGOUT('nsamp = ', nsamp(ibin))
+!
+  end __SUB(update_averages)
+!================================================
+  __FUN(lookup_average_value) (xraw) result (v)
+! use the grid data to find the average energy corresponding to the provided temperature by interpolation/fitting
+! note that we are using the inverse temperature, so that the first step is to compute beta=1/(kBT)
+  __IAM(__NM(lookup_average_value))
+  float, intent(in) :: xraw ! domain value at which the corresponding scalar value is sought
+  float :: v
+  float :: xmap ! transformed value of x, in case it is convenient to parametrize the scalar in terms of some function f(x) = __XMAP(x)
+                ! e.g. in tempering, we would use beta=1/(kT), rather than the temperature T
+                ! note that to avoid transformations we set f(x)=x ; i.e. xmap=xraw ; this is done at preprocessor level
+  int :: ibin, bin, ebin, nbin, i
+!
+! using fit to linear model y=a+bx
+!
+ float, pointer, dimension(:) :: ww, &! weights
+ &                               xx, &!
+ &                               yy
+ float :: a, b, det, ws, xs, ys, x2s, xy, wx
+
+! get inverse temperature
+#ifdef __XGTZERO
+  __ASSERT(xraw,>,zero);
+#elif defined(__XGEZERO)
+  __ASSERT(xraw,>=,zero);
+#endif
+  xmap=__XMAP(xraw) ! e.g. one/(kboltz*temperature)
+! find bin that contains the desired temperature, assuming uniform grid
+  bin = INT(oodxmap*(xmap-xxmap(1)))+1
+!
+  __ASSERT(bin,>,0)
+  __ASSERT(bin,<=,scalar%size)
+!
+! compute bin range
+  ibin=max(bin-interp_width,1);
+  ebin=min(bin+interp_width,scalar%size);
+  nbin=ebin-ibin+1
+!
+ __DBGOUT('this bin =',bin)
+ __DBGOUT('first bin=',ibin)
+ __DBGOUT('last bin =',ebin)
+ __DBGOUT('size of interp_data=',size(interp_data))
+!
+  v=savg(bin) ! failsafe (no interpolation)
+!
+ __DBGOUT('failsafe value = ', v)
+!
+! count the number of bins for which the weights are positive ; bail out if this number is less than 2 (not enough samples for interpolation)
+  if ( (nbin.gt.1) .and. (count(wgt(ibin:ebin).gt.zero).gt.1 )) then
+   ww =>interp_data(:,1)
+   xx =>interp_data(:,2)
+   yy =>interp_data(:,3)
+!
+   ww(1:nbin)=  wgt(ibin:ebin)
+   xx(1:nbin)=xxmap(ibin:ebin) + half*(xxmap(2)-xxmap(1)) ! use bin centers (for clarity)
+   yy(1:nbin)=savg(ibin:ebin)
+
+ __DBGOUT(' interp xxmap grid :',xx)
+ __DBGOUT(' interp values     :',yy)
+ __DBGOUT(' interp weights    :',ww)
+
+!
+   ws=zero; xs=zero; x2s=zero; xy=zero; ys=zero
+!
+   do i=1,nbin
+    __INCR(ws,ww(i))
+    wx=ww(i)*xx(i)
+    __INCR(xs,wx)
+    __INCR(x2s,wx*xx(i))
+    __INCR(xy,wx*yy(i))
+    __INCR(ys,ww(i)*yy(i))
+   enddo
+   det=ws*x2s-xs*xs ! inverse determinant
+   a = x2s*ys-xs*xy
+   b = ws*xy-xs*ys
+   __ASSERT(det,>,__ERRTOL)
+   v = ( a + b * xmap ) / det ! evaluate linear fit
+  endif
+ __DBGOUT(' returning value ', v)
+  end __FUN(lookup_average_value)
+!================================================
+  __FUN(griddata_ptr) () result(ptr)
+  float, pointer, dimension(:) :: ptr
+  ptr=>scalar%data
+  end __FUN(griddata_ptr)
+!================================================
+  __SUB(apply_bc)(x)
+  __IAM(__NM(apply_bc))
+  float, intent(inout) :: x
+  float :: xmap
+  xmap=__XMAP(x)
+!
+ __DBGOUT(' minimum xmap = ', xxmap(1))
+ __DBGOUT(' maximum xmap = ', xxmap(scalar%size)+dxmap)
+!
+  if (xmap.le.xxmap(1)) then
+!   xmap = xxmap(1) + (xxmap(1) - xmap) ! reflect from xxmap(1) boundary
+   xmap=min(2*xxmap(1)-xmap, xxmap(scalar%size)) ! also make sure that we stay within the grid support
+   x=__XIMAP(xmap) ! inverse map
+  elseif (xmap.ge.xxmap(scalar%size)+dxmap ) then
+!   xmap = xxmap(scalar%size) + dxmap - (xmap - (xxmap(scalar%size)+dxmap)) ! reflect from xxmap(size)+dxmap boundary
+   xmap=max(2*(xxmap(scalar%size)+dxmap)-xmap, xxmap(1)) ! stay within grid support
+   x=__XIMAP(xmap) ! inverse map
+  endif
+! otherwise no need to update temp
+!
+!
+  end __SUB(apply_bc)
+!================================================
+end module _N
