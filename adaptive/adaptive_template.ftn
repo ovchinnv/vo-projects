@@ -28,8 +28,8 @@ module _N
 ! macro for parameter definition
 #define __PAR(_PAR,_TYPE,_DEF) _TYPE, save :: _PAR ; _TYPE, parameter :: __CONCAT(default_,_PAR)=_DEF;
 
- __PAR(__CONCAT(min,_NAME),float,0.01)
- __PAR(__CONCAT(max,_NAME),float,100)
+ __PAR(__CONCAT(min,_NAME),float,0.01d0)
+ __PAR(__CONCAT(max,_NAME),float,100d0)
  __PAR(_NAME,float,__CONCAT(default_min,_NAME))       ! current value
  __PAR(timestep,float,1.0d-4) ! integration step
  __PAR(bdtemp, float, 300d0) ! temperature for Brownian dynamics evolution of adaptive quantity _NAME
@@ -41,7 +41,7 @@ module _N
  __PAR(damping_average,float,one/ten) ! damping constant for computing averages (C_\gamma in Zhang & Ma)
 !
  __PAR(dist, character(len=vartaglen), 'POWERLAW') ! prescribed distribution of (untransformed) _NAME
- __PAR(dist_exp, float, -one) ! powerlaw coefficent in the distribution of (untransformed) _NAME
+ __PAR(dist_exp, float, zero) ! powerlaw coefficent in the distribution of (untransformed) _NAME
  __PAR(interp_width, int, 10)  ! number of bins over which the linear fit of average conjugate/dual
  __PAR(average_update_freq, int, 1)   ! frequency of updating average of dual
  __PAR(__CONCAT(_NAME,_update_freq), int, 1)   ! frequency of evolution
@@ -78,13 +78,14 @@ module _N
  int :: bhist=0, ehist=-1 ! beginning and final indices into history array
  __PAR(stat_add_freq, int, 10)     ! frequency of storing time series
  __PAR(stat_output_freq, int, 1000)   ! frequency of time series output
- __PAR(stat_output_file, character(len=vartaglen), 'tempering.series.txt') ! time series file
+ __PAR(stat_output_file, character(len=vartaglen), 'adaptive.series.txt') ! time series file
  character(len=7) :: stat_acc='WRITE' ! access mode for series file ('WRITE'/'READ'/'APPEND')
  character(len=vartaglen) :: line ! for reading grid data from restart file
 !
  contains
 !====================================================================================
- __SUB(initialize) ()
+ __SUB(initialize) (param)
+ float, intent(out), optional :: param ! if requested, pass the value of param = (__NAME) at initialization
  character(len=vartaglen) :: keyword, context
  int :: l
  __IAM(__NM(initialize))
@@ -109,7 +110,7 @@ module _N
  qrestart = ( existtag_nocase('restart_file', context) .and. trim(ftoupper(restart_file)).ne.'NONE')
 !
  if (qrestart) then
-  __MESSAGE(whoami,' READING RESTART FILE. COMMAND FILE '//trim(ftoupper(__STRING(_NAME)))//' AND GRID SIZE PARAMETERS ARE IGNORED.')
+  __MESSAGE(whoami,' READING RESTART FILE. INPUT FILE '//trim(ftoupper(__STRING(_NAME)))//' AND GRID SIZE PARAMETERS ARE IGNORED.')
 ! read and parse restart file
   fid=-1
   call files_open(fid, restart_file, 'FORMATTED', 'READ')
@@ -147,13 +148,13 @@ module _N
 
 !
 #undef __LEZEROERR
+#define __WARNIFMISSING
+#define __DEFAULT
 #define __VAR	damping_average
 #define __TAG	average_damping_constant
 #define __NAME	damping constant for weighted average
 #include "parser/parser_macro2.src"
 !
-#define __DEFAULT
-#define __WARNIFMISSING
 #define __INT
 #define __VAR	iteration
 #define __TAG	__VAR
@@ -233,7 +234,7 @@ module _N
 #undef __INT
 #define __VAR	dist_exp
 #define __TAG	__CONCAT(_NAME,_distribution_exponent)
-#define __NAME	exponent for_NAME distribution
+#define __NAME	exponent for _NAME distribution
 #include "parser/parser_macro2.src"
 !
  if (mapdist.eq.constant) then
@@ -348,6 +349,7 @@ module _N
  bhist=0
  ehist=-1
 !
+ if (present(param)) param=_NAME
  __NM(initialized=).true.
 !
  end __SUB(initialize)
@@ -369,6 +371,7 @@ module _N
  __INC(iteration)
  __PRESENT(mditeration,izero)
  __DBGOUT('iteration = ', iteration)
+ __DBGOUT('MD iteration = ', mditeration)
 ! check that parameter value is consistent
  if ( abs(param - _NAME) .gt. __FERRTOL ) then
   __WRN(whoami, ftoupper(__STRING(_NAME))//' MISMATCH: '//ftoa(param)//'(SIMULATION) vs.'//ftoa(_NAME)//'(THIS MODULE)')
@@ -527,9 +530,9 @@ module _N
  _W __STRING(_NAME=),_NAME,' # current value'
  _W __STRING(__CONCAT(minimum_,_NAME)=),__CONCAT(min,_NAME)
  _W __STRING(__CONCAT(maximum_,_NAME)=),__CONCAT(max,_NAME)
- _W __STRING(__CONCAT(_NAME,_distribution)=),trim(dist)
+ _W __STRING(__CONCAT(_NAME,_distribution)=),trim(dist),' # note that this is the distribution of the actual '//__STRING(_NAME)//', i.e. not mapped'
  _W __STRING(__CONCAT(_NAME,_distribution_exponent)=),dist_exp, ' # exponent for power-law distribution'
- _W __STRING(__CONCAT3(mapped_,_NAME,_gridsize)=),gridsize,' # number of points used for mapped grid discretization'
+ _W __STRING(__CONCAT3(mapped_,_NAME,_gridsize)=),gridsize,' # number of points used for grid discretization'
  _W 'average_damping_constant=',damping_average,' # constant used in adaptive averaging (Cg)'
  _W 'interp_width=',interp_width,' # number of bins on either side of current bin for interpolation'
  _W 'random_seeds=(',random_get_seeds(),') # current seeds from RNG for seamless restart'
@@ -537,7 +540,7 @@ module _N
 ! retrieve dual grid :
  restart_grid_data=__CONCAT3(gridscalar,_MAPTYPE,_griddata_ptr)()
 ! write the dual grid :
- _W '# gdata_i (i=1, gridsize) ; for ith bin write : '//__STRING(_NAME (i))//', SUM S(i), SUM S(i)^2, AVG S(i), AVG S(i)^2, WGT(i), NUM_SAMPLES(i) '
+ _W '# gdata_i (i=1, gridsize) ; for ith bin write : '//__STRING(__XMAP(_NAME (i)))//', SUM S(i), SUM S(i)^2, AVG S(i), AVG S(i)^2, WGT(i), NUM_SAMPLES(i) '
  do j=1, gridsize
   _W 'gdata_'//trim(itoa(j)),'=(',restart_grid_data(j::gridsize),')'
  enddo ! forced atoms
