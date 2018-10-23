@@ -13,7 +13,7 @@ module __NM(plugin)
 
 #if ( defined(__ADAPTIVE_KCV) && defined(__STRUNA))
  use adaptive_kforce
- use cv_common, only: cv, cv_energy=>energy
+ use cv_common, only: cv, cv_energy=>energy, cv_zcur=>zcur, cv_instant=>instant
  use cv_types
 #endif
 !
@@ -35,6 +35,10 @@ module __NM(plugin)
  character(vartaglen) :: keyword
  int*8 :: ad_iteration
  int, parameter :: default_adaptive_freq=1
+! macro for parameter definition
+#define __PAR(_PAR,_TYPE,_DEF) _TYPE, save :: _PAR ; _TYPE, parameter :: __CONCAT(default_,_PAR)=_DEF;
+ __PAR(bdtemp, float, 300d0) ! temperature for Brownian dynamics evolution of adaptive quantity _NAME
+ float :: bet
 #endif
 !
  contains
@@ -207,6 +211,9 @@ end function _ME
  __IAM(_ME)
 #ifdef __STRUNA
  int :: i
+#ifdef __ADAPTIVE_KCV
+ float :: dbedk
+#endif
 #endif
 !
  _ME=1
@@ -244,8 +251,21 @@ end function _ME
 #endif
  endif
  ad_iteration=iteration_
- if (adaptive_kforce_initialized.and.mod(ad_iteration, adaptive_freq).eq.izero) &
-&  call adaptive_kforce_main(cv%r(cvind,cv_energy), cv%k(cvind), ad_iteration)
+ if (adaptive_kforce_initialized.and.mod(ad_iteration, adaptive_freq).eq.izero) then
+! copied from SMCV code
+! another way to do this is to store dcv_e / dk (in addition to the energy)
+   dbedk = cv%r(cvind,cv_zcur)-cv%r(cvind,cv_instant);
+   dbedk = max(zero, dbedk - cv%fbwidth(cvind)) + min(zero, dbedk + cv%fbwidth(cvind))
+   dbedk = half*bet*dbedk**2 ; ! missing kforce; scaled by beta
+#ifdef __DEBUG
+  __DBGOUT('ZCUR :',cv%r(cvind,cv_zcur))
+  __DBGOUT('INST :',cv%r(cvind,cv_instant))
+  __DBGOUT('K    :',cv%k(cvind))
+  __DBGOUT('D BetaE / Dk :', dbedk)
+#endif
+!  dbedk = bet * cv%r(cvind,cv_energy)/cv%k(cvind) ! what if cv%k == 0 ? Currently disallowed, but 
+   call adaptive_kforce_main(dbedk, cv%k(cvind), ad_iteration)
+ endif ! adaptive_kforce
 #endif
  endif ! sm_initializes .or. defer_init_until_dyna
 #endif
@@ -362,6 +382,16 @@ __DBGOUT(i, 'atoms found')
 #define __VAR adaptive_freq
 #define __TAG evolution_frequency
 #define __NAME Number of iterations between adaptive calls
+#include "parser/parser_macro2.src"
+!
+! Evolution temperature (can be specified independently of the simulation temperature, although the calculation would not be in equilibrium)
+!
+#undef __INT
+#define __WARNIFMISSING
+#define __VAR	bdtemp
+#define __TAG	temperature
+#define __NAME	evolution temperature
+#define __DOALWAYS bet=one/(bdtemp*kboltz)
 #include "parser/parser_macro2.src"
 !
    call adaptive_kforce_initialize(cv%k(cvind))
