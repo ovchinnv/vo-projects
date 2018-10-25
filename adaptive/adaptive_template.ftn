@@ -378,28 +378,42 @@ module _N
    if (irand.eq.0) call randomg_vector(eta, nrand) ! draw nrand normal deviates
 ! compute new _NAME
 
+ __DBGOUT('old '//__STRING(_NAME=), _NAME)
  __DBGOUT('current dual = ', dual)
  __DBGOUT('interpolated dual = ', __CONCAT3(gridscalar,_MAPTYPE,_lookup_average_value(_NAME)))
  __DBGOUT('timestep=',timestep)
 
 ! integrate in transformed (mapped) coordinates using euler integrator of SDE
 ! compute increment :
+#ifdef __EVOLVE_MAPPED
    dpar = __DXMAP(param) * (timestep * ( __DRIFT(dual, param) + dist_exp / param ) & ! drift
  &                         + sqrt2dt * __DIFF(param) * eta(irand)) ! diffusion
+!
+ __DBGOUT('dpar : ', dpar)
+ __DBGOUT('drift : ', __DRIFT(dual, param))
+ __DBGOUT('distribution force : ', dist_exp/param)
+ __DBGOUT('diffusion force : ', sqrt2dt * eta(irand)*__DIFF(param))
+ 
 ! transform, add evolve, and transform back
-   xmap=__XMAP(_NAME)
-   _NAME = __XIMAP(xmap + dpar)
+   xmap=__XMAP(_NAME) ! transform
+   __INCR(xmap, dpar) ! evolve
+   _NAME = __XIMAP(xmap) ! transform back
+#else
+   __INCR(_NAME , timestep * ( __DRIFT(dual, param) + dist_exp / param ) + sqrt2dt * __DIFF(param) * eta(irand))
+#endif
 !
  __DBGOUT('new '//__STRING(_NAME=), _NAME)
 !
 ! increment random number pointer
    __INC(irand); if (irand.eq.nrand) irand=izero
-!
 ! apply boundary conditions to _NAME (essentially ensuring that we stay inside the prescribed support )
-   call __CONCAT3(gridscalar, _MAPTYPE, _apply_bc)(_NAME)
-!
+#ifdef __EVOLVE_MAPPED
+!   call __CONCAT3(gridscalar, _MAPTYPE, _apply_bc_mapped)(_NAME)
+   call __CONCAT3(gridscalar, _MAPTYPE, _apply_bc_raw)(_NAME) ! inconsistent but numerically safer
+#else
+   call __CONCAT3(gridscalar, _MAPTYPE, _apply_bc_raw)(_NAME)
+#endif
  __DBGOUT('corrected '//__STRING(_NAME=), _NAME)
-!
 ! update value of _NAME for output
    param=_NAME
   endif
@@ -418,7 +432,7 @@ module _N
 ! update history
    hist(istep,ehist) = iteration
    hist(ivar,ehist) = _NAME
-   hist(imapvar, ehist) = xmap
+   hist(imapvar, ehist) = __XMAP(_NAME)
    hist(idual,ehist) = dual
 !
  __PRESENT(mditeration,izero)
@@ -478,7 +492,7 @@ module _N
  int::i, numvar
  character(len=vartaglen) :: fmt
 !
- __PRESENT(qmdstep, .false.)
+ __PRESENT(qmdstep, .true.)
  __DBGOUT('beginning history index : ', bhist)
  __DBGOUT('ending history index    : ', ehist)
 !
