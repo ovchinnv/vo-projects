@@ -1,0 +1,435 @@
+#define _N CV_RMSD2AV
+!
+!     CV_RMSD2AV.MOD
+!
+!     ROUTINES FOR COLLECTIVE VARIABLE `RMSD2AV` : rms distance between several groups of atoms and their average coordinates
+!     10/18 : CURRENTLY, SUPPORT FOR BEST-FIT IS LIMITED TO IDENTICAL ORIENTATION AND FORCING GROUPS
+!     THIS CV IS USED FOR THE IMPLEMENTATION OF RLES
+      module _N
+!
+__CHARMM_ONLY##IF STRINGM
+!
+      use cv_common
+      use ivector
+      use ivector_list
+!
+      __IMPNONE
+      private
+      ! subroutines
+      public __NM(add)
+      public __NM(calc)
+      public __NM(list)
+!
+      contains
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       function __NM(add) (inds,w,_COMMON_ARGS,qrota_,qtrans_) result(l) ! note: i is the atom index in the PSF
+! a note on convention : qorient = qrota .or. qtrans ; the two operands indicate (separately) whether
+! rotational and translation fitting are to be performed, respectively
+       use cv_types
+       use parser, only : itoa
+       __DEP_OUTPUT
+       __DEP_NUMBER
+!
+       float  :: _COMMON_ARGS
+       int, pointer, intent(inout) :: inds(:,:)
+       float, pointer, intent(in)  :: w(:)
+       bool, optional, intent(in) :: qrota_, qtrans_
+!      locals
+       bool :: found, qorient
+       int :: i, j, l, m, ind, num_int, num_real, nforced, norient, nset
+       int :: qtrans, qrota
+       type (int_vector) :: unique_amap_ptr ! contains a unique list of atom map pointers (to speed up gradient computation, etc)
+!
+       __IAM(__NM(ADD))
+!
+       if (present(qrota_))  then ; if (qrota_)  then ; qrota=1  ; else ; qrota=0  ; endif ; else ; qrota=1;  endif
+       if (present(qtrans_)) then ; if (qtrans_) then ; qtrans=1 ; else ; qtrans=0 ; endif ; else ; qtrans=1; endif
+       qorient=(qtrans+qrota).gt.0
+!
+! some consistency checks
+!
+       if (.not.(associated(inds).and.                                 &
+     &           associated(w))) then
+         __WRN(whoami, ' UNALLOCATED FORCED/RMSD POINTER ARRAY. ABORT.')
+        return
+       else ! associated
+        nforced=size(inds,1) ! number of RMSD atoms
+        nset=size(inds,2) ! number of coordinate sets for computing average
+        if (nforced.eq.0) then
+         __WRN(whoami, ' NO RMSD ATOMS FOUND. ABORT.')
+         return
+        elseif (nset.le.1) then
+         __WRN(whoami, ' AVERAGE RMSD RESTRAINT REQUIRES AT LEAST TWO ATOM SETS (RECEIVED '//itoa(nset)//') ABORT.')
+         return
+        endif ! nforced
+       endif ! associated
+!
+       if (qorient) then
+! FORCED AND ORIENTATION ATOMS ASSUMED TO BE THE SAME
+        norient=nforced
+        if (norient.eq.0) then
+         __WRN(whoami, ' SUPERPOSITION REQUESTED BUT NO ORIENTATION ATOMS FOUND. ABORT.')
+         return
+        elseif (norient.eq.1) then
+         if (qrota.eq.1) then
+          __WRN(whoami, ' ROTATIONAL SUPERPOSITION REQUIRES AT LEAST TWO ORIENTATION ATOMS. ABORT.')
+          return
+         endif ! qrota
+        endif ! norient
+       else ! qorient
+        norient=0
+       endif ! qorient
+!
+!    check for duplicate CV (exact identical entry only)
+       found=.false.
+       do l=1, cv%num_cv
+        if (cv%type(l).eq.rmsd2av) then
+         found=(nforced.eq.cv%priv(l)%p(1).and.                         & ! number of RMSD atoms
+     &          nset.eq.cv%priv(l)%p(2).and.                            & ! number of atom coordinate sets
+     &          qtrans.eq.cv%priv(l)%p(3).and.                          & ! translational superposition used
+     &          qrota.eq.cv%priv(l)%p(4))                                 ! rotational superposition used
+!
+         ind=5
+         do i=1,nset
+          do j=1,nforced
+           if (found) found=                                            &
+     &         (inds(j,i).eq.cv%amap%i(cv%priv(l)%p(ind)))
+           __INC(ind)
+          enddo ! over atoms j
+         enddo ! over sets i
+!
+        endif
+        if (found) exit
+       enddo ! over cvs l
+!
+       if (.not.found) then
+        l=__CV_COMMON_ADD(rmsd2av)
+        if  (l.gt.0) then
+!     allocate private data
+!     space needed:
+         num_int = 4 + nset * nforced ! number of ints needed for storage
+!
+         allocate(cv%priv(l)%p(num_int));
+         cv%priv(l)%p(1)=nforced
+         cv%priv(l)%p(2)=nset
+         cv%priv(l)%p(3)=qtrans
+         cv%priv(l)%p(4)=qrota
+!        now add slave CV indices
+         ind=5
+         do i=1,nset
+          do j=1,nforced
+           m=inds(j,i)
+           if (m.le.0) then
+             __WRN( whoami,' NONPOSITIVE ATOM INDEX.')
+           endif
+           cv%priv(l)%p(ind)=int_vlist_uaddu(cv%amap,m,l) ! add indices into unique map
+           m=int_vector_uadd(unique_amap_ptr,cv%priv(l)%p(ind))
+           __INC(ind)
+          enddo ! over atoms j
+         enddo ! over sets i
+!    populate private real array
+         num_real = nforced
+         allocate(cv%priv(l)%pr(num_real));
+         ind=1
+         do i=1, nforced
+          cv%priv(l)%pr(ind)=w(i)
+          __INC(ind)
+         enddo ! over atoms i
+!
+         m=unique_amap_ptr%last ! number of unique atoms this cv depends on
+         allocate(cv%priv(l)%amap_ptr(m+1)) ! add one to include length of list
+         cv%priv(l)%amap_ptr(1)=m;
+         cv%priv(l)%amap_ptr(2:m+1)=unique_amap_ptr%i(1:m)
+         call int_vector_done(unique_amap_ptr)
+!          write(0,*) whoami, size(cv%priv(l)%amap_ptr(:)) !aa
+!
+        else ! out of bounds
+         __WRN( whoami,' ERROR ADDING RMSD CV. NOTHING DONE.')
+        endif
+       else ! found
+         __WRN( whoami,' RMSD CV ALREADY PRESENT. NOTHING DONE.')
+         l=0
+       endif
+!
+       end function __NM(add)
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       subroutine __NM(calc)(i,x,y,z,mass,fx,fy,fz,                   &
+     &                             calctheta,deriv,addforce,fext)
+       __DEP_BESTFIT
+       __DEP_CONST
+       __DEP_NUMBER
+       __DEP_OUTPUT
+!
+       float :: x(:), y(:), z(:),                                      &
+     &           fx(:), fy(:), fz(:), mass(:)
+       float, optional :: fext ! `external` force for planar dynamics (see smcv_addforce in smcv_master)
+       int, intent(in) :: i
+       bool :: calctheta ! whether or not to calculate theta(x); if not, use theta=cv%r(i,instant)
+                        ! note that if calctheta=.false., we do not calculate the derivatives!
+       bool :: deriv    ! whether or not to calculate derivatives w.r.t. x
+       bool :: addforce ! whether or not to add forces on simulation atoms
+!    locals
+       int, parameter :: maxiter = 20 ! maximum iterations for aligned average structure computation
+       bool :: qtrans, qrota, qorient
+       int :: j, k, ii, jj, ind, nforced, norient, nset
+       float :: d, f, wgt, err, dummy, theta, tol, tol2
+       int, pointer :: priv(:)
+       int, pointer :: inds(:,:)
+       float, pointer :: r(:,:,:), w(:), r_rot(:,:,:), rave(:,:), rave_new(:,:), u(:,:,:), r_com(:,:)
+!
+       __IAM(__NM(CALC))
+!
+       nforced=cv%priv(i)%p(1)
+       nset=cv%priv(i)%p(2)
+       qtrans=(cv%priv(i)%p(3).ne.0)
+       qrota=(cv%priv(i)%p(4).ne.0)
+       qorient=qtrans.or.qrota
+!
+       allocate(inds(nforced,nset))
+       allocate(w(nforced))
+       allocate(r(nforced,3,nset+2))
+       rave=>r(:,:,nset+1)
+       rave_new=>r(:,:,nset+2)
+       rave_new=zero
+       if (qorient) allocate(r_com(3,nset))
+       if (qrota) then
+        allocate(u(3,3,nset))
+        allocate(r_rot(nforced,3,nset)) ! allocate rotated coordinates
+       endif
+! indices
+       ii=5;
+       do j=1,nset
+        do k=1, nforced
+         inds(k,j)=cv%priv(i)%p(ii); __INC(ii)
+        enddo
+       enddo
+! weights
+       w=cv%priv(i)%pr(1:nforced)
+!
+!    set this CV energy to zero by default
+!       cv%r(i,energy)=zero
+!
+       if (calctheta) then
+        d=one/nset
+        tol=__ERRTOL
+        tol2=tol**2
+!      load coordinates
+!========================================================
+        do j=1,nset
+         do k=1,nforced
+          ind=cv%amap%i(inds(k,j))
+          r(k,1,j)=x(ind)
+          r(k,2,j)=y(ind)
+          r(k,3,j)=z(ind)
+         enddo
+        enddo
+!       translate forced atoms to centroid
+        if (qorient) then
+         do j=1, nset
+          r_com(1,j) = dot_product(w, r(:,1,j)); __DECR(r(:,1,j), r_com(1,j))
+          r_com(2,j) = dot_product(w, r(:,2,j)); __DECR(r(:,2,j), r_com(2,j))
+          r_com(3,j) = dot_product(w, r(:,3,j)); __DECR(r(:,3,j), r_com(3,j)) 
+         enddo
+        endif ! qtrans
+!
+        if (qrota) then
+! find the average structure
+         rave=r(:,:,1)
+         do k=1,maxiter
+          do j=1,nset
+           call RMSBestFit(rave,r(:,:,j),w,u(:,:,j)) ! superpose rave into r(j)
+           r_rot(:,:,j)=matmul(r(:,:,j),u(:,:,j))    ! note : applying u^T x r to align r with rave
+          enddo ! j
+          rave_new = d * sum(r_rot,3) ; ! recompute average
+          err=rmsd(rave_new,rave,w,.false.)   ; ! compute MS difference between old and new averages
+          rave=rave_new ! update rave
+          if (err.lt.tol2) exit    ; ! bail if within tolerance
+         enddo ! k/maxiter
+!
+         if (err.gt.tol2) & ! all threads execute
+           __WRN(whoami, 'NO CONVERGENCE AFTER MAXIMUM NUMBER OF ITERATIONS.')
+! rotate rave into the frames of r`s
+!
+         if (qtrans) r_com=zero ! trick to avoid if statement in the r_com subtraction below
+!
+         do j=1, nset
+          do ii=1,3
+           r_rot(:,ii,j)=-r_com(ii,j) ! restore COM if qtrans=.false.
+           do k=1,3
+            __INCR(r_rot(:,ii,j) , u(ii,k,j) * rave(:,k))
+           enddo
+          enddo
+          __DECR(r(:,:,j), r_rot(:,:,j))  ! now, r is a displacement from average coords ( in the local frame of reference )
+         enddo ! j
+         rave_new = zero ! reset to zero for tricky RMSD call below
+        else ! (qrota)
+         rave = d * sum(r(:,:,1:nset),3)           ! simple average
+         do j=1, nset
+          __DECR(r(:,:,j),rave)                    ! displacement from average coords
+         enddo ! j
+        endif ! qrota
+!
+! now compute theta
+!
+        theta=zero
+        do j=1, nset
+! r is already the displacement, so use the zero dummy array 'rave_new'
+         __INCR(theta,rmsd(r(:,:,j),rave_new,w,.false.))! energy proportional to rmsd^2 (.false. means do not take sqrt -- i.e. msd)
+        enddo
+        theta=sqrt(theta)
+!========================================================
+        cv%r(i,previnst)=cv%r(i,instant)
+        cv%r(i,instant)=theta
+        if (deriv) then
+!     initialize derivative arrays
+         priv=>cv%priv(i)%amap_ptr ! this should copy the pointers statically; the pointers point to the _same_ data
+         do jj=2,priv(1)+1
+          j=priv(jj)
+          do ii=1,2
+           cv%gradx(i,j,ii)=zero
+           cv%grady(i,j,ii)=zero
+           cv%gradz(i,j,ii)=zero
+          enddo
+         enddo
+! NOTE : it is possible that two different pairs k,j will map to the same ind, which could impact OPENMP parallelization
+         do j=1,nset
+          do k=1,nforced
+           ind=inds(k,j)
+           __INCR(cv%gradx(i,ind,1), r(k,1,j)*w(k))
+           __INCR(cv%grady(i,ind,1), r(k,2,j)*w(k))
+           __INCR(cv%gradz(i,ind,1), r(k,3,j)*w(k))
+          enddo
+         enddo
+!
+!     scale derivatives by 1/theta and populate mass-weighted der. arrays
+         if (theta.gt.__ERRTOL) then
+          d=one/theta
+         else
+          d=one ! avoid singularity at near zero separation
+         endif
+!
+         priv=>cv%priv(i)%amap_ptr
+         do ii=2, priv(1)+1
+          jj=priv(ii)
+          j=cv%amap%i(jj) ! psf index
+          wgt=sqrt(one/mass(j))
+          cv%gradx(i,jj,1)=cv%gradx(i,jj,1)*d
+          cv%gradx(i,jj,2)=cv%gradx(i,jj,1)*wgt
+!
+          cv%grady(i,jj,1)=cv%grady(i,jj,1)*d
+          cv%grady(i,jj,2)=cv%grady(i,jj,1)*wgt
+!
+          cv%gradz(i,jj,1)=cv%gradz(i,jj,1)*d
+          cv%gradz(i,jj,2)=cv%gradz(i,jj,1)*wgt
+         enddo
+        endif ! deriv
+       else  ! calctheta
+        theta=cv%r(i,instant) ! assume valid theta has been computed in cv%r(i,instant)
+       endif ! calctheta
+!
+!      NOTE that the forces calculated here are NOT acting on the CV, as in
+!      the evolution subroutine, but on the simulation atoms
+       dummy=cv%r(i,zcur)-theta ! zcur contains reference coords (combination of main+comp)
+! FB modification (FB statistics updated outside):
+       dummy=max(zero, dummy - cv%fbwidth(i)) + min(zero, dummy + cv%fbwidth(i))
+!
+       __CALC_CV_FORCE_ENERGY
+!
+       if (addforce) then
+        if (present(fext)) f=fext ! override for planar sampling
+!
+        priv=>cv%priv(i)%amap_ptr
+        do ii=2, priv(1)+1
+         jj=priv(ii)
+         j=cv%amap%i(jj) ! psf index
+         fx(j)=fx(j)-f*cv%gradx(i,jj,1)
+         fy(j)=fy(j)-f*cv%grady(i,jj,1)
+         fz(j)=fz(j)-f*cv%gradz(i,jj,1)
+        enddo
+       endif ! addforce
+!     free memory
+       deallocate(inds,r,w)
+       if (qorient) then
+        deallocate(r_com)
+       endif
+!
+       if (qrota) then
+        deallocate(r_rot)
+        deallocate(u)
+       endif
+!
+       end subroutine __NM(calc)
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       subroutine __NM(list)(i)
+       use cv_types
+       __DEP_MULTICOM
+       __DEP_MPI 
+       __DEP_ATOMID
+       __DEP_OUTPUT
+!
+ __DECLARE_MSGBUF
+!
+       int :: i, j, k, type, ii, jj, iatom
+       character(len=8) :: sid, rid, ren, ac
+!
+       int :: nforced, nset
+       bool :: qtrans, qrota
+       int, pointer, dimension(:,:) :: inds
+       __IAM(__NM(LIST))
+!
+       if (MPI_COMM_STRNG.eq.MPI_COMM_NULL) return ! only replica heads stay
+!
+!    check type just in case
+       type=cv%type(i)
+       if (type.ne.rmsd2av) then
+        __WRN(whoami,' WRONG CV TYPE RECEIVED.')
+       endif
+!
+       if (ME_STRNG.eq.0) then
+        nforced=cv%priv(i)%p(1)
+        nset=cv%priv(i)%p(2)
+        qtrans=(cv%priv(i)%p(3).ne.0)
+        qrota=(cv%priv(i)%p(4).ne.0)
+!
+! note that I currently cannot tell whether mass-weighting is requested
+! am also not printing the weights
+!
+        allocate(inds(nforced, nset))
+! indices
+        ii=5; jj=ii+nforced*nset-1
+        inds=reshape(cv%priv(i)%p(ii:jj),(/nforced, nset/))
+!
+        ii=1
+        write(_MSGBUF(ii),'(A)') _TAB//' RMSD FROM AVERAGE STRUCTURE' ; __INC(ii)
+        write(_MSGBUF(ii),'(A,I5)' )_TAB//' NUMBER OF COORDINATE SETS : ',nset ; __INC(ii)
+        if (qtrans) then
+         write(_MSGBUF(ii),'(A)') _TAB//' SUPERPOSITION INCLUDES TRANSLATIONAL ALIGNMENT' ; __INC(ii)
+        endif
+        if (qrota) then
+         write(_MSGBUF(ii),'(A)') _TAB//' SUPERPOSITION INCLUDES ROTATIONAL ALIGNMENT' ; __INC(ii)
+        endif
+        if (qtrans.or.qrota) then
+         write(_MSGBUF(ii),'(A)')_TAB//' FORCED AND ORIENTATION ATOMS ARE THE SAME' ; __INC(ii)
+        endif
+        __PRINT(_MSGBUF)
+!
+        do k=1, nset
+         write(_MSGBUF,'(A,I5,A)') _TAB//' COORDINATE SET #',k,':' ; __PRINT(_MSGBUF)
+         do j=1, nforced
+           iatom=cv%amap%i(inds(j,k))
+           __ATOMID(iatom, sid, rid, ren, ac)
+           write(_MSGBUF,667) _TAB,j, iatom, sid, rid, ren, ac             ; __PRINT(_MSGBUF)
+         enddo
+        enddo
+!
+        deallocate(inds)
+!
+       endif ! ME_STRING
+!
+ 667  format(A,2I8,' ',4A)
+!
+       end subroutine __NM(list)
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+__CHARMM_ONLY##ENDIF
+      end module _N
+!

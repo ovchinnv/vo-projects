@@ -21,7 +21,7 @@ __CHARMM_ONLY##IF STRINGM
 !
       contains
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       function cv_cvrms_add(cv_list,_COMMON_ARGS) result(l) ! note: i is the atom index in the PSF
+       function cv_cvrms_add(cv_list,_COMMON_ARGS) result(l)
        __DEP_OUTPUT
        float  :: _COMMON_ARGS
        type (int_vector) :: cv_list
@@ -98,15 +98,17 @@ __CHARMM_ONLY##IF STRINGM
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        recursive subroutine cv_cvrms_calc(i,x,y,z,mass,fx,fy,fz,        &
      &                             calctheta,deriv,addforce,fext)
-       use cv_posi_com, only: cv_posi_com_calc
-       use cv_dist_com, only: cv_dist_com_calc
-       use cv_dihe_com, only: cv_dihe_com_calc
-       use cv_angle_com, only: cv_angle_com_calc
-       use cv_anglvec, only: cv_anglvec_calc
-       use cv_qcomp, only: cv_qcomp_calc
-       use cv_rmsd, only: cv_rmsd_calc
-       use cv_drmsd, only: cv_drmsd_calc
-       use cv_proj, only: cv_proj_calc
+#define __USE(_CV) use __CONCAT(cv_,_CV) , only : __CONCAT3(cv_,_CV,_calc)
+       __USE(posi_com)
+       __USE(dist_com)
+       __USE(dihe_com)
+       __USE(angle_com)
+       __USE(anglvec)
+       __USE(qcomp)
+       __USE(rmsd)
+       __USE(drmsd)
+       __USE(proj)
+       __USE(rmsd2av)
 !
        __DEP_CONST
        __DEP_NUMBER
@@ -136,13 +138,13 @@ __CHARMM_ONLY##IF STRINGM
        allocate(ind(ncv))
        ind=cv%priv(i)%p(2:ncv+1)
 !
-!    Because the collective CVs (i.e. those made up of other CVs) are defined only after the other (in particular, component) CVs have been defined,
+!    Because the compound CVs (i.e. those made up of other CVs) are defined only after the other (in particular, component) CVs have been defined,
 !    the component CVs should have their values and derivatives already computed (I assume this below)
 !    Practically, this means that in the code, cv computations involving cvrms should always be done _after_ all other CVs
 !    this should be trivial to satisfy for a serial caclulation because the CVs are evaluated in the same order as they are added
-!    and since adding cvs has the same dependency (i.e. the constituent cvs need to be present for compound ones to be definable)
-!    the condition is satisfy naturally ; however, for parallel calculations, the node assigned to a collective cv would first need to know
-!    the value/gradients from constituent cvs, which would require communication.  You have been warned. Keep this in mind.
+!    and since adding CVs has the same dependency (i.e. the constituent CVs need to be present for compound ones to be definable)
+!    the condition is satisfied naturally ; however, for parallel calculations, the node assigned to a collective cv would first need to know
+!    the value/gradients from constituent CVs, which would require communication.  You have been warned. Keep this in mind.
 !
 !    set this CV energy to zero by default
 !       cv%r(i,energy)=zero
@@ -257,25 +259,22 @@ __CHARMM_ONLY##IF STRINGM
          do jj=1,ncv
           j=ind(jj)
           select case(cv%type(j))
+#define __CALC(_CV) call __CONCAT3(cv_,_CV,_calc)(j,x,y,z,mass,fx,fy,fz,calctheta2,deriv2,addforce2)
+
            case(posi_com);
-            call cv_posi_com_calc(j,x,y,z,mass,fx,fy,fz,                &
-     &                           calctheta2,deriv2,addforce2)
+            __CALC(posi_com)
             dummy=(cv%r(j,instant)-cv%r(j,ref))
            case(qcomp_1, qcomp_2, qcomp_3, qcomp_4);
-            call cv_qcomp_calc(j,x,y,z,mass,fx,fy,fz,                   &
-     &                           calctheta2,deriv2,addforce2)
+            __CALC(qcomp)
             dummy=(cv%r(j,instant)-cv%r(j,ref))
            case(angle_com);
-            call cv_angle_com_calc(j,x,y,z,mass,fx,fy,fz,               &
-     &                           calctheta2,deriv2,addforce2)
+            __CALC(angle_com)
             dummy=(abs(cv%r(j,instant))-abs(cv%r(j,ref)))
            case(anglvec);
-            call cv_anglvec_calc(j,x,y,z,mass,fx,fy,fz,                 &
-     &                           calctheta2,deriv2,addforce2)
+            __CALC(anglvec)
             dummy=(cv%r(j,instant)-cv%r(j,ref))
            case(dihe_com);
-            call cv_dihe_com_calc(j,x,y,z,mass,fx,fy,fz,                &
-     &                           calctheta2,deriv2,addforce2)
+            __CALC(dihe_com)
 ! minimum angle:
             dummy=(cv%r(j,instant)-cv%r(j,ref))
             dummy=modulo(dummy,TWOPI)
@@ -288,24 +287,22 @@ __CHARMM_ONLY##IF STRINGM
 !            dummy=(cv%r(j,previnst)+dummy)-cv%r(j,ref)
              write(666,'(2I10,2G20.10)') jj, j, theta, dummy
            case(dist_com);
-            call cv_dist_com_calc(j,x,y,z,mass,fx,fy,fz,                &
-     &                           calctheta2,deriv2,addforce2)
+            __CALC(dist_com)
+            dummy=(cv%r(j,instant)-cv%r(j,ref))
+           case(rmsd2av);
+            __CALC(rmsd2av)
             dummy=(cv%r(j,instant)-cv%r(j,ref))
            case(rmsd);
-            call cv_rmsd_calc(j,x,y,z,mass,fx,fy,fz,                    &
-     &                           calctheta2,deriv2,addforce2)
+            __CALC(rmsd)
             dummy=(cv%r(j,instant)-cv%r(j,ref))
            case(drmsd);
-            call cv_drmsd_calc(j,x,y,z,mass,fx,fy,fz,                   &
-     &                           calctheta2,deriv2,addforce2)
+            __CALC(drmsd)
             dummy=(cv%r(j,instant)-cv%r(j,ref))
            case(proj);
-            call cv_proj_calc(j,x,y,z,mass,fx,fy,fz,                    &
-     &                           calctheta2,deriv2,addforce2)
+            __CALC(proj)
             dummy=(cv%r(j,instant)-cv%r(j,ref))
            case(cvrms); ! in principle, possible, but not tested (or recommended)
-            call cv_cvrms_calc(j,x,y,z,mass,fx,fy,fz,                   &
-     &                           calctheta2,deriv2,addforce2)
+            __CALC(cvrms)
             dummy=(cv%r(j,instant)-cv%r(j,ref))
            case default
             __WRN(' CV_CVRMS_CALC>','UNKNOWN CV SPECIFIED.')
