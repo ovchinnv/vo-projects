@@ -37,10 +37,14 @@ module _N
 !
  __PAR(dgrid,float,abs(__XMAP(__CONCAT(default_max,_NAME))-__XMAP(__CONCAT(default_min,_NAME)))/(default_gridsize-1))
 !                                                                                           ! ( note that it is easier to set the gridsize )
- __PAR(damping_average,float,one/ten) ! damping constant for computing averages (C_\gamma in Zhang & Ma)
+ __PAR(damping_average,float,half/ten) ! damping constant for computing averages (C_\gamma in Zhang & Ma)
 !
  __PAR(dist, character(len=vartaglen), 'POWERLAW') ! prescribed distribution of (untransformed) _NAME
- __PAR(dist_exp, float, zero) ! powerlaw coefficent in the distribution of (untransformed) _NAME
+ __PAR(dist_exp, float, zero) ! exponent in the power-law distribution of (untransformed) _NAME
+#ifndef __CUSTOM_DIFFUSION
+ __PAR(diff_exp, float, zero)  ! exponent in the power-law distribution of diffusion constant (D=offset+k^exp)
+ __PAR(diff_offset, float, zero)  ! constant offset in the power-law distribution of diffusion constant (D=offset+k^exp)
+#endif
  __PAR(interp_width, int, 10)  ! number of bins over which the linear fit of average conjugate/dual
  __PAR(average_update_freq, int, 1)   ! frequency of updating average of dual
  __PAR(__CONCAT(_NAME,_update_freq), int, 1)   ! frequency of evolution
@@ -73,6 +77,7 @@ module _N
  float :: hist(numhistvar,0:maxhist-1)
  int, parameter :: istep=1, ivar=2, imapvar=3, idual=4, imdstep=5  ! indices into hist
  int :: bhist=0, ehist=-1 ! beginning and final indices into history array
+ __PAR(skip_iterations, int*8, izero) ! initial number of iterations to skip (nothing will be done until after iteration count is higher)
  __PAR(stat_add_freq, int, 10)     ! frequency of storing time series
  __PAR(stat_output_freq, int, 1000)   ! frequency of time series output
  __PAR(stat_output_file, character(len=vartaglen), 'adaptive.series.txt') ! time series file
@@ -152,12 +157,20 @@ module _N
 #define __NAME	damping constant for weighted average
 #include "parser/parser_macro2.src"
 !
+#define __MINUSERR
 #define __INT
 #define __VAR	iteration
 #define __TAG	__VAR
 #define __NAME	starting iteration
 #include "parser/parser_macro2.src"
 !
+#undef __WARNIFMISSING
+#define __VAR	skip_iterations
+#define __TAG	__VAR
+#define __NAME	number of iterations to skip before evolving _NAME
+#include "parser/parser_macro2.src"
+#define __WARNIFMISSING
+#undef __MINUSERR
 !
 #define __LEZEROERR
 #undef __INT
@@ -166,7 +179,6 @@ module _N
 #define __NAME	initial _NAME value
 #include "parser/parser_macro2.src"
 !
-#define __WARNIFMISSING
 #define __VAR	__CONCAT(min,_NAME)
 #define __TAG	__CONCAT(minimum_,_NAME)
 #define __NAME	minimum _NAME
@@ -240,6 +252,23 @@ module _N
    dist_exp=zero
   endif
  endif
+#ifndef __CUSTOM_DIFFUSION
+! variable diffusion parameters
+#//undef __WARNIFMISSING
+#define __VAR	diff_exp
+#define __TAG	__CONCAT(_NAME,_diffusion_exponent)
+#define __NAME	exponent for _NAME diffusion [D(k)=offset+k^exp]
+#include "parser/parser_macro2.src"
+!
+#define __LEZEROERR
+#define __VAR	diff_offset
+#define __TAG	__CONCAT(_NAME,_diffusion_offset)
+#define __NAME	offset for _NAME diffusion [D(k)=offset+k^exp]
+#include "parser/parser_macro2.src"
+#undef __LEZEROERR
+#//define __WARNIFMISSING
+!
+#endif
 !
  if (fatal_warning()) return
 ! ====== done with (possible) restart file data
@@ -338,7 +367,7 @@ module _N
  bhist=0
  ehist=-1
 !
- if (present(param)) param=_NAME
+ if (present(param) .and. iteration.ge.skip_iterations) param=_NAME
  __NM(initialized=).true.
 !
  end __SUB(initialize)
@@ -359,11 +388,20 @@ module _N
 !
  __INC(iteration)
  __DBGOUT('iteration = ', iteration)
+! check whether to skip
+ if (iteration.gt.skip_iterations) return
+! proceed with the code
+!
 ! check that parameter value is consistent
  if ( abs(param - _NAME) .gt. __FERRTOL ) then
-  __WRN(whoami, ftoupper(__STRING(_NAME))//' MISMATCH: '//ftoa(param)//'(SIMULATION) vs.'//ftoa(_NAME)//'(THIS MODULE)')
+  if (iteration.eq.skip_iterations) then
+   param=_NAME
+   __MESG(whoami, 'INITIAL FORCE CONSTANT SET TO', _NAME)
+  else
+   __WRN(whoami, ftoupper(__STRING(_NAME))//' MISMATCH: '//ftoa(param)//'(SIMULATION) vs.'//ftoa(_NAME)//'(THIS MODULE)')
 ! not clear what to next; for now, adopt the most permissive behaviour, assuming that MD is has the desired value
-  _NAME=param
+   _NAME=param
+  endif
  endif
 !
 !========================================== update averages
@@ -382,6 +420,11 @@ module _N
  __DBGOUT('current dual = ', dual)
  __DBGOUT('interpolated dual = ', __CONCAT3(gridscalar,_MAPTYPE,_lookup_average_value(_NAME)))
  __DBGOUT('timestep=',timestep)
+
+#ifndef __CUSTOM_DIFFUSION
+#define __D(_X)  (diff_offset + (_X)**diff_exp)
+#define __DP(_X) (diff_exp*(_X)**(diff_exp-1))
+#endif
 
 #ifdef __EVOLVE_MAPPED
 ! integrate in transformed (mapped) coordinates using euler integrator of SDE
@@ -428,7 +471,7 @@ module _N
     if (ehist.eq.bhist) bhist=mod(bhist+1,maxhist)
    endif
 ! update history
-   hist(istep,ehist) = iteration
+   hist(istep,ehist) = iteration + 1 ! we increment iteration counter at the end of routine
    hist(ivar,ehist) = _NAME
    hist(imapvar, ehist) = __XMAP(_NAME)
    hist(idual,ehist) = dual
@@ -458,6 +501,8 @@ module _N
 !
   endif
  endif
+ __INC(iteration)
+ __DBGOUT('iteration = ', iteration)
 
  end __SUB(main)
 !======================================
@@ -532,11 +577,18 @@ module _N
  _W __STRING(#adaptive _NAME restart file)
  _W __STRING(__RESTARTCTX)//' {'
  _W 'iteration=',iteration
+ if (skip_iterations.ne.default_skip_iterations) then
+  _W 'skip_iterations=',skip_iterations
+ endif
  _W __STRING(_NAME=),_NAME,' # current value'
  _W __STRING(__CONCAT(minimum_,_NAME)=),__CONCAT(min,_NAME)
  _W __STRING(__CONCAT(maximum_,_NAME)=),__CONCAT(max,_NAME)
  _W __STRING(__CONCAT(_NAME,_distribution)=),trim(dist),' # note that this is the distribution of the actual '//__STRING(_NAME)//', i.e. not mapped'
  _W __STRING(__CONCAT(_NAME,_distribution_exponent)=),dist_exp, ' # exponent for power-law distribution'
+#ifndef __CUSTOM_DIFFUSION
+ _W __STRING(__CONCAT(_NAME,_diffusion_exponent)=),diff_exp, ' # exponent for diffusion [D=offset+k^exp]'
+ _W __STRING(__CONCAT(_NAME,_diffusion_offset)=),diff_offset, ' # offset for diffusion [D=offset+k^exp]'
+#endif
  _W __STRING(__CONCAT3(mapped_,_NAME,_gridsize)=),gridsize,' # number of points used for grid discretization'
  _W 'average_damping_constant=',damping_average,' # constant used in adaptive averaging (Cg)'
  _W 'interp_width=',interp_width,' # number of bins on either side of current bin for interpolation'
