@@ -8,6 +8,7 @@ files={ 'adaptive-test1.dat'};
 files={ 'adaptive-test2.dat'};
 files={ 'adaptive-test3.dat'};
 %files={ 'adaptive-test4.dat'};
+files={ 'adaptive-test5.dat'};
 
 
 for i=1:length(files)

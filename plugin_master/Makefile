@@ -3,7 +3,7 @@ ROOT=..
 HEADS=plugin.h plugin.hpp
 OBJS= plugin_master.o plugin_acemd.o
 
-DEPS=files dynamol continua output parser constants
+DEPS=files dynamol continua output parser constants adaptive string watershell
 
 LIB=lib$(NAME).so
 LIBS+=$(LIB)
