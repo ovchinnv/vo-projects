@@ -49,6 +49,7 @@ LINKOBJS+=\
  cv_dist_com.o \
  cv_drmsd.o \
  cv_rmsd.o \
+ cv_rmsd2av.o \
  cv_proj.o \
  cv_cvrms.o \
  ftsm_var.o ftsm.o \

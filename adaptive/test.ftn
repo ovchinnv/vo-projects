@@ -1,0 +1,292 @@
+program test
+ __DEP_RANDOM
+ __DEP_CONST
+ __DEP_FILES
+ __IMPNONE
+
+
+! test the stochastic integration to make sure we are sampling the correct distribution
+ float :: exponent ! powerlaw distribution exponent
+ int :: nsteps ! number of integration steps
+ int :: nrandom ! number of random numbers to generate at once
+ float :: dt ! integration step
+ float, allocatable :: Diff ! position-dependent diffusion constant
+ float :: xmin, xmax, xminmap, xmaxmap ! grid limits
+ float, allocatable :: xsave(:), tsave(:), dxsave(:)
+ float, allocatable :: eta(:) ! rangom nise for Brownian dynamics
+ float :: tnow, xnow, xnowmap ! current value for x
+ float :: dx, dxmap ! increment
+ bool :: qtest1, qtest2, qtest3, qtest4
+
+ int :: fout=-1 ! file handle
+
+ int :: istep, isave, j
+ int :: outfreq=1000
+ __DECL_MSGBUF
+
+! begin tests : 
+  qtest1=.false.
+  qtest4=.false.
+  qtest3=.true.
+  qtest2=.false.
+
+!==============================================================================================
+ if (qtest1) then
+! (1) constant D, direct space integration, power law distribution
+  nsteps=500000000
+  nrandom=100000000
+  __ALLOC(xsave(0:nsteps/outfreq + 1))
+  __ALLOC(tsave(0:nsteps/outfreq + 1))
+  __ALLOC(eta(nrandom))
+  Diff=one
+  exponent=-0.5
+  xmin=0.001d0
+  xmax=100d0
+  dt=1d-2 ! note that if dt is too large, we will not resolve the pdf near the boundary !
+
+  xnow=half*(xmin+xmax) ! start from middle
+  tnow=zero
+  call random_init( (/1,2,3,4/) )
+
+#define D Diff
+
+  isave=0
+  xsave(isave)=xnow
+  tsave(isave)=tnow
+  do istep=1, nsteps, nrandom
+   call randomg_vector(eta,nrandom) ! get random numbers
+   __SCALE(eta, sqrt(two*D*dt))
+   do j=0,nrandom-1
+!   dx = dt * exponent / xnow + sqrt( two * D * dt ) * eta(j)
+! using precomputed diffusion for faster speed
+    dx = dt * D * exponent / xnow + eta(j)
+    __INCR(tnow, dt)
+    __INCR(xnow, dx)
+! apply reflective BC :
+    if (xnow.le.xmin) then
+     xnow=min(2*xmin-xnow, xmax) ! also make sure that we stay within the grid support
+    elseif (xnow.ge.xmax ) then
+     xnow=max(2*xmax-xnow, xmin) ! stay within grid support
+    endif
+
+    if (mod(j,outfreq).eq.0) then
+!    __MESG('TEST1', 'output at iteration', istep)
+     __INC(isave)
+     xsave(isave)=xnow
+     tsave(isave)=tnow
+    endif
+   enddo ! inner j
+  enddo ! outer
+!
+  call files_open(fout, 'adaptive-test1.dat', 'formatted','write')
+  write(fout, '(2G20.10)') ((/tsave(istep), xsave(istep)/), istep=0,isave ) 
+  call files_close(fout)
+
+  __DEALL(xsave)
+  __DEALL(tsave)
+  __DEALL(eta)
+ endif
+!
+! (2) =========== variable D, a function of k, direct space integration
+ if (qtest2) then
+  nsteps =10000000
+  nrandom=10000000
+  __ALLOC(xsave(0:nsteps/outfreq + 1))
+  __ALLOC(tsave(0:nsteps/outfreq + 1))
+  __ALLOC(eta(nrandom))
+  Diff=one
+  exponent=-1
+  xmin=0.01d0
+  xmax=100d0
+  dt=1d-3 ! note that if dt is too large, we will not resolve the pdf near the boundary !
+
+  xnow=half*(xmin+xmax) ! start from middle
+  tnow=zero
+  call random_init( (/1,2,3,4/) )
+! set nonuniform diffusion constant :
+#define D ( Diff * xnow )
+! and its derivative :
+#define Dp ( Diff )
+!
+  isave=0
+  xsave(isave)=xnow
+  tsave(isave)=tnow
+  do istep=1, nsteps, nrandom
+   call randomg_vector(eta,nrandom) ! get random numbers
+   __SCALE(eta, sqrt(two*dt))
+   do j=0,nrandom-1
+    dx = dt * ( D * exponent / xnow + Dp ) + sqrt(D)*eta(j)
+    __INCR(tnow, dt)
+    __INCR(xnow, dx)
+! apply reflective BC :
+    if (xnow.le.xmin) then
+     xnow=min(2*xmin-xnow, xmax) ! also make sure that we stay within the grid support
+    elseif (xnow.ge.xmax ) then
+     xnow=max(2*xmax-xnow, xmin) ! stay within grid support
+    endif
+
+    if (mod(j,outfreq).eq.0) then
+!    __MESG('TEST1', 'output at iteration', istep)
+     __INC(isave)
+     xsave(isave)=xnow
+     tsave(isave)=tnow
+    endif
+   enddo ! inner j
+  enddo ! outer
+!
+  call files_open(fout, 'adaptive-test2.dat', 'formatted','write')
+  write(fout, '(2G20.10)') ((/tsave(istep), xsave(istep)/), istep=0,isave ) 
+  call files_close(fout)
+
+  __DEALL(xsave)
+  __DEALL(tsave)
+  __DEALL(eta)
+ endif
+!==============================================================================================
+ if (qtest3) then
+! (1) constant D, integration in log space, power law distribution
+! this is the worst performer ; it does not sample the low k regime well
+  nsteps=100000000
+  nrandom=100000000
+  __ALLOC(xsave(0:nsteps/outfreq + 1))
+  __ALLOC(dxsave(0:nsteps/outfreq + 1))
+  __ALLOC(tsave(0:nsteps/outfreq + 1))
+  __ALLOC(eta(nrandom))
+  Diff=one
+  exponent=-1
+  xmin=0.01d0
+  xmax=100d0
+  dt=1d-4 ! note that if dt is too large, we will not resolve the pdf near the boundary !
+
+  xnow=half*(xmin+xmax) ! start from middle
+  tnow=zero
+  call random_init( (/1,2,3,4/) )
+
+#define D Diff
+!
+  xminmap=log(xmin)
+  xmaxmap=log(xmax)
+!
+  isave=0
+  xsave(isave)=xnow
+  tsave(isave)=tnow
+  do istep=1, nsteps, nrandom
+   call randomg_vector(eta,nrandom) ! get random numbers
+   __SCALE(eta, sqrt(two*D*dt))
+   do j=0,nrandom-1
+!   dx = dt * exponent / xnow + sqrt( two * D * dt ) * eta(j)
+! using precomputed diffusion for faster speed
+    dx = dt * D * ( exponent - one ) / xnow + eta(j) ! this does not lead to the correct law, but I do not understand why ; instability or scaling bad ?
+    __INCR(tnow, dt)
+    xnowmap=log(xnow)
+    dxmap=dx/xnow
+    xnowmap=xnowmap+dxmap
+!
+! apply reflective BC :
+    if (xnowmap.le.xminmap) then
+     xnowmap=min(2*xminmap-xnowmap, xmaxmap) ! also make sure that we stay within the grid support
+    elseif (xnowmap.ge.xmaxmap ) then
+     xnowmap=max(2*xmaxmap-xnowmap, xminmap) ! stay within grid support
+    endif
+!
+    xnow=exp(xnowmap)
+!
+    if (mod(j,outfreq).eq.0) then
+!    __MESG('TEST1', 'output at iteration', istep)
+     __INC(isave)
+     dxsave(isave)=dx
+     xsave(isave)=xnow
+     tsave(isave)=tnow
+    endif
+   enddo ! inner j
+  enddo ! outer
+!
+  call files_open(fout, 'adaptive-test3.dat', 'formatted','write')
+  write(fout, '(3G20.10)') ((/tsave(istep), xsave(istep), dxsave(istep)/), istep=0,isave ) 
+  call files_close(fout)
+
+  __DEALL(xsave)
+  __DEALL(dxsave)
+  __DEALL(tsave)
+  __DEALL(eta)
+ endif
+!
+! (4) =========== variable D, a function of k, log space integration
+! do not recommend this because of low accuracy at low fc
+ if (qtest4) then
+  nsteps =10000000
+  nrandom=10000000
+  __ALLOC(xsave(0:nsteps/outfreq + 1))
+  __ALLOC(tsave(0:nsteps/outfreq + 1))
+  __ALLOC(eta(nrandom))
+  Diff=one
+  exponent=-1
+  xmin=0.01d0
+  xmax=100d0
+  dt=1d-3 ! note that if dt is too large, we get accuracy losses, which even impact the slope (increasing it)
+
+  xnow=half*(xmin+xmax) ! start from middle
+  tnow=zero
+  call random_init( (/1,2,3,4/) )
+! set nonuniform diffusion constant :
+#define D ( Diff * xnow )
+! and its derivative :
+#define Dp ( Diff )
+!
+  xminmap=log(xmin)
+  xmaxmap=log(xmax)
+!
+  isave=0
+  xsave(isave)=xnow
+  tsave(isave)=tnow
+  do istep=1, nsteps, nrandom
+   call randomg_vector(eta,nrandom) ! get random numbers
+   __SCALE(eta, sqrt(two*dt))
+   do j=0,nrandom-1
+!    dx = dt * ( D * exponent / xnow + Dp ) + sqrt(D)*eta(j) ! get wrong exponent
+! need to use Ito's formula :
+!      .
+! for: x = a(x) + b(x) * noise(t)
+!     .                                                                 .
+! for f(x) = a(x) * f' + b(x) * noise * f' + 1/2 * b(x)^2 * f'' = f' * (x) + (1/2) f'' * b(x)^2 = f' * (x + 1/2 f''/f' * b(x)^2)
+!
+! f(x)=log(x) ; f'=1/x ; f''=-1/x^2 ; b=sqrt( 2 dt * D) ; 1/2 * f'' / f' * b^2 = - D * dt / x^2 * x; = -D dt / x 
+    dx = dt * ( D * (exponent - one) / xnow + Dp ) + sqrt(D)*eta(j) ! modified exponent
+    __INCR(tnow, dt)
+    xnowmap=log(xnow)
+    dxmap=dx/xnow
+    xnowmap=xnowmap+dxmap
+!    xnow=xnow + dx ! standard integration
+! apply reflective BC :
+    if (xnowmap.le.xminmap) then
+     xnowmap=min(2*xminmap-xnowmap, xmaxmap) ! also make sure that we stay within the grid support
+    elseif (xnowmap.ge.xmaxmap ) then
+     xnowmap=max(2*xmaxmap-xnowmap, xminmap) ! stay within grid support
+    endif
+!
+    xnow=exp(xnowmap)
+!
+    if (mod(j,outfreq).eq.0) then
+!    __MESG('TEST1', 'output at iteration', istep)
+     __INC(isave)
+     xsave(isave)=xnow
+     tsave(isave)=tnow
+    endif
+   enddo ! inner j
+  enddo ! outer
+!
+  call files_open(fout, 'adaptive-test4.dat', 'formatted','write')
+  write(fout, '(2G20.10)') ((/tsave(istep), xsave(istep)/), istep=0,isave ) 
+  call files_close(fout)
+
+  __DEALL(xsave)
+  __DEALL(tsave)
+  __DEALL(eta)
+ endif
+
+
+end program test
+
+
+
+

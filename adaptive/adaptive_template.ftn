@@ -1,10 +1,6 @@
-#define __CTX __TEMPERINGCTX
-#define __RESTARTCTX __CONCAT(__TEMPERINGCTX,_RESTART)
-#ifdef __ACEMD
-#define __INITCTX TEMPERING_INIT
-#define __DONECTX TEMPERING_DONE
-#endif
-#define _N TEMPERING
+#define __CTX __CONCAT3(adaptive,_,_NAME)
+#define __RESTARTCTX __CONCAT(__CTX,_restart)
+#define _N __CTX
 #//define __CHKUPDATE(_WHAT)   ( (mod(iteration, _WHAT) .eq. ione) .or. _WHAT.eq.ione )
 #define __CHKUPDATE(_WHAT)   (mod(iteration, _WHAT) .eq. izero)
 
@@ -16,13 +12,14 @@ module _N
  __DEP_FILES
  __DEP_RANDOM
  __DEP_MPI
- use energy_grid
+ use __CONCAT(gridscalar,_MAPTYPE)
 
  __IMPNONE
 
  private
 
  public __NM(initialize)
+ public __NM(initialized)
  public __NM(done)
  public __NM(main)
 
@@ -31,32 +28,33 @@ module _N
 ! macro for parameter definition
 #define __PAR(_PAR,_TYPE,_DEF) _TYPE, save :: _PAR ; _TYPE, parameter :: __CONCAT(default_,_PAR)=_DEF;
 
- __PAR(mintemp,float,298d0)
- __PAR(maxtemp,float,500d0)
- __PAR(temp,float,default_mintemp)       ! current temperature
+ __PAR(__CONCAT(min,_NAME),float,0.01d0)
+ __PAR(__CONCAT(max,_NAME),float,100d0)
+ __PAR(_NAME,float,__CONCAT(default_min,_NAME))       ! current value
  __PAR(timestep,float,1.0d-4) ! integration step
- __PAR(iteration,int,izero)   ! iteration
- __PAR(gridsize,int,1000)     ! size for (inverse) temperature grid (note that this is the number of temp. points ; number of bins would be gridsize-1 )
- __PAR(dgrid,float,(one/default_mintemp-one/default_maxtemp)/(kboltz*(default_gridsize-1))) ! resolution for (inverse) temperature grid 
+ __PAR(iteration,int*8,izero)   ! iteration
+ __PAR(gridsize,int,1000)     ! size for grid (note that this is the number of points ; number of bins would be gridsize-1 )
+!
+ __PAR(dgrid,float,abs(__XMAP(__CONCAT(default_max,_NAME))-__XMAP(__CONCAT(default_min,_NAME)))/(default_gridsize-1))
 !                                                                                           ! ( note that it is easier to set the gridsize )
  __PAR(damping_average,float,one/ten) ! damping constant for computing averages (C_\gamma in Zhang & Ma)
 !
- __PAR(inverse_dist, character(len=vartaglen), 'POWERLAW') ! prescribed distribution of inverse temperature
- __PAR(inverse_dist_exp, float, -one) ! coefficent in the distribution of inverse temperature
- __PAR(energy_interp_width, int, 10)  ! number of bins over which the linear fit of average energy is made
- __PAR(average_update_freq, int, 1)   ! frequency of updating average energy
- __PAR(temperature_update_freq, int, 1)   ! frequency of temperature evolution
+ __PAR(dist, character(len=vartaglen), 'POWERLAW') ! prescribed distribution of (untransformed) _NAME
+ __PAR(dist_exp, float, zero) ! powerlaw coefficent in the distribution of (untransformed) _NAME
+ __PAR(interp_width, int, 10)  ! number of bins over which the linear fit of average conjugate/dual
+ __PAR(average_update_freq, int, 1)   ! frequency of updating average of dual
+ __PAR(__CONCAT(_NAME,_update_freq), int, 1)   ! frequency of evolution
  __PAR(output_file_freq, int, 1000)   ! frequency of writing tempering output file
 !
  __PAR(restart_file, character(len=vartaglen), 'NONE') ! restart file
- __PAR(output_file, character(len=vartaglen), 'tempering.restart.txt') ! output file
+ __PAR(output_file, character(len=vartaglen), 'adaptive.restart.txt') ! output file
 !
  __PAR(random_seeds(4), int, (/ione, itwo, ithree, ifour/))
 ! grid data array:
  float, pointer, dimension(:) :: restart_grid_data=>NULL() ! energy grid data for reading/writing restart/output files
 
 !
- int :: betadist ! temperature distribution type flag
+ int :: mapdist ! distribution type flag
  int, parameter :: constant=1, powerlaw=2
 !
  int :: fid, i, ierr
@@ -67,36 +65,36 @@ module _N
  int :: nrand = 0 !actual size of random number array size
  int :: irand=0 ! pointer into random number array eta
  float :: eta(0:nrandmax-1)
- float, parameter :: ookb=one/kboltzmann
  float :: sqrt2dt  = sqrt(two * default_timestep) ! precomputed sqrt(2 x dt) for BD integrator
 !
 ! for time series (history) output
  int, parameter :: maxhist = 100000 ! size of history array ; this is the largest size that can be stored between outputs 
- int, parameter :: numhistvar  = 4      ! for now, plugin iteration, thermostat temperature and instantaneous energy, mditeration
+ int, parameter :: numhistvar  = 5      ! for now, plugin iteration, adaptive variable and its instantaneous dual, mditeration
  float :: hist(numhistvar,0:maxhist-1)
- int, parameter :: istep=1, itemp=2, iene=3, imdstep=4  ! indices into hist
+ int, parameter :: istep=1, ivar=2, imapvar=3, idual=4, imdstep=5  ! indices into hist
  int :: bhist=0, ehist=-1 ! beginning and final indices into history array
  __PAR(stat_add_freq, int, 10)     ! frequency of storing time series
  __PAR(stat_output_freq, int, 1000)   ! frequency of time series output
- __PAR(stat_output_file, character(len=vartaglen), 'tempering.series.txt') ! time series file
+ __PAR(stat_output_file, character(len=vartaglen), 'adaptive.series.txt') ! time series file
  character(len=7) :: stat_acc='WRITE' ! access mode for series file ('WRITE'/'READ'/'APPEND')
  character(len=vartaglen) :: line ! for reading grid data from restart file
 !
  contains
 !====================================================================================
- __SUB(initialize) ()
+ __SUB(initialize) (param)
+ float, intent(out), optional :: param ! if requested, pass the value of param = (__NAME) at initialization
  character(len=vartaglen) :: keyword, context
  int :: l
- __IAM(__NM(INITIALIZE))
+ __IAM(__NM(initialize))
 !
-#ifdef __ACEMD
-#define __CONTEXT __STRING(__INITCTX)
-#else
 #define __CONTEXT __STRING(__CTX)
-#endif
-!
  context=__CONTEXT ;
-! first, check for restart file
+! first, check if we have the watershell context present
+ if (parser_find_context(__CONTEXT).le.0) then
+  __MESSAGE(whoami, trim(ftoupper(__STRING(_N)))//' CONFIGURATION OPTIONS NOT PROVIDED. WILL NOT INITIALIZE.');
+   return
+ endif
+! next, check for restart file
 ! if present, read it and skip initialization options
 ! read restart file
 #define __CHAR
@@ -109,7 +107,7 @@ module _N
  qrestart = ( existtag_nocase('restart_file', context) .and. trim(ftoupper(restart_file)).ne.'NONE')
 !
  if (qrestart) then
-  __MESSAGE(whoami,' READING RESTART FILE. COMMAND FILE TEMPERATURE AND GRID SIZE PARAMETERS ARE IGNORED.')
+  __MESSAGE(whoami,' READING RESTART FILE. INPUT FILE '//trim(ftoupper(__STRING(_NAME)))//' AND GRID SIZE PARAMETERS ARE IGNORED.')
 ! read and parse restart file
   fid=-1
   call files_open(fid, restart_file, 'FORMATTED', 'READ')
@@ -125,13 +123,13 @@ module _N
 !
 #define __LEZEROERR
 #define __VAR	dgrid
-#define __TAG	inverse_temperature_spacing
-#define __NAME	resolution of inverse temperature grid
-#define __DOIFOK gridsize = INT(one + (one/mintemp-one/maxtemp)/(kboltz*dgrid))
+#define __TAG	__CONCAT(_NAME,_grid_spacing)
+#define __NAME	mapped _NAME grid resolution
+#define __DOIFOK gridsize = INT(one + abs(__XMAP(__CONCAT(max,_NAME))-__XMAP(__CONCAT(min,_NAME)))/dgrid )
 #include "parser/parser_macro2.src"
 
 ! warn if both dgrid and gridsize provided
-  if (existtag_nocase('inverse_temperature_spacing', context).and.existtag_nocase('inverse_temperature_gridsize', context)) then
+  if (existtag_nocase(__STRING(__CONCAT(_NAME,_grid_spacing)), context).and.existtag_nocase(__STRING(__CONCAT3(mapped_,_NAME,_gridsize)), context)) then
    __WRN(whoami, ' GRID SIZE AND GRID SPACING CANNOT BOTH BE SPECIFIED.')
   endif
 !
@@ -160,31 +158,30 @@ module _N
 #define __NAME	starting iteration
 #include "parser/parser_macro2.src"
 !
-! temperature parameters (note that the temperature cannot be zero; otherwise beta=\infty)
 !
 #define __LEZEROERR
 #undef __INT
-#define __VAR	temp
-#define __TAG	temperature
-#define __NAME	starting temperature
+#define __VAR	_NAME
+#define __TAG	_NAME
+#define __NAME	initial _NAME value
 #include "parser/parser_macro2.src"
 !
 #define __WARNIFMISSING
-#define __VAR	mintemp
-#define __TAG	minimum_temperature
-#define __NAME	minimum temperature
+#define __VAR	__CONCAT(min,_NAME)
+#define __TAG	__CONCAT(minimum_,_NAME)
+#define __NAME	minimum _NAME
 #include "parser/parser_macro2.src"
 !
-#define __VAR	maxtemp
-#define __TAG	maximum_temperature
-#define __NAME	maximum temperature
+#define __VAR	__CONCAT(max,_NAME)
+#define __TAG	__CONCAT(maximum_,_NAME)
+#define __NAME	maximum _NAME
 #include "parser/parser_macro2.src"
 !
 #define __INT
 #define __VAR	gridsize
-#define __TAG	inverse_temperature_gridsize
-#define __NAME	size of inverse temperature grid
-#define __DOIFOK dgrid=(one/mintemp-one/maxtemp)/(kboltz*(gridsize-1))
+#define __TAG	__CONCAT(_NAME,_gridsize)
+#define __NAME	size of mapped _NAME grid
+#define __DOIFOK dgrid=abs(__XMAP(__CONCAT(max,_NAME))-__XMAP(__CONCAT(min,_NAME)))/(gridsize-1)
 #include "parser/parser_macro2.src"
 ! read grid data (ndim is public in energy_grid)
  allocate(restart_grid_data(ndim*gridsize))
@@ -207,40 +204,40 @@ module _N
 ! distribution parameters
 #undef __INT
 #define __CHAR
-#define __VAR	inverse_dist
-#define __TAG	inverse_temperature_distribution
-#define __NAME	inverse temperature distribution
+#define __VAR	dist
+#define __TAG	__CONCAT(_NAME,_distribution)
+#define __NAME	_NAME distribution
 #include "parser/parser_macro2.src"
 !
- call toupper(inverse_dist)
- select case(inverse_dist)
-  case('CONSTANT', 'CONST','UNIFORM', 'UNIF') ; betadist=constant; 
-  case('PLAW','POWER','POWERLAW') ; betadist=powerlaw;
+ call toupper(dist)
+ select case(dist)
+  case('CONSTANT', 'CONST','UNIFORM', 'UNIF') ; mapdist=constant; 
+  case('PLAW','POWER','POWERLAW') ; mapdist=powerlaw;
   case default;
-   __WRN(whoami, ' UNKNOWN DISTRIBUTION SPECIFIED ('//trim(inverse_dist)//')')
+   __WRN(whoami, ' UNKNOWN DISTRIBUTION SPECIFIED ('//trim(dist)//')')
  end select
 !
 #undef __CHAR
 
 #define __MINUSERR
 #define __INT
-#define __VAR	energy_interp_width
+#define __VAR	interp_width
 #define __TAG	__VAR
-#define __NAME	number of bins for energy interpolation
+#define __NAME	number of bins for interpolation
 #include "parser/parser_macro2.src"
 !
 #undef __MINUSERR
 #undef __LEZEROERR
 #undef __INT
-#define __VAR	inverse_dist_exp
-#define __TAG	inverse_temperature_distribution_exponent
-#define __NAME	exponent for inverse temperature distribution
+#define __VAR	dist_exp
+#define __TAG	__CONCAT(_NAME,_distribution_exponent)
+#define __NAME	exponent for _NAME distribution
 #include "parser/parser_macro2.src"
 !
- if (betadist.eq.constant) then
-  if (existtag_nocase('inverse_temperature_distribution_exponent', context)) then
-   __WRN(whoami, ' FOR UNIFORM 1/T DISTRIBUTION EXPONENT IS SET TO ZERO.')
-   inverse_dist_exp=zero
+ if (mapdist.eq.constant) then
+  if (existtag_nocase(__STRING(__CONCAT(_NAME,_distribution_exponent)), context)) then
+   __WRN(whoami, ' FOR UNIFORM DISTRIBUTION EXPONENT IS SET TO ZERO.')
+   dist_exp=zero
   endif
  endif
 !
@@ -253,14 +250,14 @@ module _N
 #define __INT
 #define __VAR	average_update_freq
 #define __TAG	__VAR
-#define __NAME	frequency of updating averages
-#define __DOIFOK if (__VAR.eq.izero) __MESSAGE(whoami, ' UPDATE OF AVERAGE ENERGY IS OFF.')
+#define __NAME	frequency of updating averages of conjugate/dual
+#define __DOIFOK if (__VAR.eq.izero) __MESSAGE(whoami, ' UPDATE OF AVERAGE DUAL IS OFF.')
 #include "parser/parser_macro2.src"
 !
-#define __VAR	temperature_update_freq
+#define __VAR	__CONCAT(_NAME,_update_freq)
 #define __TAG	__VAR
-#define __NAME	frequency of updating temperature
-#define __DOIFOK if (__VAR.eq.izero) __MESSAGE(whoami, ' TEMPERATURE UPDATE IS OFF.')
+#define __NAME	frequency of updating _NAME
+#define __DOIFOK if (__VAR.eq.izero) __MESSAGE(whoami, __STRING(_NAME UPDATE IS OFF.))
 #include "parser/parser_macro2.src"
 !
 #define __VAR	stat_add_freq
@@ -271,7 +268,7 @@ module _N
 !
 #define __VAR	stat_output_freq
 #define __TAG	__VAR
-#define __NAME	frequency of writing temperature/energy time series file
+#define __NAME	frequency of writing time series file
 #define __DOIFOK if (__VAR.eq.izero) then ; stat_add_freq=izero ; __MESSAGE(whoami, ' WILL NOT WRITE TIME SERIES.') ; endif
 #include "parser/parser_macro2.src"
 !
@@ -280,25 +277,25 @@ module _N
 #define __CHAR
 #define __VAR	stat_output_file
 #define __TAG	__VAR
-#define __NAME	temperature/energy time series file
+#define __NAME	time series file name
 #include "parser/parser_macro2.src"
 !
 ! output
 #define __CHAR
 #define __VAR	output_file
 #define __TAG	__VAR
-#define __NAME	tempering output file
+#define __NAME	restart/output file
 #include "parser/parser_macro2.src"
 !
 #undef __CHAR
 #define __INT
 #define __VAR	output_file_freq
 #define __TAG	__VAR
-#define __NAME	frequency for writing tempering output/restart file
+#define __NAME	frequency for writing adaptive _NAME output/restart file
 #include "parser/parser_macro2.src"
 !
  if (output_file_freq.le.zero) then
-  __WRN(whoami, ' TEMPERING RESTART FILE WILL BE WRITTEN AT THE END ONLY')
+  __WRN(whoami, ' RESTART FILE WILL BE WRITTEN AT THE END ONLY')
   nrand=nrandmax ;
  else
   nrand=output_file_freq ! this is to ensure that the random deviates are a continuous sequence
@@ -330,9 +327,9 @@ module _N
 ! initialize grid data
 
  if (qrestart) then
-  call energy_grid_init(mintemp, maxtemp, gridsize, damping_average, energy_interp_width, restart_grid_data)
+  call __CONCAT3(gridscalar,_MAPTYPE,_init)(__CONCAT(min,_NAME), __CONCAT(max,_NAME), gridsize, damping_average, interp_width, restart_grid_data)
  else
-  call energy_grid_init(mintemp, maxtemp, gridsize, damping_average, energy_interp_width) ! no restart data
+  call __CONCAT3(gridscalar,_MAPTYPE,_init)(__CONCAT(min,_NAME), __CONCAT(max,_NAME), gridsize, damping_average, interp_width) ! no restart data
  endif
 
 ! statistics
@@ -341,83 +338,86 @@ module _N
  bhist=0
  ehist=-1
 !
- tempering_initialized=.true.
+ if (present(param)) param=_NAME
+ __NM(initialized=).true.
 !
  end __SUB(initialize)
 
 !======================================
- __SUB(main) (energy,temperature,mditeration_)
- float, intent(in) :: energy
- float, intent(inout) :: temperature ! new temperature (if requested) will be returned in the same variable
- __OPAR(mditeration,int)
- __IAM(__NM(COMPUTE))
+ __SUB(main) (dual, param, mditeration_)
+ float, intent(in) :: dual
+ float, intent(inout) :: param ! new value of _NAME (if requested) will be returned in the same variable
+ float :: dpar, xmap
+ __OPAR(mditeration,int*8)
+ __IAM(__NM(compute))
 
 ! check initialization :
- if (.not. tempering_initialized) then
-  __WRN(whoami, ' TEMPERING NOT INITIALIZED. NOTHING DONE')
+ if (.not. __NM(initialized)) then
+  __WRN(whoami, ftoupper(__STRING(_N NOT INITIALIZED. NOTHING DONE)))
   return
  endif
 !
  __INC(iteration)
- __PRESENT(mditeration,izero)
  __DBGOUT('iteration = ', iteration)
-! check that temperature is consistent
- if ( abs(temperature-temp) .gt. __FERRTOL ) then
-  __WRN(whoami, ' TEMPERATURE MISMATCH: '//ftoa(temperature)//'(SIMULATION THERMOSTAT) vs.'//ftoa(temp)//'(THIS MODULE)')
-! not clear what to next; for now, adopt the most permissive behaviour, assuming that MD is has the desired temperature"
-  temp=temperature
+! check that parameter value is consistent
+ if ( abs(param - _NAME) .gt. __FERRTOL ) then
+  __WRN(whoami, ftoupper(__STRING(_NAME))//' MISMATCH: '//ftoa(param)//'(SIMULATION) vs.'//ftoa(_NAME)//'(THIS MODULE)')
+! not clear what to next; for now, adopt the most permissive behaviour, assuming that MD is has the desired value
+  _NAME=param
  endif
 !
 !========================================== update averages
  if (average_update_freq.gt.izero) then
   if __CHKUPDATE(average_update_freq) &
-  & call energy_grid_update_averages(temperature,energy)
+  & call __CONCAT3(gridscalar,_MAPTYPE,_update_averages)(param,dual)
  endif
-!========================================== compute new temperature
- if (temperature_update_freq.gt.izero) then
-  if __CHKUPDATE(temperature_update_freq) then
-! compute average energy
-! NOTE : the Langevin equation to solve is :
-! dT/dt = ( E-Eavg )/kB - \alpha T + T sqrt[2] x \eta(t), where \alpha is the inverse temp distribution exponent ; \eta is Wiener process derivative
-! the corresponding FPE is
-! dp/dt = (T^2 V(T)'p)' + (T^2 p)'' ; where V(T)=V(\beta (T))=V(1/(kBT));
-! we only need V(beta)' to solve the Langevin, which is E-Eavg(beta)-[ln(w(beta))]' = E-Eavg - kBT\alpha; for w(beta) ~ beta^\alpha
-! to solve the Langevin we use the regular Brownian Dynamics integrator :
-! T(n+1) = T(n) + [ (E - Eavg)/kB - \alpha T(n) ] + T sqrt[2dt]\eta(n) ; where \eta is a normal deviate
-
+!========================================== compute new _NAME
+ if (__CONCAT3(_NAME,_,update_freq).gt.izero) then
+  if __CHKUPDATE(__CONCAT3(_NAME,_,update_freq)) then
 ! determine whether we need to generate random numbers:
    if (irand.eq.0) call randomg_vector(eta, nrand) ! draw nrand normal deviates
-! compute new temperature
+! compute new _NAME
 
- __DBGOUT('current energy = ', energy)
- __DBGOUT('interpolated energy = ', energy_grid_lookup_average_energy(temp))
-!
- __DBGOUT('force from distribution = ',inverse_dist_exp*temp)
- __DBGOUT('random force = ',temp*sqrt2dt*eta(irand))
- __DBGOUT('energy difference force = ',(energy - energy_grid_lookup_average_energy(temp))*ookb)
+ __DBGOUT('old '//__STRING(_NAME=), _NAME)
+ __DBGOUT('current dual = ', dual)
+ __DBGOUT('interpolated dual = ', __CONCAT3(gridscalar,_MAPTYPE,_lookup_average_value(_NAME)))
  __DBGOUT('timestep=',timestep)
 
-   temp = temp &
-   &    + timestep*( (energy - energy_grid_lookup_average_energy(temp)) * ookb - inverse_dist_exp*temp ) & ! drift
-!   &    - timestep*inverse_dist_exp*temp & ! to test integrator in the absence of potential : PASSED -- obtain the prescribed distribution
-   &    + temp*sqrt2dt*eta(irand)
+#ifdef __EVOLVE_MAPPED
+! integrate in transformed (mapped) coordinates using euler integrator of SDE
+! I do not recommend integrating in transformed coordinates
+! compute increment :
+   dpar = __DXMAP(param) * (timestep * ( __D(param) * ( __FORCE(dual, param) + (dist_exp - one)/ param ) + __DP(param) ) & ! drift
+ &                         + sqrt2dt * sqrt(__D(param)) * eta(irand)) ! diffusion
 !
- __DBGOUT('new temperature = ', temp)
+ __DBGOUT('dpar : ', dpar)
+! transform, add evolve, and transform back
+   xmap=__XMAP(_NAME) ! transform
+   __INCR(xmap, dpar) ! evolve
+   _NAME = __XIMAP(xmap) ! transform back
+#else
+! integrate in direct space here
+   __INCR(_NAME , timestep * ( __D(param) * ( __FORCE(dual, param) + dist_exp / param ) + __DP(param) ) + sqrt2dt * sqrt ( __D(param) ) * eta(irand))
+#endif
+!
+ __DBGOUT('new '//__STRING(_NAME=), _NAME)
 !
 ! increment random number pointer
    __INC(irand); if (irand.eq.nrand) irand=izero
-!
-! apply relflective boundary conditions to temperature (essentially ensuring that we stay inside the correct temp window)
-   call energy_grid_apply_bc(temp)
-!
- __DBGOUT('corrected temperature = ', temp)
-!
-! update temperature for output
-   temperature=temp
+! apply boundary conditions to _NAME (essentially ensuring that we stay inside the prescribed support )
+#ifdef __EVOLVE_MAPPED
+!   call __CONCAT3(gridscalar, _MAPTYPE, _apply_bc_mapped)(_NAME)
+   call __CONCAT3(gridscalar, _MAPTYPE, _apply_bc_raw)(_NAME) ! inconsistent but numerically safer
+#else
+   call __CONCAT3(gridscalar, _MAPTYPE, _apply_bc_raw)(_NAME)
+#endif
+ __DBGOUT('corrected '//__STRING(_NAME=), _NAME)
+! update value of _NAME for output
+   param=_NAME
   endif
  endif
 !
-!============================================= save temperature time series
+!============================================= save _NAME time series
  if (stat_add_freq.gt.izero) then
   if __CHKUPDATE(stat_add_freq) then
 
@@ -429,18 +429,22 @@ module _N
    endif
 ! update history
    hist(istep,ehist) = iteration
-   hist(itemp,ehist) = temp
-   hist(iene, ehist) = energy
-   hist(imdstep, ehist) = mditeration
+   hist(ivar,ehist) = _NAME
+   hist(imapvar, ehist) = __XMAP(_NAME)
+   hist(idual,ehist) = dual
+!
+ __PRESENT(mditeration,izero)
+!
+   hist(imdstep,ehist) = mditeration
   endif
  endif
 !
-!============================================= output temperature time series
+!============================================= output _NAME time series
  if (stat_output_freq.gt.izero) then
   if __CHKUPDATE(stat_output_freq) then
 !
    __MESSAGE(whoami, ' WRITING TIME SERIES TO FILE ("'//trim(stat_output_file)//'")')
-   call tempering_write_history(present(mditeration_))
+   call __NM(write_history)(present(mditeration_))
 
   endif
  endif
@@ -450,7 +454,7 @@ module _N
   if __CHKUPDATE(output_file_freq) then
 !
    __MESSAGE(whoami, ' WRITING OUTPUT/RESTART FILE TO ("'//trim(output_file)//'")')
-   call tempering_write_restart_file()
+   call __NM(write_restart_file)()
 !
   endif
  endif
@@ -458,34 +462,35 @@ module _N
  end __SUB(main)
 !======================================
  __SUB(done)
- __IAM(__NM(DONE))
+ __IAM(__NM(done))
 ! a possible future modification is to process content in __DONECTX
 !
 ! write restart file
- if (tempering_initialized) then
+ if (__NM(initialized)) then
 ! write remaining history
   if ( stat_output_freq.gt.izero) then
    __MESSAGE(whoami, ' WRITING REMAINING TIME SERIES TO FILE ("'//trim(stat_output_file)//'")')
-   call tempering_write_history()
+   call __NM(write_history)()
   endif
 !
   __MESSAGE(whoami, ' WRITING OUTPUT FILE')
-  call tempering_write_restart_file()
+  call __NM(write_restart_file)()
  endif
 !
- call energy_grid_done()
+ call __CONCAT3(gridscalar,_MAPTYPE,_done)()
  call parser_done()
  __FREE(restart_grid_data)
- tempering_initialized=.false.
+ __NM(initialized)=.false.
 !
  end __SUB(done)
 !======================================
  __SUB(write_history) (qmdstep_)
- __IAM(_NM(WRITE_HISTORY))
+ __IAM(_NM(write_history))
  __OPAR(qmdstep,bool)
  int::i, numvar
  character(len=vartaglen) :: fmt
 !
+ __PRESENT(qmdstep, .true.)
  __DBGOUT('beginning history index : ', bhist)
  __DBGOUT('ending history index    : ', ehist)
 !
@@ -496,9 +501,9 @@ module _N
   i=bhist
 !
   numvar=numhistvar
-  if (.not.qmdstep) __INCR(numvar,-1) ! md iterations not supplied so skip this field
+  if (.not.qmdstep) __DEC(numvar) ! md iterations not supplied so skip this field
 !
-  fmt='('//itoa(size(hist,2))//realfmt//')'
+  fmt='('//itoa(numvar)//realfmt//')'
   do
    write(fid,fmt)  hist(1:numvar,i)
    if (i.eq.ehist) exit
@@ -518,29 +523,29 @@ module _N
  end __SUB(write_history)
 !======================================
  __SUB(write_restart_file) ()
- __IAM(__NM(WRITE_RESTART_FILE))
+ __IAM(__NM(write_restart_file))
  int :: ifile, j
  ifile=-1 ! make sure files_open determines the handle automatically
  call files_open(ifile, output_file, 'FORMATTED','WRITE')
 !
 #define _W write(ifile,*)
- _W '#TEMPERING RESTART FILE'
+ _W __STRING(#adaptive _NAME restart file)
  _W __STRING(__RESTARTCTX)//' {'
  _W 'iteration=',iteration
- _W 'temperature=',temp,' # starting thermostat temperature'
- _W 'minimum_temperature=',mintemp
- _W 'maximum_temperature=',maxtemp
- _W 'inverse_temperature_distribution=',trim(inverse_dist)
- _W 'inverse_temperature_distribution_exponent=',inverse_dist_exp, ' # exponent for power-law distribution'
- _W 'inverse_temperature_gridsize=',gridsize,' # number of points used for inverse temperature grid discretization'
+ _W __STRING(_NAME=),_NAME,' # current value'
+ _W __STRING(__CONCAT(minimum_,_NAME)=),__CONCAT(min,_NAME)
+ _W __STRING(__CONCAT(maximum_,_NAME)=),__CONCAT(max,_NAME)
+ _W __STRING(__CONCAT(_NAME,_distribution)=),trim(dist),' # note that this is the distribution of the actual '//__STRING(_NAME)//', i.e. not mapped'
+ _W __STRING(__CONCAT(_NAME,_distribution_exponent)=),dist_exp, ' # exponent for power-law distribution'
+ _W __STRING(__CONCAT3(mapped_,_NAME,_gridsize)=),gridsize,' # number of points used for grid discretization'
  _W 'average_damping_constant=',damping_average,' # constant used in adaptive averaging (Cg)'
- _W 'energy_interp_width=',energy_interp_width,' # number of bins on either side of current bin for interpolation'
+ _W 'interp_width=',interp_width,' # number of bins on either side of current bin for interpolation'
  _W 'random_seeds=(',random_get_seeds(),') # current seeds from RNG for seamless restart'
 !
-! retrieve energy grid :
- restart_grid_data=energy_grid_griddata_ptr()
-! write the energy grid :
- _W '# gdata_i (i=1, gridsize) ; for ith bin write : \beta(i), SUM E(i), SUM E(i)^2, AVG E(i), AVG E(i)^2, WGT(i), NUM_SAMPLES(i) '
+! retrieve dual grid :
+ restart_grid_data=__CONCAT3(gridscalar,_MAPTYPE,_griddata_ptr)()
+! write the dual grid :
+ _W '# gdata_i (i=1, gridsize) ; for ith bin write : '//__STRING(__XMAP(_NAME (i)))//', SUM S(i), SUM S(i)^2, AVG S(i), AVG S(i)^2, WGT(i), NUM_SAMPLES(i) '
  do j=1, gridsize
   _W 'gdata_'//trim(itoa(j)),'=(',restart_grid_data(j::gridsize),')'
  enddo ! forced atoms
