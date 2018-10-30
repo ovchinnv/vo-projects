@@ -11,9 +11,13 @@ module __NM(plugin)
  __DEP_WATERSHELL
  __DEP_STRUNA
 
-
+#if ( defined(__ADAPTIVE_KCV) && defined(__STRUNA))
+ use adaptive_kforce
+ use cv_common, only: cv, cv_energy=>energy, cv_zcur=>zcur, cv_instant=>instant
+ use cv_types
+#endif
+!
  __IMPNONE
-
 
  private
 !
@@ -25,6 +29,17 @@ module __NM(plugin)
 ! plugin variables
  __VARS_WATERSHELL
  __VARS_STRUNA
+!
+#if ( defined(__ADAPTIVE_KCV) && defined(__STRUNA))
+ int :: cvind = -1, l, adaptive_freq
+ character(vartaglen) :: keyword
+ int*8 :: ad_iteration
+ int, parameter :: default_adaptive_freq=1
+! macro for parameter definition
+#define __PAR(_PAR,_TYPE,_DEF) _TYPE, save :: _PAR ; _TYPE, parameter :: __CONCAT(default_,_PAR)=_DEF;
+ __PAR(bdtemp, float, 300d0) ! temperature for Brownian dynamics evolution of adaptive quantity _NAME
+ float :: bet
+#endif
 !
  contains
 ! a collection of subroutines to call the watershell code from a plugin
@@ -129,6 +144,20 @@ module __NM(plugin)
 !==========================
  __STRUNA_INITIALIZE
 !==========================
+! NOTE: adaptive k initialization must come after the string method because it checks the CV list
+#if ( defined(__ADAPTIVE_KCV) && defined(__STRUNA))
+ adaptive_freq=1 ! make sure potential short circuit if in dyna does not crash
+#ifdef __DEBUG
+ __DBGOUT('DEFER INITIALIZATION UNTIL DYNAMICS:',defer_init_until_dyna)
+#endif
+ if (.not. defer_init_until_dyna ) then 
+#ifdef __DEBUG
+ __DBGOUT('CALLING '//__STRING(__NM(adaptive_initialize)))
+#endif
+  call __NM(adaptive_initialize)()
+ endif
+#endif
+!==========================
 ! set mass and charge after all modules initialized
 ! currently, mass and charge can only be passed in from external code:
  if (system_PDB_initialized.or.system_initialized) then
@@ -137,7 +166,7 @@ module __NM(plugin)
  endif
 !
 ! compute list of all atoms required by plugin
-! if struna is used, then there is the possibility that initialization is deferred until the first dynamics step (e.g. is coodinates are required)
+! if struna is used, then there is the possibility that initialization is deferred until the first dynamics step (e.g. if coodinates are required)
 ! in that case, we need to set alist to null which _should_ instruct the plugin code to provide all coordinates
 #ifdef __STRUNA
  if(defer_init_until_dyna) then 
@@ -182,6 +211,9 @@ end function _ME
  __IAM(_ME)
 #ifdef __STRUNA
  int :: i
+#ifdef __ADAPTIVE_KCV
+ float :: dbedk
+#endif
 #endif
 !
  _ME=1
@@ -211,7 +243,31 @@ end function _ME
  if (sm_initialized.or.defer_init_until_dyna) then
   __STRUNA_MAIN
   fr(:,sm_atomlist(2:))=-fr(:,sm_atomlist(2:))
+#ifdef __ADAPTIVE_KCV
+ if (defer_init_until_dyna) then
+  call __NM(adaptive_initialize)()
+#ifdef __DEBUG
+  __DBGOUT('CALLING '//__STRING(__NM(adaptive_initialize)))
+#endif
  endif
+ ad_iteration=iteration_
+ if (adaptive_kforce_initialized.and.mod(ad_iteration, adaptive_freq).eq.izero) then
+! copied from SMCV code
+! another way to do this is to store dcv_e / dk (in addition to the energy)
+   dbedk = cv%r(cvind,cv_zcur)-cv%r(cvind,cv_instant);
+   dbedk = max(zero, dbedk - cv%fbwidth(cvind)) + min(zero, dbedk + cv%fbwidth(cvind))
+   dbedk = half*bet*dbedk**2 ; ! missing kforce; scaled by beta
+#ifdef __DEBUG
+  __DBGOUT('ZCUR :',cv%r(cvind,cv_zcur))
+  __DBGOUT('INST :',cv%r(cvind,cv_instant))
+  __DBGOUT('K    :',cv%k(cvind))
+  __DBGOUT('D BetaE / Dk :', dbedk)
+#endif
+!  dbedk = bet * cv%r(cvind,cv_energy)/cv%k(cvind) ! what if cv%k == 0 ? Currently disallowed, but ...
+   call adaptive_kforce_main(dbedk, cv%k(cvind), ad_iteration)
+ endif ! adaptive_kforce
+#endif
+ endif ! sm_initializes .or. defer_init_until_dyna
 #endif
 !======================
 #ifdef __WATERSHELL
@@ -232,6 +288,8 @@ end function _ME
 !
  if (.not.fatal_warning()) _ME=0
 !
+ if (defer_init_until_dyna) defer_init_until_dyna=.false. ! try initialization only once
+!
 end function _ME
 #undef _ME
 !===================================================================
@@ -245,6 +303,9 @@ end function _ME
 #ifdef __STRUNA
  if (sm_initialized) then
   __STRUNA_DONE
+#ifdef __ADAPTIVE_KCV
+  call adaptive_kforce_done()
+#endif
  endif
 #endif
 !
@@ -266,7 +327,7 @@ end subroutine _ME
  i=atoms%last
 !
 #ifdef __DEBUG
-__DBGOUT(whoami, i, 'atoms found')
+__DBGOUT(i, 'atoms found')
 #endif
 !
  __DEALL(__NM(atomlist))
@@ -285,5 +346,72 @@ __DBGOUT(whoami, i, 'atoms found')
 !
  alist=c_loc(__NM(atomlist)) ! return pointer to caller code 
  end function _ME
+!===================================================================
+#if ( defined(__ADAPTIVE_KCV) && defined(__STRUNA) )
+ __SUB(adaptive_initialize)()
+ __DEP_PARSER
+ float :: oldk ! old force constant, prior to initialization
+ __IAM(adaptive_initialize)
+  if (sm_initialized) then
+#define context "adaptive_kforce"
+!
+! first, check if we have the watershell context present
+   if (parser_find_context(context).le.0) then
+    __MESSAGE(whoami, 'CONFIGURATION OPTIONS NOT PROVIDED. WILL NOT INITIALIZE.');
+     return
+   endif
+!
+#define __LEZEROERR
+#define __WARNIFMISSING
+! cv index
+#define __INT
+#define __VAR cvind
+#define __TAG cvind
+#define __NAME Index of collective variable whose force constant to modify
+#define __DOIFOK if ( cvind < 1 .or. cvind > cv%num_cv ) then ;\
+        __WRN(whoami, 'ADAPTIVE CV INDEX IS OUT OF BOUNDS. ABORT.'); \ 
+                 else ; \
+                  __MESSAGE(whoami, 'WILL ADAPTIVELY ADJUST CV #'//itoa(cvind)//' ('//ftoupper(cv_type_names(cv%type(cvind)))//')'); \
+                 endif
+#include "parser/parser_macro2.src"
+  __ASSERT(cvind,>,0)
+  __ASSERT(cvind,<=,cv%num_cv)
+! plugin frequency
+#undef __WARNIFMISSING
+#define __DEFAULT
+#define __VAR adaptive_freq
+#define __TAG evolution_frequency
+#define __NAME Number of iterations between adaptive calls
+#include "parser/parser_macro2.src"
+!
+! Evolution temperature (can be specified independently of the simulation temperature, although the calculation would not be in equilibrium)
+!
+#undef __INT
+#define __WARNIFMISSING
+#define __VAR	bdtemp
+#define __TAG	temperature
+#define __NAME	evolution temperature
+#define __DOALWAYS bet=one/(bdtemp*kboltz)
+#include "parser/parser_macro2.src"
+!
+   call adaptive_kforce_initialize(cv%k(cvind))
+! set CV force constant in the string module, since adaptive is unaware of it
+   if (adaptive_kforce_initialized) then
+    if ( abs(oldk - cv%k(cvind)).gt.__ERRTOL ) then ! will be the same if skipping iterations for equilibration
+     __MESG(whoami, 'INITIAL CV FORCE CONSTANT CHANGED TO', cv%k(cvind))
+! update CV energy given the updated force constant
+     if (abs(oldk).gt.__ERRTOL) then 
+      __SCALE(cv%r(cvind, cv_energy), cv%k(cvind)/oldk)
+     endif
+    endif
+   else
+   __WRN(whoami, 'COULD NOT INITIALIZE. WILL NOT ADJUST FORCE CONSTANT.')
+   endif
+  else ! struna not initiliazed
+   __WRN(whoami, 'STRUNA NOT INTIALIZED. NO CV FORCE CONSTANTS TO ADJUST.')
+  endif
+ end __SUB(adaptive_initialize)
+!
+#endif //ADAPTIVE_KCV
 !===================================================================
 end module __NM(plugin)

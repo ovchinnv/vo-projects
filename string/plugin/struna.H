@@ -1,4 +1,4 @@
-/* C prototypes */
+/* C prototypes for plugin*/
 // C, not Fortran!
 #ifdef int
 #undef int

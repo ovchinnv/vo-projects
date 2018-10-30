@@ -3,7 +3,7 @@ ROOT=..
 HEADS=plugin.h plugin.hpp
 OBJS= plugin_master.o plugin_acemd.o
 
-DEPS=files dynamol continua output parser constants string watershell string/plugin
+DEPS=files dynamol continua output parser constants adaptive string watershell
 
 LIB=lib$(NAME).so
 LIBS+=$(LIB)
@@ -16,6 +16,7 @@ all : $(LIB)
 include plugins.inc
 include watershell.inc
 include struna.inc
+include adaptive.inc
 
 include $(ROOT)/Makefile.inc
 
