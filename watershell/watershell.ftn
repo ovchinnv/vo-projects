@@ -132,7 +132,7 @@ module _N
  float, parameter :: akma_per_atm = 1d0/atm_per_akma
  __PAR(pressure_num_samples, int, 0)    ! number of inst. pressure samples that make up average
  __PAR(pressure_max_samples, int, 1000) ! max number of inst. samples to keep in average
- __PAR(pressure_update_freq, int, 10)   ! how often pressure is updated from force and area
+ __PAR(pressure_update_freq, int, 100)   ! how often pressure is updated from force and area
 #endif
 ! === ^ barostat parameters ^ ====
 #ifdef __DASYSTAT
@@ -276,22 +276,22 @@ module _N
  int :: l, ierr
  character(len=maxlinelen) :: line
  float, pointer :: farray(:) => NULL()
- __IAM(__NM(INITIALIZE))
+ __IAM(__NM(initialize))
 !
  contexts(main_context)=__STRING(__CTX)
  contexts(restart_context)=__STRING(__RESTARTCTX)
 !
  context=contexts(main_context)
-#define __DEFAULT
 ! first, check if we have the watershell context present
  if (parser_find_context(__STRING(__CTX)).le.0) then
-  __MESSAGE(whoami, trim(ftoupper(__STRING(_N)))//' CONFIGURATION OPTIONS NOT PROVIDED. SKIPPING INTIALIZATION.');
+  __MESSAGE(whoami, trim(ftoupper(__STRING(_N)))//' CONFIGURATION OPTIONS NOT PROVIDED. WILL NOT INITIALIZE.');
    return
  endif
 !
 ! next, check for restart file
 ! if present, read it and skip initialization options
 ! read restart file
+#define __DEFAULT
 #define __CHAR
 #define __VAR	restart_file
 #define __TAG	__VAR
@@ -717,7 +717,7 @@ module _N
 #define __VAR	output_freq
 #define __TAG	__VAR
 #define __NAME	frequency for writing output/restart file
-#define __DOIFOK if (__VAR.le.izero) __WRN(whoami, 'RESTART FILE WILL BE WRITTEN AT THE END ONLY')
+#define __DOIFOK if (__VAR.le.izero) __WRN(whoami, 'RESTART FILE WILL BE WRITTEN AT THE END ONLY.')
 #include "parser/parser_macro2.src"
 #undef __INT
 !
@@ -1033,7 +1033,7 @@ module _N
 ! read current running density
  if (dasystat) then
   if (qrestart) then
-! (1) read pressure value
+! (1) read density value
    line=getval_nocase('density',__STRING(__RESTARTCTX))
    if (len_trim(line).gt.0) then
     read(line,*,iostat=ierr) density_ave
@@ -1595,18 +1595,34 @@ __DBGVAR(r_com_sa,1)
   __DBGOUT( 'COMPUTED SD, SCV: ', surface_distance, surface_contour_value)
 !
 #ifdef __DASYSTAT
-! also check for distance to bulk boundary
+!
+! also check for distance to bulk boundary note that, since the bulk
+! boundary distance is held fixed, it is possible that surface will shrink
+! to be very close to the bulk boundary,  in which case we would need to
+! recompute the bulk boundary distance to avoid instabilities (or
+! ill-definedness, if the BBD happens to be OUTSIDE !) the place to do
+! this is probably below
+!
  if (dasystat) then
-  if ( abs(bulk_boundary_distance).lt.__ERRTOL ) then
-   bulk_boundary_distance = -(__BULK_DISTANCE_SCALE)*abs(surface_distance)
-   bulk_boundary_contour_value = __RHO(bulk_boundary_distance)
-   __MESSAGE(whoami, 'SETTING LOCATION OF BULK BOUNDARY FROM SURFACE BOUNDARY TO '//ftoa(bulk_boundary_distance)//' A FROM PROTEIN. CONTOUR VALUE IS '//ftoa(bulk_boundary_contour_value))
-  else
-   if(abs(bulk_boundary_distance).gt.abs(surface_distance)) then
-    __WRN(whoami, 'BULK BOUNDARY MUST BE INSIDE SHELL SURFACE. ABORT');
-    __ASSERT(abs(bulk_boundary_distance),<,abs(surface_distance));
-   endif
+  if(abs(bulk_boundary_distance).ge.abs(surface_distance)) then
+   __WRN(whoami, 'BULK BOUNDARY MUST BE INSIDE SHELL SURFACE. ABORT');
+   __ASSERT(abs(bulk_boundary_distance),<,abs(surface_distance));
+   goto 999
+!
+  elseif( (abs(surface_distance) - abs(bulk_boundary_distance)) .lt. &
+&    ( __BULK_BOUNDARY_RECOMPUTE_FACTOR * abs(surface_distance) ) ) then ! recompute bulk_bdry
+    __MESSAGE(whoami, 'BULK BOUNDARY IS TOO CLOSE TO SURFACE BOUNDARY. WILL RECOMPUTE:')
+!
+  elseif ( abs(bulk_boundary_distance).lt.__ERRTOL ) then ! zero value signals auto-compute
+    __MESSAGE(whoami, 'COMPUTING INITIAL LOCATION OF BULK BOUNDARY FROM SURFACE BOUNDARY:')
+!
+  else !
+    goto 999
   endif
+  bulk_boundary_distance = -(__BULK_DISTANCE_SCALE)*abs(surface_distance)
+  bulk_boundary_contour_value = __RHO(bulk_boundary_distance)
+  __MESSAGE(whoami, 'LOCATION OF BULK BOUNDARY SET TO '//ftoa(bulk_boundary_distance)//' A FROM PROTEIN. CONTOUR VALUE IS '//ftoa(bulk_boundary_contour_value))
+ 999  continue
  endif ! dasystat
 #endif
 !
@@ -1618,7 +1634,7 @@ __DBGVAR(r_com_sa,1)
   else ! (NOT) qminimum_distance
    qforced_solv=rho_solv.lt.surface_contour_value ! vector operation
   endif ! qminimum_distance
-!====== NOTE : if we requested to run without neighbor lists then need to reset solute_neighbor_mind to max
+!====== NOTE : if we requested to run without neighbor lists then we need to reset solute_neighbor_mind to max
 !====== otherwise, the early exit version of force routine could miss crucial atoms (the mind list is _not_ updated b/c qnlist=0)
 !====== this is because solute_neighbor_mind is recomputed in a full loop, so it will be smaller than nsurf
 #if defined(__NEIGHBOR_LIST) & defined(__SORT_LIST)
@@ -3152,9 +3168,230 @@ __DBGVAR(solvent_mass_nonbulk,1)
  end __SUB(compute_mindist_grad)
 !================================================================
 #ifdef __BAROSTAT
- __SUB(compute_surface_area)()
+#undef _S
+#define _S compute_surface_area
+ __SUB(_S)
+!
+#ifdef __OMP
+ use omp_lib
+ int tid, numthreads, n
+#endif
+ int i, im, jm, km, ii, jj, kk, imin, imax, jmin, jmax, kmin, kmax, nx, ny, nz
+ float x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, dx2, dy2, dz2, x0, y0, z0
+! float support, support2, rsurf, a, b, ooc, expa, expb, oos
+ real*4 :: support, support2, rsurf, a, b, ooc, expa, expb, oos
+ float, parameter :: sqrtmap(0:3)=(/zero, one, sqrt2, sqrt3/)
+#ifdef __PERTURB_GRID
+ float :: drand(3)
+#endif
+!
+ integer*1 rhomx, thisrho, igrad
+ float __U(grad)
+ __IAM(__NM(_S))
+!
+! make use of existing definitions in compute_desity_grad routine above
+! different erf implementations/approximations
+ float :: erfsun ! external erf function; code by Sun Microsystems
+! if openmp is used, cannot call the function erfo7, so hack to call inlined macro here
+#ifndef __OMP
+ float :: erfo7  ! approximation to within O(-7)
+#endif
+ float :: erfo5  ! approximation to within O(-5) [contains an exponential term]
+!
+#ifdef __PERTURB_GRID
+ call randomu_vector(drand, 3, random_channel)
+ drand=(drand-half)*surface_area_grid_spacing
+#else
+#define drand(_A)
+#endif
+!
+ x0 = drand(1) + sagrid%limits(1,1)
+ y0 = drand(2) + sagrid%limits(1,2)
+ z0 = drand(3) + sagrid%limits(1,3)
+!
+ nx=sagrid%n(1)
+ ny=sagrid%n(2)
+ nz=sagrid%n(3)
+!
+#define qpbcx qper_parser_override
+#define qpbcy qpbcx
+#define qpbcz qpbcx
 
- end __SUB(compute_surface_area)
+! initialize
+ surface_area=zero
+!
+ oos=__OORHO(surface_contour_value)
+!
+#ifdef __OMP
+!$omp parallel &
+!$omp shared(sarho_all_threads, sarhof_all_threads) &
+!$omp private(x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, dx2, dy2, dz2, ii, jj, kk, imin, imax, jmin, jmax, kmin, kmax, tid, &
+!$omp i, __U(grad), rhomx, thisrho, igrad, n, support, support2, rsurf, a, b, ooc, expa, expb)
+ tid=omp_get_thread_num() ! thread index
+ numthreads=omp_get_num_threads()
+#ifdef rho
+#undef rho
+#endif
+#define rho(i,j,k) sarhof_all_threads(i,j,k,tid)
+#else
+#define rho sarhof
+#endif
+! assign to each thread a local copy of surface indicator
+ rho(:,:,:)=zero ! initialize
+ __U(grad)=0
+!$omp do schedule(runtime)
+ do i=1, nsurface
+! determine support for this atom, i.e. all grid points which are within the filter support
+  rsurf = ( rad_surf(i) + surf_padding )
+  support = ( rsurf + cutoff_surf )
+  support2=support**2
+  x=r_surf(1,i)-r_com_sa(1)
+  xmin=x-support
+  xmax=xmin + two*support
+  imin = INT( (xmin-x0)*oo_surface_area_grid_spacing ) + 1 ! could be negative (i.e. off-the-grid), but the indices are consistent with the 1-based offset
+  imax = INT( (xmax-x0)*oo_surface_area_grid_spacing ) + 2
+  if (.not.qpbcx) then
+   imin=max(imin,1)
+   imax=min(imax,nx)
+  endif
+__DBGVAR(surface_area_grid_spacing,2)
+__DBGVAR(oo_surface_area_grid_spacing,2)
+__DBGVAR(x,2)
+__DBGVAR(xmin,2)
+__DBGVAR(xmax,2)
+__DBGVAR(x0,2)
+__DBGVAR(imin,2)
+__DBGVAR(imax,2)
+! same for y
+  y=r_surf(2,i)-r_com_sa(2)
+  ymin=y-support
+  ymax=ymin + two*support
+  jmin = INT( (ymin-y0)*oo_surface_area_grid_spacing ) + 1
+  jmax = INT( (ymax-y0)*oo_surface_area_grid_spacing ) + 2
+  if (.not.qpbcy) then
+   jmin=max(jmin,1)
+   jmax=min(jmax,ny)
+  endif
+__DBGVAR(y,2)
+__DBGVAR(ymin,2)
+__DBGVAR(ymax,2)
+__DBGVAR(y0,2)
+__DBGVAR(jmin,2)
+__DBGVAR(jmax,2)
+! and for z
+  z=r_surf(3,i)-r_com_sa(3)
+  zmin=z-support
+  zmax=zmin + two*support
+  kmin = INT( (zmin-z0)*oo_surface_area_grid_spacing ) + 1
+  kmax = INT( (zmax-z0)*oo_surface_area_grid_spacing ) + 2
+  if (.not.qpbcz) then
+   kmin=max(kmin,1)
+   kmax=min(kmax,nz)
+  endif
+__DBGVAR(z,2)
+__DBGVAR(zmin,2)
+__DBGVAR(zmax,2)
+__DBGVAR(z0,2)
+__DBGVAR(kmin,2)
+__DBGVAR(kmax,2)
+
+  do kk=kmin,kmax
+   dz2=(surface_area_grid_spacing*(kk-1) - (z - z0) )**2; ! actual z-distance between gridpoint and atom
+   km=modulo(kk-1,nz-1)+1 ! works for PBC
+   do jj=jmin,jmax
+    dy2=dz2+(surface_area_grid_spacing*(jj-1) - (y - y0) )**2;
+    if (dy2>support2) cycle
+    jm=modulo(jj-1,ny-1)+1
+    do ii=imin,imax
+     dx2=dy2+(surface_area_grid_spacing*(ii-1) - (x - x0) )**2;
+     if (dx2>support2) cycle
+     im=modulo(ii-1,nx-1)+1
+! update density
+     if (rho(im,jm,km).lt.surface_contour_value) then
+      support=rsurf * oo_surf_stdev ! reuse support var
+      dx2 = sqrt(dx2) * oo_surf_stdev
+      a = osq2 * (dx2 + support)
+      b = osq2 * (dx2 - support)
+      ooc = one / dx2
+      expa = exp ( - a**2 )
+      expb = exp ( - b**2 )
+! update density
+#ifdef __ERFHYBRID
+      __erfo7i(a,erfa)
+      __erfo7i(b,erfb)
+      __INCR(rho(im,jm,km), half * ( erfa - erfb ) + osq2pi * ooc * ( expa - expb )   )
+#else
+#define __erf(_Y) __erfo7s(_Y)
+#// singe prec ^
+      __INCR(rho(im,jm,km), half * ( __erf(a) - __erf(b) ) + osq2pi * ooc * ( expa - expb )   )
+#endif
+     endif ! rho<surface_contour value
+    enddo !ii
+   enddo !jj
+  enddo !kk
+ enddo ! nsurface atoms, i
+#ifdef __OMP
+!$omp end do
+! now reduce all indicator arrays to master array (0th thread)
+ n=1
+ do while (n.lt.numthreads)
+!$omp barrier ! make sure all threads have completed previous operation
+  if (mod(tid,2*n)==0 .and. (tid+n).lt.numthreads) then
+   __INCR(rho(:,:,:), sarhof_all_threads(:,:,:,tid+n))
+  endif
+  __SCALE(n,2)
+ enddo
+! now compute surface area integral
+#if defined rho
+#undef rho
+#endif
+#define rho(i,j,k) sarhof_all_threads(i,j,k,0)
+#define irho(i,j,k) sarho_all_threads(i,j,k,0)
+!$omp barrier ! make sure thread reduction is complete, otherwise volumes will be too small
+! first, digitize continuous density :
+!$omp do schedule(runtime)
+#else
+#define irho sarho
+#endif
+ do kk=1,nz
+  do jj=1,ny
+   do ii=1,nx
+!    irho(ii,jj,kk)=INT(rho(ii,jj,kk)*oos)
+    if (rho(ii,jj,kk).gt.surface_contour_value) then ; irho(ii,jj,kk)=1 ; else ; irho(ii,jj,kk)=0 ; endif
+   enddo
+  enddo
+ enddo
+#ifdef __OMP
+!$omp end do
+!$omp barrier ! make sure irho is computed everywhere
+! second, integrate digitized gradient
+!$omp do schedule(runtime)
+#endif
+ do kk=2,nz
+  do jj=2,ny
+   rhomx=irho(1,jj,kk)
+   do ii=2,nx ; thisrho=irho(ii,jj,kk)
+! specialized code below : we know that in this case, rho can only be 0,1;
+! therefore diff(rho) can only be 0,1, which means igrad can be 0 1 2 or 3, and there is no need to use squares or square roots
+! simpified :
+    igrad = abs(thisrho-rhomx) + abs(thisrho-irho(ii,jj-1,kk)) + abs(thisrho-irho(ii,jj,kk-1))
+    rhomx=thisrho
+    __INCR(__U(grad),sqrtmap(igrad))
+   enddo
+  enddo
+ enddo
+#ifdef __OMP
+!$omp end do
+!$omp atomic
+#endif
+ surface_area=surface_area + __U(grad)
+#ifdef __OMP
+!$omp end parallel
+#endif
+ __SCALE(surface_area,surface_area_grid_spacing**2)
+ __DBGVAR(surface_area,1)
+!
+ end __SUB(_S)
 !================================================================
  __SUB(compute_surface_area_mindist)()
 #ifdef __OMP
@@ -3302,12 +3539,16 @@ __DBGVAR(kmax,2)
 #undef rho
 #endif
 #define rho(i,j,k) sarho_all_threads(i,j,k,0)
+!$omp barrier ! make sure thread reduction is complete, otherwise volumes will be too small
 !$omp do schedule(runtime)
 #endif
  do kk=2,nz
   do jj=2,ny
    rhomx=rho(1,jj,kk)
    do ii=2,nx ; thisrho=rho(ii,jj,kk)
+! note that the code below is general, but we know that in this case, rho can only be 0,1;
+! therefore diff(rho) can only be 0,1, which means igrad can be 0 1 2 or 3, and there is no need to use squares or square roots
+! so, should simplify in the future !
      igrad= &
 &     ( thisrho - rhomx )**2 + &
 &     ( thisrho - rho(ii,jj-1,kk) )**2 + &
@@ -3326,9 +3567,7 @@ __DBGVAR(kmax,2)
 !$omp end parallel
 #endif
  __SCALE(surface_area,surface_area_grid_spacing**2)
-#ifdef __DEBUG
  __DBGVAR(surface_area,1)
-#endif
 !
  end __SUB(compute_surface_area_mindist)
 !
@@ -3393,7 +3632,7 @@ __DBGVAR(kmax,2)
 !
 #ifdef __OMP
 !$omp parallel &
-!$omp shared(sarho_all_threads, ivolume, ivolume_nonbulk) &
+!$omp shared(sarhof_all_threads, ivolume, ivolume_nonbulk) &
 !$omp private(x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, dx2, dy2, dz2, ii, jj, kk, imin, imax, jmin, jmax, kmin, kmax, tid, &
 !$omp i, __U(ivolume), __U(ivolume_nonbulk), n, support, support2, rsurf, a, b, ooc, expa, expb)
  tid=omp_get_thread_num() ! thread index
@@ -3495,7 +3734,7 @@ __DBGVAR(kmax,2)
 #// singe prec ^
       __INCR(rho(im,jm,km), half * ( __erf(a) - __erf(b) ) + osq2pi * ooc * ( expa - expb )   )
 #endif
-     endif ! rho<contour value
+     endif ! rho<bulk_boundary_contour value
     enddo !ii
    enddo !jj
   enddo !kk
@@ -3511,7 +3750,7 @@ __DBGVAR(kmax,2)
   endif
   __SCALE(n,2)
  enddo
-! now compute surface area integral
+! now compute volume integrals
 #ifdef rho
 #undef rho
 #endif

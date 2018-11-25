@@ -116,6 +116,7 @@ __SETQROOT
 !=============================================================
       __TRY(DRMSD)
       __TRY(PROJ)
+      __TRY(RMSD2AV)
       __TRY(CVRMS)
 #undef __ADD_ARGS
 #define __ADD_ARGS comlyn, comlen, rmsd
@@ -976,6 +977,186 @@ __SETQROOT
       call int_vector_done(cv_list)
 !     done!
       end function smcv_cvrms_add
+!ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      function smcv_rmsd2av_add(comlyn, comlen) result(ind)
+      use cv_rmsd2av, only : cv_rmsd2av_add
+      __DEP_VECTORS
+!
+      character(len=*) :: comlyn
+      int :: comlen
+      int :: ind
+!    locals
+      __STRING_PAR(cv_name,RMSD2AV)
+!
+      type (int_vlist) :: rmsd2av_list
+      int, pointer :: inds(:,:) ! RMSD atom indices
+      float, pointer :: wgts(:) ! RMSD computation weights
+      float :: wgt
+      bool :: qrota, qtrans, qorient, qmass, err
+      int :: nset ! number of rmsd atom selections
+      int :: atom_group, i, j, nslct, nforced
+!
+#ifdef __CHARMM
+      int :: imode, iselct(natom)
+#elif defined (__DMOL)
+ __DECLARE_DMOL_SELECT
+#endif
+!
+      __IAM(SMCV_RMSD2AV_ADD)
+!
+__SETQROOT
+!
+!     first check for the number of RMSD sets
+#define _DEF 0
+      nset=_DEF; __GET(nset,NSET,I,_DEF)
+      else       __GET(nset,NRMS,I,_DEF)
+      else       __GET(nset,NSEL,I,_DEF)
+      else       __GET(nset,NCOR,I,_DEF)
+      else
+       __WRN(whoami, 'NUMBER OF RMSD ATOM SETS (NSET) NOT SPECIFIED. NOTHING DONE.')
+       return
+      endif
+!     bounds check
+      __ASSERT(NSET,>,1)
+! now can read indices
+      do atom_group=1,nset
+!
+#ifdef __CHARMM
+!
+       imode=0
+       CALL SELRPN(COMLYN,COMLEN,ISELCT,NATOM,1,IMODE,                   &
+     &      .FALSE.,1,' ',0,RESID,RES,IBASE,SEGID,NICTOT,NSEG,          &
+     &      .TRUE.,X,Y,Z,.TRUE.,1,WMAIN)
+       IF(IMODE.NE.0) THEN
+        CALL WRNDIE(0,whoami,'ATOM SELECTION ERROR')
+        RETURN
+       ENDIF
+!
+       NSLCT=NSELCT(NATOM,ISELCT)
+!
+#elif defined(__DMOL)
+#include "dmol_select_macro.def"
+      if (associated(__INDEX)) then ; nslct=size(__INDEX) ; else ; nslct=0 ; endif
+#endif
+!
+       if(nslct.eq.0) then
+       __WRN(whoami,'ZERO ATOMS SELECTED. ABORTING.')
+#ifdef __DMOL
+       __FREE(__INDEX)
+#endif
+        return
+       endif
+!
+#ifdef __CHARMM
+       do i=1,natom ! loop over all atoms
+        if (iselct(i).eq.1) then
+         j=int_vlist_uadd(rmsd2av_list, atom_group ,i)
+         if (j.le.0) then ; __WRN(whoami,'COULD NOT ADD ATOM INDEX TO RMSD LIST') ; endif
+        endif
+       enddo
+!
+#elif defined (__DMOL)
+       do i=1,size(__INDEX)
+        j=int_vlist_uadd(rmsd2av_list, atom_group,__INDEX(i))
+        if (j.le.0) then ; __WRN(whoami,'COULD NOT ADD ATOM INDEX TO RMSD LIST') ; endif
+       enddo
+       __FREE(__INDEX)
+#endif
+      enddo ! loop over rmsd selections
+!    make sure the number of atoms is the same in all restraint lists
+      do i=2, rmsd2av_list%last
+       err=rmsd2av_list%v(i)%last .ne. rmsd2av_list%v(i-1)%last
+       if (err) then
+        __WRN(whoami,'ALL SELECTIONS IN RESTRAINT MUST HAVE THE SAME NUMBER OF ATOMS. ABORT')
+        call int_vlist_done(rmsd2av_list);
+        return
+       endif
+      enddo
+! everything ok -- populate indices
+      nforced=rmsd2av_list%v(1)%last
+      allocate(inds(nforced,nset))
+      do i=1,nset
+       inds(:,i)=rmsd2av_list%v(i)%i(1:nforced)
+      enddo
+      call int_vlist_done(rmsd2av_list);
+! check for mass, rotation, translation specification
+! check for no-rotation and no-translation options in the orientation
+      qmass=(__INDX_RM(comlyn, comlen, 'MASS').gt.0) ! mass-weighting flag
+      qtrans=(__INDX_RM(comlyn, comlen,'NOTR').eq.0)
+      qorient=qtrans.or.qrota
+      qrota=(__INDX_RM(comlyn, comlen,'NORO').eq.0)
+!
+      if (qrota.and.nforced.lt.2) then
+       __WRN(whoami,' FEWER THAN TWO ATOMS SELECTED FOR ROTATIONAL FITTING. ABORT.')
+       __FREE(inds)
+       return
+      endif
+!     deal with weights :
+      allocate(wgts(nforced)); wgts=one;
+      if (qmass) then
+        do i=1, nforced
+         wgt=__MASS(inds(i,1))
+         do j=2,nset
+          if (wgt.ne.__MASS(inds(i,j))) then
+           __WRN(whoami, ' MASS WEIGHTING REQUESTED, BUT NOT ALL RMSD SETS HAVE IDENTICAL MASSES (ATOMID #'//itoa(j)//'). USING MASSES FROM FIRST SET.')
+          endif
+         enddo
+         wgts(i)=wgt
+        enddo
+      endif ! qmass
+! normalize weighting coefficients
+!
+      wgt=sum(wgts)
+      if (abs(wgt).gt.__ERRTOL) then
+       __SCALE(wgts,one/wgt)
+      endif
+!    print summary
+      if (qroot) then
+!
+       if (w.lt.zero) then
+        write(_MSGBUF, __FMTNOW) whoami,cv_name,k,gam
+       else
+        write(_MSGBUF, __FMTW) whoami,cv_name,k,w,gam
+       endif
+!
+       i=1;
+       __INC(i);write(_MSGBUF(i),3) whoami, nforced
+!
+       if (qorient) then
+        __INC(i);write(_MSGBUF(i),1) whoami, nforced
+        if (.not.qrota) then
+         __INC(i);write(_MSGBUF(i),'(2A)') whoami, ' BEST-FIT SUPERPOSITION WILL NOT INCLUDE ROTATIONAL FITTING'
+        endif
+        if (.not.qtrans) then
+         __INC(i);write(_MSGBUF(i),'(2A)') whoami, ' BEST-FIT SUPERPOSITION WILL NOT INCLUDE TRANSLATIONAL FITTING'
+        endif
+!
+       else ! no orientation
+        __INC(i);write(_MSGBUF(i),'(2A)') whoami,' WILL NOT USE BEST-FIT SUPERPOSITION IN RMSD COMPUTATION'
+       endif ! qorient
+       if (qmass) then 
+        __INC(i);write(_MSGBUF(i),2) whoami
+       endif ! qmass
+!
+       __PRINT(_MSGBUF)
+!
+ 1    format(A,' WILL SUPERPOSE TARGET STRUCTURE(S) BASED ON ',i5,' ATOMS')
+ 2    format(A,' WILL USE MASS-WEIGHTING')
+ 3    format(A,' ',i5,' RMSD ATOMS FOUND')
+!
+      endif ! qroot
+!     now attempt to add CV
+      ind=0
+      ind=cv_rmsd2av_add(inds, wgts, k, gam, w, qrota, qtrans)
+!
+      if (ind.le.0) then
+       __WRN(whoami,'COULD NOT ADD CV')
+      endif
+!     deallocate variables
+      __FREE(inds)
+      __FREE(wgts)
+!
+      end function smcv_rmsd2av_add
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       function smcv_rmsd_add(comlyn, comlen, cvtype) result(ind)
 !     much of the code taken from RTMD sources in ../misc
