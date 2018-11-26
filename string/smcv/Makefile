@@ -1,5 +1,5 @@
 ROOT=../..
-CVOBJ=cv_posi_com.o cv_dist_com.o cv_angle_com.o cv_anglvec.o cv_dihe_com.o cv_rmsd.o cv_drmsd.o cv_proj.o cv_quaternion.o cv_qcomp.o # cv_rmsd2av.o
+CVOBJ=cv_posi_com.o cv_dist_com.o cv_angle_com.o cv_anglvec.o cv_dihe_com.o cv_rmsd.o cv_drmsd.o cv_proj.o cv_quaternion.o cv_qcomp.o cv_rmsd2av.o
 OBJS=cv_types.o cv_common.o cv_frames.o cv_cvrms.o smcv_master.o smcv.o smcv_add.o smcv_check_set.o smcv_stats.o $(CVOBJ)
 HEADS=smcv_interface.h
 NAME=string/smcv
