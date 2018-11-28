@@ -1,6 +1,6 @@
 SHELL=/bin/sh
 #
-CC=gcc-5
+CC=gcc
 CFLAGS =-O3 -fno-math-errno -c -fPIC
 #CFLAGS =-O0 -g -fno-math-errno -c -fPIC
 #
@@ -24,10 +24,10 @@ CUINCLUDES+=-I/usr/local/cuda/samples/common/inc
 #MPI_HOME=/usr/local/mpich2-intel
 #---GNU
 FC=gfortran
-#FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno #-Wall -fopenmp
+FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno #-Wall -fopenmp
 # WARNING: WHEN DEBUGGING DO NOT USE THE LINE BELOW. OPTIMIZATION DESTROYS SYNCHRONIZATION
 #FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fcheck=all -g
-FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno
+#FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno
 #FFLAGS=-O1 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fcheck=all #-fno-math-errno
 #MPI_HOME=/usr/local/mpich2-gnu
 MPI_HOME=/usr/lib/openmpi

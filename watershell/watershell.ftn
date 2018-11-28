@@ -130,9 +130,11 @@ module _N
  float, parameter :: pa_per_akma = 1d0/akma_per_pa 
  float, parameter :: atm_per_akma = atm_per_pa * pa_per_akma ! conversion from akma to atom (~ 14)
  float, parameter :: akma_per_atm = 1d0/atm_per_akma
- __PAR(pressure_num_samples, int, 0)    ! number of inst. pressure samples that make up average
+ __PAR(pressure_num_long_samples, int, 0)    ! number of inst. pressure samples that make up long-time average
+ __PAR(pressure_max_long_samples, int, 100000) ! max number of inst. samples to keep in long-time average
+ __PAR(pressure_num_samples, int, 0)    ! number of inst. pressure samples that make up long-time average
  __PAR(pressure_max_samples, int, 1000) ! max number of inst. samples to keep in average
- __PAR(pressure_update_freq, int, 100)   ! how often pressure is updated from force and area
+ __PAR(pressure_update_freq, int, 10)   ! how often pressure is updated from force and area
 #endif
 ! === ^ barostat parameters ^ ====
 #ifdef __DASYSTAT
@@ -242,7 +244,7 @@ module _N
 #if defined(__BAROSTAT) || defined(__DASYSTAT)
  float :: surface_area=-1d0
 #ifdef __BAROSTAT
- float :: pressure, pressure_ave ! will store in atm
+ float :: pressure, pressure_ave, pressure_long_ave ! will store in atm
 #endif
 #ifdef __DASYSTAT
  float :: volume_bulk=-1d0
@@ -411,6 +413,15 @@ module _N
 #define __TAG	__VAR
 #define __NAME	current number of instantaneous pressure samples
 #include "parser/parser_macro2.src"
+!
+! number of long samples
+!
+#undef __WARNIFMISSING
+#define __VAR	pressure_num_long_samples
+#define __TAG	__VAR
+#define __NAME	current number of instantaneous pressure samples in long-time average
+#include "parser/parser_macro2.src"
+#define __WARNIFMISSING
 #endif
 !
 #ifdef __DASYSTAT
@@ -531,6 +542,13 @@ module _N
 #define __TAG	pressure_relax_time
 #define __NAME	barostat relaxation time (in simulation steps)
 #include "parser/parser_macro2.src"
+!
+#undef __WARNIFMISSING
+#define __VAR	pressure_max_long_samples
+#define __TAG	__VAR
+#define __NAME	maximum number of samples in long-time pressure average
+#include "parser/parser_macro2.src"
+#define __WARNIFMISSING
 !
 #undef __INT // default is float
 !
@@ -1023,8 +1041,20 @@ module _N
    else
     __WRN(whoami, 'ERROR READING PRESSURE FROM LINE "'//trim(line)//'"')
    endif ! line ok
+! now, long-time average
+   line=getval_nocase('average_pressure',__STRING(__RESTARTCTX))
+   if (len_trim(line).gt.0) then
+    read(line,*,iostat=ierr) pressure_long_ave
+    if (ierr.ne.0) then
+     __WRN(whoami, 'ERROR READING AVERAGE PRESSURE FROM LINE "'//trim(line)//'"')
+    endif
+   else ! restart file does not have lta pressure, so set it to zero
+    pressure_long_ave=zero
+    pressure_num_long_samples=izero
+   endif ! line ok
   else ! qrestart
-   pressure_ave=-one; ! this value used for initialization is not physical
+   pressure_ave=zero; ! value used for initialization
+   pressure_long_ave=zero
   endif ! qrestart
  endif ! barostat
 #endif
@@ -1096,13 +1126,13 @@ __DBGVAR(r_com_sa,1)
   if (dasystat) allocate(inrho(sagrid%n(1),sagrid%n(2),sagrid%n(3)))
 #endif
 #endif
-  else
+  else ! qminimum_distance
 #ifdef __OMP
    allocate(sarhof_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:omp_get_max_threads()-1))
 #else
    allocate(sarhof(sagrid%n(1),sagrid%n(2),sagrid%n(3)))
 #endif
-  endif
+  endif ! qmindist
 ! initialize random number generator for small random grid displacements
 #ifdef __PERTURB_GRID
   if (.not.random_initialized) call random_init()
@@ -1160,6 +1190,8 @@ __DBGVAR(r_com_sa,1)
  if (barostat) then
  _W 'pressure=',pressure_ave, '# (units of atm)'
  _W 'pressure_num_samples=',pressure_num_samples
+ _W 'average_pressure=',pressure_long_ave, '# (units of atm)'
+ _W 'pressure_num_long_samples=',pressure_num_long_samples
  endif
 #endif
 #ifdef __DASYSTAT
@@ -1568,7 +1600,7 @@ __DBGVAR(r_com_sa,1)
     __INCR(distance_from_solute, d0)
     __INCR(distance_from_solute2, d0**2)
    enddo
-   pre=0.25d0 ! prefactor for scaling std in computing reference distance
+   pre=1d0 ! prefactor for scaling std in computing reference distance
   else ! (NOT) qminimum_distance -- original erf algorithm
 ! first, set surface_contour value to an upper bound to make sure that the 
 ! no atoms can be marked as "inside" atoms; this ensures that the density routine cannot quit early
@@ -1581,14 +1613,14 @@ __DBGVAR(r_com_sa,1)
     __INCR(distance_from_solute, d0)
     __INCR(distance_from_solute2, d0**2)
    enddo
-   pre=0.25d0
+   pre=1d0
   endif ! qmin distance
 ! set contour value to average value + (a) x stdev ; a set empirically
   __SCALE(distance_from_solute,oonsolvent);
   __DBGOUT('Distance from solute ', distance_from_solute)
   __SCALE(distance_from_solute2,oonsolvent);
   __DBGOUT('Distance from solute stdDev ', sqrt ( distance_from_solute2 - distance_from_solute**2))
-  surface_distance = distance_from_solute - & ! average
+  surface_distance = distance_from_solute - & ! average (recall that distance_from_solute < 0, so this adds to the length)
 &                    pre * sqrt( max(zero,distance_from_solute2 - distance_from_solute**2) ) ! analytically positive, but, just in case, protect from roundoff
   surface_contour_value = __RHO(surface_distance) ! for mindist, determine this for information, even though not relevant to algorithm
   __MESSAGE(whoami, 'COMPUTED SURFACE DISTANCE AT '//ftoa(surface_distance)//' A FROM PROTEIN. CONTOUR VALUE IS '//ftoa(surface_contour_value))
@@ -1993,9 +2025,6 @@ endif
 !$omp atomic
   __REDUCE(surface_force)
 !  __REDUCE(density_beyond_contour) ! not clear if useful
-!  __REDUCE(nsolvent_outside)
-!  __REDUCE(surface_energy)
-!  __REDUCE(surface_force)
 #ifdef __DASYSTAT
 if (dasystat) then
 !$omp atomic
@@ -2138,14 +2167,22 @@ __DBGVAR(pressure_ave,1)
     if (pressure_num_samples<pressure_max_samples) __INC(pressure_num_samples)
     d0=1d0/pressure_num_samples
      __INCR(pressure_ave, d0 * (pressure - pressure_ave))
+! repeat for long-time average pressure
+    if (pressure_num_long_samples<pressure_max_long_samples) __INC(pressure_num_long_samples)
+    d0=1d0/pressure_num_long_samples
+     __INCR(pressure_long_ave, d0 * (pressure - pressure_long_ave))
    endif ! chkupdate
   endif ! pressure update
 !
 !=========================== evolve/update contour/distance value
   if (distance_update_freq.gt.0) then
+! NOTE : it might happen that we did not yet compute the pressure; in this case, pressure_ave is unphysical ; unclear what to do in this case
+! we could disallow negative pressures (which are unphysical, but could be useful in a controller) ; then could use pressure<0 as a flag, as done in the density case
    if __CHKUPDATE(distance_update_freq) then
 !
     d0 = ( pressure_target - pressure_ave )
+!  when pressures are large, as at the beginning of a simulation, the shell could change in large steps ; should limit such changes for stability, e.g.
+    d0 = sign( min(ten, abs(d0)), d0 );
     __INCR(surface_distance, distance_update_step * d0) ! note that surface_distance < 0 in our notation ; so too high p => dist decr.
     surface_contour_value = __RHO(surface_distance)
 !
@@ -2316,7 +2353,8 @@ __DBGVAR(density_ave,1)
 #ifdef __BAROSTAT
   if (barostat) then
    __OUT('Target pressure (atm):           ', pressure_target)
-   __OUT('Simulation pressure (atm):       ', pressure_ave)
+   __OUT('Simulation pressure (short):     ', pressure_ave)
+   __OUT('Average pressure (long):         ', pressure_long_ave)
    __OUT('Instantaneous pressure (atm):    ', pressure)
    __OUT('Total force on solvent shell :   ', surface_force)
    __OUT('Surface area of solvent shell :  ', surface_area)
@@ -3354,12 +3392,13 @@ __DBGVAR(kmax,2)
 #undef rho
 #endif
 #define rho(i,j,k) sarhof_all_threads(i,j,k,0)
-#define irho(i,j,k) sarho_all_threads(i,j,k,0)
+#// use the same array below
+#define irho(i,j,k) sarhof_all_threads(i,j,k,0)
 !$omp barrier ! make sure thread reduction is complete, otherwise volumes will be too small
 ! first, digitize continuous density :
 !$omp do schedule(runtime)
 #else
-#define irho sarho
+#define irho sarhof
 #endif
  do kk=1,nz
   do jj=1,ny
