@@ -1,14 +1,22 @@
-! to "regularize" variation of applied forces with the contour value, 
+! to "regularize" variation of applied forces with the contour value,
 ! use a rough approximation to the inverse of the filter CDF;
 ! for efficiency, use a logistic function matched to the Gaussian filter
 !
-! to avoid divide overflow, define minimum density as the smallest float in single precision
-#define  __RHO_MIN FERRTOL()
+! to avoid divide overflow, define minimum density
+#// single precision small number :
+!#define  __RHO_MIN FERRTOL()
+#// double precision small number :
+#define  __RHO_MIN ERRTOL()
 #define  __RHO(_X) ( one/(one+exp(-_X/logistic_constant)) )
-#define  __OORHO(_R) ( one/(max(_R,__RHO_MIN)))
+#define  __OORHO(_R) ( one/_R )
+#define  __OORHOSAFE(_R) ( one/(max(_R,__RHO_MIN)))
 #define  __RHO_INVERSE(_L) ( - logistic_constant * log ( __OORHO(_L) - one) )
+#define  __RHO_INVSAFE(_L) ( - logistic_constant * log ( __OORHOSAFE(_L) - one) )
 #// if already have 1/rho
 #define  __RHO_INVERSE2(_OL) ( - logistic_constant * log ( _OL - one) )
+#// with __RHO_MIN specified, we also have the largest possible shell that can be defined ; note the (-) sign convention
+#// this value should be considered when evolving the shell distance
+#define  __MINSURFDIST __RHO_INVERSE(__RHO_MIN)
 !
 #define __CTX __WATERSHELLCTX
 #define __RESTARTCTX __CONCAT(__WATERSHELLCTX,_RESTART)
@@ -394,7 +402,7 @@ module _N
                   __MESSAGE(whoami, 'LOCATION OF SOLVENT SURFACE WILL BE SET FROM SOLVENT COORDINATES.') ; \
                  else ;\
                   __VAR=-(abs(__VAR)) ; \
-                  surface_contour_value=__RHO(surface_distance) ;\
+                  surface_contour_value=__RHO(__VAR) ;\
                  endif ! make sure to set to a negative value
 !
 #include "parser/parser_macro2.src"
@@ -1265,7 +1273,7 @@ __DBGVAR(r_com_sa,1)
 #ifdef __F_T_COUPLED
  use lu
 #else
- use bestfit, only : matinv3sym
+ use bestfit, only : matinv3sym, norm3
 #endif
  float, intent(in) :: r(:,:)   ! coordinate array
  float, intent(out) :: fr(:,:) ! force array
@@ -1327,6 +1335,7 @@ __DBGVAR(r_com_sa,1)
 #endif
  int :: ierr
 #endif
+
  int :: i, ii
  __IAM(__NM(main))
 !================================================================
@@ -1608,7 +1617,10 @@ __DBGVAR(r_com_sa,1)
    call __NM(compute_density_grad)(.false.) ! need entire sum
    do i=1, nsolvent
 ! convert to distance
-    d0 = __RHO_INVERSE(rho_solv(i))
+    if ( abs(rho_solv(i)) .eq. zero ) then ! proceed if the density is positive ; otherwise warn that we are outside of the support
+     __WRN(whoami, 'SOLVENT ATOM '//itoa(isolvent_atoms(i))//' OUTSIDE OF SOLUTE SUPPORT. RESTART WITH A SMALLER SURFACE DISTANCE OR A LARGER FILTER CUTOFF.')
+    endif
+    d0 = __RHO_INVSAFE(rho_solv(i))
     __DBGOUT('Inst. distance from solute for atom ',i,' is ', d0);
     __INCR(distance_from_solute, d0)
     __INCR(distance_from_solute2, d0**2)
@@ -1815,6 +1827,9 @@ __DBGVAR(r_com_sa,1)
     __INCR(__U(net_torque)(1), ir(2) * iforce(3) - ir(3) * iforce(2))
     __INCR(__U(net_torque)(2), ir(3) * iforce(1) - ir(1) * iforce(3))
     __INCR(__U(net_torque)(3), ir(1) * iforce(2) - ir(2) * iforce(1))
+#ifdef __FNORM
+    d0=norm3(iforce)
+#endif
 !
    else ! keep net force/torque
 #endif
@@ -1823,13 +1838,20 @@ __DBGVAR(r_com_sa,1)
     __INCR(fr(1,isolvent_atoms(i)), d0 * ddist_solv(1,i))
     __INCR(fr(2,isolvent_atoms(i)), d0 * ddist_solv(2,i))
     __INCR(fr(3,isolvent_atoms(i)), d0 * ddist_solv(3,i))
+#ifdef __FNORM
+    d0=d0*norm3(ddist_solv(:,i))
+#endif
 !
 #ifdef __RMFT
    endif
 #endif
 ! sum "energy"
 ! NOT clear how the surface_force or energy are meaningful
+#ifdef __FNORM
+   __INCR(__U(surface_force), d0) ! cumulative force magnitude
+#else
    __INCR(__U(surface_force), pre) ! x k, below
+#endif
    __INCR(__U(surface_energy), pre**2) ! x k/2, below
   else ! distance check - atoms that are not forced
 
@@ -1931,8 +1953,12 @@ endif
 #ifdef __DASYSTAT
    if(dasystat) __INCR(__U(solvent_mass_outside), mass_solv(i))
 #endif
+   if ( abs(rho_solv(i)) .eq. zero ) then ! proceed if the density is positive ; otherwise warn that we are outside of the support
+    __WRN(whoami, '#'//itoa(iteration)//': SOLVENT ATOM '//itoa(isolvent_atoms(i))//' OUTSIDE OF SOLUTE SUPPORT. RESTART WITH A SMALLER SURFACE DISTANCE OR A LARGER FILTER CUTOFF.')
+    cycle
+   endif
 !   __INCR(__U(density_beyond_contour), rho_solv(i)) ! not clear whether useful
-   d0=__OORHO( rho_solv(i))
+   d0=__OORHO( rho_solv(i)) ! unsafe inverse, but rho > 0 per above
    pre = ( __RHO_INVERSE2 ( d0 ) - surface_distance ) ;
 !
 #ifdef __RMFT
@@ -1960,7 +1986,7 @@ endif
 #endif
 !
 ! add atomic force
-    d0=logistic_constant*d0*(__OORHO(one-rho_solv(i))) ! derivative of the inverse of logistic function
+    d0=logistic_constant*d0*(__OORHOSAFE(one-rho_solv(i))) ! derivative of the inverse of logistic function
     iforce = - surface_force_constant * pre * d0 * drho_solv(:,i) ! (-) because surface_distance is negative ; grad points toward protein
 !   fr(:,isolvent_atoms(i)) = - surface_force_constant * pre * d0 * drho_solv(:,i) ! (-) because surface_distance is negative ; grad points toward protein
     __INCR(fr(1,isolvent_atoms(i)),iforce(1))
@@ -1973,19 +1999,29 @@ endif
     __INCR(__U(net_torque)(1), ir(2) * iforce(3) - ir(3) * iforce(2))
     __INCR(__U(net_torque)(2), ir(3) * iforce(1) - ir(1) * iforce(3))
     __INCR(__U(net_torque)(3), ir(1) * iforce(2) - ir(2) * iforce(1))
+#ifdef __FNORM
+    d0=norm3(iforce)
+#endif
    else ! keep net force/torque
 #endif
     d0 = - surface_force_constant * pre * d0
     __INCR(fr(1,isolvent_atoms(i)), d0 * drho_solv(1,i))
     __INCR(fr(2,isolvent_atoms(i)), d0 * drho_solv(2,i))
     __INCR(fr(3,isolvent_atoms(i)), d0 * drho_solv(3,i))
+#ifdef __FNORM
+    d0=d0*norm3(drho_solv(:,i))
+#endif
 #ifdef __RMFT
    endif
 #endif
 
 ! sum "energy"
 ! NOT clear whether the surface_force or energy are meaningful
-   __INCR(__U(surface_force), pre) ! x k, below
+#ifdef __FNORM
+   __INCR(__U(surface_force), d0) ! actual force magnitude
+#else
+   __INCR(__U(surface_force), pre) ! x k, below (not sure this makes sense for barostat ; but __FNORM does )
+#endif
    __INCR(__U(surface_energy), pre**2) ! x k/2, below
   else ! for atoms that are not forced
 #ifdef __RMFT
@@ -2044,7 +2080,8 @@ endif
 ! we are using the boundary potential : k/2 x [ L^-1 (rho) - d0 ] ^ 2 ;
 ! d0 is the quasi-distance to boundary
 ! L^-1(rho) is the logistic function approximant
-! the forces on the bdry are still k ( L^-1(rho) - d0 );
+! are the forces on the body are still k ( L^-1(rho) - d0 ) ? NO, because d (d0) / d(r) is not 1 !
+! but if k is large, then d0 is very close to L^-1(rho) and d d0/dr ~= |grad_r L^-1 (rho)|
 ! the forces on the atoms are obtained by differentiation w.r.t position (x) :
 ! F(x) = - k ( L^-1(rho) - d0 ) * logistic_const / (1-L) / L * grad (rho)
 
@@ -2053,9 +2090,12 @@ endif
  else
   oonsolvent_outside=zero ;
  endif
- current_surface_distance=surface_distance + surface_force * oonsolvent_outside
+ current_surface_distance=surface_distance + surface_force * oonsolvent_outside ! note that this is incorrect with __FNORM
 !
+#ifndef __FNORM
+! otherwise, the force constant is included in the prefactor
  __SCALE(surface_force, -surface_force_constant) ! negative because of sign convention
+#endif
  __SCALE(surface_energy, half*surface_force_constant)
 !
  __INCR(energy,surface_energy)
@@ -2184,6 +2224,11 @@ __DBGVAR(pressure_ave,1)
 !  when pressures are large, as at the beginning of a simulation, the shell could change in large steps ; should limit such changes for stability, e.g.
     d0 = sign( min(ten, abs(d0)), d0 );
     __INCR(surface_distance, distance_update_step * d0) ! note that surface_distance < 0 in our notation ; so too high p => dist decr.
+! check to make sure the distance is not too large; if so, warn and limit
+    if (surface_distance .lt. __MINSURFDIST) then
+     __WRN(whoami, 'SHELL SURFACE DISTANCE HAS REACHED LARGEST ALLOWED VALUE ('//ftoa(abs(__MINSURFDIST))//'). RESTART WITH INCREASED CUTOFF OR PADDING')
+     surface_distance = __MINSURFDIST
+    endif
     surface_contour_value = __RHO(surface_distance)
 !
    endif
@@ -2310,6 +2355,11 @@ __DBGVAR(density_ave,1)
    if (__CHKUPDATE(distance_update_freq) .and. density_ave>zero) then
     d0 = ( density_target - density_ave )
     __INCR(surface_distance, distance_update_step * d0) ! note that surface_distance < 0 in our notation ; so too high p => dist decr.
+! check to make sure the distance is not too large; if so, warn and limit (same as barostat code)
+    if (surface_distance .lt. __MINSURFDIST) then
+     __WRN(whoami, 'SHELL SURFACE DISTANCE HAS REACHED LARGEST ALLOWED VALUE ('//ftoa(abs(__MINSURFDIST))//'). RESTART WITH INCREASED CUTOFF OR PADDING')
+     surface_distance = __MINSURFDIST
+    endif
     surface_contour_value = __RHO(surface_distance)
    endif
 !
@@ -2320,7 +2370,7 @@ __DBGVAR(density_ave,1)
 &    ( __BULK_BOUNDARY_RECOMPUTE_FACTOR * abs(surface_distance) ) ) then ! recompute bulk_bdry
     __MESSAGE(whoami, 'BULK BOUNDARY IS TOO CLOSE TO SURFACE BOUNDARY. WILL RECOMPUTE:') 
     bulk_boundary_distance = -(__BULK_DISTANCE_SCALE)*abs(surface_distance)
-    bulk_boundary_contour_value = __RHO(bulk_boundary_distance)
+    bulk_boundary_contour_value = __RHOSAFE(bulk_boundary_distance)
     __MESSAGE(whoami, 'LOCATION OF BULK BOUNDARY SET TO '//ftoa(bulk_boundary_distance)//' A FROM PROTEIN. CONTOUR VALUE IS '//ftoa(bulk_boundary_contour_value))
    endif ! bulk_bdry
 !
@@ -2619,7 +2669,12 @@ __DBGVAR(solvent_mass_nonbulk,1)
     if (jj>solute_neighbor_mind(i)) solute_neighbor_mind(i)=jj
 #endif
    enddo ! nsurface
-   qforced_solv(i)=qforced
+   qforced_solv(i)=qforced ! note that this is not quite enough, because it is possible that the solvent atom is outside of all supports;
+!  so that while the default setting -- qforced=T -- persists, there are actually _no_ forces and rho(i)=zero ; therefore, we could do
+!  qforced_solv(i)=qforced.and.rho_solv(i).gt.zero
+!  however, in that case we are throwing away the information that a solvent atom has moved outside of support ; better to address this in the main loop, I think
+!  Also, it is clear that the atom _should_ be forced (we just do not know which wat to push it since we are outside of the support) ; thus we are closer to the
+!  actual physical situation, leaving as is
   enddo ! nsolvent
 !#undef zero
 !#undef half
