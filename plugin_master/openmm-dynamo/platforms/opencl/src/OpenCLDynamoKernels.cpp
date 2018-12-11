@@ -206,7 +206,7 @@ void OpenCLCalcDynamoForceKernel::executeOnWorkerThread() {
        }
       } else { // no atomlist provided; loop over all atoms
        for (j=0 ; j < 3*natoms ; j++) {
-        frc[j]= fr[j++]*str2omm_f; //units
+        frc[j]= fr[j]*str2omm_f; //units
        }
       } // atomlist
 //=============
@@ -222,7 +222,7 @@ void OpenCLCalcDynamoForceKernel::executeOnWorkerThread() {
        }
       } else { // no atomlist provided; loop over all atoms
        for (j=0 ; j < 3*natoms ; j++) {
-        frc[j]= fr[j++]*str2omm_f; //units
+        frc[j]= fr[j]*str2omm_f; //units
        }
       } // atomlist
      } //qdble

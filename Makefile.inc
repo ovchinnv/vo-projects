@@ -25,7 +25,6 @@ CUINCLUDES+=-I/usr/local/cuda/samples/common/inc
 #---GNU
 FC=gfortran
 #FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno #-Wall -fopenmp
-#FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fcheck=all  #-Wall  #-fopenmp 
 # WARNING: WHEN DEBUGGING DO NOT USE THE LINE BELOW. OPTIMIZATION DESTROYS SYNCHRONIZATION
 #FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fcheck=all -g
 FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno
@@ -58,7 +57,7 @@ DEFS+=$(STRING_FLAGS)
 # preprocess with C++ style preprocessor
 # -C flag preserves comments
 
-AR=ar
+AR=gcc-ar-5
 AFLAGS=rvcs
 
 LD=$(FC)
