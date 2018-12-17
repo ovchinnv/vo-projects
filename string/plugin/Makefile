@@ -3,7 +3,7 @@ ROOT=../..
 COMMON=..
 OBJS=sm_plugin.o sm_plugin_acemd.o
 HEADS=struna.h struna.hpp
-DEPS=dynamol mpi_stub
+DEPS=dynamol mpi_stub unitcell
 
 LIB=libstruna.so libstruna.a
 LIBS+=$(LIB)
@@ -23,6 +23,8 @@ LOCALDEPS+=source.defs
 LOCALDEPS+=$(COMMON)/source.defs
 
 include $(COMMON)/Makefile.inc
+
+$(SOURCES) : $(LOCALDEPS)
 
 sm_plugin.o : $(COMMON)/sm_var.mod $(COMMON)/sm_config.mod ../atomlist.def
 sm_plugin_acemd.o : aceplug.h

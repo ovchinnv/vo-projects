@@ -1,6 +1,6 @@
 SHELL=/bin/sh
 #
-CC=gcc-5
+CC=gcc
 CFLAGS =-O3 -fno-math-errno -c -fPIC
 #CFLAGS =-O0 -g -fno-math-errno -c -fPIC
 #
