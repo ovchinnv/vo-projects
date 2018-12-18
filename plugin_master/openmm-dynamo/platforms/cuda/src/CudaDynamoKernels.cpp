@@ -211,7 +211,7 @@ void CudaCalcDynamoForceKernel::beginComputation(bool includeForces, bool includ
 }
 
 void CudaCalcDynamoForceKernel::executeOnWorkerThread() {
-    int iteration = cu.getStepCount();
+    long int iteration = cu.getStepCount();
     double *rptr; // pointer to positions array
     double *fptr; // pointer to force array
     int *aptr; // pointer to atom index array

@@ -164,7 +164,7 @@ void OpenCLCalcDynamoForceKernel::beginComputation(bool includeForces, bool incl
 }
 
 void OpenCLCalcDynamoForceKernel::executeOnWorkerThread() {
-    int iteration = cl.getStepCount();
+    long int iteration = cl.getStepCount();
     double* rptr; // pointer to coordinate array
     int* aptr; // pointer to atom index array
     int i, j, ierr;
