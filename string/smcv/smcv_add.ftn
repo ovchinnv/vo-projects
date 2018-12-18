@@ -1171,6 +1171,9 @@ __SETQROOT
 !    locals
       character(len=5) :: cv_name, keyword
       bool :: qorient, qtrans, qrota, qrms
+#ifdef __PBC
+      bool :: qper
+#endif
       float :: rtarget_com(3)
 !
       float, pointer :: rtarget_o(:,:), rtarget_f(:,:),                &
@@ -1507,6 +1510,11 @@ __CHARMM_ONLY   return
        endif ! qtwo
       endif ! qorient
 !
+#ifdef __PBC
+! check for periodicity:
+      qper=(__INDX_RM(comlyn, comlen, 'PER').gt.0)
+#endif
+!
 !    print summary
       if (qroot) then
 !
@@ -1518,18 +1526,36 @@ __CHARMM_ONLY   return
 !
        i=1;
        __INC(i);write(_MSGBUF(i),103) whoami, nforced
-
+!
+#ifdef __PBC
+       if (qper) then
+        __INC(i); write(_MSGBUF(i),'(2A)') whoami, ' WILL ACCOUNT FOR PERIODIC BOUNDARIES (ORTHORHOMBIC CELLS ONLY)'
+       endif
+#endif
+!
        if (qorient) then
         __INC(i);write(_MSGBUF(i),100) whoami, norient
         if (.not.qrota) then
-         __INC(i);write(_MSGBUF(i),'(2A)') whoami, ' BEST-FIT SUPERPOSITION WILL NOT INCLUDE ROTATIONAL FITTING'
+         if (cvtype.eq.rmsd) then
+          __INC(i);write(_MSGBUF(i),'(2A)') whoami, ' BEST-FIT SUPERPOSITION WILL NOT INCLUDE ROTATIONAL FITTING'
+         else
+          __WRN(whoami, 'EXCLUSION OF ROTATIONAL FITTING IS NOT CURRENTLY SUPPORTED FOR '//trim(cv_name)//' CV.');
+         endif
         endif
         if (.not.qtrans) then
-         __INC(i);write(_MSGBUF(i),'(2A)') whoami, ' BEST-FIT SUPERPOSITION WILL NOT INCLUDE TRANSLATIONAL FITTING'
+         if (cvtype.eq.rmsd) then
+          __INC(i);write(_MSGBUF(i),'(2A)') whoami, ' BEST-FIT SUPERPOSITION WILL NOT INCLUDE TRANSLATIONAL FITTING'
+         else
+          __WRN(whoami, 'EXCLUSION OF TRANSLATIONAL FITTING IS NOT CURRENTLY SUPPORTED FOR '//trim(cv_name)//' CV.');
+         endif
         endif
 !
        else ! no orientation
-        __INC(i);write(_MSGBUF(i),'(2A)') whoami,' WILL NOT USE BEST-FIT SUPERPOSITION IN RMSD COMPUTATION'
+        if (cvtype.eq.rmsd) then
+         __INC(i);write(_MSGBUF(i),'(2A)') whoami,' WILL NOT USE BEST-FIT SUPERPOSITION IN RMSD COMPUTATION'
+        else
+         __WRN(whoami, 'CV '//trim(cv_name)//' CANNOT CURRENTLY BE USED WITHOUT BEST-FIT SUPERPOSITION.');
+        endif
        endif
        if (qmass) then 
         __INC(i);write(_MSGBUF(i),102) whoami
@@ -1562,7 +1588,11 @@ __CHARMM_ONLY   return
        case(rmsd);
         ind=cv_rmsd_add(iatom_o, iatom_f, rtarget_o, rtarget_f,         &
      &               orientWeights, forcedWeights,                      &
-     &               k, gam, w, qrota, qtrans)
+     &               k, gam, w, qrota, qtrans                           &
+#ifdef __PBC
+&      ,qper &
+#endif
+&      )
        case(drmsd);
         ind=cv_drmsd_add(iatom_o, iatom_f, rtarget_o, rtarget_f,        &
      &               rtarget1_o, rtarget1_f,                            &
