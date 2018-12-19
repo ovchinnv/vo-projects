@@ -57,7 +57,7 @@ DEFS+=$(STRING_FLAGS)
 # preprocess with C++ style preprocessor
 # -C flag preserves comments
 
-AR=gcc-ar-5
+AR=ar
 AFLAGS=rvcs
 
 LD=$(FC)
