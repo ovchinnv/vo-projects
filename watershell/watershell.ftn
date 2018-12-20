@@ -87,6 +87,7 @@ module _N
  public structure_update_freq
  public r
  public fr
+ public surface_energy
 
  bool, public :: __NM(initialized)=.false.
  bool, private:: radii_initialized=.false.
@@ -110,6 +111,7 @@ module _N
 !
  float :: cutoff_surf, cutoff_surf2, oo_surf_stdev, logistic_constant
  float :: surface_contour_value ! value of density which defines the surface ; negative means to compute from structure
+ float :: surface_energy ! moved here to be acessible from outside
 #ifdef __DASYSTAT
  float :: bulk_boundary_contour_value ! value of density which defines bulk boundary (will be greater than surface_contour_value)
 #endif
@@ -350,7 +352,7 @@ module _N
                    else ; \ 
                     __MESSAGE(whoami, 'WILL NOT USE A NEIGHBOR LIST FOR SOLVENT FORCES.');\
                    endif
-#include "parser/parser_macro2.src"
+#include "parser/parser_macro3.src"
 #endif
 #undef __BOOL
 !
@@ -375,7 +377,8 @@ module _N
 #define __TAG __VAR
 #define __NAME force constant for surface potential
 #define __DOIFOK if (__VAR.lt.__ERRTOL) __WRN(whoami, 'SURFACE FORCE IS OFF.')
-#include "parser/parser_macro2.src"
+! check all contexts:
+#include "parser/parser_macro3.src"
 !
 #define __LEZEROERR
 ! cutoff for density
@@ -792,7 +795,7 @@ module _N
                   neighbor_list_factor = seven + ( (__VAR * __VAR) * 2.0d-4); \
                   if (.not.qneighbor_list) __WRN(whoami, 'NEIGHBOR LIST WILL NOT BE USED BECAUSE "neighbor_list" set to "off"') ;\
                  endif
-#include "parser/parser_macro2.src"
+#include "parser/parser_macro3.src"
 !#ifdef __DEBUG
 !       __DBGOUT('FULL_SUM_FREQ IS ',full_sum_freq)
        __DBGOUT('NEIGHBOR_LIST_FACTOR SET TO ',neighbor_list_factor) ! , seven + (full_sum_freq**2 * 2.0d-4)) 
@@ -1295,14 +1298,14 @@ __DBGVAR(r_com_sa,1)
 !
  float, intent(in) :: r(:,:)   ! coordinate array
  float, intent(out) :: fr(:,:) ! force array
- float, intent(out) :: energy
+ float, intent(out), optional :: energy
 !
  __OPAR(qper,bool)
 !
  type (cell), optional :: mdcell
 ! int :: ibeg, iend ! atom indices for looping
  float :: distance_from_solute, distance_from_solute2, pre, d0
- float :: surface_energy, surface_force ! , density_beyond_contour ! useful ?
+ float :: surface_force ! , density_beyond_contour ! useful ?
 #ifdef __RMFT
 ! to update coefficients for computing torque matrix ; doing this way to separate com contribution :
 #define __UPDATE_TMAT_C \
@@ -1634,6 +1637,9 @@ __DBGVAR(r_com_sa,1)
 ! first, set surface_contour value to an upper bound to make sure that the 
 ! no atoms can be marked as "inside" atoms; this ensures that the density routine cannot quit early
    surface_contour_value=nsurface
+#ifdef __DASYSTAT
+   if (dasystat) bulk_boundary_contour_value=surface_contour_value
+#endif
    call __NM(compute_density_grad)(.false.) ! need entire sum
    do i=1, nsolvent
 ! convert to distance
@@ -1752,7 +1758,6 @@ __DBGVAR(r_com_sa,1)
  endif ! compute reference surface distance
 !========================== compute contour value ^
 !========================== compute forces :
-! to do : calculate density integral using only atoms beyond contour (to estimate surface area)
 ! density_beyond_contour=zero ! useful ?
  surface_energy=zero
  surface_force=zero
@@ -2142,7 +2147,9 @@ endif
 #endif
  __SCALE(surface_energy, half*surface_force_constant)
 !
- __INCR(energy,surface_energy)
+ if (present(energy)) then
+  __INCR(energy,surface_energy)
+ endif
 !
 #ifdef __BAROSTAT
 ! barostat-related code :
@@ -2587,7 +2594,15 @@ __DBGVAR(solvent_mass_nonbulk,1)
 #endif
 !
 #ifdef __DASYSTAT
- if (dasystat) solvent_mass_nonbulk=zero
+ if (dasystat) then 
+  solvent_mass_nonbulk=zero
+!
+__DBGVAR(surface_distance,1)
+__DBGVAR(bulk_boundary_distance,1)
+__DBGVAR(surface_contour_value,1)
+__DBGVAR(bulk_boundary_contour_value,1)
+!
+ endif
 #endif
  if (qtruncate_loop) then
 #ifdef __OMP
@@ -2724,7 +2739,7 @@ __DBGVAR(solvent_mass_nonbulk,1)
       exit ! density threshold exceeded ; will not apply force to this atom
      elseif(qforced) then
       if (rho_solv(i).gt.surface_contour_value) then ! not bulk, but still inside ; if already marked (qforced=t, skip)
-       qforced=.false. ! however, do not quit because we still do not know whether we are iside bulk
+       qforced=.false. ! however, do not quit because we still do not know whether we are inside bulk
       else
 ! otherwise, compute gradient contribution : (note that I am flipping the direction of dr (in the notes it is r0-r)
 ! NOTE (10/18) : I think there is a mistake below : there should not be a half; MATLAB TEST : CORRECT ! Fixing below, keeping old code for notes
