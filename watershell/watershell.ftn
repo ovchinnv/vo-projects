@@ -4,9 +4,10 @@
 !
 ! to avoid divide overflow, define minimum density
 #// single precision small number :
-!#define  __RHO_MIN FERRTOL()
+#define  __RHO_MIN FERRTOL()
 #// double precision small number :
-#define  __RHO_MIN ERRTOL()
+#// note that this should not be used with the erf approximation, which is at most accurate to within O(-7)
+#//define  __RHO_MIN ERRTOL()
 #// because the logistic is centered on zero, arguments > 0 map to > 0.5, which puts them inside the shell ; in other words, we truncate densities to at most 0.5 :
 #define  __RHO_MAX half
 #define  __RHO(_X) ( one/(one+exp(-_X/logistic_constant)) )
@@ -177,7 +178,7 @@ module _N
  __PAR(surface_area_grid_spacing, float, one)
  float :: oo_surface_area_grid_spacing
  __PAR(surface_area_grid_buffer, float, three)
- __PAR(surface_area_compute_freq, int, 10) ! surface area (or volume) gets recomputed every pressure_freq times this
+ __PAR(surface_area_compute_freq, int, 1) ! surface area (or volume) gets recomputed every pressure_freq times this
  __PAR(surface_area_grid_check_freq, int, 1) ! if no pbc, sa grid gets checked/updated this times sa_compute_freq x pressure_freq
  __PAR(surface_area_grid_recompute_change, float, three) ! domain size increase/decrease required to trigger grid recomputation
  float :: r_com_sa(3)=(/zero, zero, zero/) ! center of protein for gridding in SA computation
@@ -357,7 +358,7 @@ module _N
 #//define __MINUSERR
 ! density padding
 #define __VAR	surf_padding
-#define __TAG __VAR
+#define __TAG	surface_padding
 #define __NAME	Density padding
 #include "parser/parser_macro2.src"
 !
@@ -615,7 +616,7 @@ module _N
 #define __TAG	__VAR
 #define __NAME	frequency of computing solvent density
 #define __DOIFOK if (__VAR.eq.izero) then; \
-                  __MESSAGE(whoami, 'DENSITY UPDATE IS OFF. TURNING dasystat OFF.'); \
+                  __MESSAGE(whoami, 'DENSITY UPDATE IS OFF. TURNING DASYSTAT OFF.'); \
                   dasystat=.false. ; \
                  endif ! it does not make any sense to run dasystat without a density calculation !
 #include "parser/parser_macro2.src"
@@ -626,7 +627,7 @@ module _N
 #define __TAG	volume_compute_freq
 #define __NAME	frequency of computing solvent density
 #define __DOIFOK if (__VAR.eq.izero) then; \ 
-                  __MESSAGE(whoami, 'VOLUME COMPUTATION IS OFF. TURNING dasystat OFF.'); \
+                  __MESSAGE(whoami, 'VOLUME COMPUTATION IS OFF. TURNING DASYSTAT OFF.'); \
                   dasystat=.false. ; \
                  endif ! it does not make any sense to run dasystat without a volume calculation !
 #include "parser/parser_macro2.src"
@@ -1712,7 +1713,7 @@ __DBGVAR(r_com_sa,1)
 ! CHKUPDATE false : to truncate sum if running density value exceeds reference
 ! ALSO if qneighbor_list = false, this algorithm will be used, looping over all solute/surface indices
 ! because in that case, the maximum index in solute_neighbor_mdist is nsurface
-    call __NM(compute_mindist_grad)((.not.qneighbor_list) .or. (.not.__CHKUPDATE(full_sum_freq))) 
+    call __NM(compute_mindist_grad)((.not.qneighbor_list) .or. (.not.__CHKUPDATE(full_sum_freq))) ! rechecked conditional 12.18 -- OK
 ! NOTE that it makes no sense to run full sum w/o neighbor sorting, which requires nbr. list !
    else
 #endif
@@ -1999,6 +2000,9 @@ endif
 !   __INCR(__U(density_beyond_contour), rho_solv(i)) ! not clear whether useful
    d0=__OORHO( rho_solv(i)) ! unsafe inverse, but rho > 0 per above
    pre = ( __RHO_INVERSE2 ( d0 ) - surface_distance ) ;
+#if (_DBGLEV>1)
+ __DBGOUT('solv. atom#:', i, 'density:', rho_solv(i), 'distance:', __RHO_INVERSE2(d0), 'forced?:', qforced_solv(i), 'pre:', pre)
+#endif
 !
 #ifdef __RMFT
    if (remove_net_torque) then ! for now, here; optimize later, if needed
@@ -2140,9 +2144,9 @@ endif
 !
  __INCR(energy,surface_energy)
 !
+#ifdef __BAROSTAT
 ! barostat-related code :
 ! ==========================================================================================
-#ifdef __BAROSTAT
  if (barostat) then
 !== compute/update pressure :
   if (pressure_update_freq.gt.0) then
@@ -2281,7 +2285,7 @@ __DBGVAR(pressure_ave,1)
       surf_dist_changed=.true.
 ! check to make sure the distance is not too large; if so, warn and limit
       if (surface_distance .lt. __MINSURFDIST) then
-       __WRN(whoami, 'SHELL SURFACE DISTANCE HAS REACHED LARGEST ALLOWED VALUE ('//ftoa(abs(__MINSURFDIST))//'). RESTART WITH INCREASED CUTOFF OR PADDING')
+       __WRN(whoami, 'SHELL SURFACE DISTANCE HAS REACHED LOWEST ALLOWED VALUE ('//ftoa(__MINSURFDIST)//'). RESTART WITH INCREASED CUTOFF OR PADDING')
        surface_distance = __MINSURFDIST
       endif
       surface_contour_value = __RHOSAFE(surface_distance)
@@ -2293,11 +2297,11 @@ __DBGVAR(pressure_ave,1)
    endif
   endif
  endif ! barostat-related
-#endif
 ! BAROSTAT-RELATED CODE ^
+#endif
 ! ==========================================================================================
-! DASYSTAT-RELATED CODE v (with much repetition from above, but otherwise too complicated to follow if intermingled with barostat)
 #ifdef __DASYSTAT
+! DASYSTAT-RELATED CODE v (much overlap with barostat code, but otherwise too complicated to follow if intermingled with barostat)
  if (dasystat) then
 !== compute/update density :
   if (density_update_freq.gt.0) then
@@ -2310,7 +2314,7 @@ __DBGVAR(pressure_ave,1)
  __DBGVAR(__CHKUPDATE(surface_area_compute_freq*density_update_freq),1)
 !== first, compute volume :
     if (((r_surf_changed.or.surf_dist_changed).and.surface_area_compute_freq.gt.0).or.volume_bulk<zero) then ! note : a check to only recompute SA if surface atoms changed
-     if __CHKUPDATE(surface_area_compute_freq*density_update_freq) then
+     if (__CHKUPDATE(surface_area_compute_freq*density_update_freq).or.volume_bulk<zero) then
 ! check periodicity flag
       __PRESENT(qper,qper_parser_override)
       if (qper.neqv.qper_parser_override) then
@@ -2420,7 +2424,7 @@ __DBGVAR(density_ave,1)
       surf_dist_changed=.true.
 ! check to make sure the distance is not too large; if so, warn and limit (same as barostat code)
       if (surface_distance .lt. __MINSURFDIST) then
-       __WRN(whoami, 'SHELL SURFACE DISTANCE HAS REACHED LARGEST ALLOWED VALUE ('//ftoa(abs(__MINSURFDIST))//'). RESTART WITH INCREASED CUTOFF OR PADDING')
+       __WRN(whoami, 'SHELL SURFACE DISTANCE HAS REACHED LOWEST ALLOWED VALUE ('//ftoa(__MINSURFDIST)//'). RESTART WITH INCREASED CUTOFF OR PADDING')
        surface_distance = __MINSURFDIST
       endif
       surface_contour_value = __RHOSAFE(surface_distance)
@@ -2463,9 +2467,9 @@ __DBGVAR(density_ave,1)
   __OUT('Surface energy:                  ', surface_energy)
   __OUT('# Solute atoms used for density: ', nsurface)
   __OUT('# Solvent atoms outside / total: ', nsolvent_outside,'/',nsolvent)
- if (.not. qminimum_distance) then ! not relevant to mindist algorithm
+  if (.not. qminimum_distance) then ! not relevant to mindist algorithm
   __OUT('Surface contour value:           ', surface_contour_value)
- endif
+  endif
 #if defined(__SHOW_TORQUE) && defined(__RMFT)
   if (remove_net_torque) then
    __OUT('Net force applied to system:    ', net_force)
@@ -2490,6 +2494,9 @@ __DBGVAR(density_ave,1)
    __OUT('Mass of bulk solvent (amu):      ', solvent_mass-solvent_mass_outside-solvent_mass_nonbulk)
    __OUT('Volume of bulk solvent (Ang^3):  ', volume_bulk)
    __OUT('Bulk boundary distance:          ', bulk_boundary_distance)
+   if (.not. qminimum_distance) then
+   __OUT('Bulk boundary contour value:     ', bulk_boundary_contour_value)
+   endif
 __DBGVAR(solvent_mass,1)
 __DBGVAR(solvent_mass_outside,1)
 __DBGVAR(solvent_mass_nonbulk,1)
@@ -2705,6 +2712,9 @@ __DBGVAR(solvent_mass_nonbulk,1)
 #else
     __INCR(rho_solv(i), half * ( __erf(a) - __erf(b) ) + osq2pi * ooc * ( expa - expb )   )
 #endif
+#if (_DBGLEV>1)
+    __DBGOUT('FORCECOMP : solv. atom#:', i, 'solute. atom#:',j, 'current density:', rho_solv(i), rw, rp)
+#endif
 !
 #ifdef __DASYSTAT
     if (dasystat) then
@@ -2741,6 +2751,9 @@ __DBGVAR(solvent_mass_nonbulk,1)
     if (jj>solute_neighbor_mind(i)) solute_neighbor_mind(i)=jj
 #endif
    enddo ! nsurface
+#if (_DBGLEV>1)
+    __DBGOUT('FORCECOMP : solv. atom#:', i, 'density:', rho_solv(i))
+#endif
    qforced_solv(i)=qforced ! note that this is not quite enough, because it is possible that the solvent atom is outside of all supports;
 !  so that while the default setting -- qforced=T -- persists, there are actually _no_ forces and rho(i)=zero ; therefore, we could do
 !  qforced_solv(i)=qforced.and.rho_solv(i).gt.zero
