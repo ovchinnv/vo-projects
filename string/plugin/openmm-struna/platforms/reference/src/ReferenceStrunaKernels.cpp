@@ -136,7 +136,7 @@ void ReferenceCalcStrunaForceKernel::initialize(const System& system, const Stru
 double ReferenceCalcStrunaForceKernel::execute(ContextImpl& context, bool includeForces, bool includeEnergy) {
     //
     ReferencePlatform::PlatformData* data = reinterpret_cast<ReferencePlatform::PlatformData*>(context.getPlatformData());
-    int iteration = data->stepCount;
+    long int iteration = data->stepCount;
     double* rptr; // pointer to positions array
     double* fptr; // pointer to force array
     int* aptr; // pointer to atom index array

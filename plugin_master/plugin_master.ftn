@@ -56,7 +56,7 @@ module __NM(plugin)
 #endif
 !
  int(__FCINT) :: initerr
- int( __FCINT), intent(in), value :: n, il, ol
+ int(__FCINT), intent(in), value :: n, il, ol
  type(c_ptr), value, intent(in) :: inputname, outputname
  real(__FCFLOAT), intent(in), dimension(n) :: mass, charge
  type(c_ptr), intent(out) :: alist ! send back a list of atom indices
@@ -89,8 +89,16 @@ module __NM(plugin)
 #ifdef __STRUNA
   endif
 #endif
-  return
- endif
+  if (fatal_warning()) then
+#ifdef __DEBUG
+   __DBGOUT('FATAL WARNING ENCOUNTERED. FINALIZING PLUGIN')
+#endif
+   call __NM(done_plugin)
+  else
+   initerr=0 ! try to survive repeated init
+   return
+  endif ! fatal warning
+ endif ! previously initialized
 !
  call c_f_pointer(outputname, ofname)
 !
@@ -163,6 +171,9 @@ module __NM(plugin)
  if (system_PDB_initialized.or.system_initialized) then
   m=mass
   q=charge
+#ifdef __DEBUG
+ __DBGOUT('SET MASS AND CHARGE FROM EXTERNAL ARRAYS');
+#endif
  endif
 !
 ! compute list of all atoms required by plugin
@@ -174,17 +185,20 @@ module __NM(plugin)
  else
 #endif
  alist=__NM(compute_atomlist)()
-#ifdef __STRUNA
- endif
 #ifdef __DDEBUG
  write(0,*) '# atoms in atomlists :', __NM(forced_atomlist(1)), __NM(atomlist(1))
 #endif
+#ifdef __STRUNA
+ endif
 #endif
 !
 ! 2/16/18 : not sure whether to terminate : would be best to signal the MD code
 ! if (fatal_warning()) return
 ! to do this here, call terminate
  if (fatal_warning()) then ! return
+#ifdef __DEBUG
+ __DBGOUT('FATAL WARNING ENCOUNTERED. FINALIZING PLUGIN')
+#endif
   call __NM(done_plugin)
 !  call terminate(whoami)
  else
@@ -233,6 +247,12 @@ end function _ME
 #endif
 ! update coordinates :
  r(:,__NM(atomlist(2:)))=r_plugin(:,__NM(atomlist(2:)))
+#ifdef __DDEBUG
+! write out coordinates
+ write(666,*) iteration_
+ write(666,*) r(:,__NM(atomlist(2:)))
+! close(666)
+#endif
 !
 ! module specific code
 ! NOTE : currently, STRUNA MUST come first because we need to flip the sign of the forces that it returns (relic of the CHARMM convention)
@@ -242,6 +262,14 @@ end function _ME
 #ifdef __STRUNA
  if (sm_initialized.or.defer_init_until_dyna) then
   __STRUNA_MAIN
+#ifdef __DDEBUG
+! write out coordinates
+ write(777,*) iteration_
+ write(777,*) sm_initialized
+ write(777,*) sm_atomlist(1)
+ write(777,*) r(:,sm_atomlist(2:))
+ close(777)
+#endif
   fr(:,sm_atomlist(2:))=-fr(:,sm_atomlist(2:))
 #ifdef __ADAPTIVE_KCV
  if (defer_init_until_dyna) then

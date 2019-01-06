@@ -19,7 +19,11 @@ __CHARMM_ONLY##IF STRINGM
 !
       contains
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       function cv_rmsd_add(ind_o,ind_f,r_o,r_f,ow,fw,_COMMON_ARGS,qrota_,qtrans_) result(l)
+       function cv_rmsd_add(ind_o,ind_f,r_o,r_f,ow,fw,_COMMON_ARGS,qrota_,qtrans_ &
+#ifdef __PBC
+&       ,qper_ &
+#endif
+&       ) result(l)
 ! a note on convention : qorient = qrota .or. qtrans ; the two operands indicate (separately) whether
 ! rotational and translation fitting are to be performed, respectively
        use cv_types
@@ -30,15 +34,29 @@ __CHARMM_ONLY##IF STRINGM
        int, pointer, intent(inout) :: ind_o(:), ind_f(:)
        float, pointer, intent(in)  :: r_o(:,:), r_f(:,:), ow(:), fw(:)
        bool, optional, intent(in) :: qrota_, qtrans_
+#ifdef __PBC
+       __OPAR(qper,bool)
+#endif
 !      locals
        int :: i, j, l, m, ind, num_int, norient, nforced, num_real, &
      &  qdiffrot ! .not. qdiffrot indicates that derivatives of rotation matrix need not be computed (oset=fset; ow=fw)
        int :: qtrans, qrota
        bool :: found, qorient
-       float :: com(3)=zero ! to store com of orientation set
+       float :: com(3)=zero ! to store com of orientation set (or of forced set when running without orientation in simple PBC)
        type (int_vector) :: unique_amap_ptr ! contains a unique list of atom map pointers (to speed up gradient computation, etc)
 !
        __IAM(CV_RMSD_ADD)
+!
+#ifdef __PBC
+       __PRESENT(qper,.false.)
+#ifdef __CHARMM
+! currently, no support for distance periodicity, mainly because unclear how to best implement it (e.g. whether to support crystal, or just mindist)
+       if (qper) then
+        __WRN(whoami, 'TREATMENT OF PERIODICITY IN DISTANCE CALCULATIONS IS NOT YET SUPPORTED. TURNING OFF.')
+        qper=.false.
+       endif
+#endif
+#endif
 !
        if (present(qrota_))  then ; if (qrota_)  then ; qrota=1  ; else ; qrota=0  ; endif ; else ; qrota=1;  endif
        if (present(qtrans_)) then ; if (qtrans_) then ; qtrans=1 ; else ; qtrans=0 ; endif ; else ; qtrans=1; endif
@@ -109,8 +127,17 @@ __CHARMM_ONLY##IF STRINGM
      &          nforced.eq.cv%priv(l)%p(2).and.                         &
      &          qtrans.eq.cv%priv(l)%p(3).and.                          & ! translational superposition
      &          qrota.eq.cv%priv(l)%p(4).and.                           & ! rotational superposition
-     &          qdiffrot.eq.cv%priv(l)%p(5))                              ! whether orientation and forcing sets are different
+     &          qdiffrot.eq.cv%priv(l)%p(5)).and.                            & ! whether orientation and forcing sets are different
+#ifdef __PBC
+     &          qper.eqv.(cv%priv(l)%p(6).gt.izero).and.                & ! whether the COM of the RMSD group could be wrapped
+#endif
+     & .true.
+
+#ifdef __PBC
+         ind=7
+#else
          ind=6
+#endif
          do j=1,norient
            if (found) found=                                            &
      &         (ind_o(j).eq.cv%amap%i(cv%priv(l)%p(ind)))
@@ -132,7 +159,10 @@ __CHARMM_ONLY##IF STRINGM
         if  (l.gt.0) then
 !     allocate private data
 !     space needed:
-         num_int = 5 + norient + nforced ! number of ints needed for storage
+         num_int = 6 + norient + nforced ! number of ints needed for storage
+#ifdef __PBC
+         __INC(num_int)
+#endif
 !
          allocate(cv%priv(l)%p(num_int));
          cv%priv(l)%p(1)=norient
@@ -140,8 +170,13 @@ __CHARMM_ONLY##IF STRINGM
          cv%priv(l)%p(3)=qtrans
          cv%priv(l)%p(4)=qrota
          cv%priv(l)%p(5)=qdiffrot
-!        now add slave CV indices
          ind=6
+#ifdef __PBC
+!    periodicity flag
+         if (qper) then  ; cv%priv(l)%p(ind)=ione ; else ; cv%priv(l)%p(ind)=izero ; endif
+         __INC(ind)
+#endif
+!        now add slave CV indices
          do j=1,norient
            m=ind_o(j)
            if (m.le.0) then
@@ -178,6 +213,9 @@ __CHARMM_ONLY##IF STRINGM
           do i=1, nforced
            cv%priv(l)%pr(ind)=r_f(i,j)
            __INC(ind)
+#ifdef __PBC
+           if (qper.and..not.qorient) __INCR(com(j),fw(i)*r_f(i,j)) ! need a refernce point for removing periodicity (in principle, could use any other point)
+#endif
           enddo
          enddo
 !
@@ -218,6 +256,7 @@ __CHARMM_ONLY##IF STRINGM
        __DEP_BESTFIT
        __DEP_CONST
        __DEP_NUMBER
+       __DEP_OUTPUT
 !
        float :: x(:), y(:), z(:),                                      &
      &           fx(:), fy(:), fz(:), mass(:)
@@ -230,6 +269,9 @@ __CHARMM_ONLY##IF STRINGM
 !    locals
        float, parameter :: tol=1.0d-10
        bool :: qorient, qtrans, qrota, qdiffrot
+#ifdef __PBC
+       bool :: qper
+#endif
        int :: j, k, ii, jj, ind, norient, nforced, obeg, oend, p, q
        float :: d, f, w, r1(3), r2(3), r_com(3), rt_com(3), theta, u(3,3)
 #ifdef __OMP
@@ -242,12 +284,33 @@ __CHARMM_ONLY##IF STRINGM
      &                    r_f(:,:), rt_f(:,:), fw(:), rt_rot_f(:,:)
        float, dimension(:,:,:,:), pointer :: ugrad
 !
+       __IAM(CV_RMSD_CALC)
+!
        norient=cv%priv(i)%p(1)
        nforced=cv%priv(i)%p(2)
        qtrans=(cv%priv(i)%p(3).ne.0)
        qrota=(cv%priv(i)%p(4).ne.0)
        qorient=qtrans.or.qrota
        qdiffrot=qorient.and.(cv%priv(i)%p(5).ne.0)
+!
+#ifdef __PBC
+       qper=cv%priv(i)%p(6).gt.0
+! check adapted from cv_dist_com
+       if (qper) then
+        if (cv%ucell%initialized) then
+         if (cv%ucell%qortho) then
+! note that below, we only allow orthorhombic cells aligned with laboratory axes
+! this is a significant inconsistency, but I am leaving it this way for now, because of computational overhead
+         else
+           __WRN(whoami, 'PERIODICITY CORRECTION IS ONLY SUPPORTED FOR ORTHORHOMBIC CELLS. WILL SKIP.')
+           qper=.false.
+         endif
+        else
+         __WRN(whoami, 'UNIT CELL NOT INITIALIZED. WILL SKIP PERIODICITY CORRECTION.')
+         qper=.false.
+        endif
+       endif ! qper
+#endif
 !
        if (qorient) then
         if (qdiffrot) then ! extract all indices and coordinates
@@ -263,7 +326,12 @@ __CHARMM_ONLY##IF STRINGM
          endif
          allocate(fw(nforced))
 ! indices
-         ii=6;    jj=ii+norient-1;  ind_o=cv%priv(i)%p(ii:jj)
+#ifdef __PBC
+         ii=7
+#else
+         ii=6
+#endif
+         jj=ii+norient-1;  ind_o=cv%priv(i)%p(ii:jj)
          ii=jj+1; jj=ii+nforced-1;  ind_f=cv%priv(i)%p(ii:jj)
 ! o. coordinates
          jj=0;
@@ -287,7 +355,12 @@ __CHARMM_ONLY##IF STRINGM
          allocate(rt_o(norient,3), r_o(norient,3))
          allocate(ow(norient))
 ! indices
-         ii=6;    jj=ii+norient-1;  ind_o=cv%priv(i)%p(ii:jj)
+#ifdef __PBC
+         ii=7
+#else
+         ii=6
+#endif
+         jj=ii+norient-1;  ind_o=cv%priv(i)%p(ii:jj)
 ! o. coordinates
          jj=0;
          do j=1,3
@@ -316,7 +389,12 @@ __CHARMM_ONLY##IF STRINGM
         rt_rot_f=>rt_f
         allocate(fw(nforced))
 ! f. indices
-        ii=6+norient;  jj=ii+nforced-1;  ind_f=cv%priv(i)%p(ii:jj)
+#ifdef __PBC
+        ii=7+norient
+#else
+        ii=6+norient
+#endif
+        jj=ii+nforced-1;  ind_f=cv%priv(i)%p(ii:jj)
 ! f. coordinates
         jj=3*norient;
         do j=1,3
@@ -324,6 +402,11 @@ __CHARMM_ONLY##IF STRINGM
         enddo
 ! f. weights
         ii=jj+norient+1; jj=ii+nforced-1;  fw(:)=cv%priv(i)%pr(ii:jj)
+#ifdef __PBC
+        if (qper) then ! recall COM of target structure for wrapping
+         ii=jj+1 ; jj=ii+2 ; rt_com=cv%priv(i)%pr(ii:jj)
+        endif
+#endif
        endif ! qorient
 !
 !    set this CV energy to zero by default
@@ -372,7 +455,11 @@ __CHARMM_ONLY##IF STRINGM
 #endif
          endif ! qdiffrot
 !       translate forced atoms to centroid
+#ifdef __PBC
+         if (qtrans.or.qper) then ! also need COM in case of periodicity
+#else
          if (qtrans) then
+#endif
 #ifdef __OMP
 !$omp single
 #endif
@@ -392,6 +479,9 @@ __CHARMM_ONLY##IF STRINGM
 !$omp atomic
           __AREDUCE(r_com,3)
 !$omp barrier
+#ifdef __PBC
+          if (.not.qtrans) goto 9999 ! if qper, only need com
+#endif
 !!$omp flush ! this does not work to flush r_com; I need a barrier ; would be good to understand why
 !!$omp critical
 !          __REDUCE(r_com)
@@ -418,6 +508,10 @@ __CHARMM_ONLY##IF STRINGM
            __INCR(r_com(j), ow(k)*r_o(k,j))
           enddo ;    enddo
 !
+#ifdef __PBC
+          if (.not.qtrans) goto 9999
+#endif
+!
           __INCR(r_o(:,1),-r_com(1))
           __INCR(r_o(:,2),-r_com(2))
           __INCR(r_o(:,3),-r_com(3))
@@ -429,6 +523,9 @@ __CHARMM_ONLY##IF STRINGM
           endif ! qdiffrot
 #endif
          endif ! qtrans
+#ifdef __PBC
+ 9999 continue
+#endif
 #ifdef __OMP
 !$omp end parallel
 #endif
@@ -443,6 +540,8 @@ __CHARMM_ONLY##IF STRINGM
 !     compute rotation matrix (and its gradient, if needed)
 !     note that RMSbestfit subtracts com, so we do not have to do this here (with rt_o)
 !
+! this section is essentially serialized
+!
          if (qrota) then
           if (qdiffrot.and.deriv) then
            allocate(ugrad(3,3,3,norient))
@@ -456,19 +555,43 @@ __CHARMM_ONLY##IF STRINGM
            do k=1,3; do j=1,3
             __INCR(rt_rot_f(:,j), rt_f(:,k)*u(j,k))
            enddo;    enddo
-          else ! translate rt to com, rotate, then translate back
+          else ! (not translational correction) translate rt to com, rotate, then translate back
+#ifdef __PBC
+! first account for PBC :
+           if (qper) then
+            r1=r_com-rt_com ! uncorrected displacement vector
+            r2(1)=modulo(r1(1), cv%ucell%a) ; if (r2(1) .gt. half*cv%ucell%a) __INCR(r2(1), -cv%ucell%a) ! corrected displacement vector
+            r2(2)=modulo(r1(2), cv%ucell%b) ; if (r2(2) .gt. half*cv%ucell%b) __INCR(r2(2), -cv%ucell%b)
+            r2(3)=modulo(r1(3), cv%ucell%c) ; if (r2(3) .gt. half*cv%ucell%c) __INCR(r2(3), -cv%ucell%c)
+            r2=r2-r1 ! now, the molecular coordinates can be shifted by r=r+r2 (subtract uncorrected, and add corrected vector)
+! shift coordinates
+#ifdef __OMP
+!$omp parallel private(k,j)
+!$omp do schedule(static)
+#endif
+            do k=1, nforced; do j=1,3
+             r_f(k,j) = r_f(k,j) + r2(j)
+            enddo          ; enddo
+#ifdef __OMP
+!$omp end do
+!$omp end parallel
+#endif
+           endif ! qper
+#endif
+!
            do j=1,3
             rt_rot_f(:,j)=rt_com(j)
             do k=1,3
              __INCR(rt_rot_f(:,j), ( rt_f(:,k)-rt_com(k) )*u(j,k) )
             enddo ! k
            enddo ! j
+!
           endif ! qtrans
          endif ! qrota
 !========================================================
         else ! not qorient
 #ifdef __OMP
-!$omp parallel private(ind)
+!$omp parallel private(ind,j)
 !$omp do schedule(static)
 #endif
          do k=1,nforced
@@ -479,6 +602,56 @@ __CHARMM_ONLY##IF STRINGM
          enddo
 #ifdef __OMP
 !$omp end do
+#endif
+#ifdef __PBC
+         if (qper) then ! compute com and remove simple periodicity
+#ifdef __OMP
+!$omp single
+#endif
+          r_com=zero
+#ifdef __OMP
+!$omp end single
+          __U(r_com)=zero
+!$omp do schedule(static)
+          do k=1, nforced; do j=1,3
+           __INCR(__U(r_com)(j), fw(k)*r_f(k,j))
+          enddo          ; enddo
+!$omp end do
+!$omp atomic
+          __AREDUCE(r_com,1)
+!$omp atomic
+          __AREDUCE(r_com,2)
+!$omp atomic
+          __AREDUCE(r_com,3)
+#else
+          do j=1,3 ; do k=1, nforced;
+           __INCR(r_com(j), fw(k)*r_f(k,j))
+          enddo ;    enddo
+#endif
+! remove periodicity; assume orthogonal, aligned cell
+#ifdef __OMP
+!$omp barrier
+!$omp single
+#endif
+          r1=r_com-rt_com ! uncorrected displacement vector
+          r2(1)=modulo(r1(1), cv%ucell%a) ; if (r2(1) .gt. half*cv%ucell%a) __INCR(r2(1), -cv%ucell%a) ! corrected displacement vector
+          r2(2)=modulo(r1(2), cv%ucell%b) ; if (r2(2) .gt. half*cv%ucell%b) __INCR(r2(2), -cv%ucell%b)
+          r2(3)=modulo(r1(3), cv%ucell%c) ; if (r2(3) .gt. half*cv%ucell%c) __INCR(r2(3), -cv%ucell%c)
+          r2=r2-r1 ! now, the molecular coordinates can be shifted by r=r+r2 (subtract uncorrected, and add corrected vector)
+#ifdef __OMP
+!$omp end single
+!$omp barrier
+!$omp do schedule(static)
+#endif
+          do k=1, nforced; do j=1,3
+           r_f(k,j) = r_f(k,j) + r2(j)
+          enddo          ; enddo
+#ifdef __OMP
+!$omp end do
+#endif
+         endif ! qper
+#endif
+#ifdef __OMP
 !$omp end parallel
 #endif
         endif ! qorient
@@ -765,6 +938,9 @@ __CHARMM_ONLY##IF STRINGM
 !
        int :: norient, nforced
        bool :: qtrans, qrota, qdiffrot
+#ifdef __PBC
+       bool :: qper
+#endif
        int, pointer, dimension(:) :: ind_o, ind_f
        __IAM(CV_RMSD_LIST)
 !
@@ -782,11 +958,19 @@ __CHARMM_ONLY##IF STRINGM
         qtrans=(cv%priv(i)%p(3).ne.0)
         qrota=(cv%priv(i)%p(4).ne.0)
         qdiffrot=(cv%priv(i)%p(5).ne.0)
+#ifdef __PBC
+        qper=(cv%priv(i)%p(6).ne.0)
+#endif
 !
 ! note that I currently cannot tell whether mass-weighting is requested
 ! am also not printing the weights
 !
-        ii=6; jj=ii+norient-1; ! both ii and jj must be defined for the two cases below
+#ifdef __PBC
+        ii=7;
+#else
+        ii=6;
+#endif
+        jj=ii+norient-1; ! both ii and jj must be defined for the two cases below
 !
         if (qtrans.or.qrota) then
          allocate(ind_o(norient))
@@ -822,6 +1006,13 @@ __CHARMM_ONLY##IF STRINGM
          enddo
          deallocate(ind_f)
         endif
+!
+#ifdef __PBC
+        if (qper.and..not.qtrans) then
+         write(_MSGBUF, '(A)') _TAB//' RMSD COMPUTATION ACCOUNTS FOR PERIODIC BOUNDARIES' ; __PRINT(_MSGBUF)
+        endif
+#endif
+!
        endif ! ME_STRING
 !
  667  format(A,2I8,' ',4A)
