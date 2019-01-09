@@ -206,6 +206,7 @@ __CHARMM_ONLY##IF STRINGM
        bool :: qtrans, qrota, qorient
 #ifdef __PBC
        bool :: qper
+       float :: dr(3)
 #endif
        int :: j, k, ii, jj, ind, nforced, norient, nset
        float :: d, f, wgt, err, dummy, theta, tol, tol2
@@ -340,15 +341,15 @@ __CHARMM_ONLY##IF STRINGM
          elseif (qper) then ! restore original COM that is closest to the first COM
           do j=2, nset
            __DECR(r_com(1,j), r_com(1,1))
-           r_com(1,j)=modulo(r_com(1,j), cv%ucell%a) ; if (r_com(1,j) .gt. half*cv%ucell%a) __DECR(r_com(1,j), cv%ucell%a) ! corrected displacement vector
+           __PBCDIST(r_com(1,j), cv%ucell%a)
            __INCR(r_com(1,j), r_com(1,1))
 !
            __DECR(r_com(2,j), r_com(2,1))
-           r_com(2,j)=modulo(r_com(2,j), cv%ucell%b) ; if (r_com(2,j) .gt. half*cv%ucell%b) __DECR(r_com(2,j), cv%ucell%b)
+           __PBCDIST(r_com(2,j), cv%ucell%b)
            __INCR(r_com(2,j), r_com(2,1))
 !
            __DECR(r_com(3,j), r_com(3,1))
-           r_com(3,j)=modulo(r_com(3,j), cv%ucell%c) ; if (r_com(3,j) .gt. half*cv%ucell%c) __DECR(r_com(3,j), cv%ucell%c)
+           __PBCDIST(r_com(3,j), cv%ucell%c)
            __INCR(r_com(3,j), r_com(3,1))
           enddo
 #endif
@@ -364,23 +365,35 @@ __CHARMM_ONLY##IF STRINGM
           __DECR(r(:,:,j), r_rot(:,:,j))  ! now, r is a displacement from average coords ( in the local frame of reference )
          enddo ! j
          rave_new = zero ! reset to zero for tricky RMSD call below
-        else ! (qrota)
+        else ! .not.(qrota)
 
 #ifdef __PBC
 ! correct COMs so that they are consistent with each other (via 1st COM)
 ! adapted from cv_rmsd
         if (qper) then
+#ifdef __DEBUG
+ __DBGOUT(*,'OLD COM:',1,r_com(:,1))
+#endif
+! shift COM of group 1 to zero
+         __DECR(r(:,1,1), r_com(1,1))
+         __DECR(r(:,2,1), r_com(2,1))
+         __DECR(r(:,3,1), r_com(3,1))
          do j=2, nset
-          __DECR(r_com(1,j), r_com(1,1))
-          __DECR(r_com(2,j), r_com(2,1))
-          __DECR(r_com(3,j), r_com(3,1))
-          r_com(1,j)=modulo(r_com(1,j), cv%ucell%a) ; if (r_com(1,j) .gt. half*cv%ucell%a) __DECR(r_com(1,j), cv%ucell%a) ! corrected displacement vector
-          r_com(2,j)=modulo(r_com(2,j), cv%ucell%b) ; if (r_com(2,j) .gt. half*cv%ucell%b) __DECR(r_com(2,j), cv%ucell%b)
-          r_com(3,j)=modulo(r_com(3,j), cv%ucell%c) ; if (r_com(3,j) .gt. half*cv%ucell%c) __DECR(r_com(3,j), cv%ucell%c)
-          __DECR(r(:,1,j), r_com(1,j))
-          __DECR(r(:,2,j), r_com(2,j))
-          __DECR(r(:,3,j), r_com(3,j))
-! now, all structures have COMs that are closest to COM 1 ; the absolute COM reference is unimportant because it is subtracted in the forces below
+#ifdef __DEBUG
+ __DBGOUT(*,'OLD COM:',j,r_com(:,j))
+#endif
+          dr=r_com(:,j)-r_com(:,1)
+          __PBCDIST(dr(1), cv%ucell%a)
+          __PBCDIST(dr(2), cv%ucell%b)
+          __PBCDIST(dr(3), cv%ucell%c)
+!
+          __INCR(r(:,1,j), dr(1) - r_com(1,j)) ! + r_com(1,1) ! this would restore com, but we can instead subtract COM1 from all coordinate sets (and set 1 above)
+          __INCR(r(:,2,j), dr(2) - r_com(2,j))
+          __INCR(r(:,3,j), dr(3) - r_com(3,j))
+#ifdef __DEBUG
+ __DBGOUT(*,'NEW COM:',j,dr+r_com(:,1))
+#endif
+! now, all structures have COMs that are near 0
          enddo
         endif
 #endif
@@ -395,6 +408,9 @@ __CHARMM_ONLY##IF STRINGM
         theta=zero
         do j=1, nset
 ! r is already the displacement, so use the zero dummy array 'rave_new'
+#ifdef __DEBUG
+   write(777,*) r(:,:,j)
+#endif
          __INCR(theta,rmsd(r(:,:,j),rave_new,w,.false.))! energy proportional to rmsd^2 (.false. means do not take sqrt -- i.e. msd)
         enddo
         theta=sqrt(theta)
