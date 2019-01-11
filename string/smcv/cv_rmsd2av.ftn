@@ -22,7 +22,11 @@ __CHARMM_ONLY##IF STRINGM
 !
       contains
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       function __NM(add) (inds,w,_COMMON_ARGS,qrota_,qtrans_) result(l) ! note: i is the atom index in the PSF
+       function __NM(add) (inds,w,_COMMON_ARGS,qrota_,qtrans_ & ! note: i is the atom index in the PSF
+#ifdef __PBC
+&       ,qper_ &
+#endif
+&       ) result(l)
 ! a note on convention : qorient = qrota .or. qtrans ; the two operands indicate (separately) whether
 ! rotational and translation fitting are to be performed, respectively
        use cv_types
@@ -34,6 +38,9 @@ __CHARMM_ONLY##IF STRINGM
        int, pointer, intent(inout) :: inds(:,:)
        float, pointer, intent(in)  :: w(:)
        bool, optional, intent(in) :: qrota_, qtrans_
+#ifdef __PBC
+       __OPAR(qper,bool)
+#endif
 !      locals
        bool :: found, qorient
        int :: i, j, l, m, ind, num_int, num_real, nforced, norient, nset
@@ -41,6 +48,16 @@ __CHARMM_ONLY##IF STRINGM
        type (int_vector) :: unique_amap_ptr ! contains a unique list of atom map pointers (to speed up gradient computation, etc)
 !
        __IAM(__NM(ADD))
+#ifdef __PBC
+       __PRESENT(qper,.false.)
+#ifdef __CHARMM
+! currently, no support for distance periodicity, mainly because unclear how to best implement it (e.g. whether to support crystal, or just mindist)
+       if (qper) then
+        __WRN(whoami, 'TREATMENT OF PERIODICITY IN DISTANCE CALCULATIONS IS NOT YET SUPPORTED. TURNING OFF.')
+        qper=.false.
+       endif
+#endif
+#endif
 !
        if (present(qrota_))  then ; if (qrota_)  then ; qrota=1  ; else ; qrota=0  ; endif ; else ; qrota=1;  endif
        if (present(qtrans_)) then ; if (qtrans_) then ; qtrans=1 ; else ; qtrans=0 ; endif ; else ; qtrans=1; endif
@@ -87,9 +104,17 @@ __CHARMM_ONLY##IF STRINGM
          found=(nforced.eq.cv%priv(l)%p(1).and.                         & ! number of RMSD atoms
      &          nset.eq.cv%priv(l)%p(2).and.                            & ! number of atom coordinate sets
      &          qtrans.eq.cv%priv(l)%p(3).and.                          & ! translational superposition used
-     &          qrota.eq.cv%priv(l)%p(4))                                 ! rotational superposition used
+     &          qrota.eq.cv%priv(l)%p(4)).and.                          & ! rotational superposition used
+#ifdef __PBC
+     &          qper.eqv.(cv%priv(l)%p(5).gt.izero).and.                & ! whether the COMs of the RMSD groups could be wrapped
+#endif
+     & .true.
 !
+#ifdef __PBC
+         ind=6
+#else
          ind=5
+#endif
          do i=1,nset
           do j=1,nforced
            if (found) found=                                            &
@@ -108,6 +133,9 @@ __CHARMM_ONLY##IF STRINGM
 !     allocate private data
 !     space needed:
          num_int = 4 + nset * nforced ! number of ints needed for storage
+#ifdef __PBC
+         __INC(num_int)
+#endif
 !
          allocate(cv%priv(l)%p(num_int));
          cv%priv(l)%p(1)=nforced
@@ -116,6 +144,11 @@ __CHARMM_ONLY##IF STRINGM
          cv%priv(l)%p(4)=qrota
 !        now add slave CV indices
          ind=5
+#ifdef __PBC
+!    periodicity flag
+         if (qper) then  ; cv%priv(l)%p(ind)=ione ; else ; cv%priv(l)%p(ind)=izero ; endif
+         __INC(ind)
+#endif
          do i=1,nset
           do j=1,nforced
            m=inds(j,i)
@@ -171,6 +204,10 @@ __CHARMM_ONLY##IF STRINGM
 !    locals
        int, parameter :: maxiter = 20 ! maximum iterations for aligned average structure computation
        bool :: qtrans, qrota, qorient
+#ifdef __PBC
+       bool :: qper
+       float :: dr(3)
+#endif
        int :: j, k, ii, jj, ind, nforced, norient, nset
        float :: d, f, wgt, err, dummy, theta, tol, tol2
        int, pointer :: priv(:)
@@ -184,6 +221,24 @@ __CHARMM_ONLY##IF STRINGM
        qtrans=(cv%priv(i)%p(3).ne.0)
        qrota=(cv%priv(i)%p(4).ne.0)
        qorient=qtrans.or.qrota
+#ifdef __PBC
+       qper=cv%priv(i)%p(5).gt.0
+! check adapted from cv_dist_com
+       if (qper) then
+        if (cv%ucell%initialized) then
+         if (cv%ucell%qortho) then
+! note that below, we only allow orthorhombic cells aligned with laboratory axes
+! this is a significant inconsistency, but I am leaving it this way for now, because of computational overhead
+         else
+           __WRN(whoami, 'PERIODICITY CORRECTION IS ONLY SUPPORTED FOR ORTHORHOMBIC CELLS. WILL SKIP.')
+           qper=.false.
+         endif
+        else
+         __WRN(whoami, 'UNIT CELL NOT INITIALIZED. WILL SKIP PERIODICITY CORRECTION.')
+         qper=.false.
+        endif
+       endif ! qper
+#endif
 !
        allocate(inds(nforced,nset))
        allocate(w(nforced))
@@ -191,13 +246,22 @@ __CHARMM_ONLY##IF STRINGM
        rave=>r(:,:,nset+1)
        rave_new=>r(:,:,nset+2)
        rave_new=zero
-       if (qorient) allocate(r_com(3,nset))
+       if (qorient .or. & 
+#ifdef __PBC
+&       qper .or. &
+#endif
+&       .false. ) allocate(r_com(3,nset))
+!
        if (qrota) then
         allocate(u(3,3,nset))
         allocate(r_rot(nforced,3,nset)) ! allocate rotated coordinates
        endif
 ! indices
-       ii=5;
+#ifdef __PBC
+         ii=6
+#else
+         ii=5
+#endif
        do j=1,nset
         do k=1, nforced
          inds(k,j)=cv%priv(i)%p(ii); __INC(ii)
@@ -234,11 +298,22 @@ __CHARMM_ONLY##IF STRINGM
 !       translate forced atoms to centroid
         if (qorient) then
          do j=1, nset
-          r_com(1,j) = dot_product(w, r(:,1,j)); __DECR(r(:,1,j), r_com(1,j))
-          r_com(2,j) = dot_product(w, r(:,2,j)); __DECR(r(:,2,j), r_com(2,j))
-          r_com(3,j) = dot_product(w, r(:,3,j)); __DECR(r(:,3,j), r_com(3,j)) 
+          r_com(1,j) = dot_product(w, r(:,1,j));
+          r_com(2,j) = dot_product(w, r(:,2,j));
+          r_com(3,j) = dot_product(w, r(:,3,j));
+          __DECR(r(:,1,j), r_com(1,j))
+          __DECR(r(:,2,j), r_com(2,j))
+          __DECR(r(:,3,j), r_com(3,j)) 
          enddo
-        endif ! qtrans
+#ifdef __PBC
+        elseif (qper) then
+         do j=1, nset
+          r_com(1,j) = dot_product(w, r(:,1,j));
+          r_com(2,j) = dot_product(w, r(:,2,j));
+          r_com(3,j) = dot_product(w, r(:,3,j));
+         enddo
+#endif
+        endif ! qorient
 !
         if (qrota) then
 ! find the average structure
@@ -258,7 +333,27 @@ __CHARMM_ONLY##IF STRINGM
            __WRN(whoami, 'NO CONVERGENCE AFTER MAXIMUM NUMBER OF ITERATIONS.')
 ! rotate rave into the frames of r`s
 !
-         if (qtrans) r_com=zero ! trick to avoid if statement in the r_com subtraction below
+         if (qtrans) then ! translational alignment active
+          r_com=zero ! trick to avoid if statement in the r_com subtraction below
+#ifdef __PBC
+! correct COMs so that they are consistent with each other (via 1st COM)
+! adapted from cv_rmsd
+         elseif (qper) then ! restore original COM that is closest to the first COM
+          do j=2, nset
+           __DECR(r_com(1,j), r_com(1,1))
+           __PBCDIST(r_com(1,j), cv%ucell%a)
+           __INCR(r_com(1,j), r_com(1,1))
+!
+           __DECR(r_com(2,j), r_com(2,1))
+           __PBCDIST(r_com(2,j), cv%ucell%b)
+           __INCR(r_com(2,j), r_com(2,1))
+!
+           __DECR(r_com(3,j), r_com(3,1))
+           __PBCDIST(r_com(3,j), cv%ucell%c)
+           __INCR(r_com(3,j), r_com(3,1))
+          enddo
+#endif
+         endif
 !
          do j=1, nset
           do ii=1,3
@@ -270,7 +365,38 @@ __CHARMM_ONLY##IF STRINGM
           __DECR(r(:,:,j), r_rot(:,:,j))  ! now, r is a displacement from average coords ( in the local frame of reference )
          enddo ! j
          rave_new = zero ! reset to zero for tricky RMSD call below
-        else ! (qrota)
+        else ! .not.(qrota)
+
+#ifdef __PBC
+! correct COMs so that they are consistent with each other (via 1st COM)
+! adapted from cv_rmsd
+        if (qper) then
+#ifdef __DEBUG
+ __DBGOUT(*,'OLD COM:',1,r_com(:,1))
+#endif
+! shift COM of group 1 to zero
+         __DECR(r(:,1,1), r_com(1,1))
+         __DECR(r(:,2,1), r_com(2,1))
+         __DECR(r(:,3,1), r_com(3,1))
+         do j=2, nset
+#ifdef __DEBUG
+ __DBGOUT(*,'OLD COM:',j,r_com(:,j))
+#endif
+          dr=r_com(:,j)-r_com(:,1)
+          __PBCDIST(dr(1), cv%ucell%a)
+          __PBCDIST(dr(2), cv%ucell%b)
+          __PBCDIST(dr(3), cv%ucell%c)
+!
+          __INCR(r(:,1,j), dr(1) - r_com(1,j)) ! + r_com(1,1) ! this would restore com, but we can instead subtract COM1 from all coordinate sets (and set 1 above)
+          __INCR(r(:,2,j), dr(2) - r_com(2,j))
+          __INCR(r(:,3,j), dr(3) - r_com(3,j))
+#ifdef __DEBUG
+ __DBGOUT(*,'NEW COM:',j,dr+r_com(:,1))
+#endif
+! now, all structures have COMs that are near 0
+         enddo
+        endif
+#endif
          rave = d * sum(r(:,:,1:nset),3)           ! simple average
          do j=1, nset
           __DECR(r(:,:,j),rave)                    ! displacement from average coords
@@ -282,6 +408,9 @@ __CHARMM_ONLY##IF STRINGM
         theta=zero
         do j=1, nset
 ! r is already the displacement, so use the zero dummy array 'rave_new'
+#ifdef __DEBUG
+   write(777,*) r(:,:,j)
+#endif
          __INCR(theta,rmsd(r(:,:,j),rave_new,w,.false.))! energy proportional to rmsd^2 (.false. means do not take sqrt -- i.e. msd)
         enddo
         theta=sqrt(theta)
@@ -365,7 +494,11 @@ __CHARMM_ONLY##IF STRINGM
        endif ! addforce
 !     free memory
        deallocate(inds,r,w)
-       if (qorient) then
+       if (qorient .or. &
+#ifdef __PBC
+&        qper .or. &
+#endif
+&        .false.) then
         deallocate(r_com)
        endif
 !
@@ -390,6 +523,9 @@ __CHARMM_ONLY##IF STRINGM
 !
        int :: nforced, nset
        bool :: qtrans, qrota
+#ifdef __PBC
+       bool :: qper
+#endif
        int, pointer, dimension(:,:) :: inds
        __IAM(__NM(LIST))
 !
@@ -406,13 +542,21 @@ __CHARMM_ONLY##IF STRINGM
         nset=cv%priv(i)%p(2)
         qtrans=(cv%priv(i)%p(3).ne.0)
         qrota=(cv%priv(i)%p(4).ne.0)
+#ifdef __PBC
+        qper=(cv%priv(i)%p(5).ne.0)
+#endif
 !
 ! note that I currently cannot tell whether mass-weighting is requested
 ! am also not printing the weights
 !
         allocate(inds(nforced, nset))
 ! indices
-        ii=5; jj=ii+nforced*nset-1
+#ifdef __PBC
+        ii=6;
+#else
+        ii=5;
+#endif
+        jj=ii+nforced*nset-1
         inds=reshape(cv%priv(i)%p(ii:jj),(/nforced, nset/))
 !
         ii=1
@@ -440,6 +584,11 @@ __CHARMM_ONLY##IF STRINGM
 !
         deallocate(inds)
 !
+#ifdef __PBC
+        if (qper.and..not.qtrans) then
+         write(_MSGBUF, '(A)') _TAB//' RMSD COMPUTATION ACCOUNTS FOR PERIODIC BOUNDARIES' ; __PRINT(_MSGBUF)
+        endif
+#endif
        endif ! ME_STRING
 !
  667  format(A,2I8,' ',4A)

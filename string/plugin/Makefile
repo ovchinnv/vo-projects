@@ -10,12 +10,13 @@ LIBS+=$(LIB)
 
 LOCALDEFS+=-D__BINDC
 
+include linkobjs.inc
+include $(ROOT)/Makefile.inc
+
+
 default : plugin
 plugin : $(LIB)
 $(LIB) : $(OBJS) $(COBJS) $(LOBJS) linkobjs.inc
-
-include linkobjs.inc
-include $(ROOT)/Makefile.inc
 
 LOCALMACROS+=-include source.defs
 LOCALMACROS+=-include $(COMMON)/source.defs

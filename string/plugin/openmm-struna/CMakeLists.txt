@@ -4,6 +4,14 @@
 
 CMAKE_MINIMUM_REQUIRED(VERSION 2.8)
 
+IF (NOT CMAKE_BUILD_TYPE)
+SET(CMAKE_BUILD_TYPE "Release" CACHE STRING "Select build type" FORCE)
+ENDIF()
+
+SET(CMAKE_C_FLAGS_RELEASE "-Ofast -DNDEBUG -std=c++11" CACHE STRING "C Optimization flags for release builds" FORCE)
+SET(CMAKE_CXX_FLAGS_RELEASE "-Ofast -DNDEBUG -std=c++11" CACHE STRING "C++ Optimization flags for release builds" FORCE)
+SET(CUDA_NVCC_FLAGS_RELEASE "-Xptxas -O3" CACHE STRING "NVCC Optimization flags for release builds" FORCE)
+
 # We need to know where OpenMM is installed so we can access the headers and libraries.
 SET(OPENMM_DIR "/usr/local/openmm" CACHE PATH "Where OpenMM is installed")
 INCLUDE_DIRECTORIES("${OPENMM_DIR}/include")
