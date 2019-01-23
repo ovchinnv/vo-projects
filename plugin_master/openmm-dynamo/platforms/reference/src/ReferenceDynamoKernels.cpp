@@ -65,11 +65,11 @@ ReferenceCalcDynamoForceKernel::ReferenceCalcDynamoForceKernel(std::string name,
 }
 
 ReferenceCalcDynamoForceKernel::~ReferenceCalcDynamoForceKernel() {
-    if (hasInitialized) {
+/*    if (hasInitialized) {
         master_done_plugin();
         free(r);
         free(fr);
-    }
+    }*/
 }
 
 void ReferenceCalcDynamoForceKernel::initialize(const System& system, const DynamoForce& force) {
@@ -134,7 +134,7 @@ void ReferenceCalcDynamoForceKernel::initialize(const System& system, const Dyna
 double ReferenceCalcDynamoForceKernel::execute(ContextImpl& context, bool includeForces, bool includeEnergy) {
     //
     ReferencePlatform::PlatformData* data = reinterpret_cast<ReferencePlatform::PlatformData*>(context.getPlatformData());
-    int iteration = data->stepCount;
+    long int iteration = data->stepCount;
     double* rptr; // pointer to positions array
     double* fptr; // pointer to force array
     int* aptr; // pointer to atom index array

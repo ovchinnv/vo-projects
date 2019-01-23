@@ -19,6 +19,7 @@ module _N
  private
 
  public __NM(initialize)
+ public __NM(initialized)
  public __NM(done)
  public __NM(main)
 
@@ -27,20 +28,23 @@ module _N
 ! macro for parameter definition
 #define __PAR(_PAR,_TYPE,_DEF) _TYPE, save :: _PAR ; _TYPE, parameter :: __CONCAT(default_,_PAR)=_DEF;
 
- __PAR(__CONCAT(min,_NAME),float,0.01)
- __PAR(__CONCAT(max,_NAME),float,100)
+ __PAR(__CONCAT(min,_NAME),float,0.01d0)
+ __PAR(__CONCAT(max,_NAME),float,100d0)
  __PAR(_NAME,float,__CONCAT(default_min,_NAME))       ! current value
  __PAR(timestep,float,1.0d-4) ! integration step
- __PAR(bdtemp, float, 300d0) ! temperature for Brownian dynamics evolution of adaptive quantity _NAME
  __PAR(iteration,int*8,izero)   ! iteration
  __PAR(gridsize,int,1000)     ! size for grid (note that this is the number of points ; number of bins would be gridsize-1 )
 !
  __PAR(dgrid,float,abs(__XMAP(__CONCAT(default_max,_NAME))-__XMAP(__CONCAT(default_min,_NAME)))/(default_gridsize-1))
 !                                                                                           ! ( note that it is easier to set the gridsize )
- __PAR(damping_average,float,one/ten) ! damping constant for computing averages (C_\gamma in Zhang & Ma)
+ __PAR(damping_average,float,half/ten) ! damping constant for computing averages (C_\gamma in Zhang & Ma)
 !
  __PAR(dist, character(len=vartaglen), 'POWERLAW') ! prescribed distribution of (untransformed) _NAME
- __PAR(dist_exp, float, -one) ! powerlaw coefficent in the distribution of (untransformed) _NAME
+ __PAR(dist_exp, float, zero) ! exponent in the power-law distribution of (untransformed) _NAME
+#ifndef __CUSTOM_DIFFUSION
+ __PAR(diff_exp, float, zero)  ! exponent in the power-law distribution of diffusion constant (D=offset+k^exp)
+ __PAR(diff_offset, float, zero)  ! constant offset in the power-law distribution of diffusion constant (D=offset+k^exp)
+#endif
  __PAR(interp_width, int, 10)  ! number of bins over which the linear fit of average conjugate/dual
  __PAR(average_update_freq, int, 1)   ! frequency of updating average of dual
  __PAR(__CONCAT(_NAME,_update_freq), int, 1)   ! frequency of evolution
@@ -65,32 +69,37 @@ module _N
  int :: nrand = 0 !actual size of random number array size
  int :: irand=0 ! pointer into random number array eta
  float :: eta(0:nrandmax-1)
- float, parameter :: ookb=one/kboltzmann
- float :: bet
  float :: sqrt2dt  = sqrt(two * default_timestep) ! precomputed sqrt(2 x dt) for BD integrator
 !
 ! for time series (history) output
  int, parameter :: maxhist = 100000 ! size of history array ; this is the largest size that can be stored between outputs 
- int, parameter :: numhistvar  = 4      ! for now, plugin iteration, adaptive variable and its instantaneous dual, mditeration
+ int, parameter :: numhistvar  = 5      ! for now, plugin iteration, adaptive variable and its instantaneous dual, mditeration
  float :: hist(numhistvar,0:maxhist-1)
- int, parameter :: istep=1, ivar=2, idual=3, imdstep=4  ! indices into hist
+ int, parameter :: istep=1, ivar=2, imapvar=3, idual=4, imdstep=5  ! indices into hist
  int :: bhist=0, ehist=-1 ! beginning and final indices into history array
+ __PAR(skip_iterations, int*8, izero) ! initial number of iterations to skip (nothing will be done until after iteration count is higher)
  __PAR(stat_add_freq, int, 10)     ! frequency of storing time series
  __PAR(stat_output_freq, int, 1000)   ! frequency of time series output
- __PAR(stat_output_file, character(len=vartaglen), 'tempering.series.txt') ! time series file
+ __PAR(stat_output_file, character(len=vartaglen), 'adaptive.series.txt') ! time series file
  character(len=7) :: stat_acc='WRITE' ! access mode for series file ('WRITE'/'READ'/'APPEND')
  character(len=vartaglen) :: line ! for reading grid data from restart file
 !
  contains
 !====================================================================================
- __SUB(initialize) ()
+ __SUB(initialize) (param)
+ float, intent(out), optional :: param ! if requested, pass the value of param = (__NAME) at initialization
  character(len=vartaglen) :: keyword, context
  int :: l
  __IAM(__NM(initialize))
 !
 #define __CONTEXT __STRING(__CTX)
  context=__CONTEXT ;
-! first, check for restart file
+! first, check if we have the watershell context present
+ if (parser_find_context(__CONTEXT).le.0) then
+  __MESSAGE(whoami, trim(ftoupper(__STRING(_N)))//' CONFIGURATION OPTIONS NOT PROVIDED. WILL NOT INITIALIZE.');
+   return
+ endif
+! next, check for restart file
 ! if present, read it and skip initialization options
 ! read restart file
 #define __CHAR
@@ -103,7 +112,7 @@ module _N
  qrestart = ( existtag_nocase('restart_file', context) .and. trim(ftoupper(restart_file)).ne.'NONE')
 !
  if (qrestart) then
-  __MESSAGE(whoami,' READING RESTART FILE. COMMAND FILE '//trim(ftoupper(__STRING(_NAME)))//' AND GRID SIZE PARAMETERS ARE IGNORED.')
+  __MESSAGE(whoami,' READING RESTART FILE. INPUT FILE '//trim(ftoupper(__STRING(_NAME)))//' AND GRID SIZE PARAMETERS ARE IGNORED.')
 ! read and parse restart file
   fid=-1
   call files_open(fid, restart_file, 'FORMATTED', 'READ')
@@ -141,28 +150,35 @@ module _N
 
 !
 #undef __LEZEROERR
+#define __WARNIFMISSING
+#define __DEFAULT
 #define __VAR	damping_average
 #define __TAG	average_damping_constant
 #define __NAME	damping constant for weighted average
 #include "parser/parser_macro2.src"
 !
-#define __DEFAULT
-#define __WARNIFMISSING
+#define __MINUSERR
 #define __INT
 #define __VAR	iteration
 #define __TAG	__VAR
 #define __NAME	starting iteration
 #include "parser/parser_macro2.src"
 !
+#undef __WARNIFMISSING
+#define __VAR	skip_iterations
+#define __TAG	__VAR
+#define __NAME	number of iterations to skip before evolving _NAME
+#include "parser/parser_macro2.src"
+#define __WARNIFMISSING
+#undef __MINUSERR
 !
 #define __LEZEROERR
 #undef __INT
 #define __VAR	_NAME
 #define __TAG	_NAME
-#define __NAME	starting _NAME
+#define __NAME	initial _NAME value
 #include "parser/parser_macro2.src"
 !
-#define __WARNIFMISSING
 #define __VAR	__CONCAT(min,_NAME)
 #define __TAG	__CONCAT(minimum_,_NAME)
 #define __NAME	minimum _NAME
@@ -227,7 +243,7 @@ module _N
 #undef __INT
 #define __VAR	dist_exp
 #define __TAG	__CONCAT(_NAME,_distribution_exponent)
-#define __NAME	exponent for_NAME distribution
+#define __NAME	exponent for _NAME distribution
 #include "parser/parser_macro2.src"
 !
  if (mapdist.eq.constant) then
@@ -236,6 +252,23 @@ module _N
    dist_exp=zero
   endif
  endif
+#ifndef __CUSTOM_DIFFUSION
+! variable diffusion parameters
+#//undef __WARNIFMISSING
+#define __VAR	diff_exp
+#define __TAG	__CONCAT(_NAME,_diffusion_exponent)
+#define __NAME	exponent for _NAME diffusion [D(k)=offset+k^exp]
+#include "parser/parser_macro2.src"
+!
+#define __LEZEROERR
+#define __VAR	diff_offset
+#define __TAG	__CONCAT(_NAME,_diffusion_offset)
+#define __NAME	offset for _NAME diffusion [D(k)=offset+k^exp]
+#include "parser/parser_macro2.src"
+#undef __LEZEROERR
+#//define __WARNIFMISSING
+!
+#endif
 !
  if (fatal_warning()) return
 ! ====== done with (possible) restart file data
@@ -309,14 +342,6 @@ module _N
 #define __DOIFOK  sqrt2dt=sqrt(two*timestep) ! precompute sqrt(2dt)
 #include "parser/parser_macro2.src"
  __DBGOUT(' integration step =',timestep)
-!
-! Evolution temperature (can be specified independently of the simulation temperature, although the calculation would not be in equilibrium)
-!
-#define __VAR	bdtemp
-#define __TAG	temperature
-#define __NAME	_NAME evolution temperature
-#define __DOIFOK bet=ookb/bdtemp
-#include "parser/parser_macro2.src"
 !======================================
 ! call lower-level initialization
 
@@ -342,6 +367,7 @@ module _N
  bhist=0
  ehist=-1
 !
+ if (present(param) .and. iteration.ge.skip_iterations) param=_NAME
  __NM(initialized=).true.
 !
  end __SUB(initialize)
@@ -350,7 +376,7 @@ module _N
  __SUB(main) (dual, param, mditeration_)
  float, intent(in) :: dual
  float, intent(inout) :: param ! new value of _NAME (if requested) will be returned in the same variable
- float :: dpar
+ float :: dpar, xmap
  __OPAR(mditeration,int*8)
  __IAM(__NM(compute))
 
@@ -361,13 +387,21 @@ module _N
  endif
 !
  __INC(iteration)
- __PRESENT(mditeration,izero)
  __DBGOUT('iteration = ', iteration)
+! check whether to skip
+ if (iteration.lt.skip_iterations) return
+! proceed with the code
+!
 ! check that parameter value is consistent
  if ( abs(param - _NAME) .gt. __FERRTOL ) then
-  __WRN(whoami, ftoupper(__STRING(_NAME))//' MISMATCH: '//ftoa(param)//'(SIMULATION) vs.'//ftoa(_NAME)//'(THIS MODULE)')
+  if (iteration.eq.skip_iterations) then
+   param=_NAME
+   __MESG(whoami, 'INITIAL FORCE CONSTANT SET TO', _NAME)
+  else
+   __WRN(whoami, ftoupper(__STRING(_NAME))//' MISMATCH: '//ftoa(param)//'(SIMULATION) vs.'//ftoa(_NAME)//'(THIS MODULE)')
 ! not clear what to next; for now, adopt the most permissive behaviour, assuming that MD is has the desired value
-  _NAME=param
+   _NAME=param
+  endif
  endif
 !
 !========================================== update averages
@@ -382,27 +416,45 @@ module _N
    if (irand.eq.0) call randomg_vector(eta, nrand) ! draw nrand normal deviates
 ! compute new _NAME
 
+ __DBGOUT('old '//__STRING(_NAME=), _NAME)
  __DBGOUT('current dual = ', dual)
  __DBGOUT('interpolated dual = ', __CONCAT3(gridscalar,_MAPTYPE,_lookup_average_value(_NAME)))
  __DBGOUT('timestep=',timestep)
 
+#ifndef __CUSTOM_DIFFUSION
+#define __D(_X)  (diff_offset + (_X)**diff_exp)
+#define __DP(_X) (diff_exp*(_X)**(diff_exp-1))
+#endif
+
+#ifdef __EVOLVE_MAPPED
 ! integrate in transformed (mapped) coordinates using euler integrator of SDE
+! I do not recommend integrating in transformed coordinates
 ! compute increment :
-   dpar = timestep * __DXMAP(param) *  ( __DRIFT(dual, param) + dist_exp / param ) & ! drift
-   &    + sqrt2dt * eta(irand) * __DIFF(param)
+   dpar = __DXMAP(param) * (timestep * ( __D(param) * ( __FORCE(dual, param) + (dist_exp - one)/ param ) + __DP(param) ) & ! drift
+ &                         + sqrt2dt * sqrt(__D(param)) * eta(irand)) ! diffusion
+!
+ __DBGOUT('dpar : ', dpar)
 ! transform, add evolve, and transform back
-   _NAME = __XIMAP(__XMAP(_NAME) + dpar)
+   xmap=__XMAP(_NAME) ! transform
+   __INCR(xmap, dpar) ! evolve
+   _NAME = __XIMAP(xmap) ! transform back
+#else
+! integrate in direct space here
+   __INCR(_NAME , timestep * ( __D(param) * ( __FORCE(dual, param) + dist_exp / param ) + __DP(param) ) + sqrt2dt * sqrt ( __D(param) ) * eta(irand))
+#endif
 !
  __DBGOUT('new '//__STRING(_NAME=), _NAME)
 !
 ! increment random number pointer
    __INC(irand); if (irand.eq.nrand) irand=izero
-!
 ! apply boundary conditions to _NAME (essentially ensuring that we stay inside the prescribed support )
-   call __CONCAT3(gridscalar, _MAPTYPE, _apply_bc)(_NAME)
-!
+#ifdef __EVOLVE_MAPPED
+!   call __CONCAT3(gridscalar, _MAPTYPE, _apply_bc_mapped)(_NAME)
+   call __CONCAT3(gridscalar, _MAPTYPE, _apply_bc_raw)(_NAME) ! inconsistent but numerically safer
+#else
+   call __CONCAT3(gridscalar, _MAPTYPE, _apply_bc_raw)(_NAME)
+#endif
  __DBGOUT('corrected '//__STRING(_NAME=), _NAME)
-!
 ! update value of _NAME for output
    param=_NAME
   endif
@@ -419,10 +471,14 @@ module _N
     if (ehist.eq.bhist) bhist=mod(bhist+1,maxhist)
    endif
 ! update history
-   hist(istep,ehist) = iteration
+   hist(istep,ehist) = iteration + 1 ! we increment iteration counter at the end of routine
    hist(ivar,ehist) = _NAME
-   hist(idual, ehist) = dual
-   hist(imdstep, ehist) = mditeration
+   hist(imapvar, ehist) = __XMAP(_NAME)
+   hist(idual,ehist) = dual
+!
+ __PRESENT(mditeration,izero)
+!
+   hist(imdstep,ehist) = mditeration
   endif
  endif
 !
@@ -445,7 +501,7 @@ module _N
 !
   endif
  endif
-
+!
  end __SUB(main)
 !======================================
  __SUB(done)
@@ -477,6 +533,7 @@ module _N
  int::i, numvar
  character(len=vartaglen) :: fmt
 !
+ __PRESENT(qmdstep, .true.)
  __DBGOUT('beginning history index : ', bhist)
  __DBGOUT('ending history index    : ', ehist)
 !
@@ -487,9 +544,9 @@ module _N
   i=bhist
 !
   numvar=numhistvar
-  if (.not.qmdstep) __INCR(numvar,-1) ! md iterations not supplied so skip this field
+  if (.not.qmdstep) __DEC(numvar) ! md iterations not supplied so skip this field
 !
-  fmt='('//itoa(size(hist,2))//realfmt//')'
+  fmt='('//itoa(numvar)//realfmt//')'
   do
    write(fid,fmt)  hist(1:numvar,i)
    if (i.eq.ehist) exit
@@ -518,12 +575,19 @@ module _N
  _W __STRING(#adaptive _NAME restart file)
  _W __STRING(__RESTARTCTX)//' {'
  _W 'iteration=',iteration
+ if (skip_iterations.ne.default_skip_iterations) then
+  _W 'skip_iterations=',skip_iterations
+ endif
  _W __STRING(_NAME=),_NAME,' # current value'
  _W __STRING(__CONCAT(minimum_,_NAME)=),__CONCAT(min,_NAME)
  _W __STRING(__CONCAT(maximum_,_NAME)=),__CONCAT(max,_NAME)
- _W __STRING(__CONCAT(_NAME,_distribution)=),trim(dist)
+ _W __STRING(__CONCAT(_NAME,_distribution)=),trim(dist),' # note that this is the distribution of the actual '//__STRING(_NAME)//', i.e. not mapped'
  _W __STRING(__CONCAT(_NAME,_distribution_exponent)=),dist_exp, ' # exponent for power-law distribution'
- _W __STRING(__CONCAT3(mapped_,_NAME,_gridsize)=),gridsize,' # number of points used for mapped grid discretization'
+#ifndef __CUSTOM_DIFFUSION
+ _W __STRING(__CONCAT(_NAME,_diffusion_exponent)=),diff_exp, ' # exponent for diffusion [D=offset+k^exp]'
+ _W __STRING(__CONCAT(_NAME,_diffusion_offset)=),diff_offset, ' # offset for diffusion [D=offset+k^exp]'
+#endif
+ _W __STRING(__CONCAT(_NAME,_gridsize)=),gridsize,' # number of points used for grid discretization'
  _W 'average_damping_constant=',damping_average,' # constant used in adaptive averaging (Cg)'
  _W 'interp_width=',interp_width,' # number of bins on either side of current bin for interpolation'
  _W 'random_seeds=(',random_get_seeds(),') # current seeds from RNG for seamless restart'
@@ -531,7 +595,7 @@ module _N
 ! retrieve dual grid :
  restart_grid_data=__CONCAT3(gridscalar,_MAPTYPE,_griddata_ptr)()
 ! write the dual grid :
- _W '# gdata_i (i=1, gridsize) ; for ith bin write : '//__STRING(_NAME (i))//', SUM S(i), SUM S(i)^2, AVG S(i), AVG S(i)^2, WGT(i), NUM_SAMPLES(i) '
+ _W '# gdata_i (i=1, gridsize) ; for ith bin write : '//__STRING(__XMAP(_NAME (i)))//', SUM S(i), SUM S(i)^2, AVG S(i), AVG S(i)^2, WGT(i), NUM_SAMPLES(i) '
  do j=1, gridsize
   _W 'gdata_'//trim(itoa(j)),'=(',restart_grid_data(j::gridsize),')'
  enddo ! forced atoms

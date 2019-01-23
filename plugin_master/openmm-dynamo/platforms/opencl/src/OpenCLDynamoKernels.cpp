@@ -164,7 +164,7 @@ void OpenCLCalcDynamoForceKernel::beginComputation(bool includeForces, bool incl
 }
 
 void OpenCLCalcDynamoForceKernel::executeOnWorkerThread() {
-    int iteration = cl.getStepCount();
+    long int iteration = cl.getStepCount();
     double* rptr; // pointer to coordinate array
     int* aptr; // pointer to atom index array
     int i, j, ierr;
@@ -206,7 +206,7 @@ void OpenCLCalcDynamoForceKernel::executeOnWorkerThread() {
        }
       } else { // no atomlist provided; loop over all atoms
        for (j=0 ; j < 3*natoms ; j++) {
-        frc[j]= fr[j++]*str2omm_f; //units
+        frc[j]= fr[j]*str2omm_f; //units
        }
       } // atomlist
 //=============
@@ -222,7 +222,7 @@ void OpenCLCalcDynamoForceKernel::executeOnWorkerThread() {
        }
       } else { // no atomlist provided; loop over all atoms
        for (j=0 ; j < 3*natoms ; j++) {
-        frc[j]= fr[j++]*str2omm_f; //units
+        frc[j]= fr[j]*str2omm_f; //units
        }
       } // atomlist
      } //qdble
