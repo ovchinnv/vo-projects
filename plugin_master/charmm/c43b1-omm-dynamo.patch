@@ -1,0 +1,211 @@
+diff -uN install.com install.com
+--- install.com	2018-10-19 17:34:15.000000000 -0400
++++ install.com	2019-01-24 16:54:38.579699520 -0500
+@@ -128,7 +128,7 @@
+ set qabpo = 0
+ # VO : string method v
+ set qstringm = 0 ;
+-# VI : string method ^
++# VO : string method ^
+ set mpich = 0
+ set lammpi = 0
+ set mpispecial = 0
+@@ -1305,6 +1305,10 @@
+ 	      set ommplugin = 1
+ 	      set linker_rpath = "-Wl,-rpath,$omm_lib,-rpath,$omm_plug_so:h"
+         set omm_libs = " -lOpenMMCharmm -lOpenMMGBSW -lOpenMM "
++# DYNAMO library addition:
++        if ( "$addprefdat" =~ *[dD][yY][nN][aA][mM][oO]*) then
++         set omm_libs="$omm_libs -lOpenMMDynamo"
++        endif
+       else
+         echo " install.com> ERROR: Cannot find"
+         echo "              $OPENMM_DIR/$omm_intf"
+@@ -1341,7 +1345,8 @@
+       # endif
+ 
+       # must leave in vvv to compile against openmm >= 7.1 Feb 2017
+-      setenv omm_defines "-D_GLIBCXX_USE_CXX11_ABI=0"
++#      setenv omm_defines "-D_GLIBCXX_USE_CXX11_ABI=0"
++      setenv omm_defines
+       grep -q -w getDefaultTemperature "$OPENMM_DIR/include/openmm/MonteCarloBarostat.h"
+       if ( $status == 0 ) then
+         setenv omm_defines "-DOPENMM_API_UPDATE $omm_defines"
+@@ -1354,7 +1359,8 @@
+           < $chmbuild/Makefile_$chmhost > $chmbuild/Makefile_$$
+       /bin/mv $chmbuild/Makefile_$$ $chmbuild/Makefile_$chmhost
+ 
+-      sed -e "s@omm_cc =@omm_cc = $omm_cc -D_GLIBCXX_USE_CXX11_ABI=0@" \
++#      sed -e "s@omm_cc =@omm_cc = $omm_cc -D_GLIBCXX_USE_CXX11_ABI=0@" \
++      sed -e "s@omm_cc =@omm_cc = $omm_cc @" \
+             < "$chmbuild/../UNX/Makefile_omm" > "$chmbuild/Makefile_omm"
+       sed -ie "s@SHLIB =@SHLIB = $SHLIB@" \
+             "$chmbuild/Makefile_omm"
+@@ -1880,7 +1886,7 @@
+ if ( $stopmark == 2 ) then
+   echo " "
+   echo " install.com> Installation STOPs after creating "
+-  echo "              the default pref.dat.
++  echo "              the default pref.dat."
+   mv $chmbuild/pref$$.dat $chmbuild/pref.dat
+   exit 2
+ endif
+diff -ruN source/openmm/omm_ctrl.src source/openmm/omm_ctrl.src
+--- source/openmm/omm_ctrl.src	2018-10-19 17:34:15.000000000 -0400
++++ source/openmm/omm_ctrl.src	2019-01-24 18:19:55.589654506 -0500
+@@ -33,11 +33,18 @@
+    !> OMM CLEAR - Clears omm_active and destroys Context.
+ 
+    subroutine omm_command(comlyn, comlen)
+-      use string, only: INDXA, nexti, gtrmf, gtrmi, nexta4, nexta8
++      use string, only: INDXA, nexti, gtrmf, gtrmi, &
++#if KEY_DYNAMO==1
++&          gtrmwd, &
++#endif
++&          nexta4, nexta8
+       use inbnd, only: lommgb, qgbsw_omm
+ #if KEY_OPENMM==1
+       use omm_main, only: teardown_openmm, serialize, nbopts, check_nbopts, &
+-           omm_change_lambda
++#if KEY_DYNAMO==1
++&           qdynamo, dynamoConfig, dynamoLog, defaultDynamoConfig, defaultDynamoLog, &
++#endif
++&           omm_change_lambda
+       use omm_gbsa, only : qgbsa, soluteEPS, solventEPS
+       use gbsw, only: qgbsw
+       use omm_gbsw, only : qgbsw_import_settings, qphmd_omm, qphmd_initialized, &
+@@ -59,6 +66,9 @@
+       logical :: omm_state_cmd
+       character(len=20) :: blank
+       character(len=4) :: wrd, wrd1
++#if KEY_DYNAMO==1
++      integer :: strlen
++#endif
+ 
+       omm_state_cmd = .false.
+ #if KEY_OPENMM==1
+@@ -170,7 +180,22 @@
+             nbopts%torsion_lambda = torsion_lambda
+             nbcurr = current_nbopts()
+             nbopts = nbcurr
+-
++#if KEY_DYNAMO==1
++         case('DMOL') cmds
++            if (indxa(comlyn, comlen, 'DOFF').gt.0) then 
++             qdynamo=.false.
++             write(outu,'(A)') ' DYNAMO PLUGIN IS OFF'
++            elseif (indxa(comlyn, comlen, 'DON').gt.0) then
++             qdynamo=.true.
++             call GTRMWD(comlyn,comlen,'DCONF',5,dynamoConfig,len(dynamoConfig),strlen)
++             if (strlen.eq.0) dynamoConfig=defaultDynamoConfig
++             call GTRMWD(comlyn,comlen,'DLOG',4,dynamoLog,len(dynamoLog),strlen)
++             if (strlen.eq.0) dynamoLog=defaultDynamoLog
++             write(outu,'(A)') ' WILL INITIALIZE DYNAMO PLUGIN WITH CONFIG FILE "'//trim(dynamoConfig)//'" AND LOG FILE "'//trim(dynamoLog)//'"'
++            else
++             call wrndie(-1, '<CHARMM>', 'NO VALID DYNAMO COMMANDS FOUND')
++            endif
++#endif
+          end select cmds
+       enddo
+ 
+diff -ruN source/openmm/omm_dynamo.src source/openmm/omm_dynamo.src
+--- source/openmm/omm_dynamo.src	1969-12-31 19:00:00.000000000 -0500
++++ source/openmm/omm_dynamo.src	2019-01-24 17:00:37.908720128 -0500
+@@ -0,0 +1,32 @@
++module omm_dynamo
++#if KEY_OPENMM==1
++#if KEY_DYNAMO==1
++!
++! PROVIDE OPENMM/DYNAMO PLUGIN VIA CH/OMM INTERFACE
++! VICTOR OVCHINNIKOV 2019
++!
++ implicit none
++
++ public
++ 
++ contains
++
++ subroutine setup_dynamo(system, dynamoConfig, dynamoLog)
++
++ use OpenMM
++ use OpenMM_Types
++ use OpenMMDynamo_Types
++
++ type(OpenMM_System) :: system
++ type(OpenMM_DynamoForce) :: dynamo
++ character (*) dynamoConfig, dynamoLog
++ integer :: i
++
++ call OpenMM_DynamoForce_create(dynamo, dynamoConfig, dynamoLog)
++ i=OpenMM_System_addForce(system,transfer(dynamo,OpenMM_Force(0)))
++
++ end subroutine setup_dynamo
++
++#endif
++#endif
++end module omm_dynamo
+diff -ruN source/openmm/omm_main.src source/openmm/omm_main.src
+--- source/openmm/omm_main.src	2018-10-19 17:34:15.000000000 -0400
++++ source/openmm/omm_main.src	2019-01-24 15:26:56.580038896 -0500
+@@ -48,6 +48,12 @@
+    integer, save :: openmm_version_number
+    logical, save :: openmm_initialized = .false.
+    logical, save :: system_dirty = .false.
++#if KEY_DYNAMO==1
++   logical, save, public :: qdynamo = .false.
++   character(len=len('dynamo.conf')), parameter, public :: defaultDynamoConfig='dynamo.conf'
++   character(len=len('dynamo.log')), parameter, public :: defaultDynamoLog='dynamo.log'
++   character(len=200), save, public :: dynamoConfig, dynamoLog
++#endif
+ #endif
+ 
+    integer, parameter :: DYN_UNINIT = 0, DYN_RESTART = 1, &
+@@ -373,6 +379,9 @@
+    subroutine setup_system(init)
+       use omm_bonded, only: import_psf
+       use omm_restraint, only: setup_restraints
++#if KEY_DYNAMO==1
++      use omm_dynamo
++#endif
+       use new_timer
+       use rndnum, only : rngseeds
+ 
+@@ -397,6 +406,9 @@
+          call setup_cm_freezer(system)
+          call setup_thermostat(system, ommseed)
+          call setup_barostat(system, ommseed)
++#if KEY_DYNAMO==1
++         if (qdynamo) call setup_dynamo(system, dynamoConfig, dynamoLog)
++#endif
+       endif
+       integrator = new_integrator(dynopts, ommseed)
+       if(.not. init) call setup_shake(system, integrator)
+diff -ruN source/openmm/openmm_api.src source/openmm/openmm_api.src
+--- source/openmm/openmm_api.src	2018-10-19 17:34:15.000000000 -0400
++++ source/openmm/openmm_api.src	2019-01-24 13:58:55.873483428 -0500
+@@ -9,6 +9,10 @@
+ INCLUDE 'CharmmOpenMMFortranModule.f90'
+ INCLUDE 'OpenMMGBSWFortranModule.f90'
+ 
++#if KEY_DYNAMO==1
++include 'DynamoOpenMMFortranModule.f90'
++#endif
++
+ #else /* KEY_OPENMM */
+ 
+ ! humor setmk.com
+@@ -27,4 +31,14 @@
+ 
+ MODULE OpenMMGBSW
+ END MODULE OpenMMGBSW
++
++#if KEY_DYNAMO==1
++MODULE OpenMMDynamo_Types
++END MODULE OpenMMDynamo_Types
++
++MODULE OpenMMDynamo
++END MODULE OpenMMDynamo
++
++#endif
++
+ #endif
