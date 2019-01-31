@@ -231,6 +231,7 @@ void CudaCalcDynamoForceKernel::executeOnWorkerThread() {
     }
     // copy coordinates :
     if (atomlist==NULL) { // atomlist is not defined; therefore, provide all coords
+//    if (1) { // atomlist is not defined; therefore, provide all coords
      for (i=0, rptr=r ; i < natoms ; i++) {
       *(rptr++) = pos[i][0]*nm2A;
       *(rptr++) = pos[i][1]*nm2A;
@@ -240,6 +241,7 @@ void CudaCalcDynamoForceKernel::executeOnWorkerThread() {
      ierr=master_dyna_plugin(iteration, r, fr, NULL, 0, &master_energy, &atomlist, usesPeriodic, box); // might return valid atomlist
     // copy plugin forces
      if (atomlist!=NULL) { // atom indices provided; use them for adding forces
+//     if (0) { // atom indices provided; use them for adding forces
       for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
        j=*aptr - 1; // for zero offset (e.g. first coordinate lives in r[0]
        fptr=fr + 3*j ;
