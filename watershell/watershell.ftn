@@ -40,14 +40,14 @@
 #if defined(__SORT_LIST ) && defined(__NEIGHBOR_LIST)
 ! neighbor list length
 #// to check a subset of surface atom list
-#define __NEIGHBOR_LIST_LENGTH_MINDIST max(1,min(nsurface, INT(solute_neighbor_mind(i) * neighbor_list_factor) ))
+#define __NEIGHBOR_LIST_LENGTH_MINDIST max(1,min(nsurface_coord, INT(solute_neighbor_mind(i) * neighbor_list_factor) ))
 #//define __NEIGHBOR_LIST_LENGTH_DENSITY __NEIGHBOR_LIST_LENGTH_MINDIST
-#define __NEIGHBOR_LIST_LENGTH_DENSITY max(1,min(nsurface, INT (half * solute_neighbor_mind(i) * neighbor_list_factor) ))
+#define __NEIGHBOR_LIST_LENGTH_DENSITY max(1,min(nsurface_coord, INT (half * solute_neighbor_mind(i) * neighbor_list_factor) ))
 #endif
 
 #ifdef __UNWRAP_PBC
 #// note that I assume that _PER is positive, no checks are done
-#define __PBCDIST(_DIST,_PER) _DIST=modulo(_DIST, _PER);if(_DIST .gt. half*(_PER)) __DECR(_DIST,_PER)
+#define __PBCDIST(_DIST,_PER) _DIST=modulo(_DIST, _PER);if((_DIST)*2 .gt. (_PER)) __DECR(_DIST,_PER)
 #define __PBC_DIST(_DIST,_PER) __PBCDIST(_DIST,_PER)
 #define __DISTPBC(_DIST,_PER) __PBCDIST(_DIST,_PER)
 #define __DIST_PBC(_DIST,_PER) __PBCDIST(_DIST,_PER)
@@ -57,7 +57,8 @@ module _N
 
  use system, only : r, rcomp, fr, radius, natom, system_PDB_initialized, system_PDB_init, system_done, system_getind, &
 #ifdef __DASYSTAT
-&                   dasystat_masses=>occupancy, & ! use occupancy to store masses used in density control
+!&                   dasystat_masses=>occupancy, & ! use occupancy to store masses used in density control ; this is BAD because occupanct cannot be used !
+&                   dasystat_masses=>bcomp, & ! use backup beta array
 #endif
 &                   system_init_mol_scalar_nocase
  __DEP_OUTPUT
@@ -231,7 +232,10 @@ module _N
 #endif
 #endif
 !
- int, public :: nsurface=-1, nsolvent=-1
+ int, public :: nsurface_coord=-1, nsurface_atoms=-1, nsolvent=-1 ! 1/19 introducing surface atoms and coords to allow for atomless (dummy) coordinates
+#define nsurface_coordinates nsurface_coord
+#define nsurface_coords nsurface_coord
+!
  int :: nsolvent_outside
 #ifdef __DASYSTAT
  float :: solvent_mass         ! total mass of solvent atoms (constant throughout simulation)
@@ -276,6 +280,9 @@ module _N
 !
  int :: fid
  bool :: qrestart=.false. ! whether we are restarting from a restart file
+#ifdef __DUMSURF
+ bool :: qdumsurf=.false. ! whether the surface atoms are fixed 'dummies'
+#endif
 !
  float, private, parameter :: osq2=one/sqrt2
  float, private, parameter :: osq2pi=one/sqrt(twopi)
@@ -916,22 +923,78 @@ module _N
  endif ! dasystat
 #endif
 !
-! copy coordinates
+! initialize coordinate arrays
+#ifdef __DUMSURF
+! decide whether we are using dummy surface atoms
+ call toupper(surface_atom_selection)
+ select case(surface_atom_selection)
+  case('DUMMY','DUMB', 'DUM', 'DUMMIES','FIXED','POINT', 'POINTS');
+   qdumsurf=.true.
+   if (structure_update_freq.gt.0) then
+    __WRN(whoami, 'STRUCTURE UPDATE WILL BE DISABLED SINCE FIXED DUMMY ATOMS ARE USED.');
+    structure_update_freq=0
+   endif
+  case default;
+   qdumsurf=.false.
+ end select
 !
+ if (qdumsurf) then
+  allocate(isurface_atoms(0)) ! zero-sized array to be able to recycle most of the (non-dummy) code as is
+! obtain number of dummy atoms from parser
+#define __GET_NDUM(_TAG)  if (existtag_nocase(__STRING(_TAG),context)) then;\
+                           nsurface_coord=atoi(getval_nocase(__STRING(_TAG), context)) ;
+  __GET_NDUM(NDUMMY)
+  else  __GET_NDUM(NDUMB)
+  else  __GET_NDUM(NDUM)
+  else  __GET_NDUM(NDUMMIES)
+  else  __GET_NDUM(NFIXED)
+  else  __GET_NDUM(NPOINT)
+  else  __GET_NDUM(NPOINTS)
+  else  __GET_NDUM(NSURF)
+  else  __GET_NDUM(NSURFACE)
+  else  __GET_NDUM(NSURFACE_ATOMS)
+  else  __GET_NDUM(NUMDUMB)
+  else  __GET_NDUM(NUMDUM)
+  else  __GET_NDUM(NUMDUMMIES)
+  else  __GET_NDUM(NUMFIXED)
+  else  __GET_NDUM(NUMPOINT)
+  else  __GET_NDUM(NUMPOINTS)
+  else  __GET_NDUM(NUMSURF)
+  else  __GET_NDUM(NUMSURFACE)
+  else  __GET_NDUM(NUMSURFACE_ATOMS)
+  endif
+  __ASSERT(nsurface_coord,.gt.,0)
+ else
+#endif __DUMSURF
  isurface_atoms=>system_getind(surface_atom_selection)
+#ifdef __DUMSURF
+ endif ! qdumsurf
+
+ __DBGVAR(qdumsurf,1)
+ __DBGVAR(nsurface_coord,1)
+
+#endif
+
  if (associated(isurface_atoms)) then
-  nsurface=size(isurface_atoms) ; oonsurface=one/nsurface ;
-  __ALLOC(r_surf(3,nsurface))
-  __ALLOC(rad_surf(nsurface))
+  nsurface_atoms=size(isurface_atoms) ; ! note that per above, isurface_atoms is always allocated but might be a 0-size array
+#ifdef __DUMSURF
+  if (.not.qdumsurf) & 
+#endif
+  nsurface_coord=nsurface_atoms ! if the surface coordianates are physical atoms, their number equals the number of atoms
+!
+  oonsurface=one/nsurface_coord ! recall that nsurface_coord is either the number of surface dummies, or the number of surface atoms
+!
+  __ALLOC(r_surf(3,nsurface_coord))
+  __ALLOC(rad_surf(nsurface_coord))
 ! add atoms to list if provided
 !  if (present(atoms)) then
-   do l=1, nsurface
+   do l=1, nsurface_atoms
     ierr=atoms%uadd(isurface_atoms(l))
 #if defined(__RMFT) && defined(__SIMPLE_NET_FORCE_SURFACE)
 !  if (remove_net_torque.and.present(forced_atoms)) ierr=forced_atoms%uadd(isurface_atoms(l))
   if (remove_net_torque) ierr=forced_atoms%uadd(isurface_atoms(l))
 #endif
-   enddo
+   enddo ! physical surface atoms
 !  endif ! present
 !
  else
@@ -951,18 +1014,18 @@ module _N
   __ALLOC(drho_solv(3,nsolvent))
   ddist_solv=>drho_solv
 #ifdef __SORT_LIST
-  __ALLOC(solute_neighbor_list(nsurface,nsolvent))
-! initialize neighbor list with solute indices from 1 to nsurface for each solute atom:
+  __ALLOC(solute_neighbor_list(nsurface_coord,nsolvent))
+! initialize neighbor list with solute indices from 1 to nsurface_coord for each solute atom:
 #ifdef __DEBUG
   __DBGOUT('INITIALIZING SOLUTE NEIGHBOR LIST');
 #endif
-  do l=1,nsurface
+  do l=1,nsurface_coord
    solute_neighbor_list(l,:)=l
   enddo
 #ifdef __NEIGHBOR_LIST
   qneighbor_list_sorted=.not.qneighbor_list ! if not using qlist, set to true to avoid sorting
   __ALLOC(solute_neighbor_mind(nsolvent))
-  solute_neighbor_mind=nsurface ! initialize to last position in the solute neighbor list array
+  solute_neighbor_mind=nsurface_coord ! initialize to last position in the solute neighbor list array
 #endif
 #endif
 ! add atoms to lists if provided
@@ -982,12 +1045,26 @@ module _N
   __WRN(whoami, 'COULD NOT ALLOCATE MEMORY FOR SOLVENT ATOM INDICES.')
  endif
 !
- if  (qrestart) then
+ if  (qrestart &
+#ifdef __DUMSURF
+ .or. qdumsurf &
+#endif
+& ) then
+#ifdef __DUMSURF
+ if (qdumsurf) then
+  context=contexts(main_context)
+ else
+#endif
+ context=contexts(restart_context)
+#ifdef __DUMSURF
+ endif
+#endif
 ! read surface atom coordinates from restart file (context __RESTARTCTX)
-  do l=1, nsurface
-   line=getval_nocase('rsurf_'//trim(itoa(l)),__STRING(__RESTARTCTX))
+  do l=1, nsurface_coord
+   line=getval_nocase('rsurf_'//trim(itoa(l)),context)
    if (len_trim(line).gt.0) then
     read(line,*,iostat=ierr) r_surf(:,l)
+__DBGVAR(r_surf(:,l),1)
     if (ierr.ne.0) then
      __WRN(whoami, 'ERROR READING COORDINATE FROM LINE "'//trim(line)//'"')
      cycle
@@ -995,16 +1072,29 @@ module _N
    else
     __WRN(whoami, 'ERROR READING COORDINATE FROM LINE "'//trim(line)//'"')
    endif ! line ok
-  enddo ! over surface atoms
+  enddo ! over surface atom coordinates
  else ! qrestart
 ! take surface atom coordinates from structure (PDB) file
-  r_surf=r(:,isurface_atoms)
+  r_surf(:,1:nsurface_atoms)=r(:,isurface_atoms)
  endif ! qrestart
 !
- rad_surf=radius(isurface_atoms)
+#ifdef __DUMSURF
+ if (qdumsurf) then
+! obtain radii for dummy atoms from parser (other options useful ?) ; adapted from above
+  rad_surf=zero ! initialize to zero ; missing entries below will remain zero
+  do l=1, nsurface_coord
+! no explicit checking for missing radii in the parser here
+   rad_surf(l)=atof(getval_nocase('radsurf_'//trim(itoa(l)),contexts(main_context)))
+  enddo ! over surface atom coordinates
+ else ! qdumsurf
+#endif
+  rad_surf(1:nsurface_atoms)=radius(isurface_atoms)
+#ifdef __DUMSURF
+ endif
+#endif
 ! check that the radius is positive
  if (.not.qminimum_distance) then
-  do l=1, nsurface
+  do l=1, nsurface_coord
    __ASSERTWARN( rad_surf(l) + surf_padding, > , zero )
   enddo
  endif
@@ -1023,6 +1113,7 @@ module _N
 #endif
 &     .false. ) then 
   r_surf_changed=.true. ! we only need this variable for barostat/dasystat
+! note that the above flag is set to compute the SA/VOL initially, so we keep it even with fixed (dummy) coords
  endif
 #endif
 #ifdef __RMFT
@@ -1039,7 +1130,7 @@ module _N
 #endif
 #endif
   if (qrestart) then ! read average force
-   line=getval_nocase('average_net_force',__STRING(__RESTARTCTX))
+   line=getval_nocase('average_net_force', contexts(restart_context))
    if (len_trim(line).gt.0) then
     read(line,*,iostat=ierr) net_force_ave
     if (ierr.ne.0) then
@@ -1132,10 +1223,21 @@ module _N
    r_surf_minmax(1,:) = - half * (/ucell%a, ucell%b, ucell%c/) ! grid minima
    r_surf_minmax(2,:) = + half * (/ucell%a, ucell%b, ucell%c/) ! grid maxima
   else
-   r_surf_minmax(1,:) = minval(r_surf,2) - r_com_sa - ( abs(surface_distance) + surface_area_grid_buffer)
-   r_surf_minmax(2,:) = maxval(r_surf,2) - r_com_sa + ( abs(surface_distance) + surface_area_grid_buffer)
+! note : a problem here is that surface_distance might be undefined (or zero) to be computed on first iteration
+! this should be moved entirely to the main routine, after surface_distance is known
+! also : note the need to incorporate radii
+   r_surf_minmax(1,1) = minval(r_surf(1,:)-rad_surf) - r_com_sa(1) - ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+   r_surf_minmax(2,1) = maxval(r_surf(1,:)+rad_surf) - r_com_sa(1) + ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+!
+   r_surf_minmax(1,2) = minval(r_surf(2,:)-rad_surf) - r_com_sa(2) - ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+   r_surf_minmax(2,2) = maxval(r_surf(2,:)+rad_surf) - r_com_sa(2) + ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+!
+   r_surf_minmax(1,3) = minval(r_surf(3,:)-rad_surf) - r_com_sa(3) - ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+   r_surf_minmax(2,3) = maxval(r_surf(3,:)+rad_surf) - r_com_sa(3) + ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
   endif
 !
+__DBGVAR(surface_distance,1)
+__DBGVAR(surface_area_grid_buffer,1)
 __DBGVAR(r_surf_minmax,1)
 __DBGVAR(minval(r_surf,2),1)
 __DBGVAR(maxval(r_surf,2),1)
@@ -1183,7 +1285,7 @@ __DBGVAR(r_com_sa,1)
  end __SUB(initialize)
 !======================================
  __SUB(write_restart_file) ()
-! = adapted from tempering
+! adapted from tempering
  __IAM(__NM(WRITE_RESTART_FILE))
  int :: ifile, i
  ifile=-1 ! make sure files_open determines the handle automatically
@@ -1198,7 +1300,7 @@ __DBGVAR(r_com_sa,1)
  _W 'surface_distance=',surface_distance, ' # distance of solvent surface from solute'
  _W 'surface_force_constant=',surface_force_constant, ' # surface force constant'
  _W 'surf_stdev=',surf_stdev, ' # standard deviation of Gaussian filter'
- _W 'cutoff_surf_stdev=',cutoff_surf_stdev, ' # distance from center beyond which it is set to zero (units of stdandard deviation)'
+ _W 'cutoff_surf_stdev=',cutoff_surf_stdev, ' # distance from center beyond which it is set to zero (units of standard deviation)'
  _W 'surface_padding=',surf_padding, ' # scalar padding added to each atom radius'
 !
 #if defined(__SORT_LIST) & defined(__NEIGHBOR_LIST)
@@ -1232,7 +1334,7 @@ __DBGVAR(r_com_sa,1)
 #endif
 ! write the current reference atoms :
  _W '# rsurf_i : reference coordinate triple for atom #i used to define surface'
- do i=1, nsurface
+ do i=1, nsurface_coord
   _W 'rsurf_'//trim(itoa(i)),'=(',r_surf(:,i),')'
  enddo ! surface atoms
  _W '}'
@@ -1379,7 +1481,7 @@ __DBGVAR(r_com_sa,1)
  if (.not. qminimum_distance) pre=(maxval(rad_surf) + surf_padding + cutoff_surf)**2
 !
 #if defined(__OMP) & defined(__FORCE_OMP)
-  __ALLOC(distance2_all_threads(nsurface,0:omp_get_max_threads()-1))
+  __ALLOC(distance2_all_threads(nsurface_coord,0:omp_get_max_threads()-1))
 !$omp parallel private(ierr,tid,i,ii,ind,istep &
 #ifdef __PBC_UNWRAP
 !$omp ,d0 &
@@ -1388,7 +1490,7 @@ __DBGVAR(r_com_sa,1)
   tid=omp_get_thread_num()
 #define distance2(_ii) distance2_all_threads(_ii,tid)
 #else
-  __ALLOC(distance2(nsurface))
+  __ALLOC(distance2(nsurface_coord))
 #endif
 
 #ifdef __PBC_UNWRAP
@@ -1399,7 +1501,7 @@ __DBGVAR(r_com_sa,1)
 !$omp do schedule(runtime)
 #endif
    do i=1, nsolvent
-    do ii=1, nsurface
+    do ii=1, nsurface_coord
 #ifdef __PBC_UNWRAP
      distance2(ii)=zero
 ! x
@@ -1425,13 +1527,13 @@ __DBGVAR(r_com_sa,1)
      d0=r_surf(3,ii)-r_solv(3,i)
      __INCR(distance2(ii),d0*d0)
 #endif
-    enddo ! nsurface
+    enddo ! nsurface_coord
 !  sort neighbor list:
-    call rsort_ind('i',nsurface,distance2(:),solute_neighbor_list(:,i),ierr)
+    call rsort_ind('i',nsurface_coord,distance2(:),solute_neighbor_list(:,i),ierr)
 !
     if (qminimum_distance) then
-     solute_neighbor_mind(i)=min(nsurface,2) ! fo mindist only
-    elseif (nsurface>0) then
+     solute_neighbor_mind(i)=min(nsurface_coord,2) ! fo mindist only
+    elseif (nsurface_coord>0) then
 ! for the erf/density method, we need to find the largest index in the set of atoms supported by filter:
 ! use this search macro:
 #define __MXLOC(_A,_a,_len,_ind,_istep) \
@@ -1448,7 +1550,7 @@ __DBGVAR(r_com_sa,1)
  enddo;\
  if ( _A(_ind)>(_a) .and. _ind>1) _ind=_ind-1
 !
-     __MXLOC( distance2, pre, nsurface, ind, istep )
+     __MXLOC( distance2, pre, nsurface_coord, ind, istep )
 !
      solute_neighbor_mind(i)=ind
     endif
@@ -1465,7 +1567,7 @@ __DBGVAR(r_com_sa,1)
 !$omp do schedule(runtime)
 #endif
    do i=1, nsolvent
-    do ii=1, nsurface
+    do ii=1, nsurface_coord
 !     distance2(ii) = sum ( (r_surf(:,ii)-r_solv(:,i))**2 )
 ! slightly faster :
      distance2(ii)=zero
@@ -1477,11 +1579,11 @@ __DBGVAR(r_com_sa,1)
      __INCR(distance2(ii),d0*d0)
     enddo ! nsurface
 !  sort neighbor list:
-    call rsort_ind('i',nsurface,distance2(:),solute_neighbor_list(:,i),ierr)
+    call rsort_ind('i',nsurface_coord,distance2(:),solute_neighbor_list(:,i),ierr)
     if (qminimum_distance) then
-     solute_neighbor_mind(i)=min(nsurface,2) ! for mindist only
-    elseif (nsurface>0) then
-     __MXLOC( distance2, pre, nsurface, ind, istep )
+     solute_neighbor_mind(i)=min(nsurface_coord,2) ! for mindist only
+    elseif (nsurface_coord>0) then
+     __MXLOC( distance2, pre, nsurface_coord, ind, istep )
      solute_neighbor_mind(i)=ind
     endif
    enddo ! nsolvent
@@ -1504,6 +1606,11 @@ __DBGVAR(r_com_sa,1)
 #ifdef __RMFT
 #ifdef __SIMPLE_NET_FORCE_SURFACE
  if (remove_net_torque) then
+#ifdef __DUMSURF
+  if (qdumsurf) then
+   r_com_inst=r_com ! since the coordinates are fixed
+  else
+#endif
 #ifdef __UNWRAP_PBC
   if (qper_parser_override) then 
    r_com_inst=zero
@@ -1512,7 +1619,7 @@ __DBGVAR(r_com_sa,1)
    __U(r_com_inst)=zero
 !$omp do schedule(runtime)
 #endif
-   do i=1, nsurface
+   do i=1, nsurface_atoms
     ii=isurface_atoms(i)
 !x
     pre=r(1,ii)-r_surf(1,i); __PBCDIST(pre,ucell%a)
@@ -1523,7 +1630,7 @@ __DBGVAR(r_com_sa,1)
 !z
     pre=r(3,ii)-r_surf(3,i); __PBCDIST(pre,ucell%c)
     __INCR(__U(r_com_inst)(3), pre + r_surf(3,i))
-   enddo
+   enddo ! surface_atoms
 #ifdef __OMP
 !$omp end do
 !$omp atomic
@@ -1535,13 +1642,16 @@ __DBGVAR(r_com_sa,1)
 !$omp end parallel
 #endif
    __SCALE(r_com_inst,oonsurface)
-  else
+  else ! qper_parser_override
 #endif
   r_com_inst = oonsurface * sum(r(:,isurface_atoms),2) ; ! need instant com for SIMPLE_NET_FORCE_SURFACE, b/c forces applied to prot. atoms
- endif
 #ifdef __UNWRAP_PBC
- endif
+ endif ! qper_parser_override
 #endif
+#ifdef __DUMSURF
+ endif ! qdumsurf
+#endif
+ endif ! remove_net_torque
 
 #endif
 #endif
@@ -1556,17 +1666,17 @@ __DBGVAR(r_com_sa,1)
 !$omp parallel private(pre,ii)
 !$omp do schedule(runtime)
 #endif
-    do i=1, nsurface
+    do i=1, nsurface_atoms
      ii=isurface_atoms(i)
 ! x
      pre=r(1,ii)-r_surf(1,i); __PBCDIST(pre,ucell%a)
-     __INCR(r_surf(1,ii), d0*pre)
+     __INCR(r_surf(1,i), d0*pre)
 ! y
      pre=r(2,ii)-r_surf(2,i); __PBCDIST(pre,ucell%b)
-     __INCR(r_surf(2,ii), d0*pre)
+     __INCR(r_surf(2,i), d0*pre)
 ! z
      pre=r(3,ii)-r_surf(3,i); __PBCDIST(pre,ucell%c)
-     __INCR(r_surf(3,ii), d0*pre)
+     __INCR(r_surf(3,i), d0*pre)
     enddo
 #ifdef __OMP
 !$omp end do
@@ -1574,7 +1684,10 @@ __DBGVAR(r_com_sa,1)
 #endif
    else
 #endif
-    r_surf = structure_update_memory * r_surf + (one - structure_update_memory) * r(:,isurface_atoms)
+#ifdef __DUMSURF
+    if (nsurface_atoms.gt.0) &
+#endif
+     r_surf = structure_update_memory * r_surf + (one - structure_update_memory) * r(:,isurface_atoms)
 #ifdef __PBC_UNWRAP
    endif ! qper override
 #endif
@@ -1636,7 +1749,7 @@ __DBGVAR(r_com_sa,1)
   else ! (NOT) qminimum_distance -- original erf algorithm
 ! first, set surface_contour value to an upper bound to make sure that the 
 ! no atoms can be marked as "inside" atoms; this ensures that the density routine cannot quit early
-   surface_contour_value=nsurface
+   surface_contour_value=nsurface_coord
 #ifdef __DASYSTAT
    if (dasystat) bulk_boundary_contour_value=surface_contour_value
 #endif
@@ -1644,7 +1757,7 @@ __DBGVAR(r_com_sa,1)
    do i=1, nsolvent
 ! convert to distance
     if ( abs(rho_solv(i)) .eq. zero ) then ! proceed if the density is positive ; otherwise warn that we are outside of the support
-     __WRN(whoami, 'SOLVENT ATOM '//itoa(isolvent_atoms(i))//' OUTSIDE OF SOLUTE SUPPORT. RESTART WITH A SMALLER SURFACE DISTANCE OR A LARGER FILTER CUTOFF.')
+     __WRN(whoami, 'SOLVENT ATOM '//itoa(isolvent_atoms(i))//' OUTSIDE OF SOLUTE SUPPORT. RESTART WITH A SMALLER SURFACE DISTANCE OR A LARGER FILTER CUTOFF OR PADDING.')
     endif
     d0 = __RHO_INVSAFE(rho_solv(i))
     __DBGOUT('Inst. density/distance from solute for atom ',i,' are ',rho_solv(i),'/',d0);
@@ -1711,7 +1824,7 @@ __DBGVAR(r_com_sa,1)
 !====== otherwise, the early exit version of force routine could miss crucial atoms (the mind list is _not_ updated b/c qnlist=0)
 !====== this is because solute_neighbor_mind is recomputed in a full loop, so it will be smaller than nsurf
 #if defined(__NEIGHBOR_LIST) & defined(__SORT_LIST)
-  if (.not. qneighbor_list) solute_neighbor_mind=nsurface
+  if (.not. qneighbor_list) solute_neighbor_mind=nsurface_coord
 #endif
 !=========================================================================
  else ! compute reference surface distance
@@ -1722,12 +1835,12 @@ __DBGVAR(r_com_sa,1)
    if (full_sum_freq.gt.izero) then
 ! CHKUPDATE false : to truncate sum if running density value exceeds reference
 ! ALSO if qneighbor_list = false, this algorithm will be used, looping over all solute/surface indices
-! because in that case, the maximum index in solute_neighbor_mdist is nsurface
+! because in that case, the maximum index in solute_neighbor_mdist is nsurface_coord
     call __NM(compute_mindist_grad)((.not.qneighbor_list) .or. (.not.__CHKUPDATE(full_sum_freq))) ! rechecked conditional 12.18 -- OK
 ! NOTE that it makes no sense to run full sum w/o neighbor sorting, which requires nbr. list !
    else
 #endif
-    call __NM(compute_mindist_grad)(.true.) ! always call quit-early version; however, the max. index will be set to nsurface, so traverse full list
+    call __NM(compute_mindist_grad)(.true.) ! always call quit-early version; however, the max. index will be set to nsurface_coord, so traverse full list
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
    endif ! full_sum_freq
 #endif
@@ -1795,7 +1908,7 @@ __DBGVAR(r_com_sa,1)
 !$omp rhs, qforced_solv, r_com, &
 !$omp ir1,ir2,ir3,ir1s,ir2s,ir3s,ir12,ir13,ir23, &
 #endif
-!$omp nsolvent, nsurface, nsolvent_outside, surface_force, surface_energy, &
+!$omp nsolvent, nsurface_coord, nsurface_atoms, nsolvent_outside, surface_force, surface_energy, &
 #ifdef __DASYSTAT
 !$omp solvent_mass_outside, mass_solv, &
 #endif
@@ -2003,7 +2116,7 @@ endif
    if(dasystat) __INCR(__U(solvent_mass_outside), mass_solv(i))
 #endif
    if ( abs(rho_solv(i)) .eq. zero ) then ! proceed if the density is positive ; otherwise warn that we are outside of the support
-    __WRN(whoami, '#'//itoa(iteration)//': SOLVENT ATOM '//itoa(isolvent_atoms(i))//' OUTSIDE OF SOLUTE SUPPORT. RESTART WITH A SMALLER SURFACE DISTANCE OR A LARGER FILTER CUTOFF.')
+    __WRN(whoami, '#'//itoa(iteration)//': SOLVENT ATOM '//itoa(isolvent_atoms(i))//' OUTSIDE OF SOLUTE SUPPORT. RESTART WITH A SMALLER SURFACE DISTANCE OR A LARGER FILTER CUTOFF OR PADDING.')
     cycle
    endif
 !   __INCR(__U(density_beyond_contour), rho_solv(i)) ! not clear whether useful
@@ -2200,8 +2313,16 @@ endif
 ! check that grid dimensions are still adequate : 
       if (.not.qper_parser_override.and.surface_area_grid_check_freq.gt.0) then
        if __CHKUPDATE(surface_area_grid_check_freq*surface_area_compute_freq*pressure_update_freq) then
-        r_surf_minmax(1,:) = minval(r_surf,2) - r_com_sa - (abs(surface_distance)+surface_area_grid_buffer)
-        r_surf_minmax(2,:) = maxval(r_surf,2) - r_com_sa + (abs(surface_distance)+surface_area_grid_buffer)
+!
+        r_surf_minmax(1,1) = minval(r_surf(1,:)-rad_surf) - r_com_sa(1) - ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+        r_surf_minmax(2,1) = maxval(r_surf(1,:)+rad_surf) - r_com_sa(1) + ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+!
+        r_surf_minmax(1,2) = minval(r_surf(2,:)-rad_surf) - r_com_sa(2) - ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+        r_surf_minmax(2,2) = maxval(r_surf(2,:)+rad_surf) - r_com_sa(2) + ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+!
+        r_surf_minmax(1,3) = minval(r_surf(3,:)-rad_surf) - r_com_sa(3) - ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+        r_surf_minmax(2,3) = maxval(r_surf(3,:)+rad_surf) - r_com_sa(3) + ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+!
         if (any(abs(r_surf_minmax(2,:) - r_surf_minmax(1,:) - sagrid%lengths).gt.surface_area_grid_recompute_change)) then
          __MESSAGE(whoami, 'REINITIALIZING SURFACE AREA COMPUTATION GRID.');
          call ugrid_finalize(sagrid)
@@ -2355,8 +2476,19 @@ __DBGVAR(pressure_ave,1)
 ! check that grid dimensions are still adequate : 
       if (.not.qper_parser_override.and.surface_area_grid_check_freq.gt.0) then
        if __CHKUPDATE(surface_area_grid_check_freq*surface_area_compute_freq*density_update_freq) then
-        r_surf_minmax(1,:) = minval(r_surf,2) - r_com_sa - (abs(surface_distance)+surface_area_grid_buffer)
-        r_surf_minmax(2,:) = maxval(r_surf,2) - r_com_sa + (abs(surface_distance)+surface_area_grid_buffer)
+!
+!        r_surf_minmax(1,:) = minval(r_surf,2) - r_com_sa - (abs(surface_distance)+surface_area_grid_buffer)
+!        r_surf_minmax(2,:) = maxval(r_surf,2) - r_com_sa + (abs(surface_distance)+surface_area_grid_buffer)
+!
+        r_surf_minmax(1,1) = minval(r_surf(1,:)-rad_surf) - r_com_sa(1) - ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+        r_surf_minmax(2,1) = maxval(r_surf(1,:)+rad_surf) - r_com_sa(1) + ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+!
+        r_surf_minmax(1,2) = minval(r_surf(2,:)-rad_surf) - r_com_sa(2) - ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+        r_surf_minmax(2,2) = maxval(r_surf(2,:)+rad_surf) - r_com_sa(2) + ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+!
+        r_surf_minmax(1,3) = minval(r_surf(3,:)-rad_surf) - r_com_sa(3) - ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+        r_surf_minmax(2,3) = maxval(r_surf(3,:)+rad_surf) - r_com_sa(3) + ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+!
         if (any(abs(r_surf_minmax(2,:) - r_surf_minmax(1,:) - sagrid%lengths).gt.surface_area_grid_recompute_change)) then
          __MESSAGE(whoami, 'REINITIALIZING VOLUME COMPUTATION GRID.');
          call ugrid_finalize(sagrid)
@@ -2476,7 +2608,10 @@ __DBGVAR(density_ave,1)
 !
   __OUT('Current avg. distance to protein:', current_surface_distance)
   __OUT('Surface energy:                  ', surface_energy)
-  __OUT('# Solute atoms used for density: ', nsurface)
+  __OUT('# Solute atoms used for density: ', nsurface_atoms)
+#ifdef __DUMSURF
+  if (qdumsurf) __OUT('# Fixed dummy atoms used for density: ', nsurface_coord)
+#endif
   __OUT('# Solvent atoms outside / total: ', nsolvent_outside,'/',nsolvent)
   if (.not. qminimum_distance) then ! not relevant to mindist algorithm
   __OUT('Surface contour value:           ', surface_contour_value)
@@ -2534,7 +2669,7 @@ __DBGVAR(solvent_mass_nonbulk,1)
  bool :: qtruncate_loop ! whether we can stop looping over solute atoms once the density reaches a threshold value
 ! ^ this allows the neighbor lists to be sorted only ; if __SORT_LIST is undefined then there is not effect
 !   the density calculation is still truncated once the atom is determined to be inside
-!   to avoid the truncation, you must define an upper bound to the surface contour, which is nsurface
+!   to avoid the truncation, you must define an upper bound to the surface contour, which is nsurface_coord
  int :: i, j
  float :: rp(3), rw(3), dr(3), dr2, a, b, expa, expb, ooc
 ! real*4 :: as, bs
@@ -2587,7 +2722,7 @@ __DBGVAR(solvent_mass_nonbulk,1)
 #ifndef __erf
 #//define __erf erf
 #// get an improvement of 20% when using inlined erfo7
-#//define __erf __erfo7s
+#define __erfs __erfo7s
 #define __erf __erfo7
 #endif
 !
@@ -2611,7 +2746,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
  if (qtruncate_loop) then
 #ifdef __OMP
 !$omp parallel &
-!$omp shared ( rho_solv, drho_solv, r_solv, r_surf, rad_surf, surf_padding, nsolvent, nsurface, cutoff_surf, oo_surf_stdev &
+!$omp shared ( rho_solv, drho_solv, r_solv, r_surf, rad_surf, surf_padding, nsolvent, nsurface_coord, cutoff_surf, oo_surf_stdev &
 #ifdef __DASYSTAT
 !$omp , solvent_mass_nonbulk, mass_solv &
 #endif
@@ -2652,11 +2787,11 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #ifdef __NEIGHBOR_LIST
    do jj=1, __NEIGHBOR_LIST_LENGTH_DENSITY
 #else
-   do jj=1, nsurface ! inner loop over solute atoms
+   do jj=1, nsurface_coord ! inner loop over solute atoms
 #endif
     j=solute_neighbor_list(jj,i)
 #else
-   do j=1, nsurface ! inner loop over solute atoms
+   do j=1, nsurface_coord ! inner loop over solute atoms
 #endif
 !#define _nonce  rho_solv(i)=0.0001d0;
 !    if (qtruncate_sum.and.rho.gt.surface_contour_value) &     ! density threshold exceeded ; will not apply force to this atom
@@ -2769,7 +2904,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 ! if we are here, that means that the jj index contributes to the calculation ; check it if it is inside the index support ; if not, increase index support
     if (jj>solute_neighbor_mind(i)) solute_neighbor_mind(i)=jj
 #endif
-   enddo ! nsurface
+   enddo ! nsurface_coord
 #if (_DBGLEV>1)
     __DBGOUT('FORCECOMP : solv. atom#:', i, 'density:', rho_solv(i))
 #endif
@@ -2807,7 +2942,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 !=====================================================================================
 #ifdef __OMP
 !$omp parallel &
-!$omp shared ( rho_solv, drho_solv, r_solv, r_surf, rad_surf, surf_padding, nsolvent, nsurface, cutoff_surf, oo_surf_stdev &
+!$omp shared ( rho_solv, drho_solv, r_solv, r_surf, rad_surf, surf_padding, nsolvent, nsurface_coord, cutoff_surf, oo_surf_stdev &
 #ifdef __DASYSTAT
 !$omp , solvent_mass_nonbulk, mass_solv &
 #endif
@@ -2853,10 +2988,10 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #if defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
    neighbor_list_length = __NEIGHBOR_LIST_LENGTH_DENSITY
 #endif
-   do jj=1, nsurface ! inner loop over solute atoms
+   do jj=1, nsurface_coord ! inner loop over solute atoms
     j=solute_neighbor_list(jj,i)
 #else
-   do j=1, nsurface ! inner loop over solute atoms
+   do j=1, nsurface_coord ! inner loop over solute atoms
 #endif
     rp=r_surf(:,j)
     rsurf    = ( rad_surf(j) + surf_padding )
@@ -2950,7 +3085,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
      endif ! rho>contour value
     endif ! qforced
 ! _nonce
-   enddo ! nsurface
+   enddo ! nsurface_coord
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
 ! check for _potential_ neighbor list violations :
    if (qforced .and. solute_neighbor_mind(i) > neighbor_list_length ) __INC(__U(neighbor_list_misses)) ! count only if qforced, ok?
@@ -3058,7 +3193,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
 #ifdef __OMP
 !$omp parallel &
-!$omp shared ( dist_solv, ddist_solv, r_solv, nsolvent, nsurface, surface_distance2 &
+!$omp shared ( dist_solv, ddist_solv, r_solv, nsolvent, nsurface_coord, surface_distance2 &
 #ifdef __DASYSTAT
 !$omp , bulk_distance2, mass_solv, solvent_mass_nonbulk &
 #endif
@@ -3090,13 +3225,13 @@ __DBGVAR(bulk_boundary_contour_value,1)
    dr2old=-1.d0 ; ! set to a small number to guarantee that no swap is done on first iteration
 #ifdef __NEIGHBOR_LIST
    do jj=1, __NEIGHBOR_LIST_LENGTH_MINDIST
-!   do jj=1,max(1,min(nsurface, solute_neighbor_mind(i) ))
+!   do jj=1,max(1,min(nsurface_coord, solute_neighbor_mind(i) ))
 #else
-   do jj=1, nsurface ! inner loop over solute atoms ! to check the entire surface atom list
+   do jj=1, nsurface_coord ! inner loop over solute atoms ! to check the entire surface atom list
 #endif
     j=solute_neighbor_list(jj,i) ! note that this is really a (partially) distance-sorted list of surface atoms for each solvent atom
 #else
-   do j=1, nsurface ! inner loop over solute atoms, without regard to their location relative to the solvent atom i
+   do j=1, nsurface_coord ! inner loop over solute atoms, without regard to their location relative to the solvent atom i
 #endif
     rp=r_surf(:,j) ! protein atom coordinate
 !
@@ -3165,7 +3300,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
 #endif
     endif
-   enddo ! nsurface
+   enddo ! nsurface_coord
    if (qforced) then
     dist_solv(i) = -sqrt(dr2min) ! negative distance by convention
     ddist_solv(:,i) = drmin      ! the minimum distance between this atom and a surface atom
@@ -3197,7 +3332,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 !=====================================================================================
 #ifdef __OMP
 !$omp parallel &
-!$omp shared ( dist_solv, ddist_solv, r_solv, nsolvent, nsurface, surface_distance2 &
+!$omp shared ( dist_solv, ddist_solv, r_solv, nsolvent, nsurface_coord, surface_distance2 &
 #ifdef __DASYSTAT
 !$omp , bulk_distance2, solvent_mass_nonbulk &
 #endif
@@ -3244,11 +3379,11 @@ __DBGVAR(bulk_boundary_contour_value,1)
    neighbor_list_length = __NEIGHBOR_LIST_LENGTH_MINDIST
 #endif
 !
-   do jj=1, nsurface ! inner loop over solute atoms
-!   do jj=nsurface, 1, -1 ! inner loop over solute atoms, starting from the end
+   do jj=1, nsurface_coord ! inner loop over solute atoms
+!   do jj=nsurface_coord, 1, -1 ! inner loop over solute atoms, starting from the end
     j=solute_neighbor_list(jj,i)
 #else
-   do j=1, nsurface ! inner loop over solute atoms
+   do j=1, nsurface_coord ! inner loop over solute atoms
 #endif
     rp=r_surf(:,j) ! protein atom coordinate
 !
@@ -3319,7 +3454,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 !     solute_neighbor_list(1,i)=j
 #endif
     endif
-   enddo ! nsurface
+   enddo ! nsurface_coord
 ! check for _potential_ neighbor list violations :
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
    if (qforced .and. solute_neighbor_mind(i) > neighbor_list_length ) __INC(__U(neighbor_list_misses)) ! count only if qforced, ok?
@@ -3445,7 +3580,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
  rho(:,:,:)=zero ! initialize
  __U(grad)=0
 !$omp do schedule(runtime)
- do i=1, nsurface
+ do i=1, nsurface_coord
 ! determine support for this atom, i.e. all grid points which are within the filter support
   rsurf = ( rad_surf(i) + surf_padding )
   support = ( rsurf + cutoff_surf )
@@ -3662,7 +3797,7 @@ __DBGVAR(kmax,2)
  __U(grad)=zero
 ! NOTE : partially adapted from elec code
 !$omp do schedule(runtime)
- do i=1, nsurface
+ do i=1, nsurface_coord
 ! determine support for this atom, i.e. all grid points which are within the cutoff
   x=r_surf(1,i)-r_com_sa(1)
   xmin=x+surface_distance ! remember the sign convention
@@ -3855,7 +3990,7 @@ __DBGVAR(kmax,2)
  __U(ivolume)=0
  __U(ivolume_nonbulk)=0
 !$omp do schedule(runtime)
- do i=1, nsurface
+ do i=1, nsurface_coord
 ! determine support for this atom, i.e. all grid points which are within the filter support
   rsurf = ( rad_surf(i) + surf_padding )
   support = ( rsurf + cutoff_surf )
@@ -3937,7 +4072,7 @@ __DBGVAR(kmax,2)
       __INCR(rho(im,jm,km), half * ( erfa - erfb ) + osq2pi * ooc * ( expa - expb )   )
 #else
 #define __erf(_Y) __erfo7s(_Y)
-#// singe prec ^
+#// single prec          ^
       __INCR(rho(im,jm,km), half * ( __erf(a) - __erf(b) ) + osq2pi * ooc * ( expa - expb )   )
 #endif
      endif ! rho<bulk_boundary_contour value
@@ -4064,7 +4199,7 @@ __DBGVAR(kmax,2)
  __U(ivolume_nonbulk)=0
 ! NOTE : partially adapted from elec code
 !$omp do schedule(runtime)
- do i=1, nsurface
+ do i=1, nsurface_coord
 ! determine support for this atom, i.e. all grid points which are within the cutoff
   x=r_surf(1,i)-r_com_sa(1)
   xmin=x+surface_distance ! remember the sign convention

@@ -37,7 +37,8 @@ module system
 ! corresponding data arrays
  float, pointer, save, public, dimension(:,:) :: r=>NULL(), vr=>NULL(), fr=>NULL()
 #ifdef __RCOMP
- float, pointer, save, public, dimension(:,:) :: rcomp=>NULL()
+ float, pointer, save, public, dimension(:,:) :: rcomp=>NULL() ! aux coord
+ float, pointer, save, public, dimension(:) :: bcomp=>NULL() ! aux data
 #endif
  float, pointer, save, public, dimension(:) ::   m=>NULL(), q=>NULL(), radius=>NULL()
  float, pointer, save, public, dimension(:) ::   bfactor=>NULL(), occupancy=>NULL()
@@ -402,6 +403,7 @@ module system
 
 #ifdef __RCOMP
  call state_add3df('AUXPOS'   ,'Auxiliary coordinates'  , (/ndim,natom/), __COMM _COMMA __CTX, vptr, qinit); __FPTR2(rcomp);
+ call state_add3df('AUXBFACTOR','Auxiliary Debye-Waller (B) factor', (/natom/), __COMM _COMMA __CTX, vptr, qinit); __FPTR1(bcomp);
 #endif
  m=atoms%mass(1:natom)
  q=atoms%charge(1:natom)
@@ -409,6 +411,7 @@ module system
  r=unknownf; vr=unknownf; fr=zero
 #ifdef __RCOMP
  rcomp=unknownf
+ bcomp=unknownf
 #endif
  occupancy=unknownf;
  bfactor=unknownf;
@@ -974,7 +977,7 @@ module system
 !
  character(len=*), intent(in) :: selection
  character(len=len(selection)) :: s, tag, operator, value
- character, parameter :: nontext(3) = (/' ','=','~'/)
+ character, parameter :: nontext(8) = (/' ','=','~','(',')','<','>','!'/)
  character, parameter :: opchar(7) = (/'=','~','(',')','<','>','!'/)
  character(len=8), parameter :: unitary(4) = (/'ALL     ','NOH     ','HEAVY   ','HYDROGEN'/) ! list of tags corresponding to unitary operations
  int, parameter :: qor=1, qand=2, qxor=3, qend=4
@@ -996,7 +999,7 @@ module system
 !
  s=selection; call adjustleft(s); l=len_trim(s)
  if (l.le.0) then
-  call warning(whoami, 'Empty selection string. Abort.',-1); return
+  call warning(whoami, 'Empty selection string. Abort.',fatal_warnlev); return
  else
   call toupper(s);
   call message(whoami, 'Processing selection "'//s(1:l)//'"');
@@ -1013,7 +1016,7 @@ module system
 ! reset temporary aray to begin new (sub) selection
 !
  if (all(letters.ne.s(1:1))) then
-  call warning(whoami, 'Invalid character "'//s(1:1)//'" in selection specifier. Abort.', -1); return
+  call warning(whoami, 'Invalid character "'//s(1:1)//'" in selection specifier. Abort.', fatal_warnlev); return
  else
   tag=pop_string(s,l,nontext)
  endif
@@ -1025,7 +1028,7 @@ module system
    if (tag.eq.'ATOMID') then 
     operator='=' ! for backward compatibility, allow atomid list without "="
    else
-    call warning(whoami, 'Invalid character "'//s(1:1)//'" in operator. Abort.', -1); return
+    call warning(whoami, 'Invalid character "'//s(1:1)//'" in operator. Abort.', fatal_warnlev); return
    endif
   else
    operator=pop_string(s,l,opchar,.true.) ! take off just the operator part of the string
@@ -1057,7 +1060,7 @@ write(666,*) l
 #endif
 !
    if(l.lt.0) then
-    call warning(whoami, 'Selection text is empty. Abort.', -1)
+    call warning(whoami, 'Selection text is empty. Abort.', fatal_warnlev)
     qerror=.true.
     nsel=0
    else ! ok
@@ -1066,7 +1069,7 @@ write(666,*) l
     if (nsel.le.natom) then
      ind0(1:nsel)=ilist%i(1:nsel)
     else
-     call warning(whoami, 'Unexpected error: number of selected atoms is greater than the total number of atoms ('//itoa(nsel)//') > ('//itoa(natom)//')',-1);
+     call warning(whoami, 'Unexpected error: number of selected atoms is greater than the total number of atoms ('//itoa(nsel)//') > ('//itoa(natom)//')',fatal_warnlev);
      nsel=0
      qerror=.true.
     endif
@@ -1076,7 +1079,7 @@ write(666,*) l
   case('NOH','HEAVY') ;
    if (.not.system_structure_initialized) then
     if (.not.system_PDB_initialized) then ! use the first letter of PDB name
-     call warning(whoami, 'Structure not initialized. Abort.',-1);
+     call warning(whoami, 'Structure not initialized. Abort.',fatal_warnlev);
      qerror=.true.
     else
      nsel=0
@@ -1093,7 +1096,7 @@ write(666,*) l
 !===========
   case('HYDROGEN') ;
    if (.not.system_structure_initialized) then
-    call warning(whoami, 'Structure not initialized. Abort.',-1);
+    call warning(whoami, 'Structure not initialized. Abort.',fatal_warnlev);
     qerror=.true.
    else
     nsel=0
@@ -1104,7 +1107,7 @@ write(666,*) l
 !===========
   case('ANAME');
    if (.not. (system_structure_initialized .or. system_PDB_initialized)) then
-    call warning(whoami, 'Structure not initialized. Abort.',-1);
+    call warning(whoami, 'Structure not initialized. Abort.',fatal_warnlev);
     qerror=.true.
    else
     select case(operator)
@@ -1121,13 +1124,13 @@ write(666,*) l
       enddo
 !
      case default;
-      call warning(whoami, 'Unsupported operator "'//trim(operator)//'" for selection tag "'//trim(tag)//'". Abort.', -1); qerror=.true.
+      call warning(whoami, 'Unsupported operator "'//trim(operator)//'" for selection tag "'//trim(tag)//'". Abort.', fatal_warnlev); qerror=.true.
     end select
    endif
 !===========
   case('SEGID', 'SEGNAME', 'SEGMENT');
    if (.not. (system_structure_initialized .or. system_PDB_initialized)) then
-    call warning(whoami, 'Structure not initialized. Abort.',-1);
+    call warning(whoami, 'Structure not initialized. Abort.',fatal_warnlev);
     qerror=.true.
    else
     select case(operator)
@@ -1144,14 +1147,37 @@ write(666,*) l
       enddo
 !
      case default;
-      call warning(whoami, 'Unsupported operator "'//trim(operator)//'" for selection tag "'//trim(tag)//'". Abort.', -1); qerror=.true.
+      call warning(whoami, 'Unsupported operator "'//trim(operator)//'" for selection tag "'//trim(tag)//'". Abort.', fatal_warnlev); qerror=.true.
+    end select
+   endif
+!===========
+  case('RESNAME');
+   if (.not. (system_structure_initialized .or. system_PDB_initialized)) then
+    call warning(whoami, 'Structure not initialized. Abort.',fatal_warnlev);
+    qerror=.true.
+   else
+    select case(operator)
+     case('=','==') ;
+      nsel=0 ! new index on ind0 
+      do i=1, natom ; 
+       if (atoms%resname(i).eq.value) then ; __INC(nsel) ; ind0(nsel)=i ; endif
+      enddo
+!
+     case('~=','!=','<>') ;
+      nsel=0
+      do i=1, natom ;
+       if (atoms%resname(i).ne.value) then ; __INC(nsel) ; ind0(nsel)=i ; endif
+      enddo
+!
+     case default;
+      call warning(whoami, 'Unsupported operator "'//trim(operator)//'" for selection tag "'//trim(tag)//'". Abort.', fatal_warnlev); qerror=.true.
     end select
    endif
 !===========
 ! the scalars below should be dealt with generically
   case('BETA', 'TEMPFACTOR', 'TFACT', 'TFACTOR', 'TEMPFACT', 'BFACT', 'BFACTOR', 'WMAIN', 'TEMP', 'TEMPERATURE');
    if (.not. system_PDB_initialized) then
-    call warning(whoami, 'PDB variables not initialized. Abort.',-1);
+    call warning(whoami, 'PDB variables not initialized. Abort.',fatal_warnlev);
     qerror=.true.
    else
     select case(operator)
@@ -1180,13 +1206,13 @@ write(666,*) l
       enddo
 !
      case default;
-      call warning(whoami, 'Unsupported operator "'//trim(operator)//'" for selection tag "'//trim(tag)//'". Abort.', -1); qerror=.true.
+      call warning(whoami, 'Unsupported operator "'//trim(operator)//'" for selection tag "'//trim(tag)//'". Abort.', fatal_warnlev); qerror=.true.
     end select
    endif
 !============
   case('OCCU', 'OCCUPANCY')
    if (.not. system_PDB_initialized) then
-    call warning(whoami, 'PDB variables not initialized. Abort.',-1);
+    call warning(whoami, 'PDB variables not initialized. Abort.',fatal_warnlev);
     qerror=.true.
    else
     select case(operator)
@@ -1215,12 +1241,12 @@ write(666,*) l
       enddo
 !
      case default;
-      call warning(whoami, 'Unsupported operator "'//trim(operator)//'" for selection tag "'//trim(tag)//'". Abort.', -1); qerror=.true.
+      call warning(whoami, 'Unsupported operator "'//trim(operator)//'" for selection tag "'//trim(tag)//'". Abort.', fatal_warnlev); qerror=.true.
     end select
    endif
 !===========
   case default;
-   call warning(whoami, 'Unsupported selection tag "'//trim(tag)//'". Abort.', -1); qerror=.true.
+   call warning(whoami, 'Unsupported selection tag "'//trim(tag)//'". Abort.', fatal_warnlev); qerror=.true.
  end select
 !
  if (.not.qerror) then
@@ -1234,7 +1260,7 @@ write(666,*) l
       flag(j)=0
      endif
     else
-     call warning(whoami, ' Invalid atom index specified ("'//itoa(j)//'"). Abort',-1); qerror=.true.
+     call warning(whoami, ' Invalid atom index specified ("'//itoa(j)//'"). Abort',fatal_warnlev); qerror=.true.
     endif
   enddo
 ! there is one remaining case : if an atom was not chosen in this selection, but was chosen in the previous selection
@@ -1259,7 +1285,7 @@ write(666,*) l
     case('XOR');          algebra=qxor;
     case('AND','&','&&'); algebra=qand;
     case default;
-     call warning(whoami, 'Unknown characters after selection string ("'//value//'"). Abort.',-1) ; qerror=.true.; algebra=qend
+     call warning(whoami, 'Unknown characters after selection string ("'//value//'"). Abort.',fatal_warnlev) ; qerror=.true.; algebra=qend
    end select
  else
    algebra=qend
@@ -1547,12 +1573,16 @@ write(666,*) l
     call state_add3df('OCCUPANCY','Occupancy'              , (/natom/),      __COMM _COMMA __CTX, vptr, qinit); __FPTR1(occupancy);
 #ifdef __RCOMP
     call state_add3df('AUXPOS'   ,'Auxiliary coordinates'  , (/ndim,natom/), __COMM _COMMA __CTX, vptr, qinit); __FPTR2(rcomp);
+    call state_add3df('AUXBFACTOR','Auxiliary Debye-Waller (B) factors', (/natom/), __COMM _COMMA __CTX, vptr, qinit); __FPTR1(bcomp);
 #endif
 !
    q=atoms%charge(1:natom)
    m=one ! default "mass"
 ! initialize coordinates
    r=unknownf; occupancy=unknownf; bfactor=unknownf; radius=unknownf
+#ifdef __RCOMP
+   rcomp=unknownf ; bcomp=unknownf
+#endif
 !
    rewind(fid)
   endif ! pass

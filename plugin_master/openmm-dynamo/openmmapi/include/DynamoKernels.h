@@ -53,7 +53,7 @@ namespace DynamoPlugin {
  */
 class CalcDynamoForceKernel : public OpenMM::KernelImpl {
 public:
-    static std::string Name() {
+    static const std::string Name() {
         return "CalcDynamoForce";
     }
     CalcDynamoForceKernel(std::string name, const OpenMM::Platform& platform) : OpenMM::KernelImpl(name, platform) {
