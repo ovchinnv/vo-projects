@@ -145,7 +145,9 @@ void OpenCLCalcDynamoForceKernel::initialize(const System& system, const DynamoF
     int ierr=master_init_plugin(natoms, m, q, inputfile, ilen, logfile, llen, &atomlist, usesPeriodic, box);
     free(m);
     free(q);
-    hasInitialized = (ierr==0);
+    pos.resize(natoms);
+    hasInitialized = true;
+    if (ierr) throw OpenMMException("Could not initialize DYNAMO plugin");
 }
 
 double OpenCLCalcDynamoForceKernel::execute(ContextImpl& context, bool includeForces, bool includeEnergy) {
