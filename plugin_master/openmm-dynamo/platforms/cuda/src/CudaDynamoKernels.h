@@ -82,7 +82,6 @@ public:
     double addForces(bool includeForces, bool includeEnergy, int groups);
 private:
     class ExecuteTask;
-    class CopyForcesTask;
     class StartCalculationPreComputation;
     class AddForcesPostComputation;
     bool hasInitialized;
@@ -94,7 +93,7 @@ private:
     CUstream stream;
     CUevent syncEvent;
     int forceGroupFlag;
-    std::vector<OpenMM::Vec3> pos, frc;
+    std::vector<OpenMM::Vec3> pos ; //, frc;
     OpenMM::Vec3 boxVectors[3];
 // VO 2017
     double master_energy; // plugin energy
