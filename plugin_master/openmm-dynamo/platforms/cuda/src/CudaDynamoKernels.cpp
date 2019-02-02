@@ -282,7 +282,7 @@ void CudaCalcDynamoForceKernel::executeOnWorkerThread() {
      } // qdble
     } // atomlist == NULL
     // upload forces to device
-//    cu.setAsCurrent();
+    cu.setAsCurrent();
     cuMemcpyHtoDAsync(dynamoForces->getDevicePointer(), cu.getPinnedBuffer(), dynamoForces->getSize()*dynamoForces->getElementSize(), stream);
     cuEventRecord(syncEvent, stream);
 }
