@@ -176,6 +176,8 @@ void CudaCalcDynamoForceKernel::beginComputation(bool includeForces, bool includ
 }
 
 void CudaCalcDynamoForceKernel::executeOnWorkerThread() {
+//NOTE : 1/2019 : changes interface to match that of OPENCL (serialized) ; not clear that the removal of extra parallel copy 
+// is always beneficial
     long int iteration = cu.getStepCount();
     double* rptr; // pointer to coordinate array
     int* aptr; // pointer to atom index array
@@ -280,7 +282,7 @@ void CudaCalcDynamoForceKernel::executeOnWorkerThread() {
      } // qdble
     } // atomlist == NULL
     // upload forces to device
-//    cu.setAsCurrent();
+    cu.setAsCurrent();
     cuMemcpyHtoDAsync(dynamoForces->getDevicePointer(), cu.getPinnedBuffer(), dynamoForces->getSize()*dynamoForces->getElementSize(), stream);
     cuEventRecord(syncEvent, stream);
 }
