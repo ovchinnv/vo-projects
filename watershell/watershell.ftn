@@ -201,7 +201,7 @@ module _N
 !
 !  atom selections
  __PAR(surface_atom_selection, character(len=vartaglen), 'ANAME=CA')  ! protein CA trace
- __PAR(solvent_atom_selection, character(len=vartaglen), 'ANAME=OH2') ! TIP3 oxygens atoms
+ __PAR(solvent_atom_selection, character(len=vartaglen), 'ANAME=OH2') ! TIP3 oxygen atoms
  int, pointer, public :: isurface_atoms(:)=>NULL()
  int, pointer, public :: isolvent_atoms(:)=>NULL()
 !
@@ -217,7 +217,7 @@ module _N
 &                  ddist_solv(:,:) ! distance gradient at solvent coordinate (inward surface normal)
  bool, pointer :: qforced_solv(:) ! flags that indicate whether a force is to be applied on the atom
 #ifdef __SORT_LIST
- int, pointer :: solute_neighbor_list(:,:) ! for each solvent atom, the solute atoms are sorted in terms of proximity
+ int, pointer :: solute_neighbor_list(:,:) ! for each solvent atom, the solute atoms are sorted by proximity
 #ifdef __NEIGHBOR_LIST
  __PAR(qneighbor_list, bool, .true.) ! whether to use a neighbor list to shorten loops over surface atoms
  float :: neighbor_list_factor ! coefficient used to relate sorting frequency and limit index to loop length
@@ -1473,7 +1473,7 @@ __DBGVAR(r_com_sa,1)
 ! sort neighbor list on first iteration
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
  if (qneighbor_list.and.sort_neighbor_list_freq.gt.izero) then
-   if (__CHKUPDATE(sort_neighbor_list_freq)) qneighbor_list_sorted=.false.
+  if (__CHKUPDATE(sort_neighbor_list_freq)) qneighbor_list_sorted=.false.
  endif ! qneighbor_list
 !
  if (.not. qneighbor_list_sorted) then
@@ -1554,9 +1554,9 @@ __DBGVAR(r_com_sa,1)
 !
      solute_neighbor_mind(i)=ind
     endif
- __DBGVAR(pre,2)
- __DBGVAR(distance2(1:10),2)
- __DBGVAR(solute_neighbor_mind(i),2)
+! __DBGVAR(pre,2)
+! __DBGVAR(distance2(1:10),2)
+! __DBGVAR(solute_neighbor_mind(i),2)
    enddo ! nsolvent
 #if defined(__OMP) & defined(__FORCE_OMP)
 !$omp end do
@@ -1815,10 +1815,20 @@ __DBGVAR(r_com_sa,1)
 ! at this point, qforced_solv is wrong : it will be true everywhere, because surface distance was undefined (=0) in the calc. loop
 ! recompute qforced_solv :
   if (qminimum_distance) then
+#ifdef __HAMILTONIAN
+! no easy solution, but to recompute the gradients, now that surface distance is known
+   call __NM(compute_mindist_grad(.false.))
+#else
    qforced_solv=dist_solv.lt.surface_distance ! vector operation
+#endif
 !============================================================
   else ! (NOT) qminimum_distance
+#ifdef __HAMILTONIAN
+! no easy solution, but to recompute the gradients, now that surface distance is known
+   call __NM(compute_density_grad(.false.))
+#else
    qforced_solv=rho_solv.lt.surface_contour_value ! vector operation
+#endif
   endif ! qminimum_distance
 !====== NOTE : if we requested to run without neighbor lists then we need to reset solute_neighbor_mind to max
 !====== otherwise, the early exit version of force routine could miss crucial atoms (the mind list is _not_ updated b/c qnlist=0)
@@ -1870,7 +1880,6 @@ __DBGVAR(r_com_sa,1)
 #endif
 &       .false. ) surf_dist_changed=.true. ! we only need this variable for barostat/dasystat
 #endif
-
 
  endif ! compute reference surface distance
 !========================== compute contour value ^
@@ -1970,7 +1979,12 @@ __DBGVAR(r_com_sa,1)
 #ifdef __TORQUE_FROM_FORCED_SOLVENT
     __UPDATE_TMAT_C
 #endif
+#ifdef __HAMILTONIAN
+! prefactor already included in gradient
+    iforce=ddist_solv(:,i)
+#else
     iforce=surface_force_constant * pre / d0 * ddist_solv(:,i) ! re sign : note that surface_distance is negative
+#endif
 ! set force
     __INCR(fr(1,isolvent_atoms(i)),iforce(1)) ;
     __INCR(fr(2,isolvent_atoms(i)),iforce(2)) ;
@@ -1989,6 +2003,7 @@ __DBGVAR(r_com_sa,1)
    else ! keep net force/torque
 #endif
 ! just set the force
+#ifndef __HAMILTONIAN
     d0=surface_force_constant * pre / d0
     __INCR(fr(1,isolvent_atoms(i)), d0 * ddist_solv(1,i))
     __INCR(fr(2,isolvent_atoms(i)), d0 * ddist_solv(2,i))
@@ -1996,23 +2011,42 @@ __DBGVAR(r_com_sa,1)
 #if defined (__BAROSTAT) & defined (__FNORM)
     if (barostat) d0=d0*norm3(ddist_solv(:,i))
 #endif
+#else
+! prefactor already included in force
+    __INCR(fr(1,isolvent_atoms(i)), ddist_solv(1,i))
+    __INCR(fr(2,isolvent_atoms(i)), ddist_solv(2,i))
+    __INCR(fr(3,isolvent_atoms(i)), ddist_solv(3,i))
+#if defined (__BAROSTAT) & defined (__FNORM)
+    if (barostat) d0=norm3(ddist_solv(:,i))
+#endif
+!
+#endif
 !
 #ifdef __RMFT
    endif
 #endif
 ! sum "energy"
-! NOT clear how the surface_force or energy are meaningful
+! NOT clear how the surface energy is physically meaningful
 #if defined(__BAROSTAT)
    if (barostat) &
 #ifdef __FNORM
 &   __INCR(__U(surface_force), d0) ! cumulative force magnitude
 #else
+!
+#ifndef __HAMILTONIAN
 &   __INCR(__U(surface_force), pre) ! x k, below
+#else
+&   __INCR(__U(surface_force), dist_solv(i)-surface_distance) ! x k, below
 #endif
 #endif
+#endif
+#ifndef __HAMILTONIAN
    __INCR(__U(surface_energy), pre**2) ! x k/2, below
+#else
+   __INCR(__U(surface_energy), (dist_solv(i)-surface_distance)**2) ! x k/2, below
+#endif
   else ! distance check - atoms that are not forced
-
+!
 #ifdef __RMFT
    if (remove_net_torque) then ! for now, here; optimize later
 #ifdef __TORQUE_FROM_FREE_SOLVENT
@@ -2120,11 +2154,21 @@ endif
     cycle
    endif
 !   __INCR(__U(density_beyond_contour), rho_solv(i)) ! not clear whether useful
+!
+#ifndef __HAMILTONIAN
    d0=__OORHO( rho_solv(i)) ! unsafe inverse, but rho > 0 per above
    pre = ( __RHO_INVERSE2 ( d0 ) - surface_distance ) ;
-#if (_DBGLEV>1)
- __DBGOUT('solv. atom#:', i, 'density:', rho_solv(i), 'distance:', __RHO_INVERSE2(d0), 'forced?:', qforced_solv(i), 'pre:', pre)
+! otherwise, already computed prefactor and absorbed into gradients
+! What happens if we do not know surface distance going into the grad routine ? In that case, the computed prefactor will be wrong !
 #endif
+#if (_DBGLEV>1)
+ __DBGOUT('solv. atom#:', i, 'density:', rho_solv(i), 'distance:', __RHO_INVERSE2(d0), 'forced?:', qforced_solv(i) &
+#ifndef __HAMILTONIAN
+& , 'pre:', pre &
+#endif
+& )
+#endif
+!
 !
 #ifdef __RMFT
    if (remove_net_torque) then ! for now, here; optimize later, if needed
@@ -2151,9 +2195,14 @@ endif
 #endif
 !
 ! add atomic force
+#ifdef __HAMILTONIAN
+! derivative already includes force prefactor
+    iforce = - drho_solv(:,i);
+#else
     d0=logistic_constant*d0*(__OORHOSAFE(one-rho_solv(i))) ! derivative of the inverse of logistic function
     iforce = - surface_force_constant * pre * d0 * drho_solv(:,i) ! (-) because surface_distance is negative ; grad points toward protein
 !   fr(:,isolvent_atoms(i)) = - surface_force_constant * pre * d0 * drho_solv(:,i) ! (-) because surface_distance is negative ; grad points toward protein
+#endif
     __INCR(fr(1,isolvent_atoms(i)),iforce(1))
     __INCR(fr(2,isolvent_atoms(i)),iforce(2))
     __INCR(fr(3,isolvent_atoms(i)),iforce(3))
@@ -2169,6 +2218,7 @@ endif
 #endif
    else ! keep net force/torque
 #endif
+#ifndef __HAMILTONIAN
     d0 = - surface_force_constant * pre * d0
     __INCR(fr(1,isolvent_atoms(i)), d0 * drho_solv(1,i))
     __INCR(fr(2,isolvent_atoms(i)), d0 * drho_solv(2,i))
@@ -2176,17 +2226,31 @@ endif
 #ifdef __BAROSTAT
     d0=d0*norm3(drho_solv(:,i))
 #endif
+#else
+! derivative already includes force prefactor
+    __DECR(fr(1,isolvent_atoms(i)), drho_solv(1,i))
+    __DECR(fr(2,isolvent_atoms(i)), drho_solv(2,i))
+    __DECR(fr(3,isolvent_atoms(i)), drho_solv(3,i))
+#ifdef __BAROSTAT
+    d0=norm3(drho_solv(:,i))
+#endif
+#endif
+!
 #ifdef __RMFT
    endif
 #endif
 
 ! sum "energy"
-! NOT clear whether the surface_energy is meaningful
+! NOT clear whether the surface_energy is physically meaningful
 ! surface force is used for pressure calculations (but only if barostat is on !)
 #ifdef __BAROSTAT
    __INCR(__U(surface_force), d0) ! actual force magnitude
 #endif
+#ifndef __HAMILTONIAN
    __INCR(__U(surface_energy), pre**2) ! x k/2, below
+#else
+   __INCR(__U(surface_energy), (__RHO_INVERSE(rho_solv(i)) - surface_distance)**2) ! x k/2, below
+#endif
   else ! for atoms that are not forced
 #ifdef __RMFT
 #ifdef __TORQUE_FROM_FREE_SOLVENT
@@ -2822,16 +2886,17 @@ __DBGVAR(bulk_boundary_contour_value,1)
     dr2=sum(dr**2);
 #ifdef __SORT_LIST
 ! bubble sort between this and previous atom base on distance
-! one issue here is that rmaxsurf depends on the atom radius ; 
+! one issue here is that rmaxsurf depends on the atom radius ;
 ! i.e. perhaps sorting should take that into account ?
-! speccifically, should we compare :
+! specifically, should we compare :
 !
 ! ( dr - rmax ) < ( drold - rmaxold) ? swap : continue
 !
 ! Note that, in the above, the sign matters
-! The point is that atoms with a larger radius contribute more to the density
-! even though the distance between their center to the solvent atom is larger
-! For now, will keep as is, since the adaptive algorithm should correct for the sort inaccuracy, but may be fixed in the future
+! The point is that atoms with a larger radius could contribute more to the density
+! even though the distance between their centers to the solvent atom is larger
+! For now, will keep as is, since the adaptive algorithm should correct for the sort inaccuracy, but may be changed in the future
+! Keep in mind however, that the "better" test above would require computing a square root, where none may me required otherwise
 !
     if (dr2 .lt. dr2old) then ! bubble sort
      solute_neighbor_list(jj,i)=solute_neighbor_list(jj-1,i)
@@ -2881,7 +2946,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
        qforced=.false. ! however, do not quit because we still do not know whether we are inside bulk
       else
 ! otherwise, compute gradient contribution : (note that I am flipping the direction of dr (in the notes it is r0-r)
-! NOTE (10/18) : I think there is a mistake below : there should not be a half; MATLAB TEST : CORRECT ! Fixing below, keeping old code for notes
+! NOTE (10/18) : I think there is a mistake below : there should not be a half; MATLAB TEST:CORRECT ! Fixed below, keeping old code for record
 ! MATLAB : dGdX_fix =  - 1/sqrt(2*pi) * ( (expa + expb) * radpad/s +       (expa - expb)./c)./(c*s).^2 .*dX ;% corrected analytical expression
 !       __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurf + half * (expa - expb) * ooc) ) ! WRONG !!!
        __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurf + (expa - expb) * ooc) ) ! CORRECTED 10/18
@@ -2914,6 +2979,11 @@ __DBGVAR(bulk_boundary_contour_value,1)
 !  however, in that case we are throwing away the information that a solvent atom has moved outside of support ; better to address this in the main loop, I think
 !  Also, it is clear that the atom _should_ be forced (we just do not know which wat to push it since we are outside of the support) ; thus we are closer to the
 !  actual physical situation, leaving as is
+#ifdef __HAMILTONIAN
+! Need to propagate Hamiltonian forces to surface atoms ; therefore, compute force prefactor and apply to gradients here
+! Should not need to recompute the prefactor in the main loop for aolvent atoms (i.e. mod the code!)
+
+#endif
   enddo ! nsolvent
 !#undef zero
 !#undef half
@@ -2939,7 +3009,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
   neighbor_list_misses=0
 #endif
 #endif
-!=====================================================================================
+!==========================================================================================
 #ifdef __OMP
 !$omp parallel &
 !$omp shared ( rho_solv, drho_solv, r_solv, r_surf, rad_surf, surf_padding, nsolvent, nsurface_coord, cutoff_surf, oo_surf_stdev &
@@ -3091,6 +3161,11 @@ __DBGVAR(bulk_boundary_contour_value,1)
    if (qforced .and. solute_neighbor_mind(i) > neighbor_list_length ) __INC(__U(neighbor_list_misses)) ! count only if qforced, ok?
 #endif
    qforced_solv(i)=qforced
+#ifdef __HAMILTONIAN
+! Need to propagate Hamiltonian forces to surface atoms ; therefore, compute force prefactor and apply to gradients here
+! Should not need to recompute the prefactor in the main loop for aolvent atoms (i.e. mod the code!)
+
+#endif
   enddo ! nsolvent
 #ifdef __OMP
 !$omp end do
@@ -3127,6 +3202,11 @@ __DBGVAR(bulk_boundary_contour_value,1)
  endif
 #endif
 !
+#ifdef __HAMILTONIAN
+! reduce Hamiltonian forces on surface atoms ;
+
+#endif
+
  endif ! truncate sum
 !
  end __SUB(compute_density_grad)
