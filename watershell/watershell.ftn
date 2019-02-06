@@ -294,6 +294,9 @@ module _N
  float, allocatable, target :: drho_surf(:,:,:) ! array that stores forces on surcace atoms 
 #endif
 !
+#ifdef __OMP
+ int :: numthreads
+#endif
 != subroutines
  contains
 !========
@@ -1052,6 +1055,21 @@ module _N
   __WRN(whoami, 'COULD NOT ALLOCATE MEMORY FOR SOLVENT ATOM INDICES.')
  endif
 !
+#ifdef __OMP
+ numthreads=omp_get_max_threads()
+ __MESSAGE(whoami, 'WILL USE '//itoa(numthreads)//' OPENMP THREADS')
+#endif
+!
+#ifdef __HAMILTONIAN
+#ifdef __OMP
+ __ALLOC(ispt(nsurface_coord,0:numthreads-1)) ! note that nsurface_coord could be referring to dummy atoms (i.e. those to which forces cannot be applied)
+ __ALLOC(drho_surf(3,nsurface_coord,0:2*numthreads-1)) ! 2*numthreads sets ; for each thread, the first is the support for a particular solvent atom; second is the sum over solv. atoms
+#else
+ __ALLOC(ispt(nsurface_coord,0:0))
+ __ALLOC(drho_surf(3,nsurface_coord,0:1))
+#endif
+#endif
+!
  if  (qrestart &
 #ifdef __DUMSURF
  .or. qdumsurf &
@@ -1254,9 +1272,9 @@ __DBGVAR(r_com_sa,1)
 !
   if (qminimum_distance) then
 #ifdef __OMP
-   allocate(sarho_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:omp_get_max_threads()-1))
+   allocate(sarho_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:numthreads-1))
 #ifdef __DASYSTAT
-   if (dasystat) allocate(inrho_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:omp_get_max_threads()-1))
+   if (dasystat) allocate(inrho_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:numthreads-1))
 #endif
 #else
   allocate(sarho(sagrid%n(1),sagrid%n(2),sagrid%n(3)))
@@ -1266,7 +1284,7 @@ __DBGVAR(r_com_sa,1)
 #endif
   else ! qminimum_distance
 #ifdef __OMP
-   allocate(sarhof_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:omp_get_max_threads()-1))
+   allocate(sarhof_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:numthreads-1))
 #else
    allocate(sarhof(sagrid%n(1),sagrid%n(2),sagrid%n(3)))
 #endif
@@ -1392,6 +1410,10 @@ __DBGVAR(r_com_sa,1)
  call ugrid_done(sagrid)
 #endif
 !
+#ifdef __HAMILTONIAN
+ __DEALL(ispt)
+ __DEALL(drho_surf)
+#endif
  __NM(initialized)=.false. ; radii_initialized=.false.
 #ifdef __DASYSTAT
  dmasses_initialized=.false.
@@ -1488,7 +1510,7 @@ __DBGVAR(r_com_sa,1)
  if (.not. qminimum_distance) pre=(maxval(rad_surf) + surf_padding + cutoff_surf)**2
 !
 #if defined(__OMP) & defined(__FORCE_OMP)
-  __ALLOC(distance2_all_threads(nsurface_coord,0:omp_get_max_threads()-1))
+  __ALLOC(distance2_all_threads(nsurface_coord,0:numthreads-1))
 !$omp parallel private(ierr,tid,i,ii,ind,istep &
 #ifdef __PBC_UNWRAP
 !$omp ,d0 &
@@ -2411,7 +2433,7 @@ endif
           if (qminimum_distance) then
 #ifdef __OMP
            __DEALL(sarho_all_threads)
-           allocate(sarho_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:omp_get_max_threads()-1))
+           allocate(sarho_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:numthreads-1))
 #else
           __DEALL(sarho)
            allocate(sarho(sagrid%n(1),sagrid%n(2),sagrid%n(3)))
@@ -2419,7 +2441,7 @@ endif
           else
 #ifdef __OMP
            __DEALL(sarhof_all_threads)
-           allocate(sarhof_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:omp_get_max_threads()-1))
+           allocate(sarhof_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:numthreads-1))
 #else
           __DEALL(sarhof)
            allocate(sarhof(sagrid%n(1),sagrid%n(2),sagrid%n(3)))
@@ -2573,9 +2595,9 @@ __DBGVAR(pressure_ave,1)
          if (qminimum_distance) then
 #ifdef __OMP
           __DEALL(sarho_all_threads)
-          allocate(sarho_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:omp_get_max_threads()-1))
+          allocate(sarho_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:numthreads-1))
           __DEALL(inrho_all_threads)
-          allocate(inrho_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:omp_get_max_threads()-1))
+          allocate(inrho_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:numthreads-1))
 #else
           __DEALL(sarho)
           allocate(sarho(sagrid%n(1),sagrid%n(2),sagrid%n(3)))
@@ -2585,7 +2607,7 @@ __DBGVAR(pressure_ave,1)
          else
 #ifdef __OMP
           __DEALL(sarhof_all_threads)
-          allocate(sarhof_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:omp_get_max_threads()-1))
+          allocate(sarhof_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:numthreads-1))
 #else
           __DEALL(sarhof)
           allocate(sarhof(sagrid%n(1),sagrid%n(2),sagrid%n(3)))
@@ -2743,7 +2765,6 @@ __DBGVAR(solvent_mass_nonbulk,1)
 !   to avoid the truncation, you must define an upper bound to the surface contour, which is nsurface_coord
  int :: i, j
  float :: rp(3), rw(3), dr(3), dr2, a, b, expa, expb, ooc
-! real*4 :: as, bs
 #ifdef __SORT_LIST
  int :: jj
  float :: dr2old ! squared distance difference from previous iteration
@@ -2785,7 +2806,7 @@ __DBGVAR(solvent_mass_nonbulk,1)
 !$omp parallel
 !$omp single
  __DBGOUT('OMP: Available processors: ',omp_get_num_procs());
- __DBGOUT('OMP: Maximum threads:      ',omp_get_max_threads());
+ __DBGOUT('OMP: Maximum threads:      ',numthreads);
  __DBGOUT('OMP: Current threads:      ',omp_get_num_threads());
  __DBGOUT('OMP: This thread:          ',omp_get_thread_num());
 !$omp end single
@@ -2851,7 +2872,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #ifdef __OMP
  tid=omp_get_thread_num()
 #else
- tid=1
+ tid=0
 #endif
  ispt_this_thread=>ispt(:,tid)
  drho_surf_this_thread=>drho_surf(:,:,2*tid)
@@ -2948,8 +2969,6 @@ __DBGVAR(bulk_boundary_contour_value,1)
 ! a and b
     a = osq2 * (dr2 + rsurf)
     b = osq2 * (dr2 - rsurf)
-!    as=a
-!    bs=b
     ooc = one / dr2
 ! _nonce cycle ! aa get 54
 !
@@ -3093,7 +3112,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #ifdef __OMP
  tid=omp_get_thread_num()
 #else
- tid=1
+ tid=0
 #endif
  ispt_this_thread=>ispt(:,tid)
  drho_surf_this_thread=>drho_surf(:,:,2*tid)
@@ -3168,8 +3187,6 @@ __DBGVAR(bulk_boundary_contour_value,1)
       dr2 = sqrt(dr2) * oo_surf_stdev
       a = osq2 * (dr2 + rsurf)
       b = osq2 * (dr2 - rsurf)
-!      as=a
-!      bs=b
       ooc = one / dr2
       expa = exp ( - a**2 )
       expb = exp ( - b**2 )
@@ -3210,8 +3227,6 @@ __DBGVAR(bulk_boundary_contour_value,1)
      dr2 = sqrt(dr2) * oo_surf_stdev
      a = osq2 * (dr2 + rsurf)
      b = osq2 * (dr2 - rsurf)
-!     as=a
-!     bs=b
      ooc = one / dr2
      expa = exp ( - a**2 )
      expb = exp ( - b**2 )
@@ -3296,8 +3311,18 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
 !
 #ifdef __HAMILTONIAN
-! reduce Hamiltonian forces on surface atoms ;
-
+#ifdef __OMP
+! reduce Hamiltonian forces on surface atoms (0th thread has final data)
+! adapted from volume/surface compute
+ i=1
+ do while (i.lt.numthreads)
+!$omp barrier ! make sure all threads have completed previous operation
+  if (mod(tid,2*i)==0 .and. (tid+i).lt.numthreads) then
+   __INCR(drho_surf_all_thread, drho_surf(:,:,2*(tid+i)+1)) ! maybe better to reindex to tid+i, as in the volume/surface code ?
+  endif
+  __SCALE(i,2)
+ enddo
+#endif
 #endif
 
  endif ! truncate sum
@@ -3341,7 +3366,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 !$omp parallel
 !$omp single
  __DBGOUT('OMP: Available processors: ',omp_get_num_procs());
- __DBGOUT('OMP: Maximum threads:      ',omp_get_max_threads());
+ __DBGOUT('OMP: Maximum threads:      ',numthreads);
  __DBGOUT('OMP: Current threads:      ',omp_get_num_threads());
  __DBGOUT('OMP: This thread:          ',omp_get_thread_num());
 !$omp end single
