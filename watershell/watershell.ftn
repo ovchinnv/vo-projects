@@ -857,6 +857,13 @@ module _N
 #define __TAG __VAR
 #define __NAME flag to remove net torque from solvent atoms
 #include "parser/parser_macro2.src"
+!
+#ifdef __HAMILTONIAN
+ if (__VAR) then
+  __WRN(whoami, 'NET TORQUE CORRECTION IS CURRENTLY UNSUPPORTED IF HAMILTONIAN FORCES ARE APPLIED TO SURFACE ATOMS. TURNING TORQUE CORRECTION OFF.');
+  __VAR=.false.
+#endif
+!
 ! to remove net force :
 #define __VAR remove_net_force
 #define __TAG __VAR
@@ -1000,9 +1007,12 @@ module _N
 !  if (present(atoms)) then
    do l=1, nsurface_atoms
     ierr=atoms%uadd(isurface_atoms(l))
-#if defined(__RMFT) && defined(__SIMPLE_NET_FORCE_SURFACE)
+#if (defined(__RMFT) && defined(__SIMPLE_NET_FORCE_SURFACE)) || defined(__HAMILTONIAN)
 !  if (remove_net_torque.and.present(forced_atoms)) ierr=forced_atoms%uadd(isurface_atoms(l))
-  if (remove_net_torque) ierr=forced_atoms%uadd(isurface_atoms(l))
+#ifndef __HAMILTONIAN
+  if (remove_net_torque) &
+#endif
+  ierr=forced_atoms%uadd(isurface_atoms(l))
 #endif
    enddo ! physical surface atoms
 !  endif ! present
@@ -1845,7 +1855,7 @@ __DBGVAR(r_com_sa,1)
 ! recompute qforced_solv :
   if (qminimum_distance) then
 #ifdef __HAMILTONIAN
-! no easy solution, but to recompute the gradients, now that surface distance is known
+! no easy solution but to recompute the gradients, now that surface distance is known
    call __NM(compute_mindist_grad(.false.))
 #else
    qforced_solv=dist_solv.lt.surface_distance ! vector operation
@@ -1853,7 +1863,7 @@ __DBGVAR(r_com_sa,1)
 !============================================================
   else ! (NOT) qminimum_distance
 #ifdef __HAMILTONIAN
-! no easy solution, but to recompute the gradients, now that surface distance is known
+! no easy solution but to recompute the gradients, now that surface distance is known
    call __NM(compute_density_grad(.false.))
 #else
    qforced_solv=rho_solv.lt.surface_contour_value ! vector operation
@@ -2137,6 +2147,9 @@ endif
 #ifdef __DASYSTAT
 !$omp solvent_mass_outside, solvent_mass, &
 #endif
+#ifdef __HAMILTONIAN
+!$omp drho_surf, &
+#endif
 #ifdef __RMFT
 !$omp remove_net_torque, net_force, net_torque, &
 #ifdef __F_T_COUPLED
@@ -2147,6 +2160,9 @@ endif
 #endif
 !$omp nsolvent_outside, surface_force, surface_energy, isolvent_atoms, fr) & !!! , density_beyond_contour) &
 !$omp private (i, d0, pre, __U(nsolvent_outside), __U(surface_energy), __U(surface_force) & !!! , __U(density_beyond_contour)) &
+#if defined(__HAMILTONIAN) && !defined(__H_THREAD_REDUCE)
+!$omp , ii &
+#endif
 #ifdef __DASYSTAT
 !$omp , __U(solvent_mass_outside) &
 #endif
@@ -2170,6 +2186,31 @@ endif
    __U(ir1)=zero;__U(ir2)=zero;__U(ir3)=zero;__U(ir1s)=zero;__U(ir2s)=zero;__U(ir3s)=zero;__U(ir12)=zero;__U(ir13)=zero;__U(ir23)=zero
   endif
 #endif
+
+#ifdef __HAMILTONIAN
+  if (structure_update_freq.gt.0) then 
+   if (__CHKUPDATE(structure_update_freq)) then
+! note : this is incorrect if dummy atoms are present !
+!$omp do schedule(runtime)
+   do i=1, nsurface_coord
+#ifdef __H_THREAD_REDUCE
+    __INCR(fr(1,isurface_atoms(i)),drho_surf(1,i,1)) ! note that the 1 array corresponds to the global sum on 0th thread (0th array is the inst support)
+    __INCR(fr(2,isurface_atoms(i)),drho_surf(2,i,1))
+    __INCR(fr(3,isurface_atoms(i)),drho_surf(3,i,1))
+#else
+! each thread sums up contributions previously computed by different threads
+    do ii=1, 2, 2*numthreads
+     __INCR(fr(1,isurface_atoms(i)),drho_surf(1,i,ii))
+     __INCR(fr(2,isurface_atoms(i)),drho_surf(2,i,ii))
+     __INCR(fr(3,isurface_atoms(i)),drho_surf(3,i,ii))
+    enddo
+#endif
+   enddo
+!$omp end do
+  endif
+  endif
+#endif
+
 !$omp do schedule(runtime)
 #endif
  do i=1, nsolvent
@@ -2778,7 +2819,9 @@ __DBGVAR(solvent_mass_nonbulk,1)
 #endif
 !
 #ifdef __HAMILTONIAN
+#ifdef __OMP
  int :: tid
+#endif
  int, dimension(:), pointer :: ispt_this_thread
  float, dimension(:,:), pointer :: drho_surf_this_thread, drho_surf_all_thread
 #endif
@@ -2868,21 +2911,28 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
 !$omp )
 !
+#ifdef __DASYSTAT
+ if (dasystat) __U(solvent_mass_nonbulk)=zero
+#endif
+#endif
+!
 #ifdef __HAMILTONIAN
 #ifdef __OMP
  tid=omp_get_thread_num()
+ ispt_this_thread=>ispt(:,tid)
 #else
- tid=0
+#define tid 0
 #endif
  ispt_this_thread=>ispt(:,tid)
  drho_surf_this_thread=>drho_surf(:,:,2*tid)
  drho_surf_all_thread=>drho_surf(:,:,2*tid+1)
  drho_surf_all_thread=zero ! initialize this aray because it is updated incrementally
+#ifndef __OMP
+#undef tid
+#endif
 #endif
 !
-#ifdef __DASYSTAT
- if (dasystat) __U(solvent_mass_nonbulk)=zero
-#endif
+#ifdef __OMP
 !$omp do schedule(runtime)
 #endif
   do i=1, nsolvent ! outer loop over solvent atoms
@@ -3043,11 +3093,12 @@ __DBGVAR(bulk_boundary_contour_value,1)
 ! Need to propagate Hamiltonian forces to surface atoms ; therefore, compute force prefactor and apply to gradients here
 ! Also, do not recompute the prefactor in the main loop for solvent atoms (see main routine)
    if (qforced) then
-    a=__OORHOSAFE(rho_solv(i)) ! reuse a and b
-    b = surface_force_constant * logistic_constant * a * one/( one - min(rho_solv(i),__RHO_MAX)) * ( __RHO_INVERSE2(a)-surface_distance )
-    __SCALE(drho_solv(:,i),b)
+    a=__OORHOSAFE(rho_solv(i)) ! reuse a
+    a = surface_force_constant * logistic_constant * a * one/( one - min(rho_solv(i),__RHO_MAX)) * ( __RHO_INVERSE2(a)-surface_distance )
+    __SCALE(drho_solv(:,i),a)
+    __SCALE(a, (one - structure_update_memory) )
     do j=1,__U(nspt)
-     __INCR(drho_surf_all_thread(:,j), b * drho_surf_this_thread(:,j) )
+     __INCR(drho_surf_all_thread(:,j), a * drho_surf_this_thread(:,j) )
     enddo
    endif ! qforced
 #endif
@@ -3064,6 +3115,21 @@ __DBGVAR(bulk_boundary_contour_value,1)
 !$omp atomic
   __REDUCE(solvent_mass_nonbulk)
  endif
+#endif
+!
+#ifdef __HAMILTONIAN
+#ifdef __H_THREAD_REDUCE
+! reduce Hamiltonian forces on surface atoms (0th thread has final data)
+! adapted from volume/surface compute
+ i=1
+ do while (i.lt.numthreads)
+!$omp barrier ! make sure all threads have completed previous operation
+  if (mod(tid,2*i)==0 .and. (tid+i).lt.numthreads) then
+   __INCR(drho_surf_all_thread, drho_surf(:,:,2*(tid+i)+1)) ! maybe better to reindex to tid+i, as in the volume/surface code ?
+  endif
+  __SCALE(i,2)
+ enddo
+#endif
 #endif
 !$omp end parallel
 #endif
@@ -3108,24 +3174,30 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
 !$omp )
 !
-#ifdef __HAMILTONIAN
-#ifdef __OMP
- tid=omp_get_thread_num()
-#else
- tid=0
-#endif
- ispt_this_thread=>ispt(:,tid)
- drho_surf_this_thread=>drho_surf(:,:,2*tid)
- drho_surf_all_thread=>drho_surf(:,:,2*tid+1)
- drho_surf_all_thread=zero ! initialize this aray because it is updated incrementally
-#endif
-!
 #ifdef __DASYSTAT
  if (dasystat) __U(solvent_mass_nonbulk)=zero
 #endif
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
  __U(neighbor_list_misses)=0
 #endif
+#endif
+!
+#ifdef __HAMILTONIAN
+#ifdef __OMP
+ tid=omp_get_thread_num()
+#else
+#define tid 0
+#endif
+ ispt_this_thread=>ispt(:,tid)
+ drho_surf_this_thread=>drho_surf(:,:,2*tid)
+ drho_surf_all_thread=>drho_surf(:,:,2*tid+1)
+ drho_surf_all_thread=zero ! initialize this aray because it is updated incrementally
+#ifndef __OMP
+#undef tid
+#endif
+#endif
+!
+#ifdef __OMP
 !$omp do schedule(runtime)
 #endif
   do i=1, nsolvent ! outer loop over solvent atoms!
@@ -3265,11 +3337,12 @@ __DBGVAR(bulk_boundary_contour_value,1)
 ! Need to propagate Hamiltonian forces to surface atoms ; therefore, compute force prefactor and apply to gradients here
 ! Also, do not recompute the prefactor in the main loop for solvent atoms (see main routine)
    if (qforced) then
-    a=__OORHOSAFE(rho_solv(i)) ! reuse a and b
-    b = surface_force_constant * logistic_constant * a * one/( one - min(rho_solv(i),__RHO_MAX)) * ( __RHO_INVERSE2(a)-surface_distance )
-    __SCALE(drho_solv(:,i),b)
+    a=__OORHOSAFE(rho_solv(i)) ! reuse a
+    a= surface_force_constant * logistic_constant * a * one/( one - min(rho_solv(i),__RHO_MAX)) * ( __RHO_INVERSE2(a)-surface_distance )
+    __SCALE(drho_solv(:,i),a)
+    __SCALE(a,one - structure_update_memory)
     do j=1,__U(nspt)
-     __INCR(drho_surf_all_thread(:,j), b * drho_surf_this_thread(:,j) )
+     __INCR(drho_surf_all_thread(:,j), a * drho_surf_this_thread(:,j) )
     enddo
    endif ! qforced
 #endif
@@ -3285,6 +3358,21 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
  __REDUCE(neighbor_list_misses)
+#endif
+!
+#ifdef __HAMILTONIAN
+#ifdef __H_THREAD_REDUCE
+! reduce Hamiltonian forces on surface atoms (0th thread has final data)
+! adapted from volume/surface compute
+ i=1
+ do while (i.lt.numthreads)
+!$omp barrier ! make sure all threads have completed previous operation
+  if (mod(tid,2*i)==0 .and. (tid+i).lt.numthreads) then
+   __INCR(drho_surf_all_thread, drho_surf(:,:,2*(tid+i)+1)) ! maybe better to reindex to tid+i, as in the volume/surface code ?
+  endif
+  __SCALE(i,2)
+ enddo
+#endif
 #endif
 !$omp end parallel
 #endif
@@ -3310,21 +3398,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
  endif
 #endif
 !
-#ifdef __HAMILTONIAN
-#ifdef __OMP
-! reduce Hamiltonian forces on surface atoms (0th thread has final data)
-! adapted from volume/surface compute
- i=1
- do while (i.lt.numthreads)
-!$omp barrier ! make sure all threads have completed previous operation
-  if (mod(tid,2*i)==0 .and. (tid+i).lt.numthreads) then
-   __INCR(drho_surf_all_thread, drho_surf(:,:,2*(tid+i)+1)) ! maybe better to reindex to tid+i, as in the volume/surface code ?
-  endif
-  __SCALE(i,2)
- enddo
-#endif
-#endif
-
+!
  endif ! truncate sum
 !
  end __SUB(compute_density_grad)
