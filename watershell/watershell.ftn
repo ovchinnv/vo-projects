@@ -297,6 +297,11 @@ module _N
 #ifdef __OMP
  int :: numthreads
 #endif
+!
+#ifdef __FORCE_STATS
+ float, dimension(3) :: total_solute_force, total_solvent_force, max_solute_force, max_solvent_force
+#endif
+
 != subroutines
  contains
 !========
@@ -2750,10 +2755,25 @@ __DBGVAR(density_ave,1)
   if (.not. qminimum_distance) then ! not relevant to mindist algorithm
   __OUT('Surface contour value:           ', surface_contour_value)
   endif
+
+#ifdef __FORCE_STATS
+  total_solute_force=zero
+  total_solvent_force=zero
+!
+  do ii=1, nsurface_atoms
+   __INCR(total_solute_force, fr(:,isurface_atoms(ii)))
+  enddo
+  do ii=1, nsolvent
+   __INCR(total_solvent_force, fr(:,isolvent_atoms(ii)))
+  enddo
+   __OUT('Total force applied to surface atoms:    ', total_solute_force)
+   __OUT('Total force applied to solvent atoms:    ', total_solvent_force)
+#endif
+!
 #if defined(__SHOW_TORQUE) && defined(__RMFT)
   if (remove_net_torque) then
-   __OUT('Net force applied to system:    ', net_force)
-   __OUT('Net torque applied to system:   ', net_torque)
+   __OUT('Total force applied to system:    ', net_force)
+   __OUT('Total torque applied to system:   ', net_torque)
   endif
 #endif
 #ifdef __BAROSTAT
@@ -3055,6 +3075,14 @@ __DBGVAR(bulk_boundary_contour_value,1)
        __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurf + (expa - expb) * ooc) ) ! CORRECTED 10/18
 ! add gradient contribution
        __INCR(drho_solv(:,i),dr)
+!
+#ifdef __HAMILTONIAN
+! propagate force onto surface atoms
+     __INC(__U(nspt)) ! number of atoms in support
+     ispt_this_thread(__U(nspt)) = j ! index of support atom
+     drho_surf_this_thread(:,j) = dr ! density gradient (i.e. to compute force exerted on support atom)
+#endif
+!
       endif ! rho > surface contour value
      endif ! rho > bulk contour value
     else & ! dasystat
@@ -3098,8 +3126,9 @@ __DBGVAR(bulk_boundary_contour_value,1)
     __SCALE(drho_solv(:,i),a)
     __SCALE(a, (one - structure_update_memory) )
     do j=1,__U(nspt)
-     __INCR(drho_surf_all_thread(:,j), a * drho_surf_this_thread(:,j) )
+     __INCR(drho_surf_all_thread(:,ispt_this_thread(j)), a * drho_surf_this_thread(:,ispt_this_thread(j)))
     enddo
+!write(0,*) i, a, __U(nspt), ispt_this_thread(1:__U(nspt))
    endif ! qforced
 #endif
   enddo ! nsolvent
@@ -3342,7 +3371,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
     __SCALE(drho_solv(:,i),a)
     __SCALE(a,one - structure_update_memory)
     do j=1,__U(nspt)
-     __INCR(drho_surf_all_thread(:,j), a * drho_surf_this_thread(:,j) )
+     __INCR(drho_surf_all_thread(:,ispt_this_thread(j)), a * drho_surf_this_thread(:,ispt_this_thread(j)) )
     enddo
    endif ! qforced
 #endif
