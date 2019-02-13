@@ -145,7 +145,9 @@ void OpenCLCalcDynamoForceKernel::initialize(const System& system, const DynamoF
     int ierr=master_init_plugin(natoms, m, q, inputfile, ilen, logfile, llen, &atomlist, usesPeriodic, box);
     free(m);
     free(q);
-    hasInitialized = (ierr==0);
+    pos.resize(natoms);
+    hasInitialized = true;
+    if (ierr) throw OpenMMException("Could not initialize DYNAMO plugin");
 }
 
 double OpenCLCalcDynamoForceKernel::execute(ContextImpl& context, bool includeForces, bool includeEnergy) {
@@ -185,23 +187,27 @@ void OpenCLCalcDynamoForceKernel::executeOnWorkerThread() {
     }
     // copy coordinates :
     if (atomlist==NULL) { // atomlist is not defined; therefore, provide all coords
+//    if (1) {
      for (i=0, rptr=r ; i < natoms ; i++) {
       *(rptr++) = pos[i][0]*nm2A; //units
       *(rptr++) = pos[i][1]*nm2A;
       *(rptr++) = pos[i][2]*nm2A;
      }
     // compute plugin forces and energy
+// cout << "CALLING DYNAMO"<<endl;
      ierr=master_dyna_plugin(iteration, r, fr, NULL, 0, &master_energy, &atomlist, usesPeriodic, box); // might return valid atomlist
     // copy plugin forces
 //=============
      if (qdble) { // double precision version
       double *frc = (double*) cl.getPinnedBuffer();
+      memset(frc,0,3*natoms*sizeof(double));
       if (atomlist!=NULL) { // atom indices provided; use them for adding forces
        for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
         i=*aptr - 1; // for zero offset (e.g. first coordinate lives in r[0]
         j=3*i;
-        frc[j]= fr[j++]*str2omm_f; //units
-        frc[j]= fr[j++]*str2omm_f;
+        frc[j]= fr[j]*str2omm_f; j++; //units
+// cout << "x-force on atom: "<<j<<"="<<frc[j]<<endl;
+        frc[j]= fr[j]*str2omm_f; j++;
         frc[j]= fr[j]*str2omm_f;
        }
       } else { // no atomlist provided; loop over all atoms
@@ -211,18 +217,22 @@ void OpenCLCalcDynamoForceKernel::executeOnWorkerThread() {
       } // atomlist
 //=============
      } else { // single precision, identical code
+//      cout << "OPENCL DOUBLE PREC: "<<qdble<<endl;
       float *frc = (float*) cl.getPinnedBuffer();
+      memset(frc,0,3*natoms*sizeof(float));
       if (atomlist!=NULL) { // atom indices provided; use them for adding forces
+//      if (0) { // atom indices provided; use them for adding forces
        for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
         i=*aptr - 1; // for zero offset (e.g. first coordinate lives in r[0]
         j=3*i;
-        frc[j]= (float) fr[j++]*str2omm_f; //units
-        frc[j]= (float) fr[j++]*str2omm_f;
-        frc[j]= (float) fr[j]*str2omm_f;
+        frc[j]= (fr[j]*str2omm_f);j++; //units
+        frc[j]= (fr[j]*str2omm_f);j++;
+        frc[j]= (fr[j]*str2omm_f);
        }
       } else { // no atomlist provided; loop over all atoms
        for (j=0 ; j < 3*natoms ; j++) {
         frc[j]= fr[j]*str2omm_f; //units
+ //cout << "force on atom: "<<j<<"="<<frc[j]<<endl;
        }
       } // atomlist
      } //qdble
@@ -239,25 +249,27 @@ void OpenCLCalcDynamoForceKernel::executeOnWorkerThread() {
 //
      if (qdble) { // double
       double *frc = (double*) cl.getPinnedBuffer();
+      memset(frc,0,3*natoms*sizeof(double));
       for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
        i=*aptr - 1; // zero offset (see above)
        j=3*i ;
-       frc[j]= fr[j++]*str2omm_f; //units
-       frc[j]= fr[j++]*str2omm_f;
+       frc[j]= fr[j]*str2omm_f;j++; //units
+       frc[j]= fr[j]*str2omm_f;j++;
        frc[j]= fr[j]*str2omm_f;
       }
      } else { // single
       float *frc = (float*) cl.getPinnedBuffer();
+      memset(frc,0,3*natoms*sizeof(float));
       for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
        i=*aptr - 1; // zero offset (see above)
        j=3*i ;
-       frc[j]= (float) fr[j++]*str2omm_f; //units
-       frc[j]= (float) fr[j++]*str2omm_f;
-       frc[j]= (float) fr[j]*str2omm_f;
+       frc[j]= fr[j]*str2omm_f;j++; //units
+       frc[j]= fr[j]*str2omm_f;j++;
+       frc[j]= fr[j]*str2omm_f;
       }
      } // qdble
     } // atomlist == NULL
-    // upload forces to device
+    // upload forces to device <buffer>                       <blocking> <offset> <size>                                            <pointer>           <events> <event>
     queue.enqueueWriteBuffer(dynamoForces->getDeviceBuffer(), CL_FALSE, 0, dynamoForces->getSize()*dynamoForces->getElementSize(), cl.getPinnedBuffer(), NULL, &syncEvent);
 }
 
@@ -278,5 +290,6 @@ double OpenCLCalcDynamoForceKernel::addForces(bool includeForces, bool includeEn
         cl.executeKernel(addForcesKernel, cl.getNumAtoms());
     }
     // Return the energy.
+    master_energy*=str2omm_e;
     return master_energy;
 }

@@ -63,40 +63,6 @@ public:
     CudaCalcDynamoForceKernel& owner;
 };
 
-class CudaCalcDynamoForceKernel::CopyForcesTask : public ThreadPool::Task {
-public:
-    CopyForcesTask(CudaContext& cu, vector<Vec3>& forces) : cu(cu), forces(forces) {
-    }
-    void execute(ThreadPool& threads, int threadIndex) {
-        // Copy the forces applied by DYNAMO to a buffer for uploading.  This is done in parallel for speed.
-
-        int numParticles = cu.getNumAtoms();
-        int numThreads = threads.getNumThreads();
-        int start = threadIndex*numParticles/numThreads;
-        int end = (threadIndex+1)*numParticles/numThreads;
-        if (cu.getUseDoublePrecision()) {
-            double* buffer = (double*) cu.getPinnedBuffer();
-            for (int i = start; i < end; ++i) {
-                const Vec3& p = forces[i];
-                buffer[3*i] = p[0];
-                buffer[3*i+1] = p[1];
-                buffer[3*i+2] = p[2];
-            }
-        }
-        else {
-            float* buffer = (float*) cu.getPinnedBuffer();
-            for (int i = start; i < end; ++i) {
-                const Vec3& p = forces[i];
-                buffer[3*i] = (float) p[0];
-                buffer[3*i+1] = (float) p[1];
-                buffer[3*i+2] = (float) p[2];
-            }
-        }
-    }
-    CudaContext& cu;
-    vector<Vec3>& forces;
-};
-
 class CudaCalcDynamoForceKernel::AddForcesPostComputation : public CudaContext::ForcePostComputation {
 public:
     AddForcesPostComputation(CudaCalcDynamoForceKernel& owner) : owner(owner) {
@@ -191,7 +157,6 @@ void CudaCalcDynamoForceKernel::initialize(const System& system, const DynamoFor
     free(m);
     free(q);
     pos.resize(natoms);
-    frc.resize(natoms);
     hasInitialized = true;
     if (ierr) throw OpenMMException("Could not initialize DYNAMO plugin");
 } // initialize
@@ -211,11 +176,14 @@ void CudaCalcDynamoForceKernel::beginComputation(bool includeForces, bool includ
 }
 
 void CudaCalcDynamoForceKernel::executeOnWorkerThread() {
+//NOTE : 1/2019 : changes interface to match that of OPENCL (serialized) ; not clear that the removal of extra parallel copy 
+// is always beneficial
     long int iteration = cu.getStepCount();
-    double *rptr; // pointer to positions array
-    double *fptr; // pointer to force array
-    int *aptr; // pointer to atom index array
+    double* rptr; // pointer to coordinate array
+    int* aptr; // pointer to atom index array
     int i, j, ierr;
+    // buffer for uploading forces to the device:
+    bool qdble=cu.getUseDoublePrecision();
     // update periodic vectors
     if (usesPeriodic) {
      contextImpl.getPeriodicBoxVectors(boxVectors[0], boxVectors[1], boxVectors[2]);
@@ -231,53 +199,89 @@ void CudaCalcDynamoForceKernel::executeOnWorkerThread() {
     }
     // copy coordinates :
     if (atomlist==NULL) { // atomlist is not defined; therefore, provide all coords
+//    if (1) {
      for (i=0, rptr=r ; i < natoms ; i++) {
-      *(rptr++) = pos[i][0]*nm2A;
+      *(rptr++) = pos[i][0]*nm2A; //units
       *(rptr++) = pos[i][1]*nm2A;
       *(rptr++) = pos[i][2]*nm2A;
      }
     // compute plugin forces and energy
+// cout << "CALLING DYNAMO"<<endl;
      ierr=master_dyna_plugin(iteration, r, fr, NULL, 0, &master_energy, &atomlist, usesPeriodic, box); // might return valid atomlist
     // copy plugin forces
-     if (atomlist!=NULL) { // atom indices provided; use them for adding forces
-      for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
-       j=*aptr - 1; // for zero offset (e.g. first coordinate lives in r[0]
-       fptr=fr + 3*j ;
-       frc[j][0]= (*(fptr++))*str2omm_f;
-       frc[j][1]= (*(fptr++))*str2omm_f;
-       frc[j][2]= (*(fptr))*str2omm_f;
-      }
-     } else { // no atomlist provided; loop over all atoms
-      for (i=0, fptr=fr ; i < natoms ; i++) {
-       frc[i][0]= (*(fptr++))*str2omm_f;
-       frc[i][1]= (*(fptr++))*str2omm_f;
-       frc[i][2]= (*(fptr++))*str2omm_f;
-      }
-     } // atomlist
+//=============
+     if (qdble) { // double precision version
+      double *frc = (double*) cu.getPinnedBuffer();
+      memset(frc,0,3*natoms*sizeof(double));
+      if (atomlist!=NULL) { // atom indices provided; use them for adding forces
+       for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
+        i=*aptr - 1; // for zero offset (e.g. first coordinate lives in r[0]
+        j=3*i;
+        frc[j]= fr[j]*str2omm_f; j++; //units
+// cout << "x-force on atom: "<<j<<"="<<frc[j]<<endl;
+        frc[j]= fr[j]*str2omm_f; j++;
+        frc[j]= fr[j]*str2omm_f;
+       }
+      } else { // no atomlist provided; loop over all atoms
+       for (j=0 ; j < 3*natoms ; j++) {
+        frc[j]= fr[j]*str2omm_f; //units
+       }
+      } // atomlist
+//=============
+     } else { // single precision, identical code
+//      cout << "CUDA DOUBLE PREC: "<<qdble<<endl;
+      float *frc = (float*) cu.getPinnedBuffer();
+      memset(frc,0,3*natoms*sizeof(float));
+      if (atomlist!=NULL) { // atom indices provided; use them for adding forces
+//      if (0) { // atom indices provided; use them for adding forces
+       for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
+        i=*aptr - 1; // for zero offset (e.g. first coordinate lives in r[0]
+        j=3*i;
+        frc[j]= (fr[j]*str2omm_f);j++; //units
+        frc[j]= (fr[j]*str2omm_f);j++;
+        frc[j]= (fr[j]*str2omm_f);
+       }
+      } else { // no atomlist provided; loop over all atoms
+       for (j=0 ; j < 3*natoms ; j++) {
+        frc[j]= fr[j]*str2omm_f; //units
+ //cout << "force on atom: "<<j<<"="<<frc[j]<<endl;
+       }
+      } // atomlist
+     } //qdble
     } else { // atomlist not null : loop over only the desired indices
      for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
       j=*aptr - 1;
       rptr=r + 3*j ;
-      *(rptr++) = pos[j][0]*nm2A; // units
+      *(rptr++) = pos[j][0]*nm2A; //units
       *(rptr++) = pos[j][1]*nm2A;
       *(rptr)   = pos[j][2]*nm2A;
      }
 //
      ierr=master_dyna_plugin(iteration, r, fr, NULL, 0, &master_energy, &atomlist, usesPeriodic, box); // atomlist should not be modified in this call
 //
-     for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
-      j=*aptr - 1;
-      fptr=fr + 3*j ;
-      frc[j][0]= (*(fptr++))*str2omm_f; // convert units
-      frc[j][1]= (*(fptr++))*str2omm_f;
-      frc[j][2]= (*(fptr))*str2omm_f;
-     }
+     if (qdble) { // double
+      double *frc = (double*) cu.getPinnedBuffer();
+      memset(frc,0,3*natoms*sizeof(double));
+      for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
+       i=*aptr - 1; // zero offset (see above)
+       j=3*i ;
+       frc[j]= fr[j]*str2omm_f;j++; //units
+       frc[j]= fr[j]*str2omm_f;j++;
+       frc[j]= fr[j]*str2omm_f;
+      }
+     } else { // single
+      float *frc = (float*) cu.getPinnedBuffer();
+      memset(frc,0,3*natoms*sizeof(float));
+      for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
+       i=*aptr - 1; // zero offset (see above)
+       j=3*i ;
+       frc[j]= fr[j]*str2omm_f;j++; //units
+       frc[j]= fr[j]*str2omm_f;j++;
+       frc[j]= fr[j]*str2omm_f;
+      }
+     } // qdble
     } // atomlist == NULL
-    //
-    // Upload the forces to the device.
-    CopyForcesTask task(cu, frc);
-    cu.getPlatformData().threads.execute(task);
-    cu.getPlatformData().threads.waitForThreads();
+    // upload forces to device
     cu.setAsCurrent();
     cuMemcpyHtoDAsync(dynamoForces->getDevicePointer(), cu.getPinnedBuffer(), dynamoForces->getSize()*dynamoForces->getElementSize(), stream);
     cuEventRecord(syncEvent, stream);

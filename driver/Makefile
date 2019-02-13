@@ -6,8 +6,8 @@ EXE=muphen
 
 # take all object found in object directory
 ALLOBJS=$(notdir $(wildcard $(ROOT)/obj/*.o) )
-#exclude those that have unresolved functions or that have their own main functions
-EXCOBJS=molsim.o $(OBJS)
+#exclude those that have unresolved functions or that have their own main functions, or functions with identical/conflicting names
+EXCOBJS=molsim.o watershell_plugin_acemd.o sm_plugin_acemd.o $(OBJS)
 LINKOBJS=$(filter-out $(EXCOBJS),$(ALLOBJS))
 
 LOCALMACROS=-include codes.def
