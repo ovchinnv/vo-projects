@@ -133,7 +133,7 @@ void ReferenceCalcDynamoForceKernel::initialize(const System& system, const Dyna
     hasInitialized = (ierr==0);
 }
 
-_FLOAT ReferenceCalcDynamoForceKernel::execute(ContextImpl& context, bool includeForces, bool includeEnergy) {
+double ReferenceCalcDynamoForceKernel::execute(ContextImpl& context, bool includeForces, bool includeEnergy) {
     //
     ReferencePlatform::PlatformData* data = reinterpret_cast<ReferencePlatform::PlatformData*>(context.getPlatformData());
     long int iteration = data->stepCount;

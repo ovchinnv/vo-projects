@@ -67,7 +67,7 @@ public:
      * @param includeEnergy  true if the energy should be calculated
      * @return the potential energy due to the force
      */
-    _FLOAT execute(OpenMM::ContextImpl& context, bool includeForces, bool includeEnergy);
+    double execute(OpenMM::ContextImpl& context, bool includeForces, bool includeEnergy);
     /**
      * The is called by the pre-computation to start the calculation running.
      */

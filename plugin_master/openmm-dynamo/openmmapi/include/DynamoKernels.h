@@ -73,7 +73,7 @@ public:
      * @param includeEnergy  true if the energy should be calculated
      * @return the potential energy due to the force
      */
-    virtual _FLOAT execute(OpenMM::ContextImpl& context, bool includeForces, bool includeEnergy) = 0;
+    virtual double execute(OpenMM::ContextImpl& context, bool includeForces, bool includeEnergy) = 0;
 };
 
 } // namespace DynamoPlugin

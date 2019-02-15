@@ -163,7 +163,7 @@ void CudaCalcDynamoForceKernel::initialize(const System& system, const DynamoFor
     if (ierr) throw OpenMMException("Could not initialize DYNAMO plugin");
 } // initialize
 
-_FLOAT CudaCalcDynamoForceKernel::execute(ContextImpl& context, bool includeForces, bool includeEnergy) {
+double CudaCalcDynamoForceKernel::execute(ContextImpl& context, bool includeForces, bool includeEnergy) {
     // This method does nothing.  The actual calculation is started by the pre-computation, continued on
     // the worker thread, and finished by the post-computation.
     return 0;

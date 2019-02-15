@@ -152,10 +152,9 @@ void OpenCLCalcDynamoForceKernel::initialize(const System& system, const DynamoF
     if (ierr) throw OpenMMException("Could not initialize DYNAMO plugin");
 }
 
-_FLOAT OpenCLCalcDynamoForceKernel::execute(ContextImpl& context, bool includeForces, bool includeEnergy) {
+double OpenCLCalcDynamoForceKernel::execute(ContextImpl& context, bool includeForces, bool includeEnergy) {
     // This method does nothing.  The actual calculation is started by the pre-computation, continued on
     // the worker thread, and finished by the post-computation.
-    
     return 0;
 }
 
@@ -279,7 +278,7 @@ void OpenCLCalcDynamoForceKernel::executeOnWorkerThread() {
     queue.enqueueWriteBuffer(dynamoForces->getDeviceBuffer(), CL_FALSE, 0, dynamoForces->getSize()*dynamoForces->getElementSize(), cl.getPinnedBuffer(), NULL, &syncEvent);
 }
 
-_FLOAT OpenCLCalcDynamoForceKernel::addForces(bool includeForces, bool includeEnergy, int groups) {
+double OpenCLCalcDynamoForceKernel::addForces(bool includeForces, bool includeEnergy, int groups) {
     if ((groups&forceGroupFlag) == 0)
         return 0;
     // Wait until executeOnWorkerThread() is finished.
