@@ -116,8 +116,8 @@ void CudaCalcDynamoForceKernel::initialize(const System& system, const DynamoFor
     std::strcpy(&logfile_[0], logfile__.c_str());
     char* logfile = &logfile_[0];
     // allocate position and force arrays
-    r=(double*) calloc(3 * natoms, sizeof(double));
-    fr=(double*) calloc(3 * natoms, sizeof(double));
+    r=( _FLOAT *) calloc(3 * natoms, sizeof(double));
+    fr=(_FLOAT *) calloc(3 * natoms, sizeof(double));
     //PBC
     usesPeriodic = system.usesPeriodicBoundaryConditions();
     if (usesPeriodic) {
@@ -135,21 +135,23 @@ void CudaCalcDynamoForceKernel::initialize(const System& system, const DynamoFor
      for ( int i=0 ; i < 9 ; i++ ) { box[i]=0.0 ; } // initialize "by hand" for compatibility with older compilers
     }
     // Get particle masses and charges (if available)
-    double *m=NULL; //mass
-    double *q=NULL; //charge
-    m = (double*) malloc(natoms * sizeof(double)); // allocate memory
+    _FLOAT *m=NULL; //mass
+    _FLOAT *q=NULL; //charge
+    m = (_FLOAT*) malloc(natoms * sizeof(_FLOAT)); // allocate memory
     for (int i = 0; i < natoms; i++)
         m[i] = system.getParticleMass(i);
 
-    q = (double*) calloc(natoms, sizeof(double));
+    q = (_FLOAT*) calloc(natoms, sizeof(_FLOAT));
     // If there's a NonbondedForce, get charges from it (otherwise, they will remain zero)
 
     for (int j = 0; j < system.getNumForces(); j++) {
         const NonbondedForce* nonbonded = dynamic_cast<const NonbondedForce*>(&system.getForce(j));
         if (nonbonded != NULL) {
-            double sigma, epsilon;
-            for (int i = 0; i < natoms; i++)
-                nonbonded->getParticleParameters(i, q[i], sigma, epsilon);
+            double sigma, epsilon, qi;
+            for (int i = 0; i < natoms; i++) {
+                nonbonded->getParticleParameters(i, qi, sigma, epsilon);
+                q[i]=qi;
+            }
         }
     }
     // initialize dynamo
@@ -161,7 +163,7 @@ void CudaCalcDynamoForceKernel::initialize(const System& system, const DynamoFor
     if (ierr) throw OpenMMException("Could not initialize DYNAMO plugin");
 } // initialize
 
-double CudaCalcDynamoForceKernel::execute(ContextImpl& context, bool includeForces, bool includeEnergy) {
+_FLOAT CudaCalcDynamoForceKernel::execute(ContextImpl& context, bool includeForces, bool includeEnergy) {
     // This method does nothing.  The actual calculation is started by the pre-computation, continued on
     // the worker thread, and finished by the post-computation.
     return 0;
@@ -179,7 +181,7 @@ void CudaCalcDynamoForceKernel::executeOnWorkerThread() {
 //NOTE : 1/2019 : changes interface to match that of OPENCL (serialized) ; not clear that the removal of extra parallel copy 
 // is always beneficial
     long int iteration = cu.getStepCount();
-    double* rptr; // pointer to coordinate array
+    _FLOAT * rptr; // pointer to coordinate array
     int* aptr; // pointer to atom index array
     int i, j, ierr;
     // buffer for uploading forces to the device:
@@ -204,10 +206,13 @@ void CudaCalcDynamoForceKernel::executeOnWorkerThread() {
       *(rptr++) = pos[i][0]*nm2A; //units
       *(rptr++) = pos[i][1]*nm2A;
       *(rptr++) = pos[i][2]*nm2A;
+// cerr << "position of atom: "<<j<<"="<<pos[j][0]<<pos[j][1]<<pos[j][2]<<endl;
      }
     // compute plugin forces and energy
-// cout << "CALLING DYNAMO"<<endl;
-     ierr=master_dyna_plugin(iteration, r, fr, NULL, 0, &master_energy, &atomlist, usesPeriodic, box); // might return valid atomlist
+// cerr << "CALLING DYNAMO"<<endl;
+     ierr = (sizeof(_FLOAT)==sizeof(double)) ? \
+      master_dyna_plugin(iteration, r, (double*)fr, NULL, 0, &master_energy, &atomlist, usesPeriodic, box) : \
+      master_dyna_plugin(iteration, r, NULL, (float*)fr, 1, &master_energy, &atomlist, usesPeriodic, box)   ; // might return valid atomlist
     // copy plugin forces
 //=============
      if (qdble) { // double precision version
@@ -255,9 +260,13 @@ void CudaCalcDynamoForceKernel::executeOnWorkerThread() {
       *(rptr++) = pos[j][0]*nm2A; //units
       *(rptr++) = pos[j][1]*nm2A;
       *(rptr)   = pos[j][2]*nm2A;
+// cerr << "position of atom: "<<j<<"="<<pos[j][0]<<pos[j][1]<<pos[j][2]<<endl;
      }
 //
-     ierr=master_dyna_plugin(iteration, r, fr, NULL, 0, &master_energy, &atomlist, usesPeriodic, box); // atomlist should not be modified in this call
+// cerr << "CALLING DYNAMO"<<endl;
+     ierr = (sizeof(_FLOAT)==sizeof(double)) ? \
+      master_dyna_plugin(iteration, r, (double*)fr, NULL, 0, &master_energy, &atomlist, usesPeriodic, box) : \
+      master_dyna_plugin(iteration, r, NULL, (float*)fr, 1, &master_energy, &atomlist, usesPeriodic, box)   ; // atomlist should not be modified in this call
 //
      if (qdble) { // double
       double *frc = (double*) cu.getPinnedBuffer();

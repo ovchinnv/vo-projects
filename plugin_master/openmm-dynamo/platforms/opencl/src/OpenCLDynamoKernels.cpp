@@ -104,8 +104,8 @@ void OpenCLCalcDynamoForceKernel::initialize(const System& system, const DynamoF
     std::strcpy(&logfile_[0], logfile__.c_str());
     char* logfile = &logfile_[0];
     // allocate position and force arrays
-    r=(double*) calloc(3 * natoms, sizeof(double));
-    fr=(double*) calloc(3 * natoms, sizeof(double));
+    r=(_FLOAT*) calloc(3 * natoms, sizeof(_FLOAT));
+    fr=(_FLOAT*) calloc(3 * natoms, sizeof(_FLOAT));
     //PBC
     //
     usesPeriodic = system.usesPeriodicBoundaryConditions();
@@ -124,21 +124,23 @@ void OpenCLCalcDynamoForceKernel::initialize(const System& system, const DynamoF
      for ( int i=0 ; i < 9 ; i++ ) { box[i]=0.0 ; } // initialize "by hand" for compatibility with older compilers
     }
     // Get particle masses and charges (if available)
-    double *m=NULL; //mass
-    double *q=NULL; //charge
-    m = (double*) malloc(natoms * sizeof(double)); // allocate memory
+    _FLOAT *m=NULL; //mass
+    _FLOAT *q=NULL; //charge
+    m = (_FLOAT*) malloc(natoms * sizeof(_FLOAT)); // allocate memory
     for (int i = 0; i < natoms; i++)
         m[i] = system.getParticleMass(i);
 
-    q = (double*) calloc(natoms, sizeof(double));
+    q = (_FLOAT*) calloc(natoms, sizeof(_FLOAT));
     // If there's a NonbondedForce, get charges from it (otherwise, they will remain zero)
 
     for (int j = 0; j < system.getNumForces(); j++) {
         const NonbondedForce* nonbonded = dynamic_cast<const NonbondedForce*>(&system.getForce(j));
         if (nonbonded != NULL) {
-            double sigma, epsilon;
-            for (int i = 0; i < natoms; i++)
-                nonbonded->getParticleParameters(i, q[i], sigma, epsilon);
+            double sigma, epsilon, qi;
+            for (int i = 0; i < natoms; i++) {
+                nonbonded->getParticleParameters(i, qi, sigma, epsilon);
+                q[i]=qi;
+            }
         }
     }
     // initialize dynamo
@@ -150,7 +152,7 @@ void OpenCLCalcDynamoForceKernel::initialize(const System& system, const DynamoF
     if (ierr) throw OpenMMException("Could not initialize DYNAMO plugin");
 }
 
-double OpenCLCalcDynamoForceKernel::execute(ContextImpl& context, bool includeForces, bool includeEnergy) {
+_FLOAT OpenCLCalcDynamoForceKernel::execute(ContextImpl& context, bool includeForces, bool includeEnergy) {
     // This method does nothing.  The actual calculation is started by the pre-computation, continued on
     // the worker thread, and finished by the post-computation.
     
@@ -167,7 +169,7 @@ void OpenCLCalcDynamoForceKernel::beginComputation(bool includeForces, bool incl
 
 void OpenCLCalcDynamoForceKernel::executeOnWorkerThread() {
     long int iteration = cl.getStepCount();
-    double* rptr; // pointer to coordinate array
+    _FLOAT* rptr; // pointer to coordinate array
     int* aptr; // pointer to atom index array
     int i, j, ierr;
     // buffer for uploading forces to the device:
@@ -195,7 +197,9 @@ void OpenCLCalcDynamoForceKernel::executeOnWorkerThread() {
      }
     // compute plugin forces and energy
 // cout << "CALLING DYNAMO"<<endl;
-     ierr=master_dyna_plugin(iteration, r, fr, NULL, 0, &master_energy, &atomlist, usesPeriodic, box); // might return valid atomlist
+     ierr = (sizeof(_FLOAT)==sizeof(double)) ? \
+      master_dyna_plugin(iteration, r, (double*)fr, NULL, 0, &master_energy, &atomlist, usesPeriodic, box) : \
+      master_dyna_plugin(iteration, r, NULL, (float*)fr, 1, &master_energy, &atomlist, usesPeriodic, box) ; // might return valid atomlist
     // copy plugin forces
 //=============
      if (qdble) { // double precision version
@@ -245,7 +249,9 @@ void OpenCLCalcDynamoForceKernel::executeOnWorkerThread() {
       *(rptr)   = pos[j][2]*nm2A;
      }
 //
-     ierr=master_dyna_plugin(iteration, r, fr, NULL, 0, &master_energy, &atomlist, usesPeriodic, box); // atomlist should not be modified in this call
+     ierr = (sizeof(_FLOAT)==sizeof(double)) ? \
+      master_dyna_plugin(iteration, r, (double*)fr, NULL, 0, &master_energy, &atomlist, usesPeriodic, box) : \
+      master_dyna_plugin(iteration, r, NULL, (float*)fr, 1, &master_energy, &atomlist, usesPeriodic, box) ; // atomlist should not be modified in this call
 //
      if (qdble) { // double
       double *frc = (double*) cl.getPinnedBuffer();
@@ -273,7 +279,7 @@ void OpenCLCalcDynamoForceKernel::executeOnWorkerThread() {
     queue.enqueueWriteBuffer(dynamoForces->getDeviceBuffer(), CL_FALSE, 0, dynamoForces->getSize()*dynamoForces->getElementSize(), cl.getPinnedBuffer(), NULL, &syncEvent);
 }
 
-double OpenCLCalcDynamoForceKernel::addForces(bool includeForces, bool includeEnergy, int groups) {
+_FLOAT OpenCLCalcDynamoForceKernel::addForces(bool includeForces, bool includeEnergy, int groups) {
     if ((groups&forceGroupFlag) == 0)
         return 0;
     // Wait until executeOnWorkerThread() is finished.

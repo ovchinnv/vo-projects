@@ -128,14 +128,14 @@ default: $(ROOT)/$(NAME).stamp
 	$(CC) $(LOCALDEFS) $(CFLAGS) $(PIC) $(GLOBALMACROS) $(LOCALMACROS) $< -o $@
 %.o:%.cu $(HEADS)
 	$(NVCC) $(NVCCFLAGS) $(LOCALDEFS) $(CUINCLUDES) $(LOCALMACROS) $< -o $@
+%.o:%.F $(LIBDEPS)
+	$(FC) $(FFLAGS) $(DEFS) $(PIC) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $< -o $@
 %.o:%.F90 $(LIBDEPS)
 	$(FC) $(FFLAGS) $(DEFS) $(PIC) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $< -o $@
 %.mod:%.F90 $(LIBDEPS)
 	$(FC) $(FFLAGS) $(DEFS) $(PIC) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $< -o /dev/null
 	file=$@ ; if [ -f $$file ] ; then ln -fs `pwd`/$$file ${ROOT}/include/$$file; 2>/dev/null; fi
 %__.o:%_.F90 $(LIBDEPS)
-	$(FC) $(FFLAGS) $(DEFS) $(PIC) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $< -o $@
-%.o:%.F $(LIBDEPS)
 	$(FC) $(FFLAGS) $(DEFS) $(PIC) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $< -o $@
 %.a:    $(OBJS) $(HEADS)
 	$(AR) $(AFLAGS) $@ $(LOBJS) $^
