@@ -80,7 +80,7 @@
   int, intent(in) :: nx, ny, nz
   float, dimension(*), intent(in) :: x,y,z,q
   real*4, dimension(nz,ny,nx) :: qt
-  bool :: qbin, ok, qxuni, qyuni, qzuni
+  bool :: qbin, ok, qxuni, qyuni, qzuni, quni
 #ifdef __PARALLEL
   int4mpi, optional :: communicator
   int4mpi :: ierror, me ! , ncpu
@@ -91,6 +91,7 @@
 !  character(len=11), parameter :: fmt='UNFORMATTED'
   character(len=11), parameter :: fmt='BINARY'
   character(len=5*vartaglen) :: cbuffer
+  character(len=vartaglen) :: word
   __IAM(_NAME)
 !
   bool :: q3d
@@ -132,23 +133,48 @@
   endif
 !
   q3d=(nz.gt.3)
+  __IFEQ3(cbuffer,q3d,'3','2')
+  __INFO('Data is '//trim(cbuffer)//'D');
 !
   if (me.eq.0) then
 !************** header *******
 ! check whether the grids are regular
-   qxuni = ABS ( minval(x(2:nx)-x(1:nx-1)) - maxval(x(2:nx)-x(1:nx-1)) ) .le. __ERRTOL
-   qyuni = ABS ( minval(y(2:ny)-y(1:ny-1)) - maxval(y(2:ny)-y(1:ny-1)) ) .le. __ERRTOL
-   if (q3d) &
-   qzuni = ABS ( minval(z(2:nz)-z(1:nz-1)) - maxval(z(2:nz)-z(1:nz-1)) ) .le. __ERRTOL
+#define __ERR 100*__ERRTOL
+!   write(0,*) minval(x(2:nx)-x(1:nx-1)), maxval(x(2:nx)-x(1:nx-1)), ABS(minval(x(2:nx)-x(1:nx-1)) / maxval(x(2:nx)-x(1:nx-1)) - one), __ERR
+   qxuni = ABS( minval(x(2:nx)-x(1:nx-1)) / maxval(x(2:nx)-x(1:nx-1)) - one ) .lt. __ERR
+   __IFEQ3(cbuffer,qxuni,'UNIFORM','NONUNIFORM')
+   __INFO('X-grid is '//trim(cbuffer)//' to within '//ftoa(__ERR));
+
+   qyuni = ABS( minval(y(2:ny)-y(1:ny-1)) / maxval(y(2:ny)-y(1:ny-1)) - one ) .lt. __ERR
+   __IFEQ3(cbuffer,qyuni,'UNIFORM','NONUNIFORM')
+   __INFO('Y-grid is '//trim(cbuffer)//' to within '//ftoa(__ERR));
 
 #define __WRITE(_FMT, ...)  write(cbuffer,_FMT, IOSTAT=ioerr) __VA_ARGS__ ; write(fid) trim(cbuffer),char(10)
-
     __WRITE('(A)', '#OpenDX datafile produced by the Dynamo program')
+!
+   quni=qxuni.and.qyuni
+   if (q3d) then
+    word='(3'//float_format//')'
+    qzuni = ABS( minval(z(2:nz)-z(1:nz-1)) / maxval(z(2:nz)-z(1:nz-1)) - one ) .lt. __ERR
+    __IFEQ3(cbuffer,qzuni,'UNIFORM','NONUNIFORM')
+    __INFO('Z-grid is '//trim(cbuffer)//' to within '//ftoa(__ERR));
+    quni=quni.and.qzuni
+!
+    if (quni) then
+    __INFO('WRITING REGULAR GRID')
     __WRITE('(A,3I5)', 'object 1 class gridpositions counts', nx, ny, nz)
-    __WRITE('(A,3'//float_format//')', 'origin', x(1), y(1), z(1))
-    __WRITE('(A,3'//float_format//')', 'delta',  x(2)-x(1), zero, zero)
-    __WRITE('(A,3'//float_format//')', 'delta',  zero, y(2)-y(1), zero)
-    __WRITE('(A,3'//float_format//')', 'delta',  zero, zero, z(2)-z(1))
+    __WRITE('("origin",'//word//')', x(1), y(1), z(1))
+    __WRITE('("delta",'//word//')', x(2)-x(1), zero, zero)
+    __WRITE('("delta",'//word//')', zero, y(2)-y(1), zero)
+    __WRITE('("delta",'//word//')', zero, zero, z(2)-z(1))
+    else
+    __INFO('WRITING IRREGULAR GRID')
+    __WRITE('(A, I10, A)', 'object 1 class array type float rank 1 shape 3 items', nx*ny*nz, ' data follows')
+     do i=1,nx; do j=1,ny; do k=1,nz;
+        __WRITE(word, x(i), y(j), z(k) )
+     enddo ; enddo ; enddo ;
+    endif
+!
     __WRITE('(A,3I5)', 'object 2 class gridconnections counts', nx, ny, nz)
 !    __WRITE(fid,'(A)', IOSTAT=ioerr) 'attribute "element type" string "cubes"'
 !    __WRITE(fid,'(A)', IOSTAT=ioerr) 'attribute "ref" string "positions"'
@@ -160,14 +186,51 @@
     enddo ; enddo ; enddo ;
 !
     if (qbin) then
-    __WRITE('(A, I10, A)', 'object 3 class array type float rank 0 items', nx*ny*nz, ' binary data follows')
+    __WRITE('(A, I10, A)', 'object 3 class array type float rank 0 items', nx*ny*nz, ' binary data follows') ! note that "binary" seems to be a VMD extension
      write(fid) qt
     else
     __WRITE('(A, I10, A)', 'object 3 class array type float rank 0 items', nx*ny*nz, ' data follows')
+     word='('//itoa(nz)//float_format//')'
      do i=1,nx ; do j=1,ny
-      __WRITE('('//itoa(nz)//float_format//')', qt(:,j,i) )
+      __WRITE(word, qt(:,j,i) )
      enddo ; enddo
     endif
+   else ! 2D
+    word='(2'//float_format//')'
+    if (quni) then
+    __INFO('WRITING REGULAR GRID')
+    __WRITE('(A,2I5)', 'object 1 class gridpositions counts', nx, ny)
+    __WRITE('(A,'//word//')', 'origin', x(1), y(1))
+    __WRITE('(A,'//word//')', 'delta',  x(2)-x(1), zero)
+    __WRITE('(A,'//word//')', 'delta',  zero, y(2)-y(1))
+    else
+    __INFO('WRITING IRREGULAR GRID')
+    __WRITE('(A, I10, A)', 'object 1 class array type float rank 1 shape 2 items', nx*ny, ' data follows')
+     do i=1,nx; do j=1,ny
+        __WRITE(word, x(i), y(j) )
+     enddo ; enddo
+    endif
+!
+    __WRITE('(A,2I5)', 'object 2 class gridconnections counts', nx, ny)
+! transpose array :
+! making this work for nz=1 and nz=3 cases (with top & bottom irrelevant ghost points)
+    k=nz/2+1;
+    ind=1+(k-1)*nx*ny; ! k=2 with ghost points
+    do j=1,ny; do i=1,nx;
+     qt(k,j,i)=q(ind); __INC(ind)
+    enddo ; enddo
+!
+    if (qbin) then
+    __WRITE('(A, I10, A)', 'object 3 class array type float rank 0 items', nx*ny, ' binary data follows') ! note that "binary" seems to be a VMD extension
+     write(fid) qt(k,:,:)
+    else
+    __WRITE('(A, I10, A)', 'object 3 class array type float rank 0 items', nx*ny, ' data follows')
+     word='('//itoa(ny)//float_format//')'
+     do i=1,nx
+      __WRITE(word, qt(k,:,i) )
+     enddo
+    endif ! qbin
+   endif ! quniform
     __WRITE('(A)', 'attribute "dep" string "positions"')
     __WRITE('(A)', 'object "regular positions regular connections" class field')
     __WRITE('(A)', 'component "positions" value 1')
@@ -177,16 +240,6 @@
 !
    if (ioerr.ne.0) then 
     call warning(whoami, 'Error encountered while writing file "'//fname(1:flen)//'. IO_ERR: '//itoa(ioerr),-1)
-   else
-!********* write scalar data *******
-!    if (q3d) then 
-!     if (qbin) then  ; write(fid, IOSTAT=ioerr) q(1:nx*ny*nz) ; else ; write(fid,'(5'//float_format//')', IOSTAT=ioerr) q(1:nx*ny*nz) ; endif
-!    else
-!     if (nz>1) then ; offset=nx*ny ; else ; offset=0 ; endif ! compatibility for writing 2D fields with ghostpoints
-!     if (qbin) then ; write(fid, IOSTAT=ioerr) q(offset+1:offset+nx*ny) ; 
-!               else ; write(fid,'(5'//float_format//')',IOSTAT=ioerr) q(offset+1:offset+nx*ny) ; endif
-!    endif
-    if (ioerr.ne.0) call warning(whoami, 'Error encountered while writing file "'//fname(1:flen)//'.',-1)
    endif ! ioerr
 !
    call files_close(fid)
