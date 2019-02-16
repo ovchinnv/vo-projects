@@ -85,14 +85,19 @@
        nullify(p_, eps_, kappa_, rhs_)
        nxyz=(/nx, ny, nz/)
 !
-       call state_add3df('PHI'  ,'Electrostatic Potential' , nxyz, __CTX, vptr=p_)
-       call state_add3df('EPS'  ,'Dielectric Constant'     , nxyz, __CTX, vptr=eps_)
-       call state_add3df('KAPPA','Ionic Strength Parameter', nxyz, __CTX, vptr=kappa_)
-       call state_add3df('RHS'  ,'Source Density Vector'   , nxyz, __CTX, vptr=rhs_)
+! initialize important variables
+#define __CHKINIT(_N,_V) if (.not.__CONCAT3(_V,_,%vinit)) then ; __WRN(whoami, 'MISSING INITIALIZATION FOR VARIABLE "'//__STRING(_N)//'"') ; endif
+#define __ADDVAR(_N, _D, _V) call state_add3df(__STRING(_N), __STRING(_D), nxyz, __CTX, vptr=__CONCAT(_V,_) ) ;
+!
+        __ADDVAR(PHI, Electrostatic Potential Field, p)
+        __ADDVAR(EPS, Dielectric Field, eps)
+        __ADDVAR(KAPPA, Ionic Screening Field, kappa)
+        __ADDVAR(RHS, Source Density Field, rhs)
+! check to make sure variable is initialized
 ! add more variables here as needed
 !
 !    initialize boundary conditions
-       call message(whoami, 'Initializing boundary condition variables.');
+       call message(whoami, 'Initializing boundary condition arrays for variable "PHI".');
 !
        call state_bc_add3df('PHI', left,  __CTX ) ;   call state_bc_add3df('PHI', right, __CTX )
        call state_bc_add3df('PHI', bottom,__CTX ) ;   call state_bc_add3df('PHI', top,   __CTX )
@@ -100,21 +105,9 @@
         call state_bc_add3df('PHI', front,__CTX ) ;   call state_bc_add3df('PHI', back,  __CTX )
        endif
 !
-!    check whether object specified; if so, initialize
-       if     (existtag('OBJECT',ctx) .or. existtag('object',ctx)) then 
-!    check if the object has not yet been initialized (as could happen via grid module above); if not, initialize
-        if (.not. object_initialized) then 
-         call message(whoami, 'Initializing object.');
-         call object_init()
-        endif
-       endif
-!
-!      at present, there are no cases in which a solution does not involve an object
-!
-!    object dependent properties
-       if (object_initialized) then
-        call message(whoami, 'Reading object parameters.');
-        call object_read_parameters()
+!    initialization from object :
+       if ((eps_%vflag.eq.1) .or. (kappa_%vflag.eq.1) .or. (rhs_%vflag.eq.1)) then
+! check that everything else is allocated :
         if (.not.size_initialized) then 
          call warning(whoami, 'Size not initialized.',-1);
         elseif (.not.grid_initialized) then 
@@ -122,11 +115,23 @@
         elseif (.not.state_initialized) then
          call warning(whoami, 'State variables not initialized.',-1);
         else
-         call message(whoami, 'Computing gridded parameters.');
+#define __MSGINIT(_N,_V) if (__CONCAT3(_V,_,%vflag).eq.1) then ; __MESG(whoami, 'initializing variable "'//__STRING(_N)//'" from object') ; endif
+         __MSGINIT(EPS,eps)
+         __MSGINIT(KAPPA,kappa)
+         __MSGINIT(RHS,rhs)
          call object_grid_objects( xcen, ycen, zcen, dxcor, dycor, dzcor, eps_%v, kappa_%v, rhs_%v, nx, ny, nz )
+         eps_%vinit=.true.
+         kappa_%vinit=.true.
+         rhs_%vinit=.true.
         endif
 !
        endif
+!
+! make sure 3D fields are initialized
+       __CHKINIT(PHI,p)
+       __CHKINIT(EPS,eps)
+       __CHKINIT(KAPPA,kappa)
+       __CHKINIT(RHS,rhs)
 !
        if (.not.fatal_warning(__COMM)) ches_initialized=.true.
 !
