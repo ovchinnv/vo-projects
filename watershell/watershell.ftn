@@ -96,9 +96,6 @@ module _N
  bool, private:: dmasses_initialized=.false. ! for dasystat ; not necessarily atomic, i.e. possibly molecular masses !
 #endif
  bool, private :: qper_parser_override=.false. ! to turn off (override) periodicity in parser
-
-! macro for parameters with defaults
-#define __PAR(_PAR,_TYPE,_DEF) _TYPE, save :: _PAR ; _TYPE, parameter :: __CONCAT(default_,_PAR)=_DEF;
 !
 ! surface computation parameters :
 ! __PAR(surface_contour_value, float, -one) ! value of density isosurface which is defines the surface ; negative means to compute from structure
@@ -217,7 +214,7 @@ module _N
 &                  ddist_solv(:,:) ! distance gradient at solvent coordinate (inward surface normal)
  bool, pointer :: qforced_solv(:) ! flags that indicate whether a force is to be applied on the atom
 #ifdef __SORT_LIST
- int, pointer :: solute_neighbor_list(:,:) ! for each solvent atom, the solute atoms are sorted by proximity
+ shortint, pointer :: solute_neighbor_list(:,:) ! for each solvent atom, the solute atoms are sorted by proximity
 #ifdef __NEIGHBOR_LIST
  __PAR(qneighbor_list, bool, .true.) ! whether to use a neighbor list to shorten loops over surface atoms
  float :: neighbor_list_factor ! coefficient used to relate sorting frequency and limit index to loop length
@@ -300,6 +297,27 @@ module _N
 !
 #ifdef __FORCE_STATS
  float, dimension(3) :: total_solute_force, total_solvent_force, max_solute_force, max_solvent_force
+#endif
+
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
+ interface rsort_index
+      SUBROUTINE RSORT_IND( ID, N, D, IND, INFO )
+      CHARACTER :: ID
+      int :: INFO
+      int, intent(in) :: N
+      float :: D( * )
+      int, intent(out) :: IND( N ) ! will be overwritten
+      end subroutine rsort_ind
+!
+      SUBROUTINE RSORT_INDSHORT( ID, N, D, IND, INFO )
+      CHARACTER :: ID
+      int :: INFO
+      int, intent(in) :: N
+      float :: D( * )
+      int*2, intent(out) :: IND( N )
+      end subroutine rsort_indshort
+
+ end interface rsort_index
 #endif
 
 != subroutines
@@ -1047,6 +1065,10 @@ module _N
   do l=1,nsurface_coord
    solute_neighbor_list(l,:)=l
   enddo
+! because we are possibly using short ints to store neighbor list indices, we should make sure that the largest index is representable:
+  l=solute_neighbor_list(nsurface_coord,1)
+  __ASSERT(l, .eq., nsurface_coord)
+!
 #ifdef __NEIGHBOR_LIST
   qneighbor_list_sorted=.not.qneighbor_list ! if not using qlist, set to true to avoid sorting
   __ALLOC(solute_neighbor_mind(nsolvent))
@@ -1573,7 +1595,7 @@ __DBGVAR(r_com_sa,1)
 #endif
     enddo ! nsurface_coord
 !  sort neighbor list:
-    call rsort_ind('i',nsurface_coord,distance2(:),solute_neighbor_list(:,i),ierr)
+    call rsort_index('i',nsurface_coord,distance2(:),solute_neighbor_list(:,i),ierr)
 !
     if (qminimum_distance) then
      solute_neighbor_mind(i)=min(nsurface_coord,2) ! fo mindist only
@@ -1623,7 +1645,7 @@ __DBGVAR(r_com_sa,1)
      __INCR(distance2(ii),d0*d0)
     enddo ! nsurface
 !  sort neighbor list:
-    call rsort_ind('i',nsurface_coord,distance2(:),solute_neighbor_list(:,i),ierr)
+    call rsort_index('i',nsurface_coord,distance2(:),solute_neighbor_list(:,i),ierr)
     if (qminimum_distance) then
      solute_neighbor_mind(i)=min(nsurface_coord,2) ! for mindist only
     elseif (nsurface_coord>0) then
