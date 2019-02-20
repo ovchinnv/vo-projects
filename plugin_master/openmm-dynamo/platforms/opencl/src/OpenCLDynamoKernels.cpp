@@ -190,15 +190,15 @@ void OpenCLCalcDynamoForceKernel::executeOnWorkerThread() {
     if (atomlist==NULL) { // atomlist is not defined; therefore, provide all coords
 //    if (1) {
      for (i=0, rptr=r ; i < natoms ; i++) {
-      *(rptr++) = pos[i][0]*nm2A; //units
-      *(rptr++) = pos[i][1]*nm2A;
-      *(rptr++) = pos[i][2]*nm2A;
+      *(rptr) = pos[i][0]*nm2A; rptr++;//units
+      *(rptr) = pos[i][1]*nm2A; rptr++;
+      *(rptr) = pos[i][2]*nm2A; rprt++;
      }
     // compute plugin forces and energy
 // cout << "CALLING DYNAMO"<<endl;
      ierr = (sizeof(_FLOAT)==sizeof(double)) ? \
       master_dyna_plugin(iteration, r, (double*)fr, NULL, 0, &master_energy, &atomlist, usesPeriodic, box) : \
-      master_dyna_plugin(iteration, r, NULL, (float*)fr, 1, &master_energy, &atomlist, usesPeriodic, box) ; // might return valid atomlist
+      master_dyna_plugin(iteration, r, NULL,  (float*)fr, 1, &master_energy, &atomlist, usesPeriodic, box) ; // might return valid atomlist
     // copy plugin forces
 //=============
      if (qdble) { // double precision version
@@ -243,14 +243,14 @@ void OpenCLCalcDynamoForceKernel::executeOnWorkerThread() {
      for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
       j=*aptr - 1;
       rptr=r + 3*j ;
-      *(rptr++) = pos[j][0]*nm2A; //units
-      *(rptr++) = pos[j][1]*nm2A;
-      *(rptr)   = pos[j][2]*nm2A;
+      *(rptr) = pos[j][0]*nm2A; rptr++;//units
+      *(rptr) = pos[j][1]*nm2A; rptr++;
+      *(rptr) = pos[j][2]*nm2A;
      }
 //
      ierr = (sizeof(_FLOAT)==sizeof(double)) ? \
       master_dyna_plugin(iteration, r, (double*)fr, NULL, 0, &master_energy, &atomlist, usesPeriodic, box) : \
-      master_dyna_plugin(iteration, r, NULL, (float*)fr, 1, &master_energy, &atomlist, usesPeriodic, box) ; // atomlist should not be modified in this call
+      master_dyna_plugin(iteration, r, NULL,  (float*)fr, 1, &master_energy, &atomlist, usesPeriodic, box) ; // atomlist should not be modified in this call
 //
      if (qdble) { // double
       double *frc = (double*) cl.getPinnedBuffer();
@@ -296,5 +296,5 @@ double OpenCLCalcDynamoForceKernel::addForces(bool includeForces, bool includeEn
     }
     // Return the energy.
     master_energy*=str2omm_e;
-    return master_energy;
+    return (double)master_energy;
 }
