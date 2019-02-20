@@ -71,6 +71,7 @@ module state
      v%vname='UNDEFINED';
      v%vdescription='UNDEFINED';
      v%vcontext='UNDEFINED';
+     v%vflag=0;
      v%vinit=.false.
 ! bc data
      v%vbcinit(:)=.false.
@@ -102,7 +103,7 @@ module state
 !******************************************************************
   subroutine state_add3df(vname_, vdescription, vdim_, &
 #ifdef __PARALLEL
-&  vcomm, & ! if vcomm_ is provided, parallel communication will be used for initialization (not yet complete 12.2013)
+&  vcomm, & ! if vcomm_ is provided, parallel communication will be used for initialization (not yet complete)
 #endif
 &  vcontext_, vptr, qinit_)
 !
@@ -127,7 +128,7 @@ module state
   int :: vdim(3)
   bool :: qinit
 !
-  int :: i, j, k, l, m, ifmt
+  int :: i, j, k, l, m, ifmt, vflag
   bool :: qbin
   type(varray3df), pointer :: var, vars3df_bkp(:) ! dummy pointers
   character(len=vartaglen) :: filename, file_mode, file_format
@@ -201,6 +202,7 @@ module state
     var%vdescription='UNDEFINED';
     var%vcontext='UNDEFINED';
     var%vinit=.false.
+    var%vflag=0
 ! bc data
     var%vbcinit(:)=.false.
     var%vbc_type(:)=undefined
@@ -216,6 +218,7 @@ module state
   var%vname=vname
   var%vdescription=vdescription
   var%vcontext=vcontext
+  var%vflag=vflag
   call message(whoami, 'Variable "'//vname(1:l)//'" added to context "'//vcontext(1:m)//'"',warnlev)
   if (present(vptr)) vptr=>var
 !
@@ -228,12 +231,15 @@ module state
    var%vinit=.false.
    l=len_trim(var%vname)
    select case(getval_nocase_upper(var%vname(1:l)//'INIT',vcontext(1:m)))
-    case('CONST','CONSTANT')
+    case('CONS','CONST','CONSTANT')
      if (existtag_nocase(var%vname(1:l)//'CONSTANT',vcontext(1:m))) then
       var%v=atof(getval_nocase(var%vname(1:l)//'CONSTANT',vcontext(1:m)))
       var%vinit=.true.
      elseif (existtag_nocase(var%vname(1:l)//'CONST',vcontext(1:m))) then
       var%v=atof(getval_nocase(var%vname(1:l)//'CONST',vcontext(1:m)))
+      var%vinit=.true.
+     elseif (existtag_nocase(var%vname(1:l)//'CONS',vcontext(1:m))) then
+      var%v=atof(getval_nocase(var%vname(1:l)//'CONS',vcontext(1:m)))
       var%vinit=.true.
      else
       call warning(whoami, 'Initialization constant for variable "'//var%vname(1:l)//'" not specified',warnlev-1)
@@ -293,9 +299,10 @@ module state
      if (.not.fatal_warning()) var%vinit=.true.
 #endif
 !
-   case('OBJECT') ! do nothing here : object_grid_parameters will take care of correct initialization, but it is not clear yet how to do this well
-    call message(whoami, 'Initialization for variable "'//var%vname(1:l)//'" will be computed from object',warnlev)
-    var%vinit=.true.
+   case('OBJECT') ! do nothing here : object_grid_parameters will take care of correct initialization, but it is not clear yet how to do this well, using vflag below
+    call message(whoami, 'Initialization for variable "'//var%vname(1:l)//'" is to be computed from object',warnlev)
+!    var%vinit=.true.
+    var%vflag=1 ! indicate deferred initialization
     case default
      call warning(whoami, 'Initialization option for variable "'//var%vname(1:l)//'" not recognized',warnlev-1)
    end select
@@ -452,6 +459,8 @@ module state
 !
 ! parse BC-spec from input file
   bcname=v%vname(1:len_trim(v%vname))//'_'//bc_names(ibc)
+  if (.not.existtag_nocase(bcname, vcontext)) bcname=v%vname(1:len_trim(v%vname))//bc_names(ibc)
+!
   l=len_trim(bcname)
 !
   keyword=trim(getval_nocase_upper(bcname, vcontext))

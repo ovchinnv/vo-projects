@@ -1,6 +1,6 @@
 ROOT=..
 NAME=elec
-OBJS=$(addsuffix .o, vars setup filt3 direct3 direct3_nosym util $(NAME))
+OBJS=$(addsuffix .o, vars setup filt3 direct3 direct3_nosym elec_util $(NAME))
 #OBJS=vars.o setup.o filt3.o direct3.o direct3_nosym.o util.o
 DEPS=parser constants output files vectors
 

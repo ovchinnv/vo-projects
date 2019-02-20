@@ -8,8 +8,8 @@ IF (NOT CMAKE_BUILD_TYPE)
 SET(CMAKE_BUILD_TYPE "Release" CACHE STRING "Select build type" FORCE)
 ENDIF()
 
-SET(CMAKE_C_FLAGS_RELEASE "-Ofast -DNDEBUG -std=c++11" CACHE STRING "C Optimization flags for release builds" FORCE )
-SET(CMAKE_CXX_FLAGS_RELEASE "-Ofast -DNDEBUG -std=c++11" CACHE STRING "C++ Optimization flags for release builds" FORCE)
+SET(CMAKE_C_FLAGS_RELEASE "-Ofast -DNDEBUG -D_FLOAT=double -std=c++11" CACHE STRING "C Optimization flags for release builds"  )
+SET(CMAKE_CXX_FLAGS_RELEASE "-Ofast -DNDEBUG -D_FLOAT=double -std=c++11" CACHE STRING "C++ Optimization flags for release builds"  )
 SET(CUDA_NVCC_FLAGS_RELEASE "-Xptxas -O3" CACHE STRING "NVCC Optimization flags for release builds" FORCE)
 
 # We need to know where OpenMM is installed so we can access the headers and libraries.

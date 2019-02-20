@@ -3,7 +3,7 @@ OBJS=$(VECTORS) $(VECTORLISTS) $(SORT)
 VECTORS=ivector.o rvector.o i8vector.o
 VECTORLISTS=ivector_list.o rvector_list.o 
 #i8vector_list.o
-SORT=isort.o rsort.o isort_ind.o rsort_ind.o i8sort.o
+SORT=isort.o rsort.o isort_ind.o isort_indshort.o rsort_ind.o rsort_indshort.o i8sort.o
 NAME=vectors
 DEPS=output
 
@@ -43,12 +43,18 @@ isort.F90: sort_template.ftn
 isort_ind.o: isort_ind.F90
 isort_ind.F90: sort_template.ftn
 	$(FPP) $(FPPFLAGS) $(DEFS) $(GLOBALMACROS) -U int -D'__DATANAME=I' -D'__DATATYPE=int' -D'__TYPENAME=int' -D__INDEX $(MSG) $< >$@
+isort_indshort.o: isort_indshort.F90
+isort_indshort.F90: sort_template.ftn
+	$(FPP) $(FPPFLAGS) $(DEFS) $(GLOBALMACROS) -U int -D'__DATANAME=I' -D'__DATATYPE=int' -D'__TYPENAME=int' -D__INDEX -D__SHORT $(MSG) $< >$@
 rsort.o: rsort.F90
 rsort.F90: sort_template.ftn
 	$(FPP) $(FPPFLAGS) $(DEFS) $(GLOBALMACROS) -D'__DATANAME=R' -D'__DATATYPE=float' -D'__TYPENAME=real' $(MSG) $< >$@
 rsort_ind.o: rsort_ind.F90
 rsort_ind.F90: sort_template.ftn
 	$(FPP) $(FPPFLAGS) $(DEFS) $(GLOBALMACROS) -D'__DATANAME=R' -D'__DATATYPE=float' -D'__TYPENAME=real' -D__INDEX $(MSG) $< >$@
+rsort_indshort.o: rsort_indshort.F90
+rsort_indshort.F90: sort_template.ftn
+	$(FPP) $(FPPFLAGS) $(DEFS) $(GLOBALMACROS) -D'__DATANAME=R' -D'__DATATYPE=float' -D'__TYPENAME=real' -D__INDEX -D__SHORT $(MSG) $< >$@
 i8sort.o: i8sort.F90
 i8sort.F90: sort_template.ftn
 	$(FPP) $(FPPFLAGS) $(DEFS) $(GLOBALMACROS) -U int -D'__DATANAME=I8' -D'__DATATYPE=INTEGER*8' -D'__TYPENAME=int8' $(MSG) $< >$@

@@ -4,6 +4,8 @@ OBJS=gridsize.o continuum.o grid.o
 NAME=continua/common
 DEPS=output parser constants files state multicom continua/io continua/objects
 
+LOCALDEFS+=-D__DEBUG
+
 include $(COMMON)/Makefile.inc
 include $(ROOT)/Makefile.inc
 

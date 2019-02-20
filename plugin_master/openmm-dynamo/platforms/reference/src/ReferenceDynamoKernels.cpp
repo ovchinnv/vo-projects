@@ -88,8 +88,8 @@ void ReferenceCalcDynamoForceKernel::initialize(const System& system, const Dyna
     std::strcpy(&logfile_[0], logfile__.c_str());
     char* logfile = &logfile_[0];
     // allocate position and force arrays
-    r=(double*) calloc(3 * natoms, sizeof(double));
-    fr=(double*) calloc(3 * natoms, sizeof(double));
+    r=(_FLOAT*) calloc(3 * natoms, sizeof(double));
+    fr=(_FLOAT*) calloc(3 * natoms, sizeof(double));
     // PBC flag
     usesPeriodic = system.usesPeriodicBoundaryConditions();
     OpenMM::Vec3 boxVectors[3];
@@ -107,21 +107,23 @@ void ReferenceCalcDynamoForceKernel::initialize(const System& system, const Dyna
     }
 
     // Get particle masses and charges (if available)
-    double *m=NULL; //mass
-    double *q=NULL; //charge
-    m = (double*) malloc(natoms * sizeof(double)); // allocate memory
+    _FLOAT *m=NULL; //mass
+    _FLOAT *q=NULL; //charge
+    m = (_FLOAT*) malloc(natoms * sizeof(_FLOAT)); // allocate memory
     for (int i = 0; i < natoms; i++)
         m[i] = system.getParticleMass(i);
 
-    q = (double*) calloc(natoms, sizeof(double));
+    q = (_FLOAT*) calloc(natoms, sizeof(_FLOAT));
     // If there's a NonbondedForce, get charges from it (otherwise, they will remain zero)
 
     for (int j = 0; j < system.getNumForces(); j++) {
         const NonbondedForce* nonbonded = dynamic_cast<const NonbondedForce*>(&system.getForce(j));
         if (nonbonded != NULL) {
-            double sigma, epsilon;
-            for (int i = 0; i < natoms; i++)
-                nonbonded->getParticleParameters(i, q[i], sigma, epsilon);
+            double sigma, epsilon, qi;
+            for (int i = 0; i < natoms; i++) {
+                nonbonded->getParticleParameters(i, qi, sigma, epsilon);
+                q[i]=qi;
+            }
         }
     }
     // initialize dynamo
@@ -135,13 +137,13 @@ double ReferenceCalcDynamoForceKernel::execute(ContextImpl& context, bool includ
     //
     ReferencePlatform::PlatformData* data = reinterpret_cast<ReferencePlatform::PlatformData*>(context.getPlatformData());
     long int iteration = data->stepCount;
-    double* rptr; // pointer to positions array
-    double* fptr; // pointer to force array
+    _FLOAT* rptr; // pointer to positions array
+    _FLOAT* fptr; // pointer to force array
     int* aptr; // pointer to atom index array
     int i, j, ierr;
     vector<RealVec>& pos = extractPositions(context);
     vector<RealVec>& frc = extractForces(context);
-    double master_energy;
+    _FLOAT master_energy;
     RealVec * boxVectors;
     if (usesPeriodic) {
      boxVectors = extractBoxVectors(context);
@@ -166,7 +168,9 @@ double ReferenceCalcDynamoForceKernel::execute(ContextImpl& context, bool includ
       *(rptr++) = pos[i][2]*nm2A;
      }
     // compute plugin forces and energy
-     ierr=master_dyna_plugin(iteration, r, fr, NULL, 0, &master_energy, &atomlist, usesPeriodic, box); // might return valid atomlist
+     ierr = (sizeof(_FLOAT)==sizeof(double)) ? \
+      master_dyna_plugin(iteration, r, (double*)fr, NULL, 0, &master_energy, &atomlist, usesPeriodic, box) : \
+      master_dyna_plugin(iteration, r, NULL, (float*)fr, 1, &master_energy, &atomlist, usesPeriodic, box)   ; // might return valid atomlist
     // copy plugin forces
      if (atomlist!=NULL) { // atom indices provided; use them for adding forces
       for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
@@ -192,7 +196,9 @@ double ReferenceCalcDynamoForceKernel::execute(ContextImpl& context, bool includ
       *(rptr)   = pos[j][2]*nm2A;
      }
 //
-     ierr=master_dyna_plugin(iteration, r, fr, NULL, 0, &master_energy, &atomlist, usesPeriodic, box); // atomlist should not be modified in this call
+     ierr = (sizeof(_FLOAT)==sizeof(double)) ? \
+      master_dyna_plugin(iteration, r, (double*)fr, NULL, 0, &master_energy, &atomlist, usesPeriodic, box) : \
+      master_dyna_plugin(iteration, r, NULL, (float*)fr, 1, &master_energy, &atomlist, usesPeriodic, box)   ; // atomlist should not be modified in this call
 //
      for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
       j=*aptr - 1;
