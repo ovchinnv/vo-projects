@@ -4493,6 +4493,11 @@ __DBGVAR(kmax,2)
  float :: drand(3)
 #endif
 !
+#ifndef __VOLUME_THREAD_REDUCE
+ int:: irho
+ integer*1, parameter :: i1zero=0
+#endif
+!
  __IAM(__NM(_S))
 !
  support2=surface_distance**2
@@ -4619,6 +4624,7 @@ __DBGVAR(kmax,2)
  enddo ! nsurface atoms, i
 #ifdef __OMP
 !$omp end do
+#ifdef __VOLUME_THREAD_REDUCE
 ! now reduce all indicator arrays to master array (0th thread)
  n=1
  do while (n.lt.numthreads)
@@ -4630,6 +4636,7 @@ __DBGVAR(kmax,2)
   endif
   __SCALE(n,2)
  enddo
+#endif
 ! now compute surface area integral
 #ifdef rho
 #undef rho
@@ -4645,8 +4652,22 @@ __DBGVAR(kmax,2)
  do kk=2,nz
   do jj=2,ny
    do ii=2,nx
+#ifdef __VOLUME_THREAD_REDUCE
      __INCR(__U(ivolume), rho(ii,jj,kk))
      __INCR(__U(ivolume_nonbulk), inrho(ii,jj,kk))
+#else
+     irho=0
+     do n=0,numthreads-1
+      if (inrho_all_threads(ii,jj,kk,n) .gt. i1zero) then
+       __INC(__U(ivolume_nonbulk)) ! increase non-bulk volume
+       irho=1 ! also increase total volume (added below)
+       exit
+      elseif (sarho_all_threads(ii,jj,kk,n) .gt. i1zero) then
+       irho=1 ! increase total volume below ; do not exit since need to test for non-bulk in next thread's array
+      endif
+     enddo ! n
+      __INCR(__U(ivolume),irho)
+#endif
    enddo
   enddo
  enddo
