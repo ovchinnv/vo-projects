@@ -116,8 +116,8 @@ void CudaCalcDynamoForceKernel::initialize(const System& system, const DynamoFor
     std::strcpy(&logfile_[0], logfile__.c_str());
     char* logfile = &logfile_[0];
     // allocate position and force arrays
-    r=( _FLOAT *) calloc(3 * natoms, sizeof(double));
-    fr=(_FLOAT *) calloc(3 * natoms, sizeof(double));
+    r=( _FLOAT *) calloc(3 * natoms, sizeof(_FLOAT));
+    fr=(_FLOAT *) calloc(3 * natoms, sizeof(_FLOAT));
     //PBC
     usesPeriodic = system.usesPeriodicBoundaryConditions();
     if (usesPeriodic) {
@@ -203,16 +203,16 @@ void CudaCalcDynamoForceKernel::executeOnWorkerThread() {
     if (atomlist==NULL) { // atomlist is not defined; therefore, provide all coords
 //    if (1) {
      for (i=0, rptr=r ; i < natoms ; i++) {
-      *(rptr++) = pos[i][0]*nm2A; //units
-      *(rptr++) = pos[i][1]*nm2A;
-      *(rptr++) = pos[i][2]*nm2A;
+      *(rptr) = pos[i][0]*nm2A; rptr++ ; //units
+      *(rptr) = pos[i][1]*nm2A; rptr++ ;
+      *(rptr) = pos[i][2]*nm2A; rptr++ ;
 // cerr << "position of atom: "<<j<<"="<<pos[j][0]<<pos[j][1]<<pos[j][2]<<endl;
      }
     // compute plugin forces and energy
 // cerr << "CALLING DYNAMO"<<endl;
      ierr = (sizeof(_FLOAT)==sizeof(double)) ? \
       master_dyna_plugin(iteration, r, (double*)fr, NULL, 0, &master_energy, &atomlist, usesPeriodic, box) : \
-      master_dyna_plugin(iteration, r, NULL, (float*)fr, 1, &master_energy, &atomlist, usesPeriodic, box)   ; // might return valid atomlist
+      master_dyna_plugin(iteration, r, NULL,  (float*)fr, 1, &master_energy, &atomlist, usesPeriodic, box)   ; // might return valid atomlist
     // copy plugin forces
 //=============
      if (qdble) { // double precision version
@@ -257,16 +257,16 @@ void CudaCalcDynamoForceKernel::executeOnWorkerThread() {
      for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
       j=*aptr - 1;
       rptr=r + 3*j ;
-      *(rptr++) = pos[j][0]*nm2A; //units
-      *(rptr++) = pos[j][1]*nm2A;
-      *(rptr)   = pos[j][2]*nm2A;
+      *(rptr) = pos[j][0]*nm2A; rptr++ ;//units
+      *(rptr) = pos[j][1]*nm2A; rptr++ ;
+      *(rptr) = pos[j][2]*nm2A;
 // cerr << "position of atom: "<<j<<"="<<pos[j][0]<<pos[j][1]<<pos[j][2]<<endl;
      }
 //
 // cerr << "CALLING DYNAMO"<<endl;
      ierr = (sizeof(_FLOAT)==sizeof(double)) ? \
       master_dyna_plugin(iteration, r, (double*)fr, NULL, 0, &master_energy, &atomlist, usesPeriodic, box) : \
-      master_dyna_plugin(iteration, r, NULL, (float*)fr, 1, &master_energy, &atomlist, usesPeriodic, box)   ; // atomlist should not be modified in this call
+      master_dyna_plugin(iteration, r, NULL,  (float*)fr, 1, &master_energy, &atomlist, usesPeriodic, box)   ; // atomlist should not be modified in this call
 //
      if (qdble) { // double
       double *frc = (double*) cu.getPinnedBuffer();
@@ -297,6 +297,7 @@ void CudaCalcDynamoForceKernel::executeOnWorkerThread() {
 }
 
 double CudaCalcDynamoForceKernel::addForces(bool includeForces, bool includeEnergy, int groups) {
+// return 0;
     if ((groups&forceGroupFlag) == 0)
         return 0;
     // Wait until executeOnWorkerThread() is finished.
@@ -309,5 +310,5 @@ double CudaCalcDynamoForceKernel::addForces(bool includeForces, bool includeEner
     }
     // Return plugin energy.
     master_energy*=str2omm_e;
-    return master_energy;
+    return (double)master_energy;
 }
