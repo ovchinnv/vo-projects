@@ -192,7 +192,7 @@ void OpenCLCalcDynamoForceKernel::executeOnWorkerThread() {
      for (i=0, rptr=r ; i < natoms ; i++) {
       *(rptr) = pos[i][0]*nm2A; rptr++;//units
       *(rptr) = pos[i][1]*nm2A; rptr++;
-      *(rptr) = pos[i][2]*nm2A; rprt++;
+      *(rptr) = pos[i][2]*nm2A; rptr++;
      }
     // compute plugin forces and energy
 // cout << "CALLING DYNAMO"<<endl;
