@@ -4,7 +4,7 @@ INCLUDES+= -I $(COMMON) -I $(COMMON)/acemd -I $(COMMON)/ftsm -I $(COMMON)/smcv
 #LOCALDEPS+=$(COMMON)/acemd.defs
 
 $(COMMON)/%.mod : $(COMMON)/%.o
-	file=$(notdir $@) ; \
+	@file=$(notdir $@) ; \
 	dir=$(dir $@) ; \
 	if [ -f $$file ] ; then mv -f $$file $@ 2>/dev/null; touch -m $@ 2>/dev/null; else \
 	FILE=`echo $${file%.*} | tr '[:lower:]' '[:upper:]'`.mod ; \
