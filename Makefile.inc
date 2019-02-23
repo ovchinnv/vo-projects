@@ -35,7 +35,7 @@ ifeq ($(DEBUG),1)
  DEFS+=-D__DEBUG
 else
 #FFLAGS=-O3 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno #-Wall -fopenmp
- FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -Wno-missing-include-dirs
+ FFLAGS=-O2 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno
 endif
 #---INTEL
 else ifeq ($(FC),ifort)
@@ -178,7 +178,7 @@ endif
 VPATH=$(ROOT) #this is necessary to prevent recompilation under %.stamp rule
 
 FPP=cpp
-FPPFLAGS = -P -C -I $(ROOT) -nostdinc # -nostdinc : avoid including files automatically
+FPPFLAGS += -P -C -I $(ROOT) -nostdinc # -nostdinc : avoid including files automatically
 
 DEBUG = -g
 
