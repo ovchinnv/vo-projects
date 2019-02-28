@@ -76,8 +76,8 @@ private:
     OpenMM::ContextImpl& contextImpl;
     int natoms;    // number of particles
     int* atomlist; // list of atom indices involved in restraints
-    double *r, *fr; // positions and forces
-    double box[9] ; // = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 } ; // box vectors
+    _FLOAT *r, *fr; // positions and forces
+    _FLOAT box[9] ; // = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 } ; // box vectors
 };
 
 } // namespace DynamoPlugin

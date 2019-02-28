@@ -14,6 +14,7 @@ LINKOBJS+=\
  ivector.o \
  isort.o \
  rsort_ind.o \
+ rsort_indshort.o \
  state.o \
  fieldbcdef.o \
  system.o \

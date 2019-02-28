@@ -106,9 +106,6 @@ module _N
  bool, private:: dmasses_initialized=.false. ! for dasystat ; not necessarily atomic, i.e. possibly molecular masses !
 #endif
  bool, private :: qper_parser_override=.false. ! to turn off (override) periodicity in parser
-
-! macro for parameters with defaults
-#define __PAR(_PAR,_TYPE,_DEF) _TYPE, save :: _PAR ; _TYPE, parameter :: __CONCAT(default_,_PAR)=_DEF;
 !
 ! surface computation parameters :
 ! __PAR(surface_contour_value, float, -one) ! value of density isosurface which is defines the surface ; negative means to compute from structure
@@ -227,7 +224,7 @@ module _N
 &                  ddist_solv(:,:) ! distance gradient at solvent coordinate (inward surface normal)
  bool, pointer :: qforced_solv(:) ! flags that indicate whether a force is to be applied on the atom
 #ifdef __SORT_LIST
- int, pointer :: solute_neighbor_list(:,:) ! for each solvent atom, the solute atoms are sorted by proximity
+ shortint, pointer :: solute_neighbor_list(:,:) ! for each solvent atom, the solute atoms are sorted by proximity
 #ifdef __NEIGHBOR_LIST
  __PAR(qneighbor_list, bool, .true.) ! whether to use a neighbor list to shorten loops over surface atoms
  float :: neighbor_list_factor ! coefficient used to relate sorting frequency and limit index to loop length
@@ -312,6 +309,27 @@ module _N
  float, dimension(3) :: total_solute_force, total_solvent_force, max_solute_force, max_solvent_force
 #endif
 
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
+ interface rsort_index
+      SUBROUTINE RSORT_IND( ID, N, D, IND, INFO )
+      CHARACTER :: ID
+      int :: INFO
+      int, intent(in) :: N
+      float :: D( * )
+      int, intent(out) :: IND( N ) ! will be overwritten
+      end subroutine rsort_ind
+!
+      SUBROUTINE RSORT_INDSHORT( ID, N, D, IND, INFO )
+      CHARACTER :: ID
+      int :: INFO
+      int, intent(in) :: N
+      float :: D( * )
+      int*2, intent(out) :: IND( N )
+      end subroutine rsort_indshort
+
+ end interface rsort_index
+#endif
+
 != subroutines
  contains
 !========
@@ -381,7 +399,7 @@ module _N
 #define __NAME flag to use a neighbor list for solvent forces (default=yes)
 #define __DOALWAYS if (__VAR) then ;\
                     __MESSAGE(whoami, 'WILL USE A NEIGHBOR LIST FOR SOLVENT FORCES.');\
-                   else ; \ 
+                   else ; \
                     __MESSAGE(whoami, 'WILL NOT USE A NEIGHBOR LIST FOR SOLVENT FORCES.');\
                    endif
 #include "parser/parser_macro3.src"
@@ -570,7 +588,7 @@ module _N
 #define __VAR	surface_area_compute_freq
 #define __TAG	__VAR
 #define __NAME	frequency of computing instantaneous shell surface area
-#define __DOIFOK if (__VAR.eq.izero) then; \ 
+#define __DOIFOK if (__VAR.eq.izero) then; \
                   __MESSAGE(whoami, 'SURFACE AREA COMPUTATION IS OFF. TURNING BAROSTAT OFF.'); \
                   barostat=.false. ; \
                  endif ! it does not make any sense to run barostat without a surface area calculation !
@@ -661,7 +679,7 @@ module _N
 #define __VAR	surface_area_compute_freq
 #define __TAG	volume_compute_freq
 #define __NAME	frequency of computing solvent density
-#define __DOIFOK if (__VAR.eq.izero) then; \ 
+#define __DOIFOK if (__VAR.eq.izero) then; \
                   __MESSAGE(whoami, 'VOLUME COMPUTATION IS OFF. TURNING DASYSTAT OFF.'); \
                   dasystat=.false. ; \
                  endif ! it does not make any sense to run dasystat without a volume calculation !
@@ -1057,6 +1075,10 @@ module _N
   do l=1,nsurface_coord
    solute_neighbor_list(l,:)=l
   enddo
+! because we are possibly using short ints to store neighbor list indices, we should make sure that the largest index is representable:
+  l=solute_neighbor_list(nsurface_coord,1)
+  __ASSERT(l, .eq., nsurface_coord)
+!
 #ifdef __NEIGHBOR_LIST
   qneighbor_list_sorted=.not.qneighbor_list ! if not using qlist, set to true to avoid sorting
   __ALLOC(solute_neighbor_mind(nsolvent))
@@ -1583,7 +1605,7 @@ __DBGVAR(r_com_sa,1)
 #endif
     enddo ! nsurface_coord
 !  sort neighbor list:
-    call rsort_ind('i',nsurface_coord,distance2(:),solute_neighbor_list(:,i),ierr)
+    call rsort_index('i',nsurface_coord,distance2(:),solute_neighbor_list(:,i),ierr)
 !
     if (qminimum_distance) then
      solute_neighbor_mind(i)=min(nsurface_coord,2) ! fo mindist only
@@ -1633,7 +1655,7 @@ __DBGVAR(r_com_sa,1)
      __INCR(distance2(ii),d0*d0)
     enddo ! nsurface
 !  sort neighbor list:
-    call rsort_ind('i',nsurface_coord,distance2(:),solute_neighbor_list(:,i),ierr)
+    call rsort_index('i',nsurface_coord,distance2(:),solute_neighbor_list(:,i),ierr)
     if (qminimum_distance) then
      solute_neighbor_mind(i)=min(nsurface_coord,2) ! for mindist only
     elseif (nsurface_coord>0) then
@@ -2247,11 +2269,11 @@ endif
 ! What happens if we do not know surface distance going into the grad routine ? In that case, the computed prefactor will be wrong !
 #endif
 #if (_DBGLEV>1)
- __DBGOUT('solv. atom#:', i, 'density:', rho_solv(i), 'distance:', __RHO_INVERSE2(d0), 'forced?:', qforced_solv(i) &
+ __DBGOUT('solv. atom#:', i, 'density:', rho_solv(i), 'distance:', __RHO_INVERSE2(d0), 'forced?:', qforced_solv(i)
 #ifndef __HAMILTONIAN
-& , 'pre:', pre &
+ , 'pre:', pre
 #endif
-& )
+ )
 #endif
 !
 !
@@ -3552,7 +3574,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
     rp=r_surf(:,j) ! protein atom coordinate
 !
-    dr = rp-rw ;
+    dr = rp-rw ; ! note : there is no fast way to incorporate radii without a square root somewhere in the inner loop, so for now, radii are effectively zero
 #ifdef __UNWRAP_PBC
     if (qper_parser_override) then
      __DIST_PBC(dr(1),ucell%a)
@@ -3765,7 +3787,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #ifdef __NEIGHBOR_LIST
      solute_neighbor_mind(i)=jj
 #endif
-! note that it is technically possible to swap twice here and above, which would make two j's in the same list -- error
+! note that it is technically possible to swap twice here and above, which would make two j`s in the same list -- error
 ! put this atom first in the list
 !     solute_neighbor_list(jj,i)=solute_neighbor_list(1,i)
 !     solute_neighbor_list(1,i)=j
@@ -4077,7 +4099,7 @@ __DBGVAR(kmax,2)
  support2=surface_distance**2
 !
 #ifdef __PERTURB_GRID
-! NOTE : the origin of the grid is the surface atoms' COM; since the grid is discrete, there is in principle
+! NOTE : the origin of the grid is the surface atoms` COM; since the grid is discrete, there is in principle
 ! a discretiation error that arises from the precise location of the grid boundaries
 ! this error will average out as the surface moves ; however, in some cases, the averaging out will probably
 ! be slow ; in that case, it might be advantageous to add a uniformly distributed random perturbation to the grid origin, 
@@ -4501,6 +4523,11 @@ __DBGVAR(kmax,2)
  float :: drand(3)
 #endif
 !
+#ifndef __VOLUME_THREAD_REDUCE
+ int:: irho
+ integer*1, parameter :: i1zero=0
+#endif
+!
  __IAM(__NM(_S))
 !
  support2=surface_distance**2
@@ -4627,6 +4654,7 @@ __DBGVAR(kmax,2)
  enddo ! nsurface atoms, i
 #ifdef __OMP
 !$omp end do
+#ifdef __VOLUME_THREAD_REDUCE
 ! now reduce all indicator arrays to master array (0th thread)
  n=1
  do while (n.lt.numthreads)
@@ -4638,6 +4666,7 @@ __DBGVAR(kmax,2)
   endif
   __SCALE(n,2)
  enddo
+#endif
 ! now compute surface area integral
 #ifdef rho
 #undef rho
@@ -4653,8 +4682,22 @@ __DBGVAR(kmax,2)
  do kk=2,nz
   do jj=2,ny
    do ii=2,nx
+#ifdef __VOLUME_THREAD_REDUCE
      __INCR(__U(ivolume), rho(ii,jj,kk))
      __INCR(__U(ivolume_nonbulk), inrho(ii,jj,kk))
+#else
+     irho=0
+     do n=0,numthreads-1
+      if (inrho_all_threads(ii,jj,kk,n) .gt. i1zero) then
+       __INC(__U(ivolume_nonbulk)) ! increase non-bulk volume
+       irho=1 ! also increase total volume (added below)
+       exit
+      elseif (sarho_all_threads(ii,jj,kk,n) .gt. i1zero) then
+       irho=1 ! increase total volume below ; do not exit since need to test for non-bulk in next thread's array
+      endif
+     enddo ! n
+      __INCR(__U(ivolume),irho)
+#endif
    enddo
   enddo
  enddo

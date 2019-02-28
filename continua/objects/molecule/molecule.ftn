@@ -10,20 +10,6 @@ module molecule
 
  float, private, allocatable :: epsatom(:) ! relative dielectric as a function of atom (not currently used)
 !
- float, private :: cutoff_eps_stdev,    cutoff_eps    ! grid smoothing cutoff normalized by standard deviation of gaussian (epsilon)
- float, private :: cutoff_kappa_stdev,  cutoff_kappa  ! grid smoothing cutoff normalized by standard deviation of gaussian (kappa)
- float, private :: cutoff_charge_stdev, cutoff_charge ! grid smoothing cutoff normalized by standard deviation of gaussian (charges)
- float, private :: cutoff_surf_stdev,   cutoff_surf   ! grid smoothing cutoff normalized by standard deviation of gaussian (surface)
-!
- float, private :: stdev_eps, oo_stdev_eps! , oo_stdev_eps2 ! std. dev. of the gaussian filter (epsilon)
- float, private :: stdev_kappa, oo_stdev_kappa! , oo_stdev_kappa2
- float, private :: stdev_charge, oo_stdev_charge! , oo_stdev_charge2
- float, private :: stdev_surf, oo_stdev_surf! , oo_stdev_surf2
-!
- float, private :: eps_padding, kappa_padding, charge_padding, surf_padding ! padding values to radii which might account for e.g. solvent layer(s)
-!
- float, private :: eps_solute, eps_solvent ! constant values
- float, private :: kappa_solute, kappa_solvent ! ionic strength parameter normally, kappa_solute zero
 !
  int, private, allocatable :: closest_pt(:,:)
  float, public, pointer :: rho(:,:,:)         ! surface 'density', the isosurfaces of which are used to assign the molecular surface
@@ -32,30 +18,58 @@ module molecule
  float, private, parameter :: osq2pi=one/sqrt(twopi)
 !
 !************************************** DEFAULT VALUES
+ __FPPARDEF(eps_solute, 2.5d0)
+ __FPPARDEF(eps_solvent, 78d0)
+ __FPPARDEF(kappa_solute, 0d0)
+ __FPPARDEF(kappa_solvent, 0.15d0)
 !
- float, private, parameter :: eps_solute_default   = 2.5d0,&
-&                             eps_solvent_default  = 80d0
- float, private, parameter :: kappa_solvent_default = 0.15d0,&
-&                             kappa_solute_default= 0d0
  float, private, parameter :: cutoff_stdev_default    =3d0, & ! dimensionless (see above)
 &                             padding_default         =0d0, & ! units of radius
 &                             stdev_default           = - 1d0 ! MEANS: determine from grid in grid_data
 !
- float, private, parameter :: cutoff_eps_stdev_default   = cutoff_stdev_default,&
-&                             cutoff_kappa_stdev_default = cutoff_stdev_default,&
-&                             cutoff_charge_stdev_default= cutoff_stdev_default,&
-&                             cutoff_surf_stdev_default  = cutoff_stdev_default
+ float, private :: cutoff_eps    ! grid smoothing cutoff normalized by standard deviation of gaussian (epsilon)
+ float, private :: cutoff_kappa
+ float, private :: cutoff_charge
+ float, private :: cutoff_surf
 !
- float, private, parameter :: stdev_eps_default   = stdev_default,&
-&                             stdev_kappa_default   = stdev_default,&
-&                             stdev_charge_default   = stdev_default,&
-&                             stdev_surf_default   = stdev_default
+ __FPPARDEF(cutoff_eps_stdev,   cutoff_stdev_default)
+ __FPPARDEF(cutoff_kappa_stdev, cutoff_stdev_default)
+ __FPPARDEF(cutoff_charge_stdev,cutoff_stdev_default)
+ __FPPARDEF(cutoff_surf_stdev,  cutoff_stdev_default)
 !
+ float, private :: oo_stdev_eps! , oo_stdev_eps2 ! std. dev. of the gaussian filter (epsilon)
+ float, private :: oo_stdev_kappa! , oo_stdev_kappa2
+ float, private :: oo_stdev_charge! , oo_stdev_charge2
+ float, private :: oo_stdev_surf! , oo_stdev_surf2
 !
- float, private, parameter :: kappa_padding_default   = padding_default,&
-&                             charge_padding_default  = padding_default,&
-&                             eps_padding_default     = padding_default,&
-&                             surf_padding_default    = padding_default
+ __FPPARDEF(stdev_eps,   stdev_default)
+ __FPPARDEF(stdev_kappa, stdev_default)
+ __FPPARDEF(stdev_charge,stdev_default)
+ __FPPARDEF(stdev_surf,  stdev_default)
+!
+ __FPPARDEF(kappa_padding,padding_default)
+ __FPPARDEF(charge_padding,padding_default)
+ __FPPARDEF(eps_padding,padding_default)
+ __FPPARDEF(surf_padding,padding_default)
+
+! permittivity units conversion :
+! CHARMM says :
+! CCELEC is 1/ (4 pi eps ) in AKMA units, conversion from SI
+! units: CCELEC = e*e*Na / (4*pi*eps*1Kcal*1A)
+ __FPAR(eps_amber    , 332.0522173d0)
+ __FPAR(eps_charmm   , 332.0716d0)
+ __FPAR(eps_discover , 332.054d0)
+ __FPAR(eps_namd     , 332.0636d0)
+!
+!CHARMM uses :     kappa2 = 8*PI*cat*e**2*beta
+!    KAPPA2=2530.362733*CONC/TEMP
+ __FPAR(kappa_akma , -2530.362733d0)
+
+ __FPPARDEF(eps_scale, eps_charmm)
+ __FPPARDEF(kappa_scale, kappa_akma)
+ __FPPARDEF(temperature, 298d0)
+!
+ __FPPARDEF(charge_scale, -one) ! in the MG solver, the equation is  lap(u) = q, but we need lap(u) = -q, i.e. with a negative sign
 !
 !***************************** subroutines ****************
  public molecule_initialize ! initialize molecular coordinates, radii and charges
@@ -91,6 +105,7 @@ module molecule
 !
 ! query parser for parameters 
 !
+#define __WARNIFMISSING
 #define __DEFAULT
 #define __MINUSWRN
 ! solvent dielectric
@@ -105,14 +120,62 @@ module molecule
 #include "mol_macro1.src"
 #undef  __BYATOM
 !
+! check for epsilon scaling (adapted from elec code):
+#define  __VAR eps_scale
+  if (existtag_nocase(__STRING(__VAR),__STRING(__CONTEXT))) then
+   keyword=getval_nocase(__STRING(__VAR),__STRING(__CONTEXT))
+  else
+   __OUT('Dielectric permittivity scaling not specified.')
+   keyword='CHARMM'
+  endif
+  call toupper(keyword)
+  select case(keyword)
+   case('CHARMM','CHM','CHRM','CHARM','CH') ; __VAR=one/(eps_charmm*four*pi)   ; __OUT('Using CHARMM AKMA permittivity scaling');
+   case('NAMD','NAMD2')                     ; __VAR=one/(eps_namd*four*pi)     ; __OUT('Using NAMD AKMA permittivity scaling');
+   case('AMBER','AMB','AM')                 ; __VAR=one/(eps_amber*four*pi)    ; __OUT('Using AMBER AKMA permittivity scaling');
+   case('DISCOVER','DISC','DSC','DI')       ; __VAR=one/(eps_discover*four*pi) ; __OUT('Using DISCOVER AKMA permittivity scaling');
+   case('NONE', 'ONE')                      ; __VAR=one                        ; __OUT('Assuming permittivity has correct units (no scaling applied)');
+   case default                             ; __VAR=atof(keyword)              ; __OUT('Setting permittivity scale to ', __VAR)
+  end select
+#undef __VAR
+!
+! check for ionic strength scaling
+#define  __VAR kappa_scale
+  if (existtag_nocase(__STRING(__VAR),__STRING(__CONTEXT))) then
+   keyword=getval_nocase(__STRING(__VAR),__STRING(__CONTEXT))
+  else
+   __OUT('Ionic strength scaling not specified.')
+   keyword='AKMA'
+  endif
+  call toupper(keyword)
+  select case(keyword)
+   case('AKMA','CHM','CHRM','CHARM','CHARMM', 'CH') ; __VAR=kappa_akma/(temperature*four*pi) ; __OUT('Using AKMA ionic strength scaling');
+   case('NONE', 'ONE')                              ; __VAR=one                              ; __OUT('Assuming ionic strength has correct units (no scaling applied)');
+   case default                                     ; __VAR=atof(keyword)                    ; __OUT('Setting ionic strength scale to ', __VAR)
+  end select
+#undef __VAR
+!
+! charge (rhs) scaling :
+#undef __WARNIFMISSING
+#define __VAR	charge_scale
+#define __NAME	Charge density scaling [-1 for electrostatics]
+#include "mol_macro1.src"
+#define __WARNIFMISSING
+!
 ! solvent ionic strength
 #define __VAR	kappa_solvent
-#define __NAME	Solvent ionic strength
+#define __NAME	Solvent molarity
 #include "mol_macro1.src"
 ! solute ionic strength
 #define __VAR	kappa_solute
-#define __NAME	Solute ionic strength
+#define __NAME	Solute molarity
 #include "mol_macro1.src"
+! temperature
+#define __LEZEROERR
+#define __VAR	temperature
+#define __NAME	Temperature
+#include "mol_macro1.src"
+!
 !%%%%%%%%%%%%%%%%%%%% padding parameters for grid smoothing %%%%%%%%%%%%%%%%%%%%%%%%%%%%
 ! charge padding
 #define __MINUSERR
@@ -189,10 +252,10 @@ module molecule
 ! use state, only: eps, kappa, rhs
 ! declare passed parameters (gridded data) -- see above comments
   int :: nx, ny, nz
-  float, dimension(nx,ny,nz) :: eps, kappa, rhs 
-  float, dimension(nx) :: xcen, dxcor
-  float, dimension(ny) :: ycen, dycor
-  float, dimension(nz) :: zcen, dzcor
+  float, dimension(nx,ny,nz) :: eps, kappa, rhs
+  float, dimension(nx), intent(in) :: xcen, dxcor
+  float, dimension(ny), intent(in)  :: ycen, dycor
+  float, dimension(nz), intent(in)  :: zcen, dzcor
 ! local vars
   __IAM(MOLECULE_GRID_OBJECTS)
   int :: l
@@ -234,25 +297,37 @@ module molecule
 !
   if (any((/stdev_eps, stdev_kappa, stdev_charge, stdev_surf/).lt.zero)) d=__GRIDSCALE*min(minval(dxcor),minval(dycor),minval(dzcor))
 !
-  if (stdev_eps.lt.zero)  then; 
+#ifdef __INFO
+#undef __INFO
+#endif
+#define __INFO(_WHAT) call message(whoami, 'COMPUTED SMALLEST '//ftoupper(__STRING(__CONCAT(stdev_,_WHAT)))//' FROM GRID := '//ftoa(d) )
+
+  if (stdev_eps.lt.zero)  then;
+   __INFO(eps)
    stdev_eps=d;  cutoff_eps=cutoff_eps_stdev*stdev_eps;  oo_stdev_eps=one/stdev_eps 
   endif
-  if (stdev_kappa.lt.zero)  then; 
-   stdev_kappa=d;  cutoff_kappa=cutoff_kappa_stdev*stdev_kappa;  oo_stdev_kappa=one/stdev_kappa 
+  if (stdev_kappa.lt.zero)  then;
+   __INFO(kappa)
+   stdev_kappa=d;  cutoff_kappa=cutoff_kappa_stdev*stdev_kappa;  oo_stdev_kappa=one/stdev_kappa
   endif
-  if (stdev_charge.lt.zero) then; 
+  if (stdev_charge.lt.zero) then;
+   __INFO(charge)
    stdev_charge=d;  cutoff_charge=cutoff_charge_stdev*stdev_charge;  oo_stdev_charge=one/stdev_charge
   endif
-  if (stdev_surf.lt.zero) then; 
+  if (stdev_surf.lt.zero) then;
+   __INFO(surf)
    stdev_surf=d;  cutoff_surf=cutoff_surf_stdev*stdev_surf;  oo_stdev_surf=one/stdev_surf 
   endif
 !  write(0,*) 'STDEV:', oo_stdev_eps, oo_stdev_surf ! aa
 !
   if (.not.associated(rho)) allocate(rho(nx,ny,nz))
 ! initialize all but rhs (so that we can superpose additional sources outside of this module)
-  do k=1,nz; do j=1, ny; do i=1,nx ; 
-                                       eps(i,j,k)=zero; kappa(i,j,k)=zero; rho(i,j,k)=zero; 
-  enddo;     enddo;      enddo;
+  eps=zero
+  kappa=zero
+  rho=zero
+!  do k=1,nz; do j=1, ny; do i=1,nx ;
+!                                       eps(i,j,k)=zero; kappa(i,j,k)=zero; rho(i,j,k)=zero; 
+!  enddo;     enddo;      enddo;
 
 ! gridding
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -366,7 +441,7 @@ module molecule
    zpt=r(3,l)
 !
 !  write(777,*) radius(l), q(l) ! aa
-!  write(888,*) r(:,l), radius(l), closest_pt(:,l) ! aa; coors correct
+!  write(888,*) r(:,l), radius(l), closest_pt(:,l) ! aa; coords correct
 ! precomputation of parameters for the smoothed densities
    reps=   (radius(l)+eps_padding   );  repsn   =reps    * oo_stdev_eps   ! normalize by stdev
    rkappa= (radius(l)+kappa_padding );  rkappan =rkappa  * oo_stdev_kappa
@@ -383,7 +458,7 @@ module molecule
    rmax2charge=(cutoff_charge+rcharge)**2
    rmax2surf  =(cutoff_surf  +rsurf  )**2
 ! compute nominal charge density ( nominal because it will not be accurate on the grid and will need correction )
-   qn=q(l) * 0.75d0 / ( pi * rchargen **3 )
+   qn=q(l) * three / (four * pi * rchargen **3 )
 !
    do kdir=-1,1,2 ! directions 
     k=closest_pt(3,l)+(kdir+1)/2; ! when kdir = 1, shift to the the right relative to closest point, but not when kdir=-1
@@ -391,14 +466,15 @@ module molecule
     do
 ! z-grid OOB test:
      if ((k.ge.nz).or.(k.le.1)) then 
-      call warning(whoami, 'SMOOTHED MOLECULE INTERSECTS Z-GRID BOUNDARY.',0)
+      call warning(whoami, 'SMOOTHED MOLECULE CROSSES Z-GRID BOUNDARY.',0)
+      call warning(whoami, 'ATOM #'//itoa(l)//' located at ('//trim(ftoa(xpt))//trim(ftoa(ypt))//trim(ftoa(zpt))//'); gridpoint '//itoa(k)//' of '//itoa(nz),0)
       exit
      endif
 !
      dz2=(zcen(k)-zpt)**2
 !     k range test:
-     if (qepsk)    qepsk=(dz2.lt.rmax2eps)      
-     if (qkappak)  qkappak=(dz2.lt.rmax2kappa)  
+     if (qepsk)    qepsk=(dz2.lt.rmax2eps)
+     if (qkappak)  qkappak=(dz2.lt.rmax2kappa)
      if (qchargek) qchargek=(dz2.lt.rmax2charge)
      if (qsurfk)   qsurfk=(dz2.lt.rmax2surf  )
      qanyk = qepsk .or. qkappak .or. qchargek .or. qsurfk
@@ -410,14 +486,15 @@ module molecule
       do
 ! y-grid OOB test:
        if ((j.ge.ny).or.(j.le.1)) then 
-        call warning(whoami, 'SMOOTHED MOLECULE INTERSECTS Y-GRID BOUNDARY.',0)
+        call warning(whoami, 'SMOOTHED MOLECULE CROSSES Y-GRID BOUNDARY.',0)
+        call warning(whoami, 'ATOM #'//itoa(l)//' located at ('//trim(ftoa(xpt))//trim(ftoa(ypt))//trim(ftoa(zpt))//'); gridpoint '//itoa(j)//' of '//itoa(ny),0)
         exit
        endif
 !
        dzdy2=dz2+(ycen(j)-ypt)**2
 !     j range test:
-       if (qepsj)    qepsj=(dzdy2.lt.rmax2eps)      
-       if (qkappaj)  qkappaj=(dzdy2.lt.rmax2kappa)  
+       if (qepsj)    qepsj=(dzdy2.lt.rmax2eps)
+       if (qkappaj)  qkappaj=(dzdy2.lt.rmax2kappa)
        if (qchargej) qchargej=(dzdy2.lt.rmax2charge)
        if (qsurfj)   qsurfj=(dzdy2.lt.rmax2surf  )
        qanyj = qepsj .or. qkappaj .or. qchargej .or. qsurfj
@@ -429,7 +506,8 @@ module molecule
         do
 ! x-grid OOB test:
          if ((i.ge.nx).or.(i.le.1)) then 
-          call warning(whoami, 'SMOOTHED MOLECULE INTERSECTS X-GRID BOUNDARY.',0)
+          call warning(whoami, 'SMOOTHED MOLECULE CROSSES X-GRID BOUNDARY.',0)
+          call warning(whoami, 'ATOM #'//itoa(l)//' located at ('//trim(ftoa(xpt))//trim(ftoa(ypt))//trim(ftoa(zpt))//'); gridpoint '//itoa(i)//' of '//itoa(nx),0)
           exit
          endif
 !
@@ -446,9 +524,9 @@ module molecule
 #ifndef __erf
 #define __erf erf
 #endif
-#define __SMOOTH_GAUSS(__A,__B,__C)  half * ( __erf (__A) - __erf (__B) ) + osq2pi*( exp(-__A**2) - exp(-__B**2 ) ) /__C
+#define __SMOOTH_GAUSS(__A,__B,__C)  half * ( __erf (__A) - __erf (__B) ) + osq2pi*( exp(-(__A)**2) - exp(-(__B)**2 ) ) /(__C)
 #ifndef __TRUNCATEVAL
-#define __TRUNCATEVAL 1.2
+#define __TRUNCATEVAL 1.0
 #endif
 !#undef __TRUNCATESUMS
 ! grid epsilon %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -462,7 +540,7 @@ module molecule
 !
            val=__SMOOTH_GAUSS(e,e2,d2)
 !
-           eps(i,j,k) = eps(i,j,k) + val ! scale to correct levels later
+           __INCR(eps(i,j,k), val) ! scale to correct levels later
 !
 ! this is the convolution of a normalized gaussian with stdev sigma with a function that changes across the boundary of
 ! a sphere of the given atomic radius (function values depend on the property: charge, surf, kappa, eps)
@@ -478,7 +556,7 @@ module molecule
 !
            val=__SMOOTH_GAUSS(e,e2,d2)
 !
-           kappa(i,j,k)=kappa(i,j,k) + val 
+           __INCR(kappa(i,j,k), val)
          endif ! kappa
 ! grid charges %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
          if (qchargei) then ! do not compute if cutoff exceeded in previous iteration
@@ -487,7 +565,7 @@ module molecule
 !
            val=__SMOOTH_GAUSS(e,e2,d2)
 !
-           rhs(i,j,k)=rhs(i,j,k) + val * qn ! qn is nominal charge density: q / ( 4/3pi r^3 ) 
+           __INCR(rhs(i,j,k), val * qn) ! qn is nominal charge density: q / ( 4/3pi r^3 ) 
          endif ! charge
 ! grid surface %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
          if (qsurfi &
@@ -501,7 +579,7 @@ module molecule
 !
            val=__SMOOTH_GAUSS(e,e2,d2)
 !
-           rho(i,j,k)=rho(i,j,k) + val ! density: 1 inside sphere, 0 outside sphere
+           __INCR(rho(i,j,k), val) ! density: 1 inside sphere, 0 outside sphere
 !
          endif ! surface
 !
@@ -531,8 +609,10 @@ module molecule
 ! scale charges uniformly
   qn=0d0  ! total grid charge
 ! scaling factors for kappa and eps
-  d =eps_solute-eps_solvent
-  d2=kappa_solute-kappa_solvent
+  d =eps_scale*(eps_solute-eps_solvent)
+  e =eps_solvent*eps_scale
+  d2=kappa_scale*(kappa_solute-kappa_solvent)
+  e2=kappa_solvent*kappa_scale
 !
   do k=2, nz-1 
    dz2=dzcor(k)
@@ -540,36 +620,45 @@ module molecule
     dzdy2=dz2*dycor(j)
     do i=2, nx-1
 !
-     qn = qn + rhs(i,j,k) * dxcor(i) * dzdy2
+     __INCR( qn , rhs(i,j,k) * dxcor(i) * dzdy2 )
 !
 ! scale rho, eps and kappa
 !%%%%%%%%%%%%%%%%%%%%%%%%%
 ! surface
-     if (rho(i,j,k).gt.1d0) rho(i,j,k)=1d0
+!     if (rho(i,j,k).gt.one) rho(i,j,k)=one
+     rho(i,j,k)=min(rho(i,j,k),one)
 ! dielectric
-     if (eps(i,j,k).gt.1d0) eps(i,j,k)=1d0     ; eps  (i,j,k)=eps  (i,j,k) * d  + eps_solvent
+!     if (eps(i,j,k).gt.one) eps(i,j,k)=one
+      eps(i,j,k)=min(eps(i,j,k),one)
+     eps(i,j,k)=eps  (i,j,k) * d  + e
 ! ionic strength
-     if (kappa(i,j,k).gt.1d0) kappa(i,j,k)=1d0 ; kappa(i,j,k)=kappa(i,j,k) * d2 + kappa_solvent
+!     if (kappa(i,j,k).gt.one) kappa(i,j,k)=one 
+     kappa(i,j,k)=min(kappa(i,j,k),one)
+     kappa(i,j,k)=kappa(i,j,k) * d2 + e2
 !
 !%%%%%%%%%%%%%%%%%%%%%%%%%
     enddo 
-    eps(1,j,k)   = eps(1,j,k)*d   + eps_solvent;      eps(nx,j,k)   = eps(nx,j,k)*d   + eps_solvent
-    kappa(1,j,k) = kappa(1,j,k)*d + kappa_solvent;    kappa(nx,j,k) = kappa(nx,j,k)*d + kappa_solvent 
+    eps(1,j,k)    = eps(1,j,k)*d     + e
+    eps(nx,j,k)   = eps(nx,j,k)*d    + e
+    kappa(1,j,k)  = kappa(1,j,k)*d2  + e2
+    kappa(nx,j,k) = kappa(nx,j,k)*d2 + e2
    enddo
 !
    do i=1,nx
-    eps(i,1,k)   = eps(i,1,k)*d   + eps_solvent;       eps(i,ny,k)   = eps(i,ny,k)*d   + eps_solvent
-    kappa(i,1,k) = kappa(i,1,k)*d + kappa_solvent;     kappa(i,ny,k) = kappa(i,ny,k)*d + kappa_solvent 
+    eps(i,1,k)    = eps(i,1,k)*d     + e
+    eps(i,ny,k)   = eps(i,ny,k)*d    + e
+    kappa(i,1,k)  = kappa(i,1,k)*d2  + e2
+    kappa(i,ny,k) = kappa(i,ny,k)*d2 + e2
    enddo
 !
   enddo
 !
   do j=1,ny ; do i=1,nx
-   eps(i,j,1)   = eps(i,j,1)*d   + eps_solvent;       eps(i,j,nz)   = eps(i,j,nz)*d   + eps_solvent
-   kappa(i,j,1) = kappa(i,j,1)*d + kappa_solvent;     kappa(i,j,nz) = kappa(i,j,nz)*d + kappa_solvent 
+   eps(i,j,1)   = eps(i,j,1)*d    + e;      eps(i,j,nz)   = eps(i,j,nz)*d    + e
+   kappa(i,j,1) = kappa(i,j,1)*d2 + e2;     kappa(i,j,nz) = kappa(i,j,nz)*d2 + e2
   enddo     ; enddo
 !
-  rhs=rhs*sum(q)/qn;
+  __SCALE(rhs, charge_scale * sum(q) / qn); ! preserve total charge and apply charge scaling, if any
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 ! done !
