@@ -8,8 +8,10 @@
 #// double precision small number :
 #// note that this should not be used with the erf approximation, which is at most accurate to within O(-7)
 #//define  __RHO_MIN ERRTOL()
-#// because the logistic is centered on zero, arguments > 0 map to > 0.5, which puts them inside the shell ; in other words, we truncate densities to at most 0.5 :
+#// because the sigmoid is centered on zero, arguments > 0 map to > 0.5, which puts them inside the shell ; in other words, we allow density to be at most 0.5 :
 #define  __RHO_MAX half
+#//-////////////////////// DISTANCE FUNCTION FROM DENSITY :
+#ifdef __LOGISTIC_INVERSE
 #define  __RHO(_X) ( one/(one+exp(-_X/logistic_constant)) )
 #define  __RHOSAFE(_X) (min(__RHO_MAX, __RHO(_X)))
 #define  __OORHO(_R) ( one/_R )
@@ -20,6 +22,14 @@
 #define  __RHO_INVSAFE(_L) ( - logistic_constant * log ( __OORHOSAFE(_L) - one) )
 #// if already have 1/rho
 #define  __RHO_INVERSE2(_OL) ( - logistic_constant * log ( _OL - one) )
+#else
+#// error function inverse
+#define __RHO(_X) half*(one - __erfo7((_X)*osq2*oo_surf_stdev))
+#define __RHO_INVERSE(_L) sqrt2*surf_stdev*ierfo7(two*(_L)-one)
+#define __RHO_INVSAFE(_L) sqrt2*surf_stdev*ierfo7(two*(__RHOSAFE(_L))-one)
+#endif
+
+
 #// with __RHO_MIN specified, we also have the largest possible shell that can be defined ; note the (-) sign convention
 #// this value should be considered when evolving the shell distance
 #define  __MINSURFDIST __RHO_INVERSE(__RHO_MIN)
@@ -2426,6 +2436,7 @@ endif
 !
 ! compute current surface distance from pre :
 ! NOTE: check below to make sure consistent for erf/density ; yes it is;
+#ifdef __LOGISTIC_INVERSE
 ! we are using the boundary potential : k/2 x [ L^-1 (rho) - d0 ] ^ 2 ;
 ! d0 is the quasi-distance to boundary
 ! L^-1(rho) is the logistic function approximant
@@ -2433,6 +2444,7 @@ endif
 ! but if k is large, then d0 is very close to L^-1(rho) and d d0/dr ~= |grad_r L^-1 (rho)| (which is the norm of the forces, as you might expect !)
 ! the forces on the atoms are obtained by differentiation w.r.t position (x) :
 ! F(x) = - k ( L^-1(rho) - d0 ) * logistic_const / (1-L) / L * grad (rho)
+#endif
 
  if (nsolvent_outside .gt. 0) then
   oonsolvent_outside=one/nsolvent_outside
@@ -3077,16 +3089,16 @@ __DBGVAR(bulk_boundary_contour_value,1)
 ! proceed with calculation
     rsurf=rsurf * oo_surf_stdev ! NOTE: redefining rsurf to get rid of variable rsurfn (rsurf <== rsurfn)
     dr2 = sqrt(dr2) * oo_surf_stdev
-! _nonce cycle ! aa
 ! a and b
     a = osq2 * (dr2 + rsurf)
     b = osq2 * (dr2 - rsurf)
     ooc = one / dr2
-! _nonce cycle ! aa get 54
 !
     expa = exp ( - a**2 )
     expb = exp ( - b**2 )
-! _nonce cycle ! aa
+!
+! note that, if dr ~ small, ( expa - expb ) / c is singular, thought the limit (and asymptote) exists
+! however, in the calculations here, that would imply atoms being very close together, which we consider impossible, so ignore this case
 !
 ! update density
 #ifdef __ERFHYBRID
@@ -3333,6 +3345,10 @@ __DBGVAR(bulk_boundary_contour_value,1)
       ooc = one / dr2
       expa = exp ( - a**2 )
       expb = exp ( - b**2 )
+! repeated from above, since it is important :
+! note that, if dr ~ small, ( expa - expb ) / c is singular, thought the limit (and asymptote) exists
+! however, in the calculations here, that would imply atoms being very close together, which we consider impossible, so ignore this case
+!
 ! update density
 #ifdef __ERFHYBRID
       __erfo7i(a,erfa)
@@ -3861,8 +3877,8 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
  int i, im, jm, km, ii, jj, kk, imin, imax, jmin, jmax, kmin, kmax, nx, ny, nz
  float x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, dx2, dy2, dz2, x0, y0, z0
-! float support, support2, rsurf, a, b, ooc, expa, expb, oos
- real*4 :: support, support2, rsurf, a, b, ooc, expa, expb, oos
+! float support, support2, rsurf, a, b, oos
+ real*4 :: support, support2, rsurf, a, b, oos
  float, parameter :: sqrtmap(0:3)=(/zero, one, sqrt2, sqrt3/)
 #ifdef __PERTURB_GRID
  float :: drand(3)
@@ -3909,7 +3925,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 !$omp parallel &
 !$omp shared(sarho_all_threads, sarhof_all_threads) &
 !$omp private(x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, dx2, dy2, dz2, ii, jj, kk, imin, imax, jmin, jmax, kmin, kmax, tid, &
-!$omp i, __U(grad), rhomx, thisrho, igrad, n, support, support2, rsurf, a, b, ooc, expa, expb)
+!$omp i, __U(grad), rhomx, thisrho, igrad, n, support, support2, rsurf, a, b )
  tid=omp_get_thread_num() ! thread index
  numthreads=omp_get_num_threads()
 #ifdef rho
@@ -3981,6 +3997,7 @@ __DBGVAR(kmax,2)
   do kk=kmin,kmax
    dz2=(surface_area_grid_spacing*(kk-1) - (z - z0) )**2; ! actual z-distance between gridpoint and atom
    km=modulo(kk-1,nz-1)+1 ! works for PBC
+! NOTE : assume dz < support because indices kmin, kmax computed accordingly
    do jj=jmin,jmax
     dy2=dz2+(surface_area_grid_spacing*(jj-1) - (y - y0) )**2;
     if (dy2>support2) cycle
@@ -3995,18 +4012,24 @@ __DBGVAR(kmax,2)
       dx2 = sqrt(dx2) * oo_surf_stdev
       a = osq2 * (dx2 + support)
       b = osq2 * (dx2 - support)
-      ooc = one / dx2
-      expa = exp ( - a**2 )
-      expb = exp ( - b**2 )
-! update density
 #ifdef __ERFHYBRID
       __erfo7i(a,erfa)
       __erfo7i(b,erfb)
-      __INCR(rho(im,jm,km), half * ( erfa - erfb ) + osq2pi * ooc * ( expa - expb )   )
 #else
 #define __erf(_Y) __erfo7s(_Y)
 #// singe prec ^
-      __INCR(rho(im,jm,km), half * ( __erf(a) - __erf(b) ) + osq2pi * ooc * ( expa - expb )   )
+#define erfa __erf(a)
+#define erfb __erf(b)
+#endif
+! NOTE that we will have a singularity for small dx ; treat this case here
+#ifdef __ERF_REGULARIZE
+      if ( dx2 .gt. 1e-5 ) then
+#endif
+       __INCR(rho(im,jm,km), half * ( erfa - erfb ) + osq2pi * ( exp (-a**2) - exp (-b**2) ) / dx2 )
+#ifdef __ERF_REGULARIZE
+      else
+       __INCR(rho(im,jm,km), half * ( erfa - erfb ) - osq2pi * support * (two + third * ( support * dx2 )**2 ) * exp ( - half * ( support**2 + dx2**2) ) )
+      endif
 #endif
      endif ! rho<surface_contour value
     enddo !ii
@@ -4075,6 +4098,7 @@ __DBGVAR(kmax,2)
  __SCALE(surface_area,surface_area_grid_spacing**2)
  __DBGVAR(surface_area,1)
 !
+#undef rho
  end __SUB(_S)
 !================================================================
  __SUB(compute_surface_area_mindist)()
@@ -4272,8 +4296,8 @@ __DBGVAR(kmax,2)
  int i, im, jm, km, ii, jj, kk, imin, imax, jmin, jmax, kmin, kmax, nx, ny, nz
  float x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, dx2, dy2, dz2, x0, y0, z0
 ! real*4 ::  x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, dx2, dy2, dz2, x0, y0, z0
-! float :: support, support2, rsurf, a, b, ooc, expa, expb, oos, oobs
- real*4 :: support, support2, rsurf, a, b, ooc, expa, expb, oos, oobs
+! float :: support, support2, rsurf, a, b, oos, oobs
+ real*4 :: support, support2, rsurf, a, b, oos, oobs
 #ifdef __PERTURB_GRID
  float :: drand(3)
 #endif
@@ -4326,7 +4350,7 @@ __DBGVAR(kmax,2)
 !$omp parallel &
 !$omp shared(sarhof_all_threads, ivolume, ivolume_nonbulk) &
 !$omp private(x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, dx2, dy2, dz2, ii, jj, kk, imin, imax, jmin, jmax, kmin, kmax, tid, &
-!$omp i, __U(ivolume), __U(ivolume_nonbulk), n, support, support2, rsurf, a, b, ooc, expa, expb)
+!$omp i, __U(ivolume), __U(ivolume_nonbulk), n, support, support2, rsurf, a, b)
  tid=omp_get_thread_num() ! thread index
 ! numthreads=omp_get_num_threads()
 #ifdef rho
@@ -4413,18 +4437,24 @@ __DBGVAR(kmax,2)
       dx2 = sqrt(dx2) * oo_surf_stdev
       a = osq2 * (dx2 + support)
       b = osq2 * (dx2 - support)
-      ooc = one / dx2
-      expa = exp ( - a**2 )
-      expb = exp ( - b**2 )
-! update density
 #ifdef __ERFHYBRID
       __erfo7i(a,erfa)
       __erfo7i(b,erfb)
-      __INCR(rho(im,jm,km), half * ( erfa - erfb ) + osq2pi * ooc * ( expa - expb )   )
 #else
 #define __erf(_Y) __erfo7s(_Y)
 #// single prec          ^
-      __INCR(rho(im,jm,km), half * ( __erf(a) - __erf(b) ) + osq2pi * ooc * ( expa - expb )   )
+#define erfa __erf(a)
+#define erfb __erf(b)
+#endif
+! NOTE that we will have a singularity for small dx ; treat this case here
+#ifdef __ERF_REGULARIZE
+      if ( dx2 .lt. 1e-5 ) then ! Taylor expansion for exponentials
+#endif
+       __INCR(rho(im,jm,km), half * ( erfa - erfb ) - osq2pi * exp ( - half * ( support**2 + dx2**2) ) * support * (two + third * ( support * dx2 )**2 )  )
+#ifdef __ERF_REGULARIZE
+      else ! standard expression
+       __INCR(rho(im,jm,km), half * ( erfa - erfb ) + osq2pi * ( exp (-a**2) - exp (-b**2) ) / dx2 )
+      endif
 #endif
      endif ! rho<bulk_boundary_contour value
     enddo !ii
