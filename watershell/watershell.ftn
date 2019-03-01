@@ -24,7 +24,7 @@
 #define  __RHO_INVERSE2(_OL) ( - logistic_constant * log ( _OL - one) )
 #else
 #// error function inverse
-#define __RHO(_X) half*(one - __erfo7((_X)*osq2*oo_surf_stdev))
+#define __RHO(_X) half*(one - __erf((_X)*osq2*oo_surf_stdev))
 #define __RHO_INVERSE(_L) sqrt2*surf_stdev*ierfo7(two*(_L)-one)
 #define __RHO_INVSAFE(_L) sqrt2*surf_stdev*ierfo7(two*(__RHOSAFE(_L))-one)
 #endif
@@ -173,9 +173,9 @@ module _N
  __PAR(density_max_samples, int, 100) ! max number of inst. samples to keep in average
  __PAR(density_update_freq, int, 100)   ! how often density is updated from volume and mass
 #ifdef __OMP
- integer*1, allocatable, dimension(:,:,:,:), target :: inrho_all_threads ! density array for computing nonbulk solvent volume
+ int1, allocatable, dimension(:,:,:,:), target :: inrho_all_threads ! density array for computing nonbulk solvent volume
 #else
- integer*1, allocatable, dimension(:,:,:), target :: inrho
+ int1, allocatable, dimension(:,:,:), target :: inrho
 #endif
 ! === ^ dasystat parameters ^ ====
 #endif
@@ -197,10 +197,10 @@ module _N
  bool :: surf_dist_changed=.true. ! simlarly, use flag that keeps track of whether surface distance has changed
  type (grid) :: sagrid
 #ifdef __OMP
- integer*1, allocatable, dimension(:,:,:,:), target :: sarho_all_threads ! density array for surface are computation
+ int1, allocatable, dimension(:,:,:,:), target :: sarho_all_threads ! density array for surface are computation
  real*4, allocatable, dimension(:,:,:,:), target :: sarhof_all_threads   ! density array for surface are computation
 #else
- integer*1, allocatable, dimension(:,:,:), target :: sarho
+ int1, allocatable, dimension(:,:,:), target :: sarho
  real*4, allocatable, dimension(:,:,:), target :: sarhof
 #endif
 #endif
@@ -329,6 +329,8 @@ module _N
 
  end interface rsort_index
 #endif
+!
+#include "erf/erf.H"
 
 != subroutines
  contains
@@ -426,7 +428,7 @@ module _N
 #define __VAR surface_force_constant
 #define __TAG __VAR
 #define __NAME force constant for surface potential
-#define __DOIFOK if (__VAR.lt.__ERRTOL) __WRN(whoami, 'SURFACE FORCE IS OFF.')
+#define __DOIFOK if (abs(__VAR).le.__ERRTOL) __WRN(whoami, 'SURFACE FORCE IS OFF.')
 ! check all contexts:
 #include "parser/parser_macro3.src"
 !
@@ -459,7 +461,7 @@ module _N
 #define __VAR	surface_distance
 #define __TAG __VAR
 #define __NAME	Distance of solvent surface from protein
-#define __DOALWAYS if (abs(__VAR).lt.__ERRTOL) then ; \
+#define __DOALWAYS if (abs(__VAR).le.__ERRTOL) then ; \
                   __MESSAGE(whoami, 'LOCATION OF SOLVENT SURFACE WILL BE SET FROM SOLVENT COORDINATES.') ; \
                  else ;\
                   __VAR=-(abs(__VAR)) ; \
@@ -744,7 +746,7 @@ module _N
 #define __VAR	bulk_boundary_distance
 #define __TAG __VAR
 #define __NAME	Distance from protein to bulk boundary
-#define __DOALWAYS if (abs(__VAR).lt.__ERRTOL) then ; \
+#define __DOALWAYS if (abs(__VAR).le.__ERRTOL) then ; \
                     if (abs(surface_distance).gt.__ERRTOL) then;\
                      __VAR = -(__BULK_DISTANCE_SCALE) *abs(surface_distance);\
                      bulk_boundary_contour_value=__RHOSAFE(__VAR);\
@@ -881,7 +883,7 @@ module _N
 !#define __VAR target_surface_energy
 !#define __TAG __VAR
 !#define __NAME target surface energy per area
-!#define __DOIFOK if (__VAR.lt.__ERRTOL) __WRN(whoami, 'TARGET SURFACE ENERGY IS ALMOST ZERO.')
+!#define __DOIFOK if (abs(__VAR).le.__ERRTOL) __WRN(whoami, 'TARGET SURFACE ENERGY IS ALMOST ZERO.')
 !#include "parser/parser_macro2.src"
 !
 #ifdef __RMFT
@@ -1871,11 +1873,11 @@ __DBGVAR(r_com_sa,1)
     __ASSERT(abs(bulk_boundary_distance),<,abs(surface_distance));
     goto 999
 !
-   elseif( (abs(surface_distance) - abs(bulk_boundary_distance)) .lt. &
+   elseif( (abs(surface_distance) - abs(bulk_boundary_distance)) .le. &
 &    ( __BULK_BOUNDARY_RECOMPUTE_FACTOR * abs(surface_distance) ) ) then ! recompute bulk_bdry
     __MESSAGE(whoami, 'BULK BOUNDARY IS TOO CLOSE TO SURFACE BOUNDARY. WILL RECOMPUTE:')
 !
-   elseif ( abs(bulk_boundary_distance).lt.__ERRTOL ) then ! zero value signals auto-compute
+   elseif ( abs(bulk_boundary_distance).le.__ERRTOL ) then ! zero value signals auto-compute
     __MESSAGE(whoami, 'COMPUTING INITIAL LOCATION OF BULK BOUNDARY FROM SURFACE BOUNDARY:')
 !
    else !
@@ -2917,7 +2919,6 @@ __DBGVAR(solvent_mass_nonbulk,1)
 ! error function definition
 #ifndef __erf
 #//define __erf erf
-#// get an improvement of 20% when using inlined erfo7
 #define __erfs __erfo7s
 #define __erf __erfo7
 #endif
@@ -3074,8 +3075,8 @@ __DBGVAR(bulk_boundary_contour_value,1)
     b = osq2 * (dr2 - rsurf)
     ooc = one / dr2
 !
-    expa = exp ( - a**2 )
-    expb = exp ( - b**2 )
+    expa = __gauss(a)
+    expb = __gauss(b)
 !
 ! note that, if dr ~ small, ( expa - expb ) / c is singular, thought the limit (and asymptote) exists
 ! however, in the calculations here, that would imply atoms being very close together, which we consider impossible, so ignore this case
@@ -3323,8 +3324,8 @@ __DBGVAR(bulk_boundary_contour_value,1)
       a = osq2 * (dr2 + rsurf)
       b = osq2 * (dr2 - rsurf)
       ooc = one / dr2
-      expa = exp ( - a**2 )
-      expb = exp ( - b**2 )
+      expa = __gauss(a)
+      expb = __gauss(b)
 ! repeated from above, since it is important :
 ! note that, if dr ~ small, ( expa - expb ) / c is singular, thought the limit (and asymptote) exists
 ! however, in the calculations here, that would imply atoms being very close together, which we consider impossible, so ignore this case
@@ -3367,8 +3368,8 @@ __DBGVAR(bulk_boundary_contour_value,1)
      a = osq2 * (dr2 + rsurf)
      b = osq2 * (dr2 - rsurf)
      ooc = one / dr2
-     expa = exp ( - a**2 )
-     expb = exp ( - b**2 )
+     expa = __gauss(a)
+     expb = __gauss(b)
 ! update density
 #ifdef __ERFHYBRID
      __erfo7i(a,erfa)
@@ -3864,7 +3865,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
  float :: drand(3)
 #endif
 !
- integer*1 rhomx, thisrho, igrad
+ int1 :: rhomx, thisrho, igrad
  float __U(grad)
  __IAM(__NM(_S))
 !
@@ -4005,7 +4006,7 @@ __DBGVAR(kmax,2)
 #ifdef __ERF_REGULARIZE
       if ( dx2 .gt. 1e-5 ) then
 #endif
-       __INCR(rho(im,jm,km), half * ( erfa - erfb ) + osq2pi * ( exp (-a**2) - exp (-b**2) ) / dx2 )
+       __INCR(rho(im,jm,km), half * ( erfa - erfb ) + osq2pi * ( __gauss1(a) - __gauss1(b) ) / dx2 )
 #ifdef __ERF_REGULARIZE
       else
        __INCR(rho(im,jm,km), half * ( erfa - erfb ) - osq2pi * support * (two + third * ( support * dx2 )**2 ) * exp ( - half * ( support**2 + dx2**2) ) )
@@ -4092,7 +4093,7 @@ __DBGVAR(kmax,2)
 #ifdef __PERTURB_GRID
  float :: drand(3)
 #endif
- integer*1 rhomx, thisrho, igrad
+ int1 rhomx, thisrho, igrad
  float __U(grad)
  __IAM(compute_surface_area_mindist)
 !
@@ -4433,7 +4434,7 @@ __DBGVAR(kmax,2)
        __INCR(rho(im,jm,km), half * ( erfa - erfb ) - osq2pi * exp ( - half * ( support**2 + dx2**2) ) * support * (two + third * ( support * dx2 )**2 )  )
 #ifdef __ERF_REGULARIZE
       else ! standard expression
-       __INCR(rho(im,jm,km), half * ( erfa - erfb ) + osq2pi * ( exp (-a**2) - exp (-b**2) ) / dx2 )
+       __INCR(rho(im,jm,km), half * ( erfa - erfb ) + osq2pi * ( __gauss1(a) - __gauss1(b) ) / dx2 )
       endif
 #endif
      endif ! rho<bulk_boundary_contour value
@@ -4525,7 +4526,7 @@ __DBGVAR(kmax,2)
 !
 #ifndef __VOLUME_THREAD_REDUCE
  int:: irho
- integer*1, parameter :: i1zero=0
+ int1, parameter :: i1zero=0
 #endif
 !
  __IAM(__NM(_S))
