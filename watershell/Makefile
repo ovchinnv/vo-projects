@@ -11,8 +11,8 @@ LIBS+=$(LIB)
 include linkobjs.inc
 include $(ROOT)/Makefile.inc
 
-LOCALMACROS+=-include source.defs -D__BINDC -include $(ROOT)/erf/erf_as.def #-D__erf=erfo7
-LOCALDEPS+=source.defs $(ROOT)/erf/erf_as.def
+LOCALMACROS+=-include source.defs -D__BINDC -include $(ROOT)/erf/erf_as.def -include $(ROOT)/erf/exp_as.def  #-D__erf=erfo7
+LOCALDEPS+=source.defs $(ROOT)/erf/erf_as.def $(ROOT)/erf/exp_as.def
 
 default : plugin
 plugin : $(LIB)
@@ -30,3 +30,8 @@ watershell_plugin_acemd.o : aceplug.h
 
 aceplug.h:
 	wget raw.githubusercontent.com/Acellera/plumed1/master/plumed-1.3/ACEMD/aceplug.h
+
+watershell.F90:watershell.ftn $(LOCALDEPS) $(GLOBALDEPS) $(HEADS)
+	@echo " "$<" ==> "$@" ..."
+	sed 's/\([^\#]\)\(\/\/\)/\1\^\^/g' $< | $(FPP) $(FPPFLAGS) $(DEFS) $(LOCALDEFS) -U__CHARMM $(GLOBALMACROS) $(LOCALMACROS) $(MSG) $(INCLUDES) -P | sed 's/\^\^/\/\//g'|sed 's/e \?- \?/e-/g'|sed 's/d \?- \?/d-/g'> $@
+

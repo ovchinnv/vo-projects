@@ -24,7 +24,7 @@
 #define  __RHO_INVERSE2(_OL) ( - logistic_constant * log ( _OL - one) )
 #else
 #// error function inverse
-#define __RHO(_X) half*(one - __erfo7((_X)*osq2*oo_surf_stdev))
+#define __RHO(_X) half*(one - __erf((_X)*osq2*oo_surf_stdev))
 #define __RHO_INVERSE(_L) sqrt2*surf_stdev*ierfo7(two*(_L)-one)
 #define __RHO_INVSAFE(_L) sqrt2*surf_stdev*ierfo7(two*(__RHOSAFE(_L))-one)
 #endif
@@ -173,9 +173,9 @@ module _N
  __PAR(density_max_samples, int, 100) ! max number of inst. samples to keep in average
  __PAR(density_update_freq, int, 100)   ! how often density is updated from volume and mass
 #ifdef __OMP
- integer*1, allocatable, dimension(:,:,:,:), target :: inrho_all_threads ! density array for computing nonbulk solvent volume
+ int1, allocatable, dimension(:,:,:,:), target :: inrho_all_threads ! density array for computing nonbulk solvent volume
 #else
- integer*1, allocatable, dimension(:,:,:), target :: inrho
+ int1, allocatable, dimension(:,:,:), target :: inrho
 #endif
 ! === ^ dasystat parameters ^ ====
 #endif
@@ -197,10 +197,10 @@ module _N
  bool :: surf_dist_changed=.true. ! simlarly, use flag that keeps track of whether surface distance has changed
  type (grid) :: sagrid
 #ifdef __OMP
- integer*1, allocatable, dimension(:,:,:,:), target :: sarho_all_threads ! density array for surface are computation
+ int1, allocatable, dimension(:,:,:,:), target :: sarho_all_threads ! density array for surface are computation
  real*4, allocatable, dimension(:,:,:,:), target :: sarhof_all_threads   ! density array for surface are computation
 #else
- integer*1, allocatable, dimension(:,:,:), target :: sarho
+ int1, allocatable, dimension(:,:,:), target :: sarho
  real*4, allocatable, dimension(:,:,:), target :: sarhof
 #endif
 #endif
@@ -265,9 +265,11 @@ module _N
 #endif
  float :: net_force(3) = (/zero, zero, zero/);
  float :: net_force_ave(3) = (/zero, zero, zero/); ! running average of net force
- __PAR(net_force_ave_update_memo, float, 0d0); ! memory governing the evolution of net force average ; 0 -- instant force correction
- float :: max_force(3) = (/zero, zero, zero/);
+ float :: rms_force_corr = zero, max_force_corr = zero
  float :: net_torque(3) = (/zero, zero, zero/);
+ float :: net_torque_ave(3) = (/zero, zero, zero/); ! running average of net torque
+ __PAR(net_force_ave_num_samples, int, 0); ! samples in force averages
+ __PAR(net_force_ave_max_samples, int, 5000); ! max number of samples in force averages (memory = 1-1/net_force_max_samples)
 #endif
 ! pressure variables
 #if defined(__BAROSTAT) || defined(__DASYSTAT)
@@ -306,7 +308,7 @@ module _N
 #endif
 !
 #ifdef __FORCE_STATS
- float, dimension(3) :: total_solute_force, total_solvent_force, max_solute_force, max_solvent_force
+ float :: total_solute_force(3), total_solvent_force(3), max_solute_force, max_solvent_force, rms_solute_force, rms_solvent_force
 #endif
 
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
@@ -329,6 +331,8 @@ module _N
 
  end interface rsort_index
 #endif
+!
+#include "erf/erf.H"
 
 != subroutines
  contains
@@ -436,7 +440,7 @@ module _N
 #define __VAR surface_force_constant
 #define __TAG __VAR
 #define __NAME force constant for surface potential
-#define __DOIFOK if (__VAR.lt.__ERRTOL) __WRN(whoami, 'SURFACE FORCE IS OFF.')
+#define __DOIFOK if (abs(__VAR).le.__ERRTOL) __WRN(whoami, 'SURFACE FORCE IS OFF.')
 ! check all contexts:
 #include "parser/parser_macro3.src"
 !
@@ -469,7 +473,7 @@ module _N
 #define __VAR	surface_distance
 #define __TAG __VAR
 #define __NAME	Distance of solvent surface from protein
-#define __DOALWAYS if (abs(__VAR).lt.__ERRTOL) then ; \
+#define __DOALWAYS if (abs(__VAR).le.__ERRTOL) then ; \
                   __MESSAGE(whoami, 'LOCATION OF SOLVENT SURFACE WILL BE SET FROM SOLVENT COORDINATES.') ; \
                  else ;\
                   __VAR=-(abs(__VAR)) ; \
@@ -512,6 +516,17 @@ module _N
 #include "parser/parser_macro2.src"
 #define __WARNIFMISSING
 #endif
+!
+#ifdef __RMFT
+#undef __WARNIFMISSING
+! number of samples in the net force average (we may not need it)
+#define __VAR net_force_ave_num_samples
+#define __TAG average_net_ft_samples
+#define __NAME current samples in average net force
+#include "parser/parser_macro2.src"
+#define __WARNIFMISSING
+#endif
+!
 !
 ! ====== done with (possible) restart file data
  context=contexts(main_context) ! reset context if changed
@@ -754,7 +769,7 @@ module _N
 #define __VAR	bulk_boundary_distance
 #define __TAG __VAR
 #define __NAME	Distance from protein to bulk boundary
-#define __DOALWAYS if (abs(__VAR).lt.__ERRTOL) then ; \
+#define __DOALWAYS if (abs(__VAR).le.__ERRTOL) then ; \
                     if (abs(surface_distance).gt.__ERRTOL) then;\
                      __VAR = -(__BULK_DISTANCE_SCALE) *abs(surface_distance);\
                      bulk_boundary_contour_value=__RHOSAFE(__VAR);\
@@ -901,7 +916,7 @@ endif
 !#define __VAR target_surface_energy
 !#define __TAG __VAR
 !#define __NAME target surface energy per area
-!#define __DOIFOK if (__VAR.lt.__ERRTOL) __WRN(whoami, 'TARGET SURFACE ENERGY IS ALMOST ZERO.')
+!#define __DOIFOK if (abs(__VAR).le.__ERRTOL) __WRN(whoami, 'TARGET SURFACE ENERGY IS ALMOST ZERO.')
 !#include "parser/parser_macro2.src"
 !
 #ifdef __RMFT
@@ -927,12 +942,13 @@ endif
  endif
 #include "parser/parser_macro2.src"
 #undef __BOOL
-#undef __LEZEROERR
-#define __MINUSERR
-#define __VAR net_force_ave_update_memo
-#define __TAG __VAR
-#define __NAME memory constant for average net force removal
+#define __INT
+#define __VAR net_force_ave_max_samples
+#define __TAG average_net_ft_max_samples
+#define __NAME max. samples in average net force
+#define __FATALWRNLEV -2
 #include "parser/parser_macro2.src"
+#undef __INT
 #endif
 !
 ! done pocessing input file parameters
@@ -1221,18 +1237,32 @@ __DBGVAR(r_surf(:,l),1)
  if (qper_parser_override) r_pbc_reference = oonsurface * sum(r_surf,2)
 #endif
 #endif
-  if (qrestart) then ! read average force
-   line=getval_nocase('average_net_force', contexts(restart_context))
+  if (qrestart) then ! read average torque and force
+! net torque :
+   line=getval_nocase('average_net_torque', contexts(restart_context))
    if (len_trim(line).gt.0) then
-    read(line,*,iostat=ierr) net_force_ave
+    read(line,*,iostat=ierr) net_torque_ave
     if (ierr.ne.0) then
-     __WRN(whoami, 'ERROR READING AVERAGE NET FORCE FROM LINE "'//trim(line)//'"')
+      __WRN(whoami, 'ERROR READING AVERAGE NET TORQUE FROM LINE "'//trim(line)//'"')
     endif
    else
-    __WRN(whoami, 'ERROR READING AVERAGE NET FORCE FROM LINE "'//trim(line)//'"')
+     __WRN(whoami, 'ERROR READING AVERAGE NET TORQUE FROM LINE "'//trim(line)//'"')
    endif ! line ok
+! net force :
+   if (remove_net_force) then
+    line=getval_nocase('average_net_force', contexts(restart_context))
+    if (len_trim(line).gt.0) then
+     read(line,*,iostat=ierr) net_force_ave
+     if (ierr.ne.0) then
+      __WRN(whoami, 'ERROR READING AVERAGE NET FORCE FROM LINE "'//trim(line)//'"')
+     endif
+    else
+     __WRN(whoami, 'ERROR READING AVERAGE NET FORCE FROM LINE "'//trim(line)//'"')
+    endif ! line ok
+   endif ! remove net force
   else ! qrestart
-   net_force_ave=zero; ! note that this value should not expected to be physical, since we do not have any statistics at the outset
+   net_torque_ave=zero
+   if (remove_net_force) net_force_ave=zero
   endif ! qrestart
  endif ! remove net_torque
 #endif
@@ -1406,7 +1436,11 @@ __DBGVAR(r_com_sa,1)
 #ifdef __RMFT
 ! need to write out average force (since it is a time average)
  if (remove_net_torque) then
- _W 'average_net_force=(',net_force_ave,')'
+  _W 'average_net_torque=(',net_torque_ave,')'
+  if (remove_net_force) then
+   _W 'average_net_force=(',net_force_ave,')'
+  endif
+  _W 'average_net_ft_samples=',net_force_ave_num_samples
  endif
 #endif
 #ifdef __BAROSTAT
@@ -1891,11 +1925,11 @@ __DBGVAR(r_com_sa,1)
     __ASSERT(abs(bulk_boundary_distance),<,abs(surface_distance));
     goto 999
 !
-   elseif( (abs(surface_distance) - abs(bulk_boundary_distance)) .lt. &
+   elseif( (abs(surface_distance) - abs(bulk_boundary_distance)) .le. &
 &    ( __BULK_BOUNDARY_RECOMPUTE_FACTOR * abs(surface_distance) ) ) then ! recompute bulk_bdry
     __MESSAGE(whoami, 'BULK BOUNDARY IS TOO CLOSE TO SURFACE BOUNDARY. WILL RECOMPUTE:')
 !
-   elseif ( abs(bulk_boundary_distance).lt.__ERRTOL ) then ! zero value signals auto-compute
+   elseif ( abs(bulk_boundary_distance).le.__ERRTOL ) then ! zero value signals auto-compute
     __MESSAGE(whoami, 'COMPUTING INITIAL LOCATION OF BULK BOUNDARY FROM SURFACE BOUNDARY:')
 !
    else !
@@ -2574,7 +2608,7 @@ __DBGVAR(pressure,1)
 __DBGVAR(pressure_ave,1)
 !
 ! update running average
-    if (pressure_num_samples<pressure_max_samples) __INC(pressure_num_samples)
+    if (pressure_num_samples < pressure_max_samples) __INC(pressure_num_samples)
     d0=1d0/pressure_num_samples
      __INCR(pressure_ave, d0 * (pressure - pressure_ave))
 ! repeat for long-time average pressure
@@ -2789,7 +2823,7 @@ __DBGVAR(density_ave,1)
   i=0 ;
 #define __OUT(...)  __INC(i);write(_MSGBUF(i),*) __VA_ARGS__
 #define _TAB char(9)//char(9)
-  __OUT('===================')
+  __OUT('==========================================================================================')
   __OUT('Iteration:', iteration)
   __OUT('Target distance to protein:      ', surface_distance)
 ! this needs to be computed here, because we do not need it at every step:
@@ -2813,22 +2847,45 @@ __DBGVAR(density_ave,1)
 #ifdef __FORCE_STATS
   total_solute_force=zero
   total_solvent_force=zero
+  max_solute_force=zero
+  max_solvent_force=zero
+  rms_solute_force=zero
+  rms_solvent_force=zero
 !
   do ii=1, nsurface_atoms
-   __INCR(total_solute_force, fr(:,isurface_atoms(ii)))
+   iforce=fr(:,isurface_atoms(ii))
+   __INCR(total_solute_force, iforce)
+   d0=iforce(1)**2 + iforce(2)**2 + iforce(3)**2
+   __INCR(rms_solute_force, d0)
+   max_solute_force=max(max_solute_force,d0)
   enddo
   do ii=1, nsolvent
-   __INCR(total_solvent_force, fr(:,isolvent_atoms(ii)))
+   iforce=fr(:,isolvent_atoms(ii))
+   __INCR(total_solvent_force, iforce)
+   d0=iforce(1)**2 + iforce(2)**2 + iforce(3)**2
+   __INCR(rms_solvent_force, d0)
+   max_solvent_force=max(max_solvent_force,d0)
   enddo
-   __OUT('Total force applied to surface atoms:    ', total_solute_force)
-   __OUT('Total force applied to solvent atoms:    ', total_solvent_force)
+   __OUT(' ======= FORCE STATISTICS =======')
+   __OUT('Total force applied to surface atoms:  ', total_solute_force)
+   __OUT('RMS of surface atom forces:            ', sqrt(rms_solute_force*oonsurface))
+   __OUT('Largest force acting on a surface atom:', sqrt(max_solute_force))
+   __OUT('Total force applied to solvent atoms:  ', total_solvent_force)
+   __OUT('RMS of solvent atom forces:            ', sqrt(rms_solvent_force*oonsolvent) )
+   __OUT('Largest force acting on a solvent atom:', sqrt(max_solvent_force))
 #endif
 !
 #if defined(__SHOW_TORQUE) && defined(__RMFT)
   if (remove_net_torque) then
-   __OUT('Total force applied to system:    ', net_force)
-   __OUT('Total torque applied to system:   ', net_torque)
+   __OUT('Total force applied to system:      ', net_force)
+   __OUT('Total torque applied to system:     ', net_torque)
+!
+   __OUT('Corrective force applied to system: ', -net_force_ave)
+   __OUT('Corrective torque applied to system:', -net_torque_ave)
   endif
+#endif
+#ifdef __FORCE_STATS
+   __OUT(' ================================')
 #endif
 #ifdef __BAROSTAT
   if (barostat) then
@@ -2937,7 +2994,6 @@ __DBGVAR(solvent_mass_nonbulk,1)
 ! error function definition
 #ifndef __erf
 #//define __erf erf
-#// get an improvement of 20% when using inlined erfo7
 #define __erfs __erfo7s
 #define __erf __erfo7
 #endif
@@ -3094,8 +3150,8 @@ __DBGVAR(bulk_boundary_contour_value,1)
     b = osq2 * (dr2 - rsurf)
     ooc = one / dr2
 !
-    expa = exp ( - a**2 )
-    expb = exp ( - b**2 )
+    expa = __gauss(a)
+    expb = __gauss(b)
 !
 ! note that, if dr ~ small, ( expa - expb ) / c is singular, thought the limit (and asymptote) exists
 ! however, in the calculations here, that would imply atoms being very close together, which we consider impossible, so ignore this case
@@ -3343,8 +3399,8 @@ __DBGVAR(bulk_boundary_contour_value,1)
       a = osq2 * (dr2 + rsurf)
       b = osq2 * (dr2 - rsurf)
       ooc = one / dr2
-      expa = exp ( - a**2 )
-      expb = exp ( - b**2 )
+      expa = __gauss(a)
+      expb = __gauss(b)
 ! repeated from above, since it is important :
 ! note that, if dr ~ small, ( expa - expb ) / c is singular, thought the limit (and asymptote) exists
 ! however, in the calculations here, that would imply atoms being very close together, which we consider impossible, so ignore this case
@@ -3387,8 +3443,8 @@ __DBGVAR(bulk_boundary_contour_value,1)
      a = osq2 * (dr2 + rsurf)
      b = osq2 * (dr2 - rsurf)
      ooc = one / dr2
-     expa = exp ( - a**2 )
-     expb = exp ( - b**2 )
+     expa = __gauss(a)
+     expb = __gauss(b)
 ! update density
 #ifdef __ERFHYBRID
      __erfo7i(a,erfa)
@@ -3884,7 +3940,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
  float :: drand(3)
 #endif
 !
- integer*1 rhomx, thisrho, igrad
+ int1 :: rhomx, thisrho, igrad
  float __U(grad)
  __IAM(__NM(_S))
 !
@@ -4016,6 +4072,10 @@ __DBGVAR(kmax,2)
       __erfo7i(a,erfa)
       __erfo7i(b,erfb)
 #else
+#ifdef __erf
+#undef __erf
+#endif
+#// use the single precision version
 #define __erf(_Y) __erfo7s(_Y)
 #// singe prec ^
 #define erfa __erf(a)
@@ -4025,7 +4085,7 @@ __DBGVAR(kmax,2)
 #ifdef __ERF_REGULARIZE
       if ( dx2 .gt. 1e-5 ) then
 #endif
-       __INCR(rho(im,jm,km), half * ( erfa - erfb ) + osq2pi * ( exp (-a**2) - exp (-b**2) ) / dx2 )
+       __INCR(rho(im,jm,km), half * ( erfa - erfb ) + osq2pi * ( __gauss1(a) - __gauss1(b) ) / dx2 )
 #ifdef __ERF_REGULARIZE
       else
        __INCR(rho(im,jm,km), half * ( erfa - erfb ) - osq2pi * support * (two + third * ( support * dx2 )**2 ) * exp ( - half * ( support**2 + dx2**2) ) )
@@ -4112,7 +4172,7 @@ __DBGVAR(kmax,2)
 #ifdef __PERTURB_GRID
  float :: drand(3)
 #endif
- integer*1 rhomx, thisrho, igrad
+ int1 rhomx, thisrho, igrad
  float __U(grad)
  __IAM(compute_surface_area_mindist)
 !
@@ -4441,6 +4501,9 @@ __DBGVAR(kmax,2)
       __erfo7i(a,erfa)
       __erfo7i(b,erfb)
 #else
+#ifdef __erf
+#undef __erf
+#endif
 #define __erf(_Y) __erfo7s(_Y)
 #// single prec          ^
 #define erfa __erf(a)
@@ -4453,7 +4516,7 @@ __DBGVAR(kmax,2)
        __INCR(rho(im,jm,km), half * ( erfa - erfb ) - osq2pi * exp ( - half * ( support**2 + dx2**2) ) * support * (two + third * ( support * dx2 )**2 )  )
 #ifdef __ERF_REGULARIZE
       else ! standard expression
-       __INCR(rho(im,jm,km), half * ( erfa - erfb ) + osq2pi * ( exp (-a**2) - exp (-b**2) ) / dx2 )
+       __INCR(rho(im,jm,km), half * ( erfa - erfb ) + osq2pi * ( __gauss1(a) - __gauss1(b) ) / dx2 )
       endif
 #endif
      endif ! rho<bulk_boundary_contour value
@@ -4545,7 +4608,7 @@ __DBGVAR(kmax,2)
 !
 #ifndef __VOLUME_THREAD_REDUCE
  int:: irho
- integer*1, parameter :: i1zero=0
+ int1, parameter :: i1zero=0
 #endif
 !
  __IAM(__NM(_S))
