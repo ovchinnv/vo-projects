@@ -6,6 +6,7 @@ ROOT=.
 NAME=
 
 all : $(DIRS)
+plugin : plugin_master
 clean ::
 	for d in $(DIRS); do (cd $$d; $(MAKE) clean); done
 	for d in $(DISTRIB); do if [ -d $$d ] ; then rm -rf $$d 2>/dev/null ; fi ; done

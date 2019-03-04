@@ -8,8 +8,10 @@ IF (NOT CMAKE_BUILD_TYPE)
 SET(CMAKE_BUILD_TYPE "Release" CACHE STRING "Select build type" FORCE)
 ENDIF()
 
-SET(CMAKE_C_FLAGS_RELEASE "-Ofast -DNDEBUG -D_FLOAT=double -std=c++11" CACHE STRING "C Optimization flags for release builds"  )
-SET(CMAKE_CXX_FLAGS_RELEASE "-Ofast -DNDEBUG -D_FLOAT=double -std=c++11" CACHE STRING "C++ Optimization flags for release builds"  )
+SET(DYNAMO_SINGLE_PRECISION OFF CACHE BOOL "Compile with this floating point precision")
+
+SET(CMAKE_C_FLAGS_RELEASE "-Ofast -DNDEBUG -D_FLOAT=float -std=c++11" CACHE STRING "C Optimization flags for release builds"  )
+SET(CMAKE_CXX_FLAGS_RELEASE "-Ofast -DNDEBUG -D_FLOAT=float -std=c++11" CACHE STRING "C++ Optimization flags for release builds" )
 SET(CUDA_NVCC_FLAGS_RELEASE "-Xptxas -O3" CACHE STRING "NVCC Optimization flags for release builds" FORCE)
 
 # We need to know where OpenMM is installed so we can access the headers and libraries.
@@ -23,11 +25,17 @@ SET(DYNAMO_INCLUDE_DIR "$ENV{DYNAMOPLUGIN}" CACHE PATH "Where the Dynamo header 
 INCLUDE_DIRECTORIES("${DYNAMO_INCLUDE_DIR}")
 LINK_DIRECTORIES("${DYNAMO_LIBRARY_DIR}")
 
-SET(EXTRA_COMPILE_FLAGS "-Ofast" )
+IF(DYNAMO_SINGLE_PRECISION)
+    SET(EXTRA_COMPILE_FLAGS "${EXTRA_COMPILE_FLAGS} -D_FLOAT=float")
+ELSE(DYNAMO_SINGLE_PRECISION)
+    SET(EXTRA_COMPILE_FLAGS "${EXTRA_COMPILE_FLAGS} -D_FLOAT=double")
+ENDIF(DYNAMO_SINGLE_PRECISION)
+
+SET(EXTRA_COMPILE_FLAGS "${EXTRA_COMPILE_FLAGS} -Ofast -std=c++11" )
 # set flags for linking on mac
 IF(APPLE)
     SET(CMAKE_INSTALL_NAME_DIR "@rpath")
-    SET(EXTRA_COMPILE_FLAGS "-msse2 -stdlib=libc++")
+    SET(EXTRA_COMPILE_FLAGS "${EXTRA_COMPILE_FLAGS} -msse2 -stdlib=libc++")
 ENDIF(APPLE)
 
 # Select where to install
