@@ -3,7 +3,7 @@ ROOT=..
 HEADS=watershell.h
 OBJS= watershell.o watershell_plugin.o watershell_plugin_acemd.o ugrid.o
 
-DEPS=files dynamol continua output parser constants erf lu unitcell
+DEPS=files dynamol continua output parser constants erf lu unitcell bestfit
 
 LIB=libwatershell.so # libwatershell.a
 LIBS+=$(LIB)

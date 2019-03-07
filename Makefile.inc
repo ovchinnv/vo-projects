@@ -133,6 +133,7 @@ AFLAGS=rvcs
 LD=$(FC)
 #LDFLAGS=-no-ipo -static -Bstatic #-ipo
 #LDFLAGS=-static -Bstatic -ipo
+#LDFLAGS=-Ofast -dynamic -Bdynamic $(LOMP) -Wl,-z,defs # to list unresolved symbols during linking
 LDFLAGS=-Ofast -dynamic -Bdynamic $(LOMP) -Wl,-z,defs # to list unresolved symbols during linking
 #LDFLAGS=-static -ipa
 
