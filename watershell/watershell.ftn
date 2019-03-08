@@ -1095,12 +1095,20 @@ module _N
 !  if (present(atoms)) then
    do l=1, nsurface_atoms
     ierr=atoms%uadd(isurface_atoms(l))
-#if (defined(__RMFT) && defined(__SIMPLE_NET_FORCE_SURFACE)) || defined(__HAMILTONIAN)
+! NOTE : it is important to record all atoms to which forces will be applied :
+#if (defined(__RMFT) && defined(__SIMPLE_NET_FORCE_SURFACE)) || defined(__HAMILTONIAN) || defined(__ROTRES)
 !  if (remove_net_torque.and.present(forced_atoms)) ierr=forced_atoms%uadd(isurface_atoms(l))
 #ifndef __HAMILTONIAN
-  if (remove_net_torque) &
+  if ( .false. &
+#if (defined(__RMFT) && defined(__SIMPLE_NET_FORCE_SURFACE))
+&  .or. remove_net_torque &
 #endif
-  ierr=forced_atoms%uadd(isurface_atoms(l))
+#if defined(__ROTRES)
+&  .or. qrigid_body_restraint &
+#endif
+&    ) &
+#endif
+ierr=forced_atoms%uadd(isurface_atoms(l))
 #endif
    enddo ! physical surface atoms
 !  endif ! present
@@ -1216,7 +1224,7 @@ __DBGVAR(r_surf(:,l),1)
    __PBCDIST(dr_surf(2,l),ucell%b)
    __PBCDIST(dr_surf(3,l),ucell%c)
   enddo
-   __INCR(r_surf_ref, dr_surf)
+   __INCR(r_surf, dr_surf)
 #endif
   r_com_ref=sum(r_surf_ref,2)*oonsurface ! compute center of geometry
 ! center reference structure on zero :
@@ -1843,7 +1851,7 @@ endif ! decide whether to compute dr_surf
    r_com_inst=r_com ! since the coordinates are fixed
   else
 #endif
-  r_com_inst = oonsurface * sum(dr_surf + r_surf) ; ! need instant com for SIMPLE_NET_FORCE_SURFACE, b/c forces applied to prot. atoms
+  r_com_inst = oonsurface * sum(dr_surf + r_surf,2) ; ! need instant com for SIMPLE_NET_FORCE_SURFACE, b/c forces applied to prot. atoms
 #if defined(__RMFT) && defined(__SIMPLE_NET_FORCE_SURFACE) && defined (__DUMSURF)
  endif ! qdumsurf
 #endif
@@ -1899,9 +1907,9 @@ endif ! decide whether to compute dr_surf
  if (qrigid_body_restraint) then
 ! obtain absolute inst. coordinates, shifted to zero COM
   do i=1, nsurface_atoms
-   __INCR( dr_surf(1,i), r_surf(1,i) - r_com_inst(1))
-   __INCR( dr_surf(2,i), r_surf(2,i) - r_com_inst(2))
-   __INCR( dr_surf(3,i), r_surf(3,i) - r_com_inst(3))
+   __INCR( dr_surf(1,i), r_surf(1,i) - r_com_inst(1) )
+   __INCR( dr_surf(2,i), r_surf(2,i) - r_com_inst(2) )
+   __INCR( dr_surf(3,i), r_surf(3,i) - r_com_inst(3) )
   enddo
   call RMSBestFit(r_surf_ref, dr_surf, rb_wgt, A_rb, qdimswap_=.true.)
 ! subtract Identity from A:
@@ -1916,7 +1924,7 @@ endif ! decide whether to compute dr_surf
 !$omp parallel do schedule(runtime)
 #endif
   do i=1, nsurface_atoms
-   __INCR( fr(:,isurface_atoms(i)), - ( matmul(A_rb, r_surf_ref(:,i)) + dcom ) )
+   __INCR( fr(:,isurface_atoms(i)), -(matmul(A_rb, r_surf_ref(:,i)) + dcom) )
   enddo
 #ifdef __OMP
 !$omp end parallel do
@@ -2955,8 +2963,8 @@ __DBGVAR(density_ave,1)
 ! compute energy here, since this will happen rarely
    rigid_body_energy=zero
    if ( abs(rigid_body_force_constant).gt.__ERRTOL) then
-    do i=1, nsurface_atoms
-     __INCR(rigid_body_energy, dot_product( dr_surf(:,i), matmul(A_rb,r_surf_ref(:,i)) ) )
+    do ii=1, nsurface_atoms
+     __INCR(rigid_body_energy, dot_product( dr_surf(:,ii), matmul(A_rb,r_surf_ref(:,ii)) ) )
     enddo
     __INCR(rigid_body_energy, norm3(dcom) / (rigid_body_force_constant * 2))
    endif
