@@ -34,8 +34,8 @@ ifeq ($(DEBUG),1)
  FFLAGS=-O1 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fcheck=all
  DEFS+=-D__DEBUG
 else
- FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fno-protect-parens #-Wall -fopenmp
-# FFLAGS=-Ofast -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno
+# FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-protect-parens # -fno-math-errno #-Wall -fopenmp
+ FFLAGS=-Ofast -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno
 endif
 #---INTEL
 else ifeq ($(FC),ifort)
@@ -133,6 +133,7 @@ AFLAGS=rvcs
 LD=$(FC)
 #LDFLAGS=-no-ipo -static -Bstatic #-ipo
 #LDFLAGS=-static -Bstatic -ipo
+#LDFLAGS=-Ofast -dynamic -Bdynamic $(LOMP) -Wl,-z,defs # to list unresolved symbols during linking
 LDFLAGS=-Ofast -dynamic -Bdynamic $(LOMP) -Wl,-z,defs # to list unresolved symbols during linking
 #LDFLAGS=-static -ipa
 
