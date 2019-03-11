@@ -279,6 +279,10 @@ module _N
  float :: r_com_ref(3) ! center of geometry of the reference coordinates set
  float, pointer :: r_surf_ref(:,:)
  float, pointer :: rb_wgt(:)
+#ifdef __FD_CHECK
+ float, pointer :: ffd(:,:)
+ float, parameter :: h = 0.1d0
+#endif
 #endif
 !
 ! pressure variables
@@ -1673,6 +1677,12 @@ __DBGVAR(r_com_sa,1)
  int :: ierr
 #endif
 
+#ifdef __ROTRES
+#ifdef __FD_CHECK
+ int :: j, k, l
+#endif
+#endif
+
  int :: i, ii
  __IAM(__NM(main))
 !================================================================
@@ -1944,11 +1954,66 @@ endif ! decide whether to compute dr_surf
 !$omp parallel do schedule(runtime)
 #endif
   do i=1, nsurface_atoms
-   __INCR( fr(:,isurface_atoms(i)), -(matmul(A_rb, r_surf_ref(:,i)) + dcom) )
+   __DECR( fr(:,isurface_atoms(i)), (matmul(A_rb, r_surf_ref(:,i)) + dcom) )
   enddo
 #ifdef __OMP
 !$omp end parallel do
  endif ! rigid body restraint
+!
+#ifdef __FD_CHECK
+  __ALLOC(ffd(3,nsurface_atoms))
+  do i=1, nsurface_atoms ; do j=1, 3
+   ffd(j,i)=zero
+   do ii=-1,1,2
+    __INCR ( dr_surf(j,:) , r_com_inst(j) ) ! restore COM
+    __INCR ( dr_surf(j,i) , ii * h ) ! perturb
+    r_com_inst(j)=sum(dr_surf(j,:))*oonsurface ! recompute com
+    __DECR ( dr_surf(j,:), r_com_inst(j)) ! subtract new COM
+    call RMSBestFit(r_surf_ref, dr_surf, rb_wgt, A_rb, qdimswap_=.true.)
+    dcom=(r_com_inst-r_com_ref)
+! compute energy
+    do k=1, nsurface_atoms
+     __INCR  ( ffd(j,i), ii*sum( ( dr_surf(:,k) - r_surf_ref(:,k) + dcom )**2 ))
+     __DECR  ( ffd(j,i), ii*sum( ( dr_surf(:,k) - matmul(A_rb, r_surf_ref(:,k)))**2))
+    enddo ! k
+! restore coordinate
+    __INCR ( dr_surf(j,:) , r_com_inst(j) ) ! restore COM
+    __INCR ( dr_surf(j,i) , -ii * h ) ! restore
+    r_com_inst(j)=sum(dr_surf(j,:))*oonsurface ! recompute com
+    __DECR ( dr_surf(j,:), r_com_inst(j)) ! subtract new COM
+   enddo ! ii
+  enddo ; enddo ! j, i
+  __SCALE(ffd, - half * rigid_body_force_constant * oonsurface / ( 2*h ) )
+
+! write(600,*) ffd(1,:)
+! write(600,*) fr(1,isurface_atoms(:))
+! close(600)
+
+   d0=sqrt(sum ( ffd(1,:)-fr(1,isurface_atoms(:)) )**2 * oonsurface)
+   d0=d0/sqrt( sum ( fr(1,isurface_atoms(:)) )**2 * oonsurface )
+   __WARN(whoami, ' RELATIVE RMS X-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
+!
+   d0=sqrt(sum ( ffd(2,:)-fr(2,isurface_atoms(:)) )**2 * oonsurface)
+   d0=d0/sqrt( sum ( fr(2,isurface_atoms(:)) )**2 * oonsurface )
+   __WARN(whoami, ' RELATIVE RMS Y-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
+!
+   d0=sqrt(sum ( ffd(3,:)-fr(3,isurface_atoms(:)) )**2 * oonsurface)
+   d0=d0/sqrt( sum ( fr(3,isurface_atoms(:)) )**2 * oonsurface )
+   __WARN(whoami, ' RELATIVE RMS Z-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
+!
+  __FREE(ffd)
+! recompute A and dcom correctly for energy calc in the output section
+!
+  call RMSBestFit(r_surf_ref, dr_surf, rb_wgt, A_rb, qdimswap_=.true.)
+! subtract Identity from A:
+  __DECR(A_rb(1,1),__CONCAT3(1,__PCODE,0))
+  __DECR(A_rb(2,2),__CONCAT3(1,__PCODE,0))
+  __DECR(A_rb(3,3),__CONCAT3(1,__PCODE,0))
+!
+  __SCALE(A_rb, rigid_body_force_constant*oonsurface)
+  dcom=(r_com_inst-r_com_ref)*rigid_body_force_constant*oonsurface
+
+#endif
 #endif
 !============================================= compute contour value/distance and gradient at solvent coordinates
 #endif
@@ -2980,20 +3045,57 @@ __DBGVAR(density_ave,1)
 !
 #ifdef __ROTRES
   if (qrigid_body_restraint) then
+#ifdef __OBSOLETE
 ! compute energy here, since this will happen rarely
+! note that the dot product version is not accurate in single prec. produces negative energies, not sure why.
    rigid_body_energy=zero
    if ( abs(rigid_body_force_constant).gt.__ERRTOL) then
     do ii=1, nsurface_atoms
-     __INCR(rigid_body_energy, dot_product( dr_surf(:,ii), matmul(A_rb,r_surf_ref(:,ii)) ) )
+! line below is inaccurate in single precision, not sure why !
+!     __INCR(rigid_body_energy, dot_product( dr_surf(:,ii), matmul(A_rb,r_surf_ref(:,ii))) )
+     __INCR(rigid_body_energy, sum( dr_surf(:,ii) * matmul(A_rb,r_surf_ref(:,ii))) )
     enddo
-    __INCR(rigid_body_energy, norm3(dcom) / (rigid_body_force_constant * 2))
+   __OUT('Rotational restraint energy:        ', rigid_body_energy)
+! translational component is accurate :
+    d0=nsurface_atoms**2 * dot_product(dcom, dcom) / (rigid_body_force_constant * 2 )
+    __OUT('Translational restraint energy:     ', d0)
+    __INCR(rigid_body_energy, d0)
    endif
-   __OUT('Rigid-body restraint energy:        ', rigid_body_energy)
+   __OUT('Total rigid-body restraint energy:  ', rigid_body_energy)
+#endif
+   rigid_body_energy=zero
+   if ( abs(rigid_body_force_constant).gt.__ERRTOL) then
+    dcom = dcom / rigid_body_force_constant * nsurface_atoms ! remove scaling from COM difference
+    A_rb = A_rb / rigid_body_force_constant * nsurface_atoms + Id3 ! remove scaling from rotation matrix and add back identity
+    do ii=1, nsurface_atoms
+     __INCR(rigid_body_energy, sum( ( dr_surf(:,ii) - r_surf_ref(:,ii) )**2 ))
+     __DECR(rigid_body_energy, sum( ( dr_surf(:,ii) - matmul(A_rb, r_surf_ref(:,ii)))**2))
+    enddo
+    __SCALE(rigid_body_energy, half*rigid_body_force_constant*oonsurface)
+    __OUT('Rotational restraint energy:        ', rigid_body_energy)
+     d0=half*rigid_body_force_constant*dot_product( dcom, dcom )
+    __OUT('Translational restraint energy:     ', d0)
+    __INCR(rigid_body_energy, d0)
+    __OUT('Total rigid-body restraint energy:  ', rigid_body_energy)
+   endif
+#ifdef __DEBUG
+! repeat
+! alternative calculation, close to the unsimplified analytical definition
+   rigid_body_energy=zero
+   if ( abs(rigid_body_force_constant).gt.__ERRTOL) then
+    do ii=1, nsurface_atoms
+     __INCR(rigid_body_energy, sum( ( dr_surf(:,ii) - r_surf_ref(:,ii) + dcom )**2 ))
+     __DECR(rigid_body_energy, sum( ( dr_surf(:,ii) - matmul(A_rb, r_surf_ref(:,ii)))**2))
+    enddo
+    __SCALE(rigid_body_energy, half*rigid_body_force_constant*oonsurface)
+    __OUT('Rigid-body restraint energy (DBG):  ', rigid_body_energy)
+   endif
+#endif
   endif
 #endif
 !
 #ifdef __FORCE_STATS
-   __OUT('================================')
+  __OUT('================================')
 #endif
 #ifdef __BAROSTAT
   if (barostat) then
@@ -3021,7 +3123,7 @@ __DBGVAR(solvent_mass_outside,1)
 __DBGVAR(solvent_mass_nonbulk,1)
   endif
 #endif
-  __OUT('===================')
+  __OUT('================================')
 !
   __PRINT(_MSGBUF)
 
