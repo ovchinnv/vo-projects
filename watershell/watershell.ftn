@@ -37,7 +37,7 @@
 #define __CTX __WATERSHELLCTX
 #define __RESTARTCTX __CONCAT(__WATERSHELLCTX,_RESTART)
 #//define __CHKUPDATE(_WHAT)   ( (mod(iteration, _WHAT) .eq. ione) .or. _WHAT.eq.ione )
-#define __CHKUPDATE(_WHAT)   (mod(iteration, _WHAT) .eq. izero)
+#define __CHKUPDATE(_WHAT)   (mod(iteration, max(_WHAT,1)) .eq. izero)
 
 ! for openmm local thread variables
 #ifdef __OMP
@@ -215,6 +215,7 @@ module _N
  float, pointer :: r_surf(:,:), & ! reference atom coordinates
 &                  rad_surf(:), & ! reference atom radii
 &                  r_solv(:,:), & ! solvent atom coordinates
+&                  dr_surf(:,:), & ! displacement from current r_surf to instantaneous cordinates (useful for PBC unwrapping)
 #ifdef __DASYSTAT
 &                  mass_solv(:), & ! solvent atom/molecular mass
 #endif
@@ -254,12 +255,6 @@ module _N
  float :: current_surface_distance
 #ifdef __RMFT
  float :: r_com(3) =(/zero, zero, zero/); ! center of mass (geometry) for torque computation
-#ifdef __SIMPLE_NET_FORCE_SURFACE
- float :: r_com_inst(3) =(/zero, zero, zero/); ! inst. center of mass (geometry) for torque computation
-#if defined (__OMP) && defined (__PBC_UNWRAP)
- float :: __U(r_com_inst)(3)=(/zero, zero, zero/) ! thread locals
-#endif
-#endif
 #ifdef __UNWRAP_PBC
  float :: r_pbc_reference(3)=(/zero, zero, zero/) ! to unwrap water coordinates for torque correction
 #endif
@@ -271,6 +266,25 @@ module _N
  __PAR(net_force_ave_num_samples, int, 0); ! samples in force averages
  __PAR(net_force_ave_max_samples, int, 5000); ! max number of samples in force averages (memory = 1-1/net_force_max_samples)
 #endif
+!
+#if defined(__RMFT) && defined(__SIMPLE_NET_FORCE_SURFACE) || defined(__ROTRES)
+ float :: r_com_inst(3) =(/zero, zero, zero/); ! inst. center of mass (geometry) for torque computation
+#endif
+!
+#ifdef __ROTRES
+ __PAR(qrigid_body_restraint, bool, .false.)
+ __PAR(rigid_body_force_constant, float, one)
+ float :: rigid_body_rmsd, rigid_body_energy
+ float :: A_rb(3,3) ! rotation matrix
+ float :: r_com_ref(3) ! center of geometry of the reference coordinates set
+ float, pointer :: r_surf_ref(:,:)
+ float, pointer :: rb_wgt(:)
+#ifdef __FD_CHECK
+ float, pointer :: ffd(:,:)
+ float, parameter :: h = 0.1d0
+#endif
+#endif
+!
 ! pressure variables
 #if defined(__BAROSTAT) || defined(__DASYSTAT)
  float :: surface_area=-1d0
@@ -806,7 +820,7 @@ module _N
 #undef __LEZEROERR
 #define __VAR distance_update_step
 #define __TAG __VAR
-#define __NAME memory constant for updating target distance from surface
+#define __NAME constant for updating target distance from surface
 #define __DOIFOK if (__VAR.le.zero) then ; __WRN(whoami, 'UPDATE OF SURFACE CONTOUR REFERENCE VALUE IS OFF.') ; endif
 #include "parser/parser_macro2.src"
 !
@@ -951,7 +965,26 @@ endif
 #undef __INT
 #endif
 !
-! done pocessing input file parameters
+#ifdef __ROTRES
+#define __BOOL
+#define __TAG rigid_body_restraint
+#define __VAR __CONCAT(q,__TAG)
+#define __NAME flag to restrict rigid-body motions of surface atoms
+#include "parser/parser_macro2.src"
+#undef __BOOL
+!
+ if (qrigid_body_restraint) then
+#define __WARNIFMISSING
+#define __DEFAULT
+#define __TAG rigid_body_force_constant
+#define __VAR __TAG
+#define __NAME force constat for ridig body restraint
+#include "parser/parser_macro2.src"
+ endif
+!
+#endif
+!
+! done processing input file parameters
 !
 ! read structure file
 ! (unless already read elsewhere ; at this point the data structures from dynamol are shared)
@@ -967,7 +1000,7 @@ endif
   __MESSAGE(whoami, 'READING STRUCTURE FROM FILE "'//trim(structure_file)//'"');
   call system_PDB_init(structure_file, 'PDB');
   if (.not. fatal_warning()) system_PDB_initialized=.true.
-! save coordinates in rcomp, just in case we need them later ?
+! save coordinates in rcomp, just in case we need them later , e.g. for rigid-body restraint reference
   if (associated(rcomp) .and. associated(r)) rcomp=r
  endif
 !=========== end structure file
@@ -1071,17 +1104,35 @@ endif
   oonsurface=one/nsurface_coord ! recall that nsurface_coord is either the number of surface dummies, or the number of surface atoms
 !
   __ALLOC(r_surf(3,nsurface_coord))
+  __ALLOC(dr_surf(3,nsurface_coord))
+#ifdef __ROTRES
+  if (qrigid_body_restraint) then
+   __ALLOC(r_surf_ref(3,nsurface_coord))
+   __ALLOC(rb_wgt(nsurface_coord))
+  else
+   nullify(r_surf_ref, rb_wgt)
+  endif
+#endif
   __ALLOC(rad_surf(nsurface_coord))
+ 
 ! add atoms to list if provided
 !  if (present(atoms)) then
    do l=1, nsurface_atoms
     ierr=atoms%uadd(isurface_atoms(l))
-#if (defined(__RMFT) && defined(__SIMPLE_NET_FORCE_SURFACE)) || defined(__HAMILTONIAN)
+! NOTE : it is important to record all atoms to which forces will be applied :
+#if (defined(__RMFT) && defined(__SIMPLE_NET_FORCE_SURFACE)) || defined(__HAMILTONIAN) || defined(__ROTRES)
 !  if (remove_net_torque.and.present(forced_atoms)) ierr=forced_atoms%uadd(isurface_atoms(l))
 #ifndef __HAMILTONIAN
-  if (remove_net_torque) &
+  if ( .false. &
+#if (defined(__RMFT) && defined(__SIMPLE_NET_FORCE_SURFACE))
+&  .or. remove_net_torque &
 #endif
-  ierr=forced_atoms%uadd(isurface_atoms(l))
+#if defined(__ROTRES)
+&  .or. qrigid_body_restraint &
+#endif
+&    ) &
+#endif
+ierr=forced_atoms%uadd(isurface_atoms(l))
 #endif
    enddo ! physical surface atoms
 !  endif ! present
@@ -1185,6 +1236,28 @@ __DBGVAR(r_surf(:,l),1)
 ! take surface atom coordinates from structure (PDB) file
   r_surf(:,1:nsurface_atoms)=r(:,isurface_atoms)
  endif ! qrestart
+#ifdef __ROTRES
+ if (qrigid_body_restraint) then ! read reference restraint atoms
+  r_surf_ref(:,1:nsurface_atoms)=rcomp(:,isurface_atoms)
+  rb_wgt=oonsurface ! uniform orientation weights
+! in the case of restarting with PBC, align r_surf_ref with r_surf (should not be needed)
+#ifdef __PBC_UNWRAP
+  dr_surf=r_surf_ref-r_surf
+  do l=1, nsurface_atoms
+   __PBCDIST(dr_surf(1,l),ucell%a)
+   __PBCDIST(dr_surf(2,l),ucell%b)
+   __PBCDIST(dr_surf(3,l),ucell%c)
+  enddo
+   __INCR(r_surf, dr_surf)
+#endif
+  r_com_ref=sum(r_surf_ref,2)*oonsurface ! compute center of geometry
+! center reference structure on zero :
+  do l=1, nsurface_atoms
+   __DECR( r_surf_ref(:,l), r_com_ref )
+  enddo
+ endif
+#endif
+!
 !
 #ifdef __DUMSURF
  if (qdumsurf) then
@@ -1479,6 +1552,11 @@ __DBGVAR(r_com_sa,1)
  call system_done()
  call parser_done()
  __FREE(r_surf)
+ __FREE(dr_surf)
+#ifdef __ROTRES
+ __FREE(r_surf_ref)
+ __FREE(rb_wgt)
+#endif
  __FREE(r_solv)
  __FREE(qforced_solv)
  __FREE(rad_surf)
@@ -1526,7 +1604,11 @@ __DBGVAR(r_com_sa,1)
 #if defined(__RMFT) & !defined(__F_T_COUPLED)
  use lu
 #endif
- use bestfit, only :  matinv3sym, norm3
+ use bestfit, only :  matinv3sym &
+#ifdef __ROTRES
+& , RMSBestFit &
+#endif
+& , norm3
 !
  float, intent(in) :: r(:,:)   ! coordinate array
  float, intent(out) :: fr(:,:) ! force array
@@ -1538,6 +1620,12 @@ __DBGVAR(r_com_sa,1)
 ! int :: ibeg, iend ! atom indices for looping
  float :: distance_from_solute, distance_from_solute2, pre, d0
  float :: surface_force ! , density_beyond_contour ! useful ?
+#ifdef __ROTRES
+ float :: dcom(3), r1(3)
+#endif
+#if defined(__RMFT) || defined(__FORCE_STATS)
+ float :: iforce(3)
+#endif
 #ifdef __RMFT
 ! to update coefficients for computing torque matrix ; doing this way to separate com contribution :
 #define __UPDATE_TMAT_C \
@@ -1550,7 +1638,7 @@ __DBGVAR(r_com_sa,1)
   __INCR(__U(ir12),ir(1)*ir(2));\
   __INCR(__U(ir13),ir(1)*ir(3));\
   __INCR(__U(ir23),ir(2)*ir(3));
- float, dimension(3) :: ir, iforce, itorque ! inst position, force and torque corresponding to an atom
+ float, dimension(3) :: ir, itorque ! inst position, force and torque corresponding to an atom
  float :: ir1,ir2,ir3,ir1s,ir2s,ir3s,ir12,ir13,ir23, oontorque
  float, dimension(3) :: ir_sum
 ! float, dimension(3) :: oforce ! existing force
@@ -1587,6 +1675,12 @@ __DBGVAR(r_com_sa,1)
  float, allocatable :: distance2(:)
 #endif
  int :: ierr
+#endif
+
+#ifdef __ROTRES
+#ifdef __FD_CHECK
+ int :: j, k, l
+#endif
 #endif
 
  int :: i, ii
@@ -1733,80 +1827,29 @@ __DBGVAR(r_com_sa,1)
  endif ! sorted
 #endif
 !
-#ifdef __RMFT
-#ifdef __SIMPLE_NET_FORCE_SURFACE
- if (remove_net_torque) then
-#ifdef __DUMSURF
-  if (qdumsurf) then
-   r_com_inst=r_com ! since the coordinates are fixed
-  else
-#endif
-#ifdef __UNWRAP_PBC
-  if (qper_parser_override) then 
-   r_com_inst=zero
-#ifdef __OMP
-!$omp parallel private(__U(r_com_inst), pre)
-   __U(r_com_inst)=zero
-!$omp do schedule(runtime)
-#endif
-   do i=1, nsurface_atoms
-    ii=isurface_atoms(i)
-!x
-    pre=r(1,ii)-r_surf(1,i); __PBCDIST(pre,ucell%a)
-    __INCR(__U(r_com_inst)(1), pre + r_surf(1,i))
-!y
-    pre=r(2,ii)-r_surf(2,i); __PBCDIST(pre,ucell%b)
-    __INCR(__U(r_com_inst)(2), pre + r_surf(2,i))
-!z
-    pre=r(3,ii)-r_surf(3,i); __PBCDIST(pre,ucell%c)
-    __INCR(__U(r_com_inst)(3), pre + r_surf(3,i))
-   enddo ! surface_atoms
-#ifdef __OMP
-!$omp end do
-!$omp atomic
-   __AREDUCE(r_com_inst,1)
-!$omp atomic
-   __AREDUCE(r_com_inst,2)
-!$omp atomic
-   __AREDUCE(r_com_inst,3)
-!$omp end parallel
-#endif
-   __SCALE(r_com_inst,oonsurface)
-  else ! qper_parser_override
-#endif
-  r_com_inst = oonsurface * sum(r(:,isurface_atoms),2) ; ! need instant com for SIMPLE_NET_FORCE_SURFACE, b/c forces applied to prot. atoms
-#ifdef __UNWRAP_PBC
- endif ! qper_parser_override
-#endif
-#ifdef __DUMSURF
- endif ! qdumsurf
-#endif
- endif ! remove_net_torque
+! compute displacement from inst. surface atom coordinates to current surface coordinates ; for convenience in subsequent calcs
+! note that it is needed only in certain circumstances (compilations and runtime conditions), so we test for that below :
 
+ if ( ((structure_update_freq.gt.izero) .and. __CHKUPDATE(structure_update_freq)) &
+#if (defined(__RMFT) && defined(__SIMPLE_NET_FORCE_SURFACE))
+&  .or. remove_net_torque &
 #endif
+#ifdef __ROTRES
+&  .or. qrigid_body_restraint &
 #endif
-!============================================= update reference coordinates
- if (structure_update_freq.gt.izero) then
-  if __CHKUPDATE(structure_update_freq) then
-
+&    ) then
+!
 #ifdef __PBC_UNWRAP
    if (qper_parser_override) then
-    d0=one-structure_update_memory
 #ifdef __OMP
-!$omp parallel private(pre,ii)
+!$omp parallel private(ii)
 !$omp do schedule(runtime)
 #endif
     do i=1, nsurface_atoms
      ii=isurface_atoms(i)
-! x
-     pre=r(1,ii)-r_surf(1,i); __PBCDIST(pre,ucell%a)
-     __INCR(r_surf(1,i), d0*pre)
-! y
-     pre=r(2,ii)-r_surf(2,i); __PBCDIST(pre,ucell%b)
-     __INCR(r_surf(2,i), d0*pre)
-! z
-     pre=r(3,ii)-r_surf(3,i); __PBCDIST(pre,ucell%c)
-     __INCR(r_surf(3,i), d0*pre)
+     dr_surf(1,i)=r(1,ii)-r_surf(1,i); __PBCDIST(dr_surf(1,i),ucell%a) !x
+     dr_surf(2,i)=r(2,ii)-r_surf(2,i); __PBCDIST(dr_surf(2,i),ucell%b) !y
+     dr_surf(3,i)=r(3,ii)-r_surf(3,i); __PBCDIST(dr_surf(3,i),ucell%c) !z
     enddo
 #ifdef __OMP
 !$omp end do
@@ -1817,10 +1860,41 @@ __DBGVAR(r_com_sa,1)
 #ifdef __DUMSURF
     if (nsurface_atoms.gt.0) &
 #endif
-     r_surf = structure_update_memory * r_surf + (one - structure_update_memory) * r(:,isurface_atoms)
+     dr_surf = r(:,isurface_atoms) - r_surf
 #ifdef __PBC_UNWRAP
    endif ! qper override
 #endif
+endif ! decide whether to compute dr_surf
+!
+#if (defined(__RMFT) && defined(__SIMPLE_NET_FORCE_SURFACE)) || defined (__ROTRES)
+ if ( .false. &
+#if (defined(__RMFT) && defined(__SIMPLE_NET_FORCE_SURFACE))
+& .or. remove_net_torque &
+#endif
+#ifdef __ROTRES
+& .or. qrigid_body_restraint &
+#endif
+               ) then
+! note that rigid body restraints are not compatible with __DUMSURF ; partly because is unclear why that would be useful, or how to do it
+#if defined(__RMFT) && defined(__SIMPLE_NET_FORCE_SURFACE) && defined (__DUMSURF)
+  if (qdumsurf) then
+   r_com_inst=r_com ! since the coordinates are fixed
+  else
+#endif
+  r_com_inst = oonsurface * sum(dr_surf + r_surf,2) ; ! need instant com for SIMPLE_NET_FORCE_SURFACE, b/c forces applied to prot. atoms
+#if defined(__RMFT) && defined(__SIMPLE_NET_FORCE_SURFACE) && defined (__DUMSURF)
+ endif ! qdumsurf
+#endif
+ endif ! remove_net_torque || qrigid_body_restraint
+#endif
+!============================================= update surface coordinates
+ if (structure_update_freq.gt.izero) then
+  if __CHKUPDATE(structure_update_freq) then
+   d0=(one-structure_update_memory)
+#ifdef __DUMSURF
+   if (nsurface_atoms.gt.0) &
+#endif
+    __INCR(r_surf, d0 * dr_surf)
 !
 #if defined(__BAROSTAT) || defined (__DASYSTAT)
    if (&
@@ -1841,7 +1915,7 @@ __DBGVAR(r_com_sa,1)
    if (remove_net_torque) then 
 #ifdef __SIMPLE_NET_FORCE_SURFACE
 ! update r_com
-    r_com = structure_update_memory * r_com + (one - structure_update_memory) * r_com_inst ;
+    __INCR(r_com,  d0 * (r_com_inst - r_com))
 #else
     r_com = oonsurface * sum(r_surf,2) ;
 #endif
@@ -1858,7 +1932,91 @@ __DBGVAR(r_com_sa,1)
   endif ! structure_update
  endif ! structure_update
 !
+#ifdef __ROTRES
+!============================================= apply rigid body restraint forces
+ if (qrigid_body_restraint) then
+! obtain absolute inst. coordinates, shifted to zero COM
+  do i=1, nsurface_atoms
+   __INCR( dr_surf(1,i), r_surf(1,i) - r_com_inst(1) )
+   __INCR( dr_surf(2,i), r_surf(2,i) - r_com_inst(2) )
+   __INCR( dr_surf(3,i), r_surf(3,i) - r_com_inst(3) )
+  enddo
+  call RMSBestFit(r_surf_ref, dr_surf, rb_wgt, A_rb, qdimswap_=.true.)
+! subtract Identity from A:
+  __DECR(A_rb(1,1),__CONCAT3(1,__PCODE,0))
+  __DECR(A_rb(2,2),__CONCAT3(1,__PCODE,0))
+  __DECR(A_rb(3,3),__CONCAT3(1,__PCODE,0))
+!
+  __SCALE(A_rb, rigid_body_force_constant*oonsurface) ! scale matrix for speed
+  dcom=(r_com_inst-r_com_ref)*rigid_body_force_constant*oonsurface
+! compute and apply forces on surface atoms :
+#ifdef __OMP
+!$omp parallel do schedule(runtime)
+#endif
+  do i=1, nsurface_atoms
+   __DECR( fr(:,isurface_atoms(i)), (matmul(A_rb, r_surf_ref(:,i)) + dcom) )
+  enddo
+#ifdef __OMP
+!$omp end parallel do
+ endif ! rigid body restraint
+!
+#ifdef __FD_CHECK
+  __ALLOC(ffd(3,nsurface_atoms))
+  do i=1, nsurface_atoms ; do j=1, 3
+   ffd(j,i)=zero
+   do ii=-1,1,2
+    __INCR ( dr_surf(j,:) , r_com_inst(j) ) ! restore COM
+    __INCR ( dr_surf(j,i) , ii * h ) ! perturb
+    r_com_inst(j)=sum(dr_surf(j,:))*oonsurface ! recompute com
+    __DECR ( dr_surf(j,:), r_com_inst(j)) ! subtract new COM
+    call RMSBestFit(r_surf_ref, dr_surf, rb_wgt, A_rb, qdimswap_=.true.)
+    dcom=(r_com_inst-r_com_ref)
+! compute energy
+    do k=1, nsurface_atoms
+     __INCR  ( ffd(j,i), ii*sum( ( dr_surf(:,k) - r_surf_ref(:,k) + dcom )**2 ))
+     __DECR  ( ffd(j,i), ii*sum( ( dr_surf(:,k) - matmul(A_rb, r_surf_ref(:,k)))**2))
+    enddo ! k
+! restore coordinate
+    __INCR ( dr_surf(j,:) , r_com_inst(j) ) ! restore COM
+    __INCR ( dr_surf(j,i) , -ii * h ) ! restore
+    r_com_inst(j)=sum(dr_surf(j,:))*oonsurface ! recompute com
+    __DECR ( dr_surf(j,:), r_com_inst(j)) ! subtract new COM
+   enddo ! ii
+  enddo ; enddo ! j, i
+  __SCALE(ffd, - half * rigid_body_force_constant * oonsurface / ( 2*h ) )
+
+! write(600,*) ffd(1,:)
+! write(600,*) fr(1,isurface_atoms(:))
+! close(600)
+
+   d0=sqrt(sum ( ffd(1,:)-fr(1,isurface_atoms(:)) )**2 * oonsurface)
+   d0=d0/sqrt( sum ( fr(1,isurface_atoms(:)) )**2 * oonsurface )
+   __WARN(whoami, ' RELATIVE RMS X-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
+!
+   d0=sqrt(sum ( ffd(2,:)-fr(2,isurface_atoms(:)) )**2 * oonsurface)
+   d0=d0/sqrt( sum ( fr(2,isurface_atoms(:)) )**2 * oonsurface )
+   __WARN(whoami, ' RELATIVE RMS Y-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
+!
+   d0=sqrt(sum ( ffd(3,:)-fr(3,isurface_atoms(:)) )**2 * oonsurface)
+   d0=d0/sqrt( sum ( fr(3,isurface_atoms(:)) )**2 * oonsurface )
+   __WARN(whoami, ' RELATIVE RMS Z-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
+!
+  __FREE(ffd)
+! recompute A and dcom correctly for energy calc in the output section
+!
+  call RMSBestFit(r_surf_ref, dr_surf, rb_wgt, A_rb, qdimswap_=.true.)
+! subtract Identity from A:
+  __DECR(A_rb(1,1),__CONCAT3(1,__PCODE,0))
+  __DECR(A_rb(2,2),__CONCAT3(1,__PCODE,0))
+  __DECR(A_rb(3,3),__CONCAT3(1,__PCODE,0))
+!
+  __SCALE(A_rb, rigid_body_force_constant*oonsurface)
+  dcom=(r_com_inst-r_com_ref)*rigid_body_force_constant*oonsurface
+
+#endif
+#endif
 !============================================= compute contour value/distance and gradient at solvent coordinates
+#endif
 !
  surface_energy=zero
  distance_from_solute=zero
@@ -2777,7 +2935,7 @@ __DBGVAR(density,1)
 __DBGVAR(density_ave,1)
 !
 ! update running average
-    if (density_num_samples<density_max_samples) __INC(density_num_samples)
+    if (density_num_samples .lt. density_max_samples) __INC(density_num_samples)
     d0=1d0/density_num_samples
      __INCR(density_ave, d0 * (density - density_ave))
    endif ! chkupdate
@@ -2866,7 +3024,7 @@ __DBGVAR(density_ave,1)
    __INCR(rms_solvent_force, d0)
    max_solvent_force=max(max_solvent_force,d0)
   enddo
-   __OUT(' ======= FORCE STATISTICS =======')
+   __OUT('======= FORCE STATISTICS =======')
    __OUT('Total force applied to surface atoms:  ', total_solute_force)
    __OUT('RMS of surface atom forces:            ', sqrt(rms_solute_force*oonsurface))
    __OUT('Largest force acting on a surface atom:', sqrt(max_solute_force))
@@ -2884,8 +3042,60 @@ __DBGVAR(density_ave,1)
    __OUT('Corrective torque applied to system:', -net_torque_ave)
   endif
 #endif
+!
+#ifdef __ROTRES
+  if (qrigid_body_restraint) then
+#ifdef __OBSOLETE
+! compute energy here, since this will happen rarely
+! note that the dot product version is not accurate in single prec. produces negative energies, not sure why.
+   rigid_body_energy=zero
+   if ( abs(rigid_body_force_constant).gt.__ERRTOL) then
+    do ii=1, nsurface_atoms
+! line below is inaccurate in single precision, not sure why !
+!     __INCR(rigid_body_energy, dot_product( dr_surf(:,ii), matmul(A_rb,r_surf_ref(:,ii))) )
+     __INCR(rigid_body_energy, sum( dr_surf(:,ii) * matmul(A_rb,r_surf_ref(:,ii))) )
+    enddo
+   __OUT('Rotational restraint energy:        ', rigid_body_energy)
+! translational component is accurate :
+    d0=nsurface_atoms**2 * dot_product(dcom, dcom) / (rigid_body_force_constant * 2 )
+    __OUT('Translational restraint energy:     ', d0)
+    __INCR(rigid_body_energy, d0)
+   endif
+   __OUT('Total rigid-body restraint energy:  ', rigid_body_energy)
+#endif
+   rigid_body_energy=zero
+   if ( abs(rigid_body_force_constant).gt.__ERRTOL) then
+    dcom = dcom / rigid_body_force_constant * nsurface_atoms ! remove scaling from COM difference
+    A_rb = A_rb / rigid_body_force_constant * nsurface_atoms + Id3 ! remove scaling from rotation matrix and add back identity
+    do ii=1, nsurface_atoms
+     __INCR(rigid_body_energy, sum( ( dr_surf(:,ii) - r_surf_ref(:,ii) )**2 ))
+     __DECR(rigid_body_energy, sum( ( dr_surf(:,ii) - matmul(A_rb, r_surf_ref(:,ii)))**2))
+    enddo
+    __SCALE(rigid_body_energy, half*rigid_body_force_constant*oonsurface)
+    __OUT('Rotational restraint energy:        ', rigid_body_energy)
+     d0=half*rigid_body_force_constant*dot_product( dcom, dcom )
+    __OUT('Translational restraint energy:     ', d0)
+    __INCR(rigid_body_energy, d0)
+    __OUT('Total rigid-body restraint energy:  ', rigid_body_energy)
+   endif
+#ifdef __DEBUG
+! repeat
+! alternative calculation, close to the unsimplified analytical definition
+   rigid_body_energy=zero
+   if ( abs(rigid_body_force_constant).gt.__ERRTOL) then
+    do ii=1, nsurface_atoms
+     __INCR(rigid_body_energy, sum( ( dr_surf(:,ii) - r_surf_ref(:,ii) + dcom )**2 ))
+     __DECR(rigid_body_energy, sum( ( dr_surf(:,ii) - matmul(A_rb, r_surf_ref(:,ii)))**2))
+    enddo
+    __SCALE(rigid_body_energy, half*rigid_body_force_constant*oonsurface)
+    __OUT('Rigid-body restraint energy (DBG):  ', rigid_body_energy)
+   endif
+#endif
+  endif
+#endif
+!
 #ifdef __FORCE_STATS
-   __OUT(' ================================')
+  __OUT('================================')
 #endif
 #ifdef __BAROSTAT
   if (barostat) then
@@ -2913,7 +3123,7 @@ __DBGVAR(solvent_mass_outside,1)
 __DBGVAR(solvent_mass_nonbulk,1)
   endif
 #endif
-  __OUT('===================')
+  __OUT('================================')
 !
   __PRINT(_MSGBUF)
 
