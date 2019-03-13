@@ -10,8 +10,8 @@ ENDIF()
 
 SET(DYNAMO_SINGLE_PRECISION OFF CACHE BOOL "Compile with this floating point precision")
 
-SET(CMAKE_C_FLAGS_RELEASE "-Ofast -DNDEBUG -D_FLOAT=double -std=c++11" CACHE STRING "C Optimization flags for release builds"  )
-SET(CMAKE_CXX_FLAGS_RELEASE "-Ofast -DNDEBUG -D_FLOAT=double -std=c++11" CACHE STRING "C++ Optimization flags for release builds" )
+SET(CMAKE_C_FLAGS_RELEASE "-Ofast -DNDEBUG -D_FLOAT=float -std=c++11" CACHE STRING "C Optimization flags for release builds"  )
+SET(CMAKE_CXX_FLAGS_RELEASE "-Ofast -DNDEBUG -D_FLOAT=float -std=c++11" CACHE STRING "C++ Optimization flags for release builds" )
 SET(CUDA_NVCC_FLAGS_RELEASE "-Xptxas -O3" CACHE STRING "NVCC Optimization flags for release builds" FORCE)
 
 # We need to know where OpenMM is installed so we can access the headers and libraries.
