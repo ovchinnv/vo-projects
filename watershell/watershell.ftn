@@ -1,7 +1,11 @@
+! error function definition
+#ifndef __erf
+#//define __erf erf
+#define __erfs __erfo7s
+#define __erf __erfo7
+#endif
 ! to "regularize" variation of applied forces with the contour value,
 ! use a rough approximation to the inverse of the filter CDF;
-! for efficiency, use a logistic function matched to the Gaussian filter
-!
 ! to avoid divide overflow, define minimum density
 #// single precision small number :
 #define  __RHO_MIN FERRTOL()
@@ -10,10 +14,11 @@
 #//define  __RHO_MIN ERRTOL()
 #// because the sigmoid is centered on zero, arguments > 0 map to > 0.5, which puts them inside the shell ; in other words, we allow density to be at most 0.5 :
 #define  __RHO_MAX half
+#define  __RHOSAFE(_X) (min(__RHO_MAX, __RHO(_X)))
 #//-////////////////////// DISTANCE FUNCTION FROM DENSITY :
+! for speed, use a logistic function matched to the Gaussian filter
 #ifdef __LOGISTIC_INVERSE
 #define  __RHO(_X) ( one/(one+exp(-_X/logistic_constant)) )
-#define  __RHOSAFE(_X) (min(__RHO_MAX, __RHO(_X)))
 #define  __OORHO(_R) ( one/_R )
 #//define  __OORHOSAFE(_R) ( one/(max(_R,__RHO_MIN)))
 #// incorporate maximum density into above :
@@ -24,9 +29,13 @@
 #define  __RHO_INVERSE2(_OL) ( - logistic_constant * log ( _OL - one) )
 #else
 #// error function inverse
-#define __RHO(_X) half*(one - __erf((_X)*osq2*oo_surf_stdev))
-#define __RHO_INVERSE(_L) sqrt2*surf_stdev*ierfo7(two*(_L)-one)
-#define __RHO_INVSAFE(_L) sqrt2*surf_stdev*ierfo7(two*(__RHOSAFE(_L))-one)
+#define __RHO(_X) half*(one + __erf((_X)*osq2*oo_surf_stdev))
+#define __Q(_R) ierfo7(two*(_R)-one)
+#define __QSAFE(_R) ierfo7(two * min(__RHO_MAX, _R) - one)
+#define __RHO_INVERSE(_R) sqrt2*surf_stdev*__Q(_R)
+#// if already computed erf inverse _Q
+#define __RHO_INVERSE2(_Q) sqrt2*surf_stdev*_Q
+#define __RHO_INVSAFE(_R) sqrt2*surf_stdev*__QSAFE(_R)
 #endif
 
 
@@ -109,7 +118,7 @@ module _N
 !
 ! surface computation parameters :
 ! __PAR(surface_contour_value, float, -one) ! value of density isosurface which is defines the surface ; negative means to compute from structure
- __PAR(surface_distance, float, zero) ! in the original density method, obtained by inverting logistic function of density (as an approximation)
+ __PAR(surface_distance, float, zero) ! in the original density method, obtained by `inverting` density (as an approximation)
 #ifdef __DASYSTAT
  __PAR(bulk_boundary_distance, float, zero) ! distance to the bulk solvent boundary (should obviously be smaller than the shell surface distance)
 #endif
@@ -117,7 +126,10 @@ module _N
  __PAR(surf_padding,float,0d0)       ! ( units of radius ) padding values to radii which might account for e.g. solvent layer(s)
  __PAR(surf_stdev,float,2d0)         ! standard deviation of smoothing filter
 !
- float :: cutoff_surf, cutoff_surf2, oo_surf_stdev, logistic_constant
+ float :: cutoff_surf, cutoff_surf2, oo_surf_stdev
+#ifdef __LOGISTIC_INVERSE
+ float :: logistic_constant
+#endif
  float :: surface_contour_value ! value of density which defines the surface ; negative means to compute from structure
  float :: surface_energy ! moved here to be acessible from outside
 #ifdef __DASYSTAT
@@ -308,7 +320,7 @@ module _N
 #endif
 !
  float, private, parameter :: osq2=one/sqrt2
- float, private, parameter :: osq2pi=one/sqrt(twopi)
+ float, private, parameter :: sq2pi=sqrt(twopi), osq2pi=one/sq2pi
 !
 ! for Hamiltonian dynamics
 #ifdef __HAMILTONIAN
@@ -479,7 +491,9 @@ module _N
 ! compute constant (=1/a)  for logistic distribution that matches the stdev
 ! the distribution is a * exp (-xa) / ( 1 + exp (-xa ) )^2
 ! the corresponding cdf is 1 / ( 1 + exp (-xa) )
+#ifdef __LOGISTIC_INVERSE
  logistic_constant = sqrt3 * opi * surf_stdev ; ! need this for __RHO below
+#endif
 !
 #undef __LEZEROERR
 !
@@ -2392,7 +2406,10 @@ endif
 !================= original density based algorithm ==================
 #ifdef __OMP
 !$omp parallel &
-!$omp shared (rho_solv, drho_solv, surface_contour_value, surface_distance, logistic_constant, surface_force_constant, &
+!$omp shared (rho_solv, drho_solv, surface_contour_value, surface_distance, surface_force_constant, &
+#ifdef __LOGISTIC_INVERSE
+!$omp logistic_constant, &
+#endif
 #ifdef __DASYSTAT
 !$omp solvent_mass_outside, solvent_mass, &
 #endif
@@ -2475,7 +2492,11 @@ endif
 !   __INCR(__U(density_beyond_contour), rho_solv(i)) ! not clear whether useful
 !
 #ifndef __HAMILTONIAN
+#ifdef __LOGISTIC_INVERSE
    d0=__OORHO( rho_solv(i)) ! unsafe inverse, but rho > 0 per above
+#else
+   d0=__Q(rho_solv(i))
+#endif
    pre = ( __RHO_INVERSE2 ( d0 ) - surface_distance ) ;
 ! otherwise, already computed prefactor and absorbed into gradients
 ! What happens if we do not know surface distance going into the grad routine ? In that case, the computed prefactor will be wrong !
@@ -2518,7 +2539,11 @@ endif
 ! derivative already includes force prefactor
     iforce = - drho_solv(:,i);
 #else
+#ifdef __LOGISTIC_INVERSE
     d0 = logistic_constant * d0 * ( one/(one-min(__RHO_MAX, rho_solv(i)))) ! derivative of the inverse of logistic function
+#else
+    d0 = surf_stdev * sq2pi * exp (d0**2) ! note that exp(d0^2) could be infinite ; unclear whether this will be a problem, since the gradients will be (almost) zero
+#endif
     iforce = - surface_force_constant * pre * d0 * drho_solv(:,i) ! (-) because surface_distance is negative ; grad points toward protein
 !   fr(:,isolvent_atoms(i)) = - surface_force_constant * pre * d0 * drho_solv(:,i) ! (-) because surface_distance is negative ; grad points toward protein
 #endif
@@ -2538,6 +2563,11 @@ endif
    else ! keep net force/torque
 #endif
 #ifndef __HAMILTONIAN
+#ifdef __LOGISTIC_INVERSE
+    d0 = logistic_constant * d0 * ( one/(one-min(__RHO_MAX, rho_solv(i))))
+#else
+    d0 = surf_stdev * sq2pi * exp (d0**2)
+#endif
     d0 = - surface_force_constant * pre * d0
     __INCR(fr(1,isolvent_atoms(i)), d0 * drho_solv(1,i))
     __INCR(fr(2,isolvent_atoms(i)), d0 * drho_solv(2,i))
@@ -2988,7 +3018,18 @@ __DBGVAR(density_ave,1)
   if (qminimum_distance) then
    current_surface_distance = SUM(dist_solv, MASK = (qforced_solv.eqv..true.))*oonsolvent_outside
   else
+#ifdef __LOGISTIC_INVERSE
    current_surface_distance = SUM (__RHO_INVSAFE(rho_solv), MASK = (qforced_solv.eqv..true.))*oonsolvent_outside
+#else
+! cannot use vector operation since a function is involved
+   current_surface_distance=zero
+   do ii=1, nsolvent
+    if (qforced_solv(ii)) then
+     __INCR(current_surface_distance , __RHO_INVSAFE(rho_solv(ii)))
+    endif
+   enddo
+   __SCALE(current_surface_distance, oonsolvent_outside)
+#endif
   endif
 !
   __OUT('Current avg. distance to protein:', current_surface_distance)
@@ -3198,15 +3239,8 @@ __DBGVAR(solvent_mass_nonbulk,1)
 #endif
 #endif
 !
-! naive algorithm to compute density at each solvent coordinate
+! compute density at each solvent coordinate
 ! adapted from molecule.ftn in continua
-!
-! error function definition
-#ifndef __erf
-#//define __erf erf
-#define __erfs __erfo7s
-#define __erf __erfo7
-#endif
 !
 ! if openmp is used, cannot call the function erfo7, so hack to call inlined macro here
 #ifdef __OMP
@@ -3441,8 +3475,13 @@ __DBGVAR(bulk_boundary_contour_value,1)
 ! Need to propagate Hamiltonian forces to surface atoms ; therefore, compute force prefactor and apply to gradients here
 ! Also, do not recompute the prefactor in the main loop for solvent atoms (see main routine)
    if (qforced) then
+#ifdef __LOGISTIC_INVERSE
     a=__OORHOSAFE(rho_solv(i)) ! reuse a
     a = surface_force_constant * logistic_constant * a * one/( one - min(rho_solv(i),__RHO_MAX)) * ( __RHO_INVERSE2(a)-surface_distance )
+#else
+    a=__QSAFE(rho_solv(i))
+    a = surface_force_constant * surf_stdev * sq2pi * exp (a**2) * ( __RHO_INVERSE2(a) - surface_distance )
+#endif
     __SCALE(drho_solv(:,i),a)
     __SCALE(a, (one - structure_update_memory) )
     do j=1,__U(nspt)
@@ -3690,8 +3729,13 @@ __DBGVAR(bulk_boundary_contour_value,1)
 ! Need to propagate Hamiltonian forces to surface atoms ; therefore, compute force prefactor and apply to gradients here
 ! Also, do not recompute the prefactor in the main loop for solvent atoms (see main routine)
    if (qforced) then
+#ifdef __LOGISTIC_INVERSE
     a=__OORHOSAFE(rho_solv(i)) ! reuse a
     a= surface_force_constant * logistic_constant * a * one/( one - min(rho_solv(i),__RHO_MAX)) * ( __RHO_INVERSE2(a)-surface_distance )
+#else
+    a=__QSAFE(rho_solv(i))
+    a = surface_force_constant * surf_stdev * sq2pi * exp (a**2) * ( __RHO_INVERSE2(a) - surface_distance )
+#endif
     __SCALE(drho_solv(:,i),a)
     __SCALE(a,one - structure_update_memory)
     do j=1,__U(nspt)
@@ -4185,7 +4229,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 ! initialize
  surface_area=zero
 !
- oos=__OORHO(surface_contour_value)
+ oos=one/surface_contour_value
 !
 #ifdef __OMP
 !$omp parallel &
@@ -4607,8 +4651,8 @@ __DBGVAR(kmax,2)
  ivolume_nonbulk=0
 !
 #ifdef __VOLUME_THREAD_REDUCE
- oos=__OORHO(surface_contour_value)
- oobs=__OORHO(bulk_boundary_contour_value)
+ oos=one/surface_contour_value
+ oobs=one/bulk_boundary_contour_value
 #else
  oos=surface_contour_value
  oobs=bulk_boundary_contour_value
