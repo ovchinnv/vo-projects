@@ -885,7 +885,7 @@ module _N
 #define __NAME	watershell output file
 #include "parser/parser_macro2.src"
 ! formerly known under watershell_output ; check for this tag, also
-if (.not.existtag_nocase('output_file')) then
+if (.not.existtag_nocase('output_file', context)) then
 #define __WARNIFMISSING
 #define __TAG	watershell_output
 #define __VAR	output_file
@@ -1635,6 +1635,7 @@ __DBGVAR(r_com_sa,1)
 ! int :: ibeg, iend ! atom indices for looping
  float :: distance_from_solute, distance_from_solute2, pre, d0
  float :: surface_force ! , density_beyond_contour ! useful ?
+ int :: nsolvent_unsupported
 #ifdef __ROTRES
  float :: dcom(3), r1(3)
 #endif
@@ -2059,7 +2060,7 @@ endif ! decide whether to compute dr_surf
    call __NM(compute_density_grad)(.false.) ! need entire sum
    do i=1, nsolvent
 ! convert to distance
-    if ( abs(rho_solv(i)) .eq. zero ) then ! proceed if the density is positive ; otherwise warn that we are outside of the support
+    if ( abs(rho_solv(i)) .eq. zero ) then ! warn that we are outside of the support
      __WRN(whoami, 'SOLVENT ATOM '//itoa(isolvent_atoms(i))//' OUTSIDE OF SOLUTE SUPPORT. RESTART WITH A SMALLER SURFACE DISTANCE OR A LARGER FILTER CUTOFF OR PADDING.')
     endif
     d0 = __RHO_INVSAFE(rho_solv(i))
@@ -2404,10 +2405,11 @@ endif
 !$omp end parallel
 #endif
  else ! not qminimum_distance, i.e. original algorithm
+  nsolvent_unsupported=0 ! for counting unsupported atoms in the erf density method
 !================= original density based algorithm ==================
 #ifdef __OMP
 !$omp parallel &
-!$omp shared (rho_solv, drho_solv, surface_contour_value, surface_distance, surface_force_constant, &
+!$omp shared (rho_solv, drho_solv, surface_contour_value, surface_distance, surface_force_constant, nsolvent_unsupported, &
 #ifdef __LOGISTIC_INVERSE
 !$omp logistic_constant, &
 #endif
@@ -2486,8 +2488,13 @@ endif
 #ifdef __DASYSTAT
    if(dasystat) __INCR(__U(solvent_mass_outside), mass_solv(i))
 #endif
-   if ( abs(rho_solv(i)) .eq. zero ) then ! proceed if the density is positive ; otherwise warn that we are outside of the support
-    __WRN(whoami, '#'//itoa(iteration)//': SOLVENT ATOM '//itoa(isolvent_atoms(i))//' OUTSIDE OF SOLUTE SUPPORT. RESTART WITH A SMALLER SURFACE DISTANCE OR A LARGER FILTER CUTOFF OR PADDING.')
+   if ( abs(rho_solv(i)) .eq. zero ) then ! proceed if the density is positive ; otherwise warn that we are outside of the support and cycle
+!    __WRN(whoami, '#'//itoa(iteration)//': SOLVENT ATOM '//itoa(isolvent_atoms(i))//' OUTSIDE OF SOLUTE SUPPORT. RESTART WITH A SMALLER SURFACE DISTANCE OR A LARGER FILTER CUTOFF OR PADDING.')
+#ifdef __OMP
+!$omp atomic update
+    nsolvent_unsupported = nsolvent_unsupported + 1 ! compiler cannot take __INC()
+!$omp end atomic
+#endif
     cycle
    endif
 !   __INCR(__U(density_beyond_contour), rho_solv(i)) ! not clear whether useful
@@ -2655,6 +2662,9 @@ endif
 !$omp end parallel
 #endif
 !
+  if (nsolvent_unsupported.gt.0) then
+   __WRN(whoami, 'DETECTED '//itoa(nsolvent_unsupported)//' ATOM(S) OUTSIDE SOLUTE SUPPORT.');
+  endif
  endif ! qminimum_dist
 !
 ! compute current surface distance from pre :
@@ -3470,7 +3480,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 !  so that while the default setting -- qforced=T -- persists, there are actually _no_ forces and rho(i)=zero ; therefore, we could do
 !  qforced_solv(i)=qforced.and.rho_solv(i).gt.zero
 !  however, in that case we are throwing away the information that a solvent atom has moved outside of support ; better to address this in the main loop, I think
-!  Also, it is clear that the atom _should_ be forced (we just do not know which wat to push it since we are outside of the support) ; thus we are closer to the
+!  Also, it is clear that the atom _should_ be forced (we just do not know which way to push it since we are outside of the support) ; thus we are closer to the
 !  actual physical situation, leaving as is
 #ifdef __HAMILTONIAN
 ! Need to propagate Hamiltonian forces to surface atoms ; therefore, compute force prefactor and apply to gradients here
@@ -3755,7 +3765,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
  endif
 #endif
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
- __REDUCE(neighbor_list_misses)
+ __REDUCE(neighbor_list_misses) ! maybe faster via atomic, since most of the time there will be no misses
 #endif
 !
 #ifdef __HAMILTONIAN
