@@ -1,5 +1,6 @@
 LINKOBJS+=\
  erfappx.o \
+ ierfappx.o \
  erfsun_ref.o \
  erfsun_value.o \
  lu.o \
