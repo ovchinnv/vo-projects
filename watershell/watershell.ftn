@@ -294,7 +294,9 @@ module _N
 #ifdef __FD_CHECK
  float, pointer :: ffd(:,:)
  float, pointer :: ffd2(:,:) ! this array is used to isolate shell forces from other contributions
- float, parameter :: h = 0.1d0
+! float, parameter :: h = 0.001d0 ! too low for single precision
+! float, parameter :: h = 0.01d0 ! ok for single precision
+ float, parameter :: h = 0.05d0
 #endif
 #endif
 !
@@ -2020,24 +2022,32 @@ endif ! decide whether to compute dr_surf
   enddo ; enddo ! j, i
   __SCALE(ffd, - half * rigid_body_force_constant * oonsurface / ( 2*h ) )
 
-! write(600,*) ffd(1,:)
-! write(600,*) fr(1,isurface_atoms(:))
-! close(600)
+#ifdef __DEBUG
+ write(600,*) iteration
+ write(600,*) ffd(1,:)
+ write(600,*) fr(1,isurface_atoms(:))
+ close(600)
+#endif
 
    d0=sqrt(sum ( ffd(1,:)-(fr(1,isurface_atoms(:))-ffd2(1,:)) )**2 * oonsurface)
+   __WARN(whoami, ' ABSOLUTE RMS X-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
    d0=d0/sqrt( sum ( fr(1,isurface_atoms(:))-ffd2(1,:) )**2 * oonsurface )
    __WARN(whoami, ' RELATIVE RMS X-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
 !
    d0=sqrt(sum ( ffd(2,:)-(fr(2,isurface_atoms(:))-ffd2(2,:)) )**2 * oonsurface)
+   __WARN(whoami, ' ABSOLUTE RMS Y-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
    d0=d0/sqrt( sum ( fr(2,isurface_atoms(:))-ffd2(2,:) )**2 * oonsurface )
    __WARN(whoami, ' RELATIVE RMS Y-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
 !
    d0=sqrt(sum ( ffd(3,:)-(fr(3,isurface_atoms(:))-ffd2(3,:)) )**2 * oonsurface)
+   __WARN(whoami, ' ABSOLUTE RMS Z-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
    d0=d0/sqrt( sum ( fr(3,isurface_atoms(:))-ffd2(3,:) )**2 * oonsurface )
    __WARN(whoami, ' RELATIVE RMS Z-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
 !
+  __DBGOUT('Free surface arrays for FD check')
   __FREE(ffd)
   __FREE(ffd2)
+  __DBGOUT('Recompute correct rigid restraint forces')
 ! recompute A and dcom correctly for energy calc in the output section
 !
   call RMSBestFit(r_surf_ref, dr_surf, rb_wgt, A_rb, qdimswap_=.true.)
@@ -2061,6 +2071,7 @@ endif ! decide whether to compute dr_surf
 !========================== compute contour value if needed
 ! if surface distance value is zero, estimate a reasonable value from current coordinates
  if ( abs(surface_distance) .lt. __ERRTOL) then
+  __DBGOUT('Will compute approximate surface distance')
   if (qminimum_distance) then ! simple algorithm
    call __NM(compute_mindist_grad)(.false.) ! need entire sum
    do i=1, nsolvent
@@ -2229,6 +2240,7 @@ endif ! decide whether to compute dr_surf
 !
 ! if running a FD check, first save current forces, in case they are nonzero
 #ifdef __FD_CHECK
+ __DBGOUT('Allocate solvent arrays for FD check')
  __ALLOC(ffd2(3,nsolvent))
  ffd2=-fr(:,isolvent_atoms(:))
 #endif
@@ -2425,6 +2437,7 @@ endif
 #endif
 !
 #ifdef __FD_CHECK
+ __DBGOUT('save forces before torque removal code')
 ! make sure torque removal forces do not contaminate shell the potential forces in the FD comparison :
 #ifdef __OMP
 !$omp do schedule(runtime)
@@ -2451,7 +2464,14 @@ endif
    d0=r_solv(j,i) ! save coordinate
    do ii=-1,1,2
     __INCR ( r_solv(j,i) , ii * h ) ! perturb
-    call __NM(compute_mindist_grad)(.false.) ! do not quit early
+#if (_DBGLEV>1)
+    __DBGOUT('calling compute_mindist_grad to compute forces by FD on coordinate', i, j)
+#endif
+#if defined(NEIGHBOR_LIST) && defined(SORT_LIST)
+    call __NM(compute_mindist_grad)(.not.qneighbor_list) ! do not quit early
+#else
+    call __NM(compute_mindist_grad)(.true.)
+#endif
 ! incorporate into FD
     __INCR  ( ffd(j,i), ii * (min(zero, dist_solv(i)-surface_distance))**2 ) ! recall that distance is negative, or inside shell
 ! restore coordinate
@@ -2460,19 +2480,25 @@ endif
   enddo ; enddo ! j, i
   __SCALE(ffd, - half * surface_force_constant / ( 2*h ) ) ! negative for force direction
 
-! write(600,*) ffd(1,:)
-! write(600,*) fr(1,isurface_atoms(:))
-! close(600)
+#ifdef __DEBUG
+ write(700,*) iteration
+ write(700,*) ffd(1,:)
+ write(700,*) ffd2(1,isolvent_atoms(:))
+ close(700)
+#endif
 
    d0=sqrt(sum ( ffd(1,:)-ffd2(1,:) )**2 / nsolvent_outside)
+   __WARN(whoami, ' ABSOLUTE RMS X-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
    d0=d0/sqrt( sum ( ffd2(1,:) )**2 / nsolvent_outside )
    __WARN(whoami, ' RELATIVE RMS X-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
 !
    d0=sqrt(sum ( ffd(2,:)-ffd2(2,:) )**2 / nsolvent_outside)
+   __WARN(whoami, ' ABSOLUTE RMS Y-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
    d0=d0/sqrt( sum ( ffd2(2,:) )**2 / nsolvent_outside )
    __WARN(whoami, ' RELATIVE RMS Y-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
 !
    d0=sqrt(sum ( ffd(3,:)-ffd2(3,:) )**2 / nsolvent_outside)
+   __WARN(whoami, ' ABSOLUTE RMS Z-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
    d0=d0/sqrt( sum ( ffd2(3,:) )**2 / nsolvent_outside )
    __WARN(whoami, ' RELATIVE RMS Z-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
 !
@@ -2761,7 +2787,11 @@ endif
    d0=r_solv(j,i) ! save coordinate
    do ii=-1,1,2
     __INCR ( r_solv(j,i) , ii * h ) ! perturb
-    call __NM(compute_density_grad)(.false.) ! do not quit early
+#if defined(NEIGHBOR_LIST) && defined(SORT_LIST)
+    call __NM(compute_density_grad)(.not.qneighbor_list)
+#else
+    call __NM(compute_density_grad)(.true.)
+#endif
 ! incorporate into FD
     __INCR ( ffd(j,i), ii * min(zero, (__RHO_INVERSE(rho_solv(i))-surface_distance))**2 ) ! recall that distance is negative, or inside shell
 ! restore coordinate
@@ -2770,19 +2800,25 @@ endif
   enddo ; enddo ! j, i
   __SCALE(ffd, - half * surface_force_constant / ( 2*h ) ) ! negative for force direction
 
-! write(600,*) ffd(1,:)
-! write(600,*) fr(1,isurface_atoms(:))
-! close(600)
+#ifdef __DEBUG
+ write(800,*) iteration
+ write(800,*) ffd(1,:)
+ write(800,*) ffd2(1,isurface_atoms(:))
+ close(800)
+#endif
 
    d0=sqrt(sum ( ffd(1,:)-ffd2(1,:) )**2 / nsolvent_outside)
+   __WARN(whoami, ' ABSOLUTE RMS X-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
    d0=d0/sqrt( sum ( ffd2(1,:) )**2 / nsolvent_outside )
    __WARN(whoami, ' RELATIVE RMS X-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
 !
    d0=sqrt(sum ( ffd(2,:)-ffd2(2,:) )**2 / nsolvent_outside)
+   __WARN(whoami, ' ABSOLUTE RMS Y-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
    d0=d0/sqrt( sum ( ffd2(2,:) )**2 / nsolvent_outside )
    __WARN(whoami, ' RELATIVE RMS Y-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
 !
    d0=sqrt(sum ( ffd(3,:)-ffd2(3,:) )**2 / nsolvent_outside)
+   __WARN(whoami, ' ABSOLUTE RMS Z-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
    d0=d0/sqrt( sum ( ffd2(3,:) )**2 / nsolvent_outside )
    __WARN(whoami, ' RELATIVE RMS Z-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
 !
@@ -4947,7 +4983,7 @@ __DBGVAR(kmax,2)
 ! not clear how to do this in the fastest way possible
 ! perhaps an if/else statement would be faster, densities that map to the outside of the main shell, also map to the outside of
 ! the nonbulk (i.e. interfacial) region
-#ifdef __VOLUME_THREAD_REDUCE
+#if defined(__VOLUME_THREAD_REDUCE) || !defined(__OMP)
      __INCR(__U(ivolume), min(1,INT(rho(ii,jj,kk)*oos)))
      __INCR(__U(ivolume_nonbulk), min(1,INT(rho(ii,jj,kk)*oobs)))
 #else
@@ -5161,7 +5197,7 @@ __DBGVAR(kmax,2)
  do kk=2,nz
   do jj=2,ny
    do ii=2,nx
-#ifdef __VOLUME_THREAD_REDUCE
+#if defined(__VOLUME_THREAD_REDUCE) || !defined(__OMP)
      __INCR(__U(ivolume), rho(ii,jj,kk))
      __INCR(__U(ivolume_nonbulk), inrho(ii,jj,kk))
 #else
