@@ -1,0 +1,262 @@
+! data description from VMD :
+!  
+!  DX potential maps
+! 
+!  Format of the file is:
+!  # Comments
+!  .
+!  .
+!  .
+!  object 1 class gridpositions counts xn yn zn
+!  origin xorg yorg zorg
+!  delta xdel 0 0
+!  delta 0 ydel 0
+!  delta 0 0 zdel
+!  object 2 class gridconnections counts xn yn zn
+!  object 3 class array type double rank 0 items { xn*yn*zn } [binary] data follows
+!  f1 f2 f3
+!  f4 f5 f6 f7 f8 f9
+!  .
+!  .
+!  .
+!  object "Dataset name" class field
+! 
+!  Where xn, yn, and zn are the number of data points along each axis;
+!  xorg, yorg, and zorg is the origin of the grid, assumed to be in angstroms;
+!  xdel, ydel, and zdel are the scaling factors to convert grid units to
+!  angstroms.
+! 
+!  Grid data follows, with a single or multiple values per line (maximum 
+!  allowed linelength is hardcoded into the plugin with ~2000 chars), 
+!  ordered z fast, y medium, and x slow.
+! 
+!  Note that the ordering of grid data in VMD`s VolumetricData class
+!  is transposed, i.e. x changes fastest and z slowest! 
+!  The file reading and writing routines perform the transpose.
+! 
+!  If the optional keyword 'binary' is present, the data is expected to
+!  be in binary, native endian, single precision IEEE-754 floating point format.
+! 
+!  Note: this plugin was written to read the OpenDX files created by the
+!  APBS program, and thus supports only files that are writting in this style.
+!  the full OpenDX data format is extremely powerful, complex, and flexible.
+!
+#ifdef __PARALLEL
+#define __COMM communicator
+#else
+#define __COMM
+#endif
+#define _N opendx
+!
+ module __CONCAT(_N,io)
+!
+ character(len=6), parameter :: double_format='G22.15'
+ character(len=6), parameter :: single_format='G16.8 '
+#ifdef __SINGLE
+ character(len=6), parameter :: float_format=single_format
+#else
+ character(len=6), parameter :: float_format=double_format
+#endif 
+
+ contains
+! routines that create datafiles compatible with the openDX format
+!==============================================================
+#define _NAME __NM(write_scalar)
+  function _NAME(filename,x,y,z,q,nx,ny,nz,qbin &
+#ifdef __PARALLEL
+& , communicator &
+#endif
+&  ) result(ok)
+#ifdef __PARALLEL
+  __DEP_MPI
+#endif
+!
+  __DEP_OUTPUT
+  use files
+  __DEP_PARSER
+  __DEP_CONST
+  __IMPNONE
+!
+  int, intent(in) :: nx, ny, nz
+  float, dimension(*), intent(in) :: x,y,z,q
+  real*4, dimension(nz,ny,nx) :: qt
+  bool :: qbin, ok, qxuni, qyuni, qzuni, quni
+#ifdef __PARALLEL
+  int4mpi, optional :: communicator
+  int4mpi :: ierror, me ! , ncpu
+#else
+ int :: me
+#endif
+!
+!  character(len=11), parameter :: fmt='UNFORMATTED'
+  character(len=11), parameter :: fmt='BINARY'
+  character(len=5*vartaglen) :: cbuffer
+  character(len=vartaglen) :: word
+  __IAM(_NAME)
+!
+  bool :: q3d
+!
+  integer :: ioerr
+!
+  character(len=*) :: filename
+  character(len=len(filename)) :: fname
+  int :: flen, fid=-1, offset, i, j, k, ind
+!
+  ok=.false.
+!
+#ifdef __PARALLEL
+   if (present(communicator)) then
+    call mpi_comm_rank(communicator, me, ierror)
+   else ;
+    me = 0;
+   endif
+#else
+   me=0
+#endif
+!
+  fname=filename
+  call adjustleft(fname)
+  flen=len_trim(fname)
+  if (flen.gt.0) then
+   if (me.eq.0) then 
+    call files_open(fid, name_=fname(1:flen), form_=fmt, action_='WRITE')
+    if (fid.lt.0) then
+     call warning(whoami, 'Cannot open output file. Abort.',-1)
+    endif
+   endif
+!
+   if (fatal_warning(__COMM)) return
+!
+  else ! flen > 0
+   if (me.eq.0) call warning(whoami, 'File name not specified. Abort.',0)
+   return
+  endif
+!
+  q3d=(nz.gt.3)
+  __IFEQ3(cbuffer,q3d,'3','2')
+  __INFO('Data is '//trim(cbuffer)//'D');
+!
+  if (me.eq.0) then
+!************** header *******
+! check whether the grids are regular
+#define __ERR 100*__ERRTOL
+!   write(0,*) minval(x(2:nx)-x(1:nx-1)), maxval(x(2:nx)-x(1:nx-1)), ABS(minval(x(2:nx)-x(1:nx-1)) / maxval(x(2:nx)-x(1:nx-1)) - one), __ERR
+   qxuni = ABS( minval(x(2:nx)-x(1:nx-1)) / maxval(x(2:nx)-x(1:nx-1)) - one ) .lt. __ERR
+   __IFEQ3(cbuffer,qxuni,'UNIFORM','NONUNIFORM')
+   __INFO('X-grid is '//trim(cbuffer)//' to within '//ftoa(__ERR));
+
+   qyuni = ABS( minval(y(2:ny)-y(1:ny-1)) / maxval(y(2:ny)-y(1:ny-1)) - one ) .lt. __ERR
+   __IFEQ3(cbuffer,qyuni,'UNIFORM','NONUNIFORM')
+   __INFO('Y-grid is '//trim(cbuffer)//' to within '//ftoa(__ERR));
+
+#define __WRITE(_FMT, ...)  write(cbuffer,_FMT, IOSTAT=ioerr) __VA_ARGS__ ; write(fid) trim(cbuffer),char(10)
+    __WRITE('(A)', '#OpenDX datafile produced by the Dynamo program')
+!
+   quni=qxuni.and.qyuni
+   if (q3d) then
+    word='(3'//float_format//')'
+    qzuni = ABS( minval(z(2:nz)-z(1:nz-1)) / maxval(z(2:nz)-z(1:nz-1)) - one ) .lt. __ERR
+    __IFEQ3(cbuffer,qzuni,'UNIFORM','NONUNIFORM')
+    __INFO('Z-grid is '//trim(cbuffer)//' to within '//ftoa(__ERR));
+    quni=quni.and.qzuni
+!
+    if (quni) then
+    __INFO('WRITING REGULAR GRID')
+    __WRITE('(A,3I5)', 'object 1 class gridpositions counts', nx, ny, nz)
+    __WRITE('("origin",'//word//')', x(1), y(1), z(1))
+    __WRITE('("delta",'//word//')', x(2)-x(1), zero, zero)
+    __WRITE('("delta",'//word//')', zero, y(2)-y(1), zero)
+    __WRITE('("delta",'//word//')', zero, zero, z(2)-z(1))
+    else
+    __INFO('WRITING IRREGULAR GRID')
+    __WRITE('(A, I10, A)', 'object 1 class array type float rank 1 shape 3 items', nx*ny*nz, ' data follows')
+     do i=1,nx; do j=1,ny; do k=1,nz;
+        __WRITE(word, x(i), y(j), z(k) )
+     enddo ; enddo ; enddo ;
+    endif
+!
+    __WRITE('(A,3I5)', 'object 2 class gridconnections counts', nx, ny, nz)
+!    __WRITE(fid,'(A)', IOSTAT=ioerr) 'attribute "element type" string "cubes"'
+!    __WRITE(fid,'(A)', IOSTAT=ioerr) 'attribute "ref" string "positions"'
+! transpose array :
+    ind=1;
+    do k=1,nz; do j=1,ny; do i=1,nx;
+!    qt(k,j,i)=q(i,j,k) :
+     qt(k,j,i)=q(ind); __INC(ind)
+    enddo ; enddo ; enddo ;
+!
+    if (qbin) then
+    __WRITE('(A, I10, A)', 'object 3 class array type float rank 0 items', nx*ny*nz, ' binary data follows') ! note that "binary" seems to be a VMD extension
+     write(fid) qt
+    else
+    __WRITE('(A, I10, A)', 'object 3 class array type float rank 0 items', nx*ny*nz, ' data follows')
+     word='('//itoa(nz)//float_format//')'
+     do i=1,nx ; do j=1,ny
+      __WRITE(word, qt(:,j,i) )
+     enddo ; enddo
+    endif
+   else ! 2D
+    word='(2'//float_format//')'
+    if (quni) then
+    __INFO('WRITING REGULAR GRID')
+    __WRITE('(A,2I5)', 'object 1 class gridpositions counts', nx, ny)
+    __WRITE('(A,'//word//')', 'origin', x(1), y(1))
+    __WRITE('(A,'//word//')', 'delta',  x(2)-x(1), zero)
+    __WRITE('(A,'//word//')', 'delta',  zero, y(2)-y(1))
+    else
+    __INFO('WRITING IRREGULAR GRID')
+    __WRITE('(A, I10, A)', 'object 1 class array type float rank 1 shape 2 items', nx*ny, ' data follows')
+     do i=1,nx; do j=1,ny
+        __WRITE(word, x(i), y(j) )
+     enddo ; enddo
+    endif
+!
+    __WRITE('(A,2I5)', 'object 2 class gridconnections counts', nx, ny)
+! transpose array :
+! making this work for nz=1 and nz=3 cases (with top & bottom irrelevant ghost points)
+    k=nz/2+1;
+    ind=1+(k-1)*nx*ny; ! k=2 with ghost points
+    do j=1,ny; do i=1,nx;
+     qt(k,j,i)=q(ind); __INC(ind)
+    enddo ; enddo
+!
+    if (qbin) then
+    __WRITE('(A, I10, A)', 'object 3 class array type float rank 0 items', nx*ny, ' binary data follows') ! note that "binary" seems to be a VMD extension
+     write(fid) qt(k,:,:)
+    else
+    __WRITE('(A, I10, A)', 'object 3 class array type float rank 0 items', nx*ny, ' data follows')
+     word='('//itoa(ny)//float_format//')'
+     do i=1,nx
+      __WRITE(word, qt(k,:,i) )
+     enddo
+    endif ! qbin
+   endif ! quniform
+    __WRITE('(A)', 'attribute "dep" string "positions"')
+    __WRITE('(A)', 'object "regular positions regular connections" class field')
+    __WRITE('(A)', 'component "positions" value 1')
+    __WRITE('(A)', 'component "connections" value 2')
+    __WRITE('(A)', 'component "data" value 3')
+    __WRITE('(A)', 'end')
+!
+   if (ioerr.ne.0) then 
+    call warning(whoami, 'Error encountered while writing file "'//fname(1:flen)//'. IO_ERR: '//itoa(ioerr),-1)
+   endif ! ioerr
+!
+   call files_close(fid)
+!
+  endif ! me.eq.0
+!
+  if (.not.fatal_warning(__COMM)) then 
+   if (qbin) then ; if (me.eq.0) call message(whoami, 'Binary scalar file "'//fname(1:flen)//'" written.')
+   else          ; if (me.eq.0) call message(whoami, 'ASCII scalar file "'//fname(1:flen)//'" written.')
+   endif
+#ifdef __PARALLEL
+! not yet clear what to do in parallel
+#endif
+!
+   ok=.true.
+  endif ! fatal_warning
+!
+  end function _NAME
+
+ end module openDXio

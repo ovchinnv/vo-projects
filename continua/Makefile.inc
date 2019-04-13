@@ -1,6 +1,6 @@
 
 DEFS+=-DSIZE=gridsize \
-      -U__TRUNCATESUMS  \
+      -D__TRUNCATESUMS  \
       -D__erf=__erfo7 \
 #      -D__TIMER \
 #      -D__VECCOPY

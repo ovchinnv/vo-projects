@@ -6,6 +6,7 @@ q3d=true;
 ascii=true;
 
 gridname='xyz.xyz';
+%dataname='eps.dat';
 dataname='eps.dat';
 
 if ~exist('read')

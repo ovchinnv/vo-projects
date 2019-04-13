@@ -131,7 +131,7 @@ C
 
 CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
 
-      REAL*8 function RANDOM (g)
+      float function RANDOM (g)
 C------------------------------------------------------------------------C
 C   Return a double precision uniformly distributed random number in     C
 C   (0,1) from the gth stream and reset the current seed Cg accordingly  C
@@ -145,14 +145,14 @@ C
       include 'clcg.h'
 
       integer g,k,s,j
-      real*8 u(4)
+      float u(4)
       integer  dv(4),mv(4)
       data dv/46693,10339,15499,43218/ 
       data mv/25884, 870,3979,24121/ 
       data u/4.65661287524579692d-10,-4.65661310075985993d-10,
      &     4.65661336096842131d-10,-4.65661357780891134d-10/
 C
-      real*8 zero, one
+      float zero, one
       parameter (zero=0d0, one=1d0)
 C
       if (g .le. 1)  g = 1

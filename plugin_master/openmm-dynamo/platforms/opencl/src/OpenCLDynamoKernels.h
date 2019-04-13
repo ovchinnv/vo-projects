@@ -96,11 +96,11 @@ private:
     std::vector<OpenMM::Vec3> pos;
     OpenMM::Vec3 boxVectors[3];
 // VO 2017
-    double master_energy; // plugin energy
+    _FLOAT master_energy; // plugin energy
     int natoms;    // number of particles
     int* atomlist; // list of atom indices involved in restraints
-    double *r, *fr; // positions and forces
-    double box[9] ; //= { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 } ; // box vectors
+    _FLOAT *r, *fr; // positions and forces
+    _FLOAT box[9] ; //= { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 } ; // box vectors
 };
 
 } // namespace DynamoPlugin
