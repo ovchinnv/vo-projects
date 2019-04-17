@@ -122,7 +122,7 @@ DEFS+=$(STRING_FLAGS)
 endif
 #
 DEFS+=$(EXTRA_DEFINES)
-FCFLAGS+=$(EXTRA_FC_FLAGS)
+FFLAGS+=$(EXTRA_FC_FLAGS)
 
 # preprocess with C++ style preprocessor
 # -C flag preserves comments
