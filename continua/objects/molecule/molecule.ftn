@@ -61,13 +61,14 @@ module molecule
  __FPAR(eps_discover , 332.054d0)
  __FPAR(eps_namd     , 332.0636d0)
 !
+ __FPPARDEF(temperature, 298d0)
+!
 !CHARMM uses :     kappa2 = 8*PI*cat*e**2*beta
 !    KAPPA2=2530.362733*CONC/TEMP
  __FPAR(kappa_akma , -2530.362733d0)
 
  __FPPARDEF(eps_scale, eps_charmm)
- __FPPARDEF(kappa_scale, kappa_akma)
- __FPPARDEF(temperature, 298d0)
+ __FPPARDEF(kappa_scale, kappa_akma/(four*pi*temperature_default))
 !
  __FPPARDEF(charge_scale, -one) ! in the MG solver, the equation is  lap(u) = q, but we need lap(u) = -q, i.e. with a negative sign
 !
@@ -105,8 +106,15 @@ module molecule
 !
 ! query parser for parameters 
 !
-#define __WARNIFMISSING
+! temperature
+#define __LEZEROERR
 #define __DEFAULT
+#define __VAR	temperature
+#define __NAME	Temperature
+#include "mol_macro1.src"
+#undef __LEZEROERR
+!
+#define __WARNIFMISSING
 #define __MINUSWRN
 ! solvent dielectric
 #define __VAR	eps_solvent
@@ -153,6 +161,9 @@ module molecule
    case('NONE', 'ONE')                              ; __VAR=one                              ; __OUT('Assuming ionic strength has correct units (no scaling applied)');
    case default                                     ; __VAR=atof(keyword)                    ; __OUT('Setting ionic strength scale to ', __VAR)
   end select
+#ifdef __DEBUG
+  __OUT('kappa_scale=',kappa_scale)
+#endif
 #undef __VAR
 !
 ! charge (rhs) scaling :
@@ -169,11 +180,6 @@ module molecule
 ! solute ionic strength
 #define __VAR	kappa_solute
 #define __NAME	Solute molarity
-#include "mol_macro1.src"
-! temperature
-#define __LEZEROERR
-#define __VAR	temperature
-#define __NAME	Temperature
 #include "mol_macro1.src"
 !
 !%%%%%%%%%%%%%%%%%%%% padding parameters for grid smoothing %%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -551,7 +557,11 @@ module molecule
 #ifndef __erf
 #define __erf erf
 #endif
-#define __SMOOTH_GAUSS(__A,__B,__C)  half * ( __erf (__A) - __erf (__B) ) + osq2pi*( exp(-(__A)**2) - exp(-(__B)**2 ) ) /(__C)
+#define __SMOOTH_GAUSS(__A,__B,__C)half * ( __erf (__A) - __erf (__B) ) + osq2pi*( exp(-(__A)**2) - exp(-(__B)**2 ) ) /(__C)
+#ifdef __REGULARIZE
+#define __SMOOTH_GAUSS_C0(__A,__B) half * ( __erf (__A) - __erf (__B) ) - osq2pi* exp( -half * ((__A)**2+(__B)**2)) \
+        * osq2 * ((__A) - (__B)) * (two+third*(half * ((__A)**2-(__B)**2))**2)
+#endif
 #ifndef __TRUNCATEVAL
 #define __TRUNCATEVAL 1.0
 #endif
@@ -565,7 +575,15 @@ module molecule
 ! compute atomic contribution to mesh point
            d2=d*oo_stdev_eps ; e  = osq2 * (d2 + repsn) ; e2= osq2 * (d2 - repsn)
 !
-           val=__SMOOTH_GAUSS(e,e2,d2)
+#ifdef __REGULARIZE
+           if ( d2 .lt. TOL ) then ! Taylor expansion for exponentials
+            val=__SMOOTH_GAUSS_C0(e,e2)
+           else
+#endif
+            val=__SMOOTH_GAUSS(e,e2,d2)
+#ifdef __REGULARIZE
+           endif
+#endif
 #ifdef __DDEBUG
        __OUT('Atom', l, 'makes a contribution of', val, 'to eps array at point', i, j, k)
 #endif
@@ -584,7 +602,15 @@ module molecule
 ! compute atomic contribution to mesh point
            d2=d*oo_stdev_kappa ; e  = osq2 * (d2 + rkappan) ; e2= osq2 * (d2 - rkappan)
 !
-           val=__SMOOTH_GAUSS(e,e2,d2)
+#ifdef __REGULARIZE
+           if ( d2 .lt. TOL ) then ! Taylor expansion for exponentials
+            val=__SMOOTH_GAUSS_C0(e,e2)
+           else
+#endif
+            val=__SMOOTH_GAUSS(e,e2,d2)
+#ifdef __REGULARIZE
+           endif
+#endif
 !
            __INCR(kappa(i,j,k), val)
          endif ! kappa
@@ -594,7 +620,15 @@ module molecule
            d2=d*oo_stdev_charge ; e  = osq2 * (d2 + rchargen) ; e2= osq2 * (d2 - rchargen)
 !
            if (rchargen .gt. TOL) then
-            val=__SMOOTH_GAUSS(e,e2,d2)
+#ifdef __REGULARIZE
+            if ( d2 .lt. TOL ) then ! Taylor expansion for exponentials
+             val=__SMOOTH_GAUSS_C0(e,e2)
+            else
+#endif
+             val=__SMOOTH_GAUSS(e,e2,d2)
+#ifdef __REGULARIZE
+        endif
+#endif
            else ! Gaussian asymptote
             val =  (osq2pi*oo_stdev_charge)**3 * exp(-half*d2**2) * (one + tenth * rchargen**2 * (d2**2 - three))
            endif
@@ -614,7 +648,15 @@ module molecule
 ! compute atomic contribution to mesh point
            d2=d*oo_stdev_surf ; e  = osq2 * (d2 + rsurfn) ; e2= osq2 * (d2 - rsurfn)
 !
-           val=__SMOOTH_GAUSS(e,e2,d2)
+#ifdef __REGULARIZE
+           if ( d2 .lt. TOL ) then ! Taylor expansion for exponentials
+            val=__SMOOTH_GAUSS_C0(e,e2)
+           else
+#endif
+            val=__SMOOTH_GAUSS(e,e2,d2)
+#ifdef __REGULARIZE
+           endif
+#endif
 !
            __INCR(rho(i,j,k), val) ! density: 1 inside sphere, 0 outside sphere
 !
@@ -704,6 +746,9 @@ module molecule
 !**********************************************************************************
   subroutine molecule_initialize()
   call system_initialize() ; molecule_initialized=system_initialized
+#ifdef __DEBUG
+  __MESG('molecule_initialize', molecule_initialized)
+#endif
   end subroutine molecule_initialize
 !***********************************************************************************
   subroutine molecule_center(rcen, qmass)
