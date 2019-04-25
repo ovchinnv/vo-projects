@@ -1334,8 +1334,6 @@ write(666,*) l
 !  character(len=100), parameter :: pdbfmt='(A6,A5,1X,A4,1X,A3,2X,A4,4X,3F8.3,2F6.2,1X,3X,2X,A4)' ! treat atomid as a string
 !  character(len=100), parameter :: pdbfmt='(A6,A5,1X,A4,1X,A4,1X,A4,4X,3F8.3,2F6.2,1X,3X,2X,A4)' ! extend resname by one char to 4
   character(len=100), parameter :: pdbfmt='(A6,A5,1X,A4,1X,A4,1X,A5,3X,3F8.3,2F6.2,1X,3X,2X,A4)' ! extend resid by 1 to 5
-  character(len=100), parameter :: pqrfmt='*'
-  character(len=100), parameter :: freefmt='*'
   character(len=100), parameter :: charmmextfmt='(I10,10X,2(2X,A8),3F20.10,2X,A8,2X,A8,F20.10)'
   character(len=100), parameter :: charmmfmt='(I5,5X,2(1X,A4),3F10.5,1X,A4,1X,A4,F10.5)'
   character(len=100)            :: fmt
@@ -1436,9 +1434,9 @@ write(666,*) l
   elseif (paramtype.eq.'PDB') then 
    fmt=pdbfmt
   elseif (paramtype.eq.'PQR') then 
-   fmt=pqrfmt
+!   fmt=pqrfmt ! not used
   elseif (paramtype.eq.'ATOMID') then 
-   fmt=freefmt
+!   fmt=freefmt ! not used
   else
    call warning(whoami, 'Unknown file type "'//paramtype//'". Abort.',fatal_warnlev)
    return
@@ -1448,17 +1446,20 @@ write(666,*) l
   atomid=0 ! current atomid, in case we cannot read it from file (see comments below)
   do while (ioerr.eq.0)
 ! process command line
-#ifdef DEBUG
+#ifdef __DEBUG
   call message(whoami,cmdline(1:80))
 #endif
-! only lines that begin with 'ATOM'/'HETATM' are processed; 'TER ' or 'END ' indicates end of read
-   keyword(1:6)=cmdline(1:6);
-   call toupper(keyword)
 !***********************************************************************************************
    if (paramtype.eq.'PDB'.or.paramtype.eq.'PQR') then
+! only lines that begin with 'ATOM'/'HETATM' are processed; 'TER ' or 'END ' indicates end of read
+    read(cmdline,*) keyword
+#ifdef __DEBUG
+  call message(whoami,trim(keyword))
+#endif
+    call toupper(keyword)
 !
-    select case(keyword(1:6))
-     case('ATOM  ', 'HETATM');
+    select case(trim(keyword(1:6)))
+     case('ATOM', 'HETATM');
 !     NOTE : when the number of atoms exceeds 99999, the atomid field overflows and incorrect symbols are
 !     printed; if they are read as numbers, an error will be generated; instead, read the atomid as a string,
 !     and attempt to extract the number out of it; if this fails, display a warning and use the previous atomid
@@ -1467,7 +1468,7 @@ write(666,*) l
        read(cmdline,fmt) keyword, atomid_str, aname, resname, resid, x, y, z, occ, bf, segid
        read(atomid_str, '(I5)', IOSTAT=ioerr) j ! unsafe to read atomid
       elseif (paramtype.eq.'PQR') then
-       read(cmdline,fmt) keyword, atomid_str, aname, resname, resid, x, y, z, occ, bf
+       read(cmdline,*) keyword, atomid_str, aname, resname, resid, x, y, z, occ, bf
        read(atomid_str, *, IOSTAT=ioerr) j
       endif
 !
@@ -1492,7 +1493,7 @@ write(666,*) l
    elseif (paramtype.eq.'CHARMM') then 
     read(cmdline,fmt) atomid, resname, aname, x, y, z, segid, resid, bf ! ignoring residue number; weight => B-factor
    elseif (paramtype.eq.'ATOMID') then
-    read(cmdline,fmt) atomid, x, y, z
+    read(cmdline,*) atomid, x, y, z
    endif
 
    call adjustleft(cmdline)
@@ -1562,21 +1563,27 @@ write(666,*) l
   if (pass.eq.1) then 
    natom=atoms%last
    if (n.eq.-1) n=i-1
-   if (n.ne.atoms%last) call warning(whoami, 'incorrect number of atoms specified in coordinate file.',nonfatal_warnlev)
+   if (n.ne.natom) then
+    call warning(whoami, 'Incorrect number of atoms specified in coordinate file ('//itoa(n)//' vs. '//itoa(natom)//')',nonfatal_warnlev)
+   elseif (n.le.0) then
+    call warning(whoami, 'No atoms found !!!', nonfatal_warnlev)
+   else
+    call message(whoami, 'Found '//itoa(n)//' atoms');
+   endif
 !
-    qinit=.false. ! do not query parser for initialization options
+   qinit=.false. ! do not query parser for initialization options
 !
-    call state_add3df('POSITION' ,'Positions'              , (/ndim,natom/), __COMM _COMMA __CTX, vptr, qinit); __FPTR2(r);
+   call state_add3df('POSITION' ,'Positions'              , (/ndim,natom/), __COMM _COMMA __CTX, vptr, qinit); __FPTR2(r);
 !    call state_add3df('VELOCITY' ,'Velocities'             , (/ndim,natom/), __COMM _COMMA __CTX, vptr, qinit); __FPTR2(vr);
-    call state_add3df('FORCE'    ,'Forces'                 , (/ndim,natom/), __COMM _COMMA __CTX, vptr, qinit); __FPTR2(fr);
-    call state_add3df('MASS'     ,'Masses'                 , (/natom/),      __COMM _COMMA __CTX, vptr, qinit); __FPTR1(m);
-    call state_add3df('CHARGE'   ,'Charges'                , (/natom/),      __COMM _COMMA __CTX, vptr, qinit); __FPTR1(q);
-    call state_add3df('RADIUS'   ,'Radius'                 , (/natom/),      __COMM _COMMA __CTX, vptr, qinit); __FPTR1(radius);
-    call state_add3df('BFACTOR'  ,'Debye-Waller (B) factors', (/natom/),     __COMM _COMMA __CTX, vptr, qinit); __FPTR1(bfactor);
-    call state_add3df('OCCUPANCY','Occupancy'              , (/natom/),      __COMM _COMMA __CTX, vptr, qinit); __FPTR1(occupancy);
+   call state_add3df('FORCE'    ,'Forces'                 , (/ndim,natom/), __COMM _COMMA __CTX, vptr, qinit); __FPTR2(fr);
+   call state_add3df('MASS'     ,'Masses'                 , (/natom/),      __COMM _COMMA __CTX, vptr, qinit); __FPTR1(m);
+   call state_add3df('CHARGE'   ,'Charges'                , (/natom/),      __COMM _COMMA __CTX, vptr, qinit); __FPTR1(q);
+   call state_add3df('RADIUS'   ,'Radius'                 , (/natom/),      __COMM _COMMA __CTX, vptr, qinit); __FPTR1(radius);
+   call state_add3df('BFACTOR'  ,'Debye-Waller (B) factors', (/natom/),     __COMM _COMMA __CTX, vptr, qinit); __FPTR1(bfactor);
+   call state_add3df('OCCUPANCY','Occupancy'              , (/natom/),      __COMM _COMMA __CTX, vptr, qinit); __FPTR1(occupancy);
 #ifdef __RCOMP
-    call state_add3df('AUXPOS'   ,'Auxiliary coordinates'  , (/ndim,natom/), __COMM _COMMA __CTX, vptr, qinit); __FPTR2(rcomp);
-    call state_add3df('AUXBFACTOR','Auxiliary Debye-Waller (B) factors', (/natom/), __COMM _COMMA __CTX, vptr, qinit); __FPTR1(bcomp);
+   call state_add3df('AUXPOS'   ,'Auxiliary coordinates'  , (/ndim,natom/), __COMM _COMMA __CTX, vptr, qinit); __FPTR2(rcomp);
+   call state_add3df('AUXBFACTOR','Auxiliary Debye-Waller (B) factors', (/natom/), __COMM _COMMA __CTX, vptr, qinit); __FPTR1(bcomp);
 #endif
 !
    q=atoms%charge(1:natom)

@@ -178,6 +178,7 @@ module molecule
 !
 !%%%%%%%%%%%%%%%%%%%% padding parameters for grid smoothing %%%%%%%%%%%%%%%%%%%%%%%%%%%%
 ! charge padding
+#undef __LEZEROERR
 #define __MINUSERR
 #define __VAR	charge_padding
 #define __NAME	Charge padding
@@ -280,6 +281,8 @@ module molecule
   float :: erfo7  ! approximation to within O(-7)
   float :: erfo5  ! approximation to within O(-5) [contains an exponential term]
 !
+  float, parameter :: TOL=1e-5
+!
   if (.not.molecule_initialized) call molecule_initialize()
 ! make sure we have radii
   if (.not.system_radii_initialized) then
@@ -288,7 +291,11 @@ module molecule
 !  else
 !   write(666,*) natom, size(radius), radius
   endif
-
+!
+#ifdef __DEBUG
+  __OUT('Will transfer atomic parameters to grid.')
+#endif
+!
 ! if stdevs are negative, compute from grid :
   d=-1
 #ifndef __GRIDSCALE
@@ -338,12 +345,18 @@ module molecule
 !
 ! process grid centers (may need to do the same for corner grid to compute gradients (which will defined naturally on the corners)  
 !
+#ifdef __DEBUG
+ __OUT('Found', natom, 'atoms.')
+#endif
+!
   do l=1, natom
 !
    xpt=r(1,l)
    ypt=r(2,l)
    zpt=r(3,l)
-!   write(666,*) xpt,ypt,zpt 
+#ifdef __DEBUG
+ __OUT('Processing atom', l, 'with coordinates', xpt, ypt, zpt, 'charge', q(l), 'and radius', radius(l))
+#endif
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% x-
    if ( xpt.gt.xcen(i) ) then 
     do
@@ -432,6 +445,9 @@ module molecule
     enddo
    endif
 !
+#ifdef __DEBUG
+  __OUT('The closest grid point to atom is', closest_pt(1,l), closest_pt(2,l), closest_pt(3,l))
+#endif
   enddo ! over all atoms
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 ! loop over all points in the vicinity of the closest point (defined by distance) 
@@ -457,8 +473,19 @@ module molecule
    rmax2kappa =(cutoff_kappa +rkappa )**2
    rmax2charge=(cutoff_charge+rcharge)**2
    rmax2surf  =(cutoff_surf  +rsurf  )**2
+#ifdef __DEBUG
+ __OUT('Maximum radius for gridding epsilon for atom', l, 'is', rmax2eps)
+ __OUT('Maximum radius for gridding charge for atom', l, 'is', rmax2charge)
+#endif
 ! compute nominal charge density ( nominal because it will not be accurate on the grid and will need correction )
-   qn=q(l) * three / (four * pi * rchargen **3 )
+! note that this procedure holds only if rcharge > 0 ; in the case rcharge -> 0, note that we are actually
+! computing [ qn * G(r) ] below, so we can take the limit of this expression (which could also be used
+! if r is infinitesimal but positive
+   if ( rchargen .gt. TOL ) then ! note normalization by stdev
+    qn=q(l) * three / (four * pi * rcharge **3 ) ! so that the density qn integrated over the sphere gives the charge q(l)
+   else
+    qn=q(l)
+   endif
 !
    do kdir=-1,1,2 ! directions 
     k=closest_pt(3,l)+(kdir+1)/2; ! when kdir = 1, shift to the the right relative to closest point, but not when kdir=-1
@@ -539,6 +566,9 @@ module molecule
            d2=d*oo_stdev_eps ; e  = osq2 * (d2 + repsn) ; e2= osq2 * (d2 - repsn)
 !
            val=__SMOOTH_GAUSS(e,e2,d2)
+#ifdef __DDEBUG
+       __OUT('Atom', l, 'makes a contribution of', val, 'to eps array at point', i, j, k)
+#endif
 !
            __INCR(eps(i,j,k), val) ! scale to correct levels later
 !
@@ -563,9 +593,16 @@ module molecule
 ! compute atomic contribution to mesh point
            d2=d*oo_stdev_charge ; e  = osq2 * (d2 + rchargen) ; e2= osq2 * (d2 - rchargen)
 !
-           val=__SMOOTH_GAUSS(e,e2,d2)
+           if (rchargen .gt. TOL) then
+            val=__SMOOTH_GAUSS(e,e2,d2)
+           else ! Gaussian asymptote
+            val =  (osq2pi*oo_stdev_charge)**3 * exp(-half*d2**2) * (one + tenth * rchargen**2 * (d2**2 - three))
+           endif
+#ifdef __DEBUG
+       __OUT('Atom', l, 'makes a contribution of', val, 'to rhs array at point', i, j, k)
+#endif
 !
-           __INCR(rhs(i,j,k), val * qn) ! qn is nominal charge density: q / ( 4/3pi r^3 ) 
+           __INCR(rhs(i,j,k), val * qn) ! qn is nominal charge density: q / ( 4/3pi r^3 ), or q(l) [if unit mass]
          endif ! charge
 ! grid surface %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
          if (qsurfi &
@@ -620,7 +657,7 @@ module molecule
     dzdy2=dz2*dycor(j)
     do i=2, nx-1
 !
-     __INCR( qn , rhs(i,j,k) * dxcor(i) * dzdy2 )
+     __INCR( qn , rhs(i,j,k) * dxcor(i) * dzdy2 ) ! charge integral
 !
 ! scale rho, eps and kappa
 !%%%%%%%%%%%%%%%%%%%%%%%%%
