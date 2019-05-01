@@ -6,8 +6,10 @@ q3d=true;
 ascii=true;
 
 gridname='xyz_test.xyz';
-dataname='solution.dat';
-goldname='solution-gold.dat';
+%dataname='solution.dat';
+%goldname='solution-gold.dat';
+dataname='eps.dat';
+goldname='eps_test.dat';
 
 if ~exist('read')
  read=1;
@@ -67,12 +69,12 @@ end
 dg=d-g;
 
 % show slice
-kz=10;
+kz=17;
 
 %
 mesh(x,y,d(:,:,kz)); shading flat; colorbar; box on
-%mesh(x,y,g(:,:,kz)); shading flat; colorbar; box on
-%mesh(x,y,dg(:,:,kz)); shading flat; colorbar; box on
+mesh(x,y,g(:,:,kz)); shading flat; colorbar; box on
+mesh(x,y,dg(:,:,kz)); shading flat; colorbar; box on
 mesh(x(2:nx-1),y(2:ny-1),dg(2:end-1,2:end-1,kz)); shading flat; colorbar; box on
 %hold on ;
 %pcolor(x,y,d(:,:,kz)); shading flat; colorbar; box on

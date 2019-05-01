@@ -254,7 +254,7 @@ echo "
   function ball(dr, R, s)
 ! R : ball radius
 ! s : std of Gaussian filter
-  float, parameter ::TOL=1d-13, sq2=sqrt(2d0), pi=atan(1d0)
+  float, parameter ::TOL=1d-13, sq2=sqrt(2d0), pi=4d0*atan(1d0)
   float :: ball
   float, intent(in) :: dr, R, s
 !
@@ -323,6 +323,8 @@ molecule {
  charge_padding=0 ! added to radius to compute smoothed right-hand-side
  stdev_eps=${s} ! might be worthwhile to be able to set a single stdev
  stdev_charge=${s}
+ cutoff_eps_stdev=10 ! does not seem to make much difference
+ cutoff_charge_stdev=5
 }
 
 ches {
@@ -336,9 +338,14 @@ ches {
 
 #Initial 3D data
 
+! note : object init gives error of ~0.005 vs 0.00004 for direct init ; using gridded eps reduces error to 0.00004 (with charge cutoff=5)
+! so the problem is with eps gridding. Investigate !
+! perhaps need to compare the arrays. (NOTE: increasing filtering cutoff does not help)
  epsinit=object
- kappainit=object
+! epsinit=file ; epsfile=eps_test.dat ; eps_mode=text ; eps_format=chest
+ kappainit=constant ; kappaconst=0.
  rhsinit=object
+! rhsinit=file ; rhsfile=rhs_test.dat ; rhs_mode=text ; rhs_format=chest
  phiinit=constant   ; phiconst=0. % initial solution
 
 #Solver
@@ -348,6 +355,8 @@ ches {
  output_format=plot3d
  output_mode=text
  phioutput=solution.dat
+ epsoutput=eps.dat
+! rhsoutput=rhs.dat
 
 #Execution
  exec:init
@@ -438,6 +447,9 @@ echo "
  error=maxval(uches(2:$nx-1,2:$ny-1,2:$nz-1))
  where=maxloc(uches(2:$nx-1,2:$ny-1,2:$nz-1))
  write(6,'(2F25.12,3I10)') griderror, error, where
+! RMS error :
+ error=sqrt ( sum ( uches(2:$nx-1,2:$ny-1,2:$nz-1)**2 ) / (( $nx-2 )*( $ny-2 )*( $nz-2 )) )
+ write(6,'(F25.12)') error
  end " > compare.F90
 #
 $FC $FFLAGS $DEFS compare.F90 -o compare
@@ -454,6 +466,7 @@ if [ `echo "${i[0]} > $griderr" | bc` -eq 1 ]; then
  test_passed=0
 else
  ermax=0.06; # ad-hoc criterion
+ echo " The RMS error is ${i[5]}"
  echo " The maximum absolute error is "${i[1]}" at grid point ["${i[2]}","${i[3]}","${i[4]}"]"
  echo " Comparing with maximum allowed error ("$ermax")"
  if [ `echo "${i[1]} < $ermax" | bc` -eq 1 ]; then
