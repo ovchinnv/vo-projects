@@ -7,7 +7,7 @@ endif
 ifndef CC
 CC=gcc
 endif
-ifeq ($(DEBUG),1)
+ifeq ($(strip $(DEBUG)),1)
 CFLAGS =-O0 -g -fno-math-errno -c -fPIC
 else
 CFLAGS =-O3 -fno-math-errno -c -fPIC
@@ -27,8 +27,8 @@ ifndef FC
 FC=gfortran
 endif
 
-ifeq ($(FC),gfortran)
-ifeq ($(DEBUG),1)
+ifeq ($(strip $(FC)),gfortran)
+ifeq ($(strip $(DEBUG)),1)
 # WARNING: WHEN DEBUGGING DO NOT USE THE LINE BELOW. OPTIMIZATION DESTROYS SYNCHRONIZATION
 #FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fcheck=all -g
  FFLAGS=-O1 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fcheck=all
@@ -38,8 +38,8 @@ else
  FFLAGS=-Ofast -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno
 endif
 #---INTEL
-else ifeq ($(FC),ifort)
-ifeq ($(DEBUG),1)
+else ifeq ($(strip $(FC)),ifort)
+ifeq ($(strip $(DEBUG)),1)
  FFLAGS= -O0 -c -g -check all -debug extended -debug-parameters all -traceback -no-ipo #-fast -fno-math-errno -finline -fp-model fast=2 -xhost -no-ipo #-ipo 
 else
 #FFLAGS= -O3 -fast -finline -fp-model fast=2 -xhost -ipo -fno-math-errno -no-inline-factor -no-inline-min-size -c -g
@@ -63,13 +63,13 @@ LOMP=-lgomp
 #
 # NOTE : G95 reguires no space between "-D" and the name
 FORTRAN_COMPILER=$(notdir $(FC))
-ifeq ($(FORTRAN_COMPILER),pathf90)
+ifeq ($(strip $(FORTRAN_COMPILER)),pathf90)
 DEFS+=_D__PATHSCALE
-else ifeq ($(FORTRAN_COMPILER),pathf95)
+else ifeq ($(strip $(FORTRAN_COMPILER)),pathf95)
 DEFS+=_D__PATHSCALE
-else ifeq ($(FORTRAN_COMPILER),pathcc)
+else ifeq ($(strip $(FORTRAN_COMPILER)),pathcc)
 DEFS+=_D__PATHSCALE
-else ifeq ($(FORTRAN_COMPILER),pathCC)
+else ifeq ($(strip $(FORTRAN_COMPILER)),pathCC)
 DEFS+=_D__PATHSCALE
 endif
 
@@ -79,7 +79,7 @@ ifndef DOUBLE_PRECISION
  DOUBLE_PRECISION=1
 endif
 
-ifeq ($(DOUBLE_PRECISION),1)
+ifeq ($(strip $(DOUBLE_PRECISION)),1)
  DEFS+=-Dfloat=real*8
  DEFS+=-Dmpifloat=MPI_REAL8
 else
@@ -92,7 +92,7 @@ ifndef USE_PARALLEL
  USE_PARALLEL=0
 endif
 
-ifeq ($(USE_PARALLEL),1)
+ifeq ($(strip $(USE_PARALLEL)),1)
  DEFS+=-D__PARALLEL \
        -Dmpiint=MPI_INTEGER -Dmpichar=MPI_CHARACTER -Dmpiint4=MPI_INTEGER4 -Dmpiint8=MPI_INTEGER8 -Dmpibool=MPI_LOGICAL \
        -Dint4mpi="integer(KIND=MPI_INTEGER_KIND)"
@@ -117,12 +117,12 @@ STRING_FLAGS= -D__ACEMD -D__NAMD $(OMP)
 ifndef COMPILE_FOR_CHARMM
 COMPILE_FOR_CHARMM=0
 endif
-ifeq ($(COMPILE_FOR_CHARMM),0)
+ifeq ($(strip $(COMPILE_FOR_CHARMM)),0)
 DEFS+=$(STRING_FLAGS)
 endif
 #
 DEFS+=$(EXTRA_DEFINES)
-FCFLAGS+=$(EXTRA_FC_FLAGS)
+FFLAGS+=$(EXTRA_FC_FLAGS)
 
 # preprocess with C++ style preprocessor
 # -C flag preserves comments

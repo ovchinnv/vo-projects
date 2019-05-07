@@ -34,8 +34,10 @@ module state
  public state_add3df ! add a 3D array
  public state_bc_add3df ! add a 3D array
  public state_get3df ! return pointer to a 3D array
+ public state_getptr ! return pointer variable with all associated data
  public state_initialized
  public state_initialize
+ public state_list
  public state_done
 !
  contains
@@ -100,7 +102,31 @@ module state
   endif
 !
   end subroutine state_done
-!******************************************************************
+!=======================================================================
+  subroutine state_list()
+  int :: i
+  type(varray3df), pointer :: var
+  __IAM(state_list)
+  if (state_initialized) then
+   __MESG(whoami, nvar3df, 'DATA ARRAYS ARE DEFINED:')
+   do i=1, nvar3df
+    var=>vars3df(i)
+    __MESG(whoami, '======================================')
+    __MESG(whoami, 'ARRAY #: ',i)
+    __MESG(whoami, 'NAME: ',trim(var%vname))
+    __MESG(whoami, 'DESCRIPTION: ',trim(var%vdescription))
+    __MESG(whoami, 'DIMENSIONS: ',size(var%v,1),size(var%v,2),size(var%v,3))
+    __MESG(whoami, 'CONTEXT: ',trim(var%vcontext))
+    __MESG(whoami, 'INITIALIZED: ',var%vinit)
+    __MESG(whoami, '# BC INITIALIZED: ',count(var%vbcinit.eqv..true.))
+   enddo
+    __MESG(whoami, '======================================')
+  else
+   __MESG(whoami, 'Not initilialized')
+  endif
+!
+  end subroutine state_list
+!=======================================================================
   subroutine state_add3df(vname_, vdescription, vdim_, &
 #ifdef __PARALLEL
 &  vcomm, & ! if vcomm_ is provided, parallel communication will be used for initialization (not yet complete)
@@ -116,6 +142,7 @@ module state
   int, intent(in) :: vdim_(:)
   character(len=*), optional, intent(in) :: vcontext_
   type(varray3df), pointer, optional, intent(out) :: vptr
+!  type(varray3df), optional, intent(out) :: vptr
   bool, optional, intent(in) :: qinit_  ! whether to look for initialization options in parser
 #ifdef __PARALLEL
   int4mpi, intent(in) :: vcomm
@@ -176,6 +203,7 @@ module state
      call warning(whoami, 'Variable with name "'//vname(1:l)//'" already exists in context "'//vcontext(1:m)//'"',warnlev)
      call warning(whoami, ' and has description "'//trim(vars3df(i)%vdescription)//'". Returning pointer',warnlev)
      if (present(vptr)) vptr=>vars3df(i)
+!     if (present(vptr)) vptr=vars3df(i)
      return
      endif
    enddo ! i
@@ -193,6 +221,15 @@ module state
   if (nvar3df.eq.size(vars3df)) then ! reallocate
    allocate(vars3df_bkp(nvar3df + expand_increment))
    vars3df_bkp(1:nvar3df)=vars3df
+#ifdef __DEBUG
+ __MESG('DEBUG: reallocating state arrays')
+ __MESG('DEBUG: old arrays:')
+ do i=1,nvar3df
+  __MESG('NAME',vars3df(i)%vname)
+  __MESG('INIT:',vars3df(i)%vinit)
+  __MESG('BCINIT:',vars3df(i)%vbcinit)
+ enddo
+#endif
    deallocate(vars3df) ; vars3df=>vars3df_bkp ; nullify(vars3df_bkp)
 ! initialize data for new arrays:
    do i=1, expand_increment
@@ -210,7 +247,6 @@ module state
     do j=1,numbc ; var%vbcs(j)%d=>null() ; enddo
    enddo
   endif
-!
   __INC(nvar3df)
 !
   var=>vars3df(nvar3df)
@@ -220,7 +256,6 @@ module state
   var%vcontext=vcontext
   var%vflag=vflag
   call message(whoami, 'Variable "'//vname(1:l)//'" added to context "'//vcontext(1:m)//'"',warnlev)
-  if (present(vptr)) vptr=>var
 !
 ! check for assignments to variable (at present, this probably conflicts with 'molecule.src', in that you cannot use both assignments)
 ! note that the boundary points are read, too; this is necessary because interpolated (e.g.) epsilon & kappa values are needed at cell boundaries
@@ -251,6 +286,7 @@ module state
       k=len_trim(filename)
       call message(whoami, 'Will initialize variable "'//var%vname(1:l)//'" from file "'//filename(1:k)//'"',warnlev)
      else
+      filename=''
       call warning(whoami, 'Initialization file for variable "'//var%vname(1:l)//'" not specified',warnlev-1)
      endif
 !
@@ -309,7 +345,67 @@ module state
 !
   endif ! qinit
 !
+  if (present(vptr)) vptr=>var
+!  if (present(vptr)) vptr=var
+!
+#ifdef __DEBUG
+ __MESG(whoami, 'DEBUG: current arrays:')
+ do i=1,nvar3df
+  __MESG(whoami,'NAME:',vars3df(i)%vname)
+  __MESG(whoami,'INIT:',vars3df(i)%vinit)
+  __MESG(whoami,'BCINIT:',vars3df(i)%vbcinit)
+ enddo
+#endif
+!
   end subroutine state_add3df
+!******************************************************************
+  function state_getptr(vname_, vcontext_, ind) ! returns a pointer to the variable with name vname_, in context vcontext_
+  character(len=*), intent(in) :: vname_
+  character(len=*), optional, intent(in) :: vcontext_
+  character(len=varnamelen) :: vname
+  int, optional, intent(out) :: ind ! index into the vars3df array
+  character(len=contextnamelen):: vcontext
+  int :: i, l, m
+  type(varray3df), pointer :: state_getptr
+  __IAM(STATE_GETPTR)
+  nullify(state_getptr)
+!
+  if (.not.state_initialized) call state_initialize()
+!
+  vname=vname_; l=len(vname);
+  __TRIMA(vname,l)
+  call toupper(vname)
+!
+  if (present(vcontext_)) then
+   vcontext=vcontext_; m=len(vcontext);
+   __TRIMA(vcontext,m)
+   call toupper(vcontext)
+  else
+   vcontext='MAIN';m=4
+  endif
+!
+  if (present(ind)) ind=-1 ! initialize
+!
+  if (vname.eq.'') then 
+   call warning(whoami, 'Variable name cannot be blank. Returning null.', 0)
+  elseif (vcontext.eq.'') then 
+   call warning(whoami, 'Variable context can be omitted but cannot be blank. Returning null.', 0)
+  else
+   do i=1, nvar3df
+    if (vname.eq.vars3df(i)%vname.and.vcontext.eq.vars3df(i)%vcontext) then
+     state_getptr=>vars3df(i) ; if (present(ind)) ind=i ; exit
+    endif
+   enddo ! i
+   if (.not.associated(state_getptr)) &
+#ifdef __PARALLEL
+&   call warning(whoami, 'Cannot find variable with name "'//vname(1:l)//'" in context "'//vcontext(1:m)//'" on global node '// &
+&    itoa(ME_GLOBAL)//'. Returning null.',0)
+#else
+&   call warning(whoami, 'Cannot find variable with name "'//vname(1:l)//'" in context "'//vcontext(1:m)//'". Returning null.',0)
+#endif
+  endif
+!
+  end function state_getptr
 !******************************************************************
   function state_get3df(vname_, vcontext_, ind) ! returns a pointer to the data of variable with name vname_, in context vcontext_
   character(len=*), intent(in) :: vname_
