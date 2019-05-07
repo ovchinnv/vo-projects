@@ -31,7 +31,7 @@
 #// error function inverse
 #define __RHO(_X) half*(one + __erf((_X)*osq2*oo_surf_stdev))
 #define __Q(_R) ierfo7(two*(_R)-one)
-#define __QSAFE(_R) ierfo7(two * min(__RHO_MAX, _R) - one)
+#define __QSAFE(_R) ierfo7(two * min(__RHO_MAX, max(_R,__RHO_MIN)) - one)
 #define __RHO_INVERSE(_R) sqrt2*surf_stdev*__Q(_R)
 #// if already computed erf inverse _Q
 #define __RHO_INVERSE2(_Q) sqrt2*surf_stdev*_Q
@@ -126,7 +126,7 @@ module _N
  __PAR(surf_padding,float,0d0)       ! ( units of radius ) padding values to radii which might account for e.g. solvent layer(s)
  __PAR(surf_stdev,float,2d0)         ! standard deviation of smoothing filter
 !
- float :: cutoff_surf, cutoff_surf2, oo_surf_stdev
+ float :: cutoff_surf, oo_surf_stdev
 #ifdef __LOGISTIC_INVERSE
  float :: logistic_constant
 #endif
@@ -247,7 +247,7 @@ module _N
  float, parameter :: neighbor_list_factor_grow = 0.1d0
  float, parameter :: neighbor_list_factor_shrink = - neighbor_list_factor_grow / 500d0
 !                                        ! also, the largest index of an atom within the cutoff distance for original algorithm
-! note : should implement a real test of the neighbor list algorithm, e.g. scanning the entire array and comparing with the
+! note : perhaps should implement a real test of the neighbor list algorithm, e.g. scanning the entire array and comparing with the
 ! short array result
 #endif
 #endif
@@ -257,6 +257,11 @@ module _N
 #define nsurface_coords nsurface_coord
 !
  int :: nsolvent_outside
+ int :: nsolvent_unsupported ! solvent atoms that fall outside of the density support in the erf/density algorithm
+#ifdef __ADAPTIVE_SUPPORT
+ float, parameter :: solvent_support_factor_grow = 0.01d0
+ float, parameter :: solvent_support_factor_shrink = - solvent_support_factor_grow / 500d0 ! not sure that it is a good idea to decrease it, perhaps not below original value ?
+#endif
 #ifdef __DASYSTAT
  float :: solvent_mass         ! total mass of solvent atoms (constant throughout simulation)
  float :: solvent_mass_outside ! mass of solvent atoms that are outside the shell surface
@@ -494,7 +499,6 @@ module _N
 ! MAKE sure to define variables below as soon as surf_stdev and cutoff_surf_stdev are known so that density calculations are valid hence
  oo_surf_stdev=one/surf_stdev
  cutoff_surf  =cutoff_surf_stdev*surf_stdev
- cutoff_surf2 =cutoff_surf**2
 !
 #ifdef __LOGISTIC_INVERSE
  logistic_constant = sqrt3 * opi * surf_stdev ; ! need this for __RHO below
@@ -1518,13 +1522,21 @@ __DBGVAR(r_com_sa,1)
  _W '#WATERSHELL RESTART FILE'
  _W __STRING(__RESTARTCTX)//' {'
  _W 'iteration=',iteration
- if (qminimum_distance) _W 'minimum_distance=on # use the simpler minimum distance to solvent algorithm'
+ if (qminimum_distance) then 
+  _W 'minimum_distance=on # use the simpler minimum distance to solvent algorithm'
+ else
 ! _W 'surface_contour_value=',surface_contour_value, ' # value for which density isosurface is computed'
+  _W 'surf_stdev=',surf_stdev, ' # standard deviation of Gaussian filter'
+#ifdef __ADAPTIVE_SUPPORT
+! write recomputed from current cutoff
+  _W 'cutoff_surf_stdev=',cutoff_surf * oo_surf_stdev, ' # distance from center beyond which it is set to zero (units of standard deviation)'
+#else
+  _W 'cutoff_surf_stdev=',cutoff_surf_stdev, ' # distance from center beyond which it is set to zero (units of standard deviation)'
+#endif
+  _W 'surface_padding=',surf_padding, ' # scalar padding added to each atom radius'
+ endif
  _W 'surface_distance=',surface_distance, ' # distance of solvent surface from solute'
  _W 'surface_force_constant=',surface_force_constant, ' # surface force constant'
- _W 'surf_stdev=',surf_stdev, ' # standard deviation of Gaussian filter'
- _W 'cutoff_surf_stdev=',cutoff_surf_stdev, ' # distance from center beyond which it is set to zero (units of standard deviation)'
- _W 'surface_padding=',surf_padding, ' # scalar padding added to each atom radius'
 !
 #if defined(__SORT_LIST) & defined(__NEIGHBOR_LIST)
  if (qneighbor_list) then
@@ -1648,7 +1660,6 @@ __DBGVAR(r_com_sa,1)
 ! int :: ibeg, iend ! atom indices for looping
  float :: distance_from_solute, distance_from_solute2, pre, d0
  float :: surface_force ! , density_beyond_contour ! useful ?
- int :: nsolvent_unsupported
 #ifdef __ROTRES
  float :: dcom(3), r1(3)
 #endif
@@ -2074,7 +2085,7 @@ endif ! decide whether to compute dr_surf
    do i=1, nsolvent
 ! convert to distance
     if ( abs(rho_solv(i)) .eq. zero ) then ! warn that we are outside of the support
-     __WRN(whoami, 'SOLVENT ATOM '//itoa(isolvent_atoms(i))//' OUTSIDE OF SOLUTE SUPPORT. RESTART WITH A SMALLER SURFACE DISTANCE OR A LARGER FILTER CUTOFF OR PADDING.')
+     __WRN(whoami, 'SOLVENT ATOM '//itoa(isolvent_atoms(i))//' OUTSIDE OF SOLUTE SUPPORT. RESTART WITH A LARGER FILTER CUTOFF OR PADDING.')
     endif
     d0 = __RHO_INVSAFE(rho_solv(i))
     __DBGOUT('Inst. density/distance from solute for atom ',i,' are ',rho_solv(i),'/',d0);
@@ -2505,7 +2516,9 @@ endif
 !    __WRN(whoami, '#'//itoa(iteration)//': SOLVENT ATOM '//itoa(isolvent_atoms(i))//' OUTSIDE OF SOLUTE SUPPORT. RESTART WITH A SMALLER SURFACE DISTANCE OR A LARGER FILTER CUTOFF OR PADDING.')
 #ifdef __OMP
 !$omp atomic update
+#endif
     nsolvent_unsupported = nsolvent_unsupported + 1 ! compiler cannot take __INC()
+#ifdef __OMP
 !$omp end atomic
 #endif
     cycle
@@ -2676,7 +2689,17 @@ endif
 #endif
 !
   if (nsolvent_unsupported.gt.0) then
-   __WRN(whoami, 'DETECTED '//itoa(nsolvent_unsupported)//' ATOM(S) OUTSIDE SOLUTE SUPPORT.');
+#ifdef __ADAPTIVE_SUPPORT
+   __WRN(whoami, 'DETECTED '//itoa(nsolvent_unsupported)//' ATOM(S) OUTSIDE SOLUTE SUPPORT. DENSITY CUTOFF IS '//ftoa(cutoff_surf));
+! increase support adaptively
+   __INCR(cutoff_surf, solvent_support_factor_grow)
+  else
+   if (cutoff_surf.gt.cutoff_surf_stdev*surf_stdev) then 
+    __INCR(cutoff_surf, solvent_support_factor_shrink)
+   endif
+#else
+   __WRN(whoami, 'DETECTED '//itoa(nsolvent_unsupported)//' ATOM(S) OUTSIDE SOLUTE SUPPORT. RESTART WITH A LARGER CUTOFF OR SURFACE PADDING.')
+#endif
   endif
  endif ! qminimum_dist
 !
