@@ -261,6 +261,8 @@ module _N
 #ifdef __ADAPTIVE_SUPPORT
  float, parameter :: solvent_support_factor_grow = 0.01d0
  float, parameter :: solvent_support_factor_shrink = - solvent_support_factor_grow / 500d0 ! not sure that it is a good idea to decrease it, perhaps not below original value ?
+ float :: surf_padding_input ! save surface padding provided on input
+! float, parameter :: surface_padding_max = ten
 #endif
 #ifdef __DASYSTAT
  float :: solvent_mass         ! total mass of solvent atoms (constant throughout simulation)
@@ -298,7 +300,10 @@ module _N
  float, pointer :: rb_wgt(:)
 #ifdef __FD_CHECK
  float, pointer :: ffd(:,:)
- float, parameter :: h = 0.1d0
+ float, pointer :: ffd2(:,:) ! this array is used to isolate shell forces from other contributions
+! float, parameter :: h = 0.001d0 ! too low for single precision
+! float, parameter :: h = 0.01d0 ! ok for single precision
+ float, parameter :: h = 0.05d0
 #endif
 #endif
 !
@@ -458,6 +463,9 @@ module _N
 #define __TAG	surface_padding
 #define __NAME	Density padding
 #include "parser/parser_macro3.src"
+#ifdef __ADAPTIVE_SUPPORT
+ surf_padding_input=surf_padding ! save original padding value if padding could be adjusted adaptively
+#endif
 !
 #//undef __MINUSERR
 ! value for density isosurface
@@ -1014,7 +1022,7 @@ endif
 #define __DEFAULT
 #define __TAG rigid_body_force_constant
 #define __VAR __TAG
-#define __NAME force constat for ridig body restraint
+#define __NAME force constat for rigid-body restraint
 #include "parser/parser_macro2.src"
  endif
 !
@@ -1041,7 +1049,9 @@ endif
  endif
 !=========== end structure file
 ! initialize radii using a system function
+! relevant only for density method, so make this explicit :
 !
+ if (.not.qminimum_distance) then
 #define __GET_RAD(_TAG)  if (existtag_nocase(__STRING(_TAG),context)) then;\
                             farray=>system_init_mol_scalar_nocase(__STRING(_TAG), context);\
                             if (associated(farray)) then;\
@@ -1050,11 +1060,13 @@ endif
                              radii_initialized=.true.; \
                             endif
 
- __GET_RAD(radii)
- else __GET_RAD(radius) ! other tags here
+  __GET_RAD(radii)
+  else __GET_RAD(radius) ! other tags here
+ else
  endif
 !
- if (.not.radii_initialized) __WRN(whoami, 'COULD NOT INITIALIZE ATOMIC RADII');
+ if (.not.(radii_initialized)) __WRN(whoami, 'COULD NOT INITIALIZE ATOMIC RADII');
+ endif ! qmindist
 ! same for dasystat
 #ifdef __DASYSTAT
 !
@@ -1305,7 +1317,11 @@ __DBGVAR(r_surf(:,l),1)
   enddo ! over surface atom coordinates
  else ! qdumsurf
 #endif
-  rad_surf(1:nsurface_atoms)=radius(isurface_atoms)
+  if (qminimum_distance) then 
+   rad_surf=zero ! NOTE : with qmindist, radii are inly used in dasy/baro to define grid limits
+  else
+   rad_surf(1:nsurface_atoms)=radius(isurface_atoms)
+  endif
 #ifdef __DUMSURF
  endif
 #endif
@@ -1456,7 +1472,8 @@ __DBGVAR(r_surf(:,l),1)
   else
 ! note : a problem here is that surface_distance might be undefined (or zero) to be computed on first iteration
 ! this should be moved entirely to the main routine, after surface_distance is known
-! also : note the need to incorporate radii
+! also : note that the radii are zero for mindist method, since there is not a straightforward method to incorporate them without overhead
+! the whole point of the mindist methiod is to make it "dirt cheap" compared to the "state-of-the-art" erf density
    r_surf_minmax(1,1) = minval(r_surf(1,:)-rad_surf) - r_com_sa(1) - ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
    r_surf_minmax(2,1) = maxval(r_surf(1,:)+rad_surf) - r_com_sa(1) + ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
 !
@@ -1503,7 +1520,7 @@ __DBGVAR(r_com_sa,1)
  endif ! barostat or dasystat
 #endif
 !
- if (.not.fatal_warning() .and. radii_initialized &
+ if (.not.fatal_warning() .and. (radii_initialized .or. qminimum_distance) &
 #ifdef __DASYSTAT
  .and.(dmasses_initialized .or. .not. dasystat) &
 #endif
@@ -1528,8 +1545,10 @@ __DBGVAR(r_com_sa,1)
 ! _W 'surface_contour_value=',surface_contour_value, ' # value for which density isosurface is computed'
   _W 'surf_stdev=',surf_stdev, ' # standard deviation of Gaussian filter'
 #ifdef __ADAPTIVE_SUPPORT
+#ifdef __ADAPTIVE_CUTOFF
 ! write recomputed from current cutoff
   _W 'cutoff_surf_stdev=',cutoff_surf * oo_surf_stdev, ' # distance from center beyond which it is set to zero (units of standard deviation)'
+#endif
 #else
   _W 'cutoff_surf_stdev=',cutoff_surf_stdev, ' # distance from center beyond which it is set to zero (units of standard deviation)'
 #endif
@@ -1957,7 +1976,7 @@ endif ! decide whether to compute dr_surf
 ! update r_com
     __INCR(r_com,  d0 * (r_com_inst - r_com))
 #else
-    r_com = oonsurface * sum(r_surf,2) ;
+    r_com = oonsurface * sum(r_surf,2) ; ! NOTE : a COG rather than COM
 #endif
    endif ! remove_net_torque
 #ifdef __UNWRAP_PBC
@@ -1987,9 +2006,14 @@ endif ! decide whether to compute dr_surf
   __DECR(A_rb(2,2),__CONCAT3(1,__PCODE,0))
   __DECR(A_rb(3,3),__CONCAT3(1,__PCODE,0))
 !
-  __SCALE(A_rb, rigid_body_force_constant*oonsurface) ! scale matrix for speed
+  __SCALE(A_rb, rigid_body_force_constant*oonsurface) ! pre-scale matrix for speed
   dcom=(r_com_inst-r_com_ref)*rigid_body_force_constant*oonsurface
 ! compute and apply forces on surface atoms :
+#ifdef __FD_CHECK
+! record current forces in case they are nonzero :
+   __ALLOC(ffd2(3,nsurface_atoms))
+   ffd2=fr(:,isurface_atoms(:))
+#endif
 #ifdef __OMP
 !$omp parallel do schedule(runtime)
 #endif
@@ -1998,7 +2022,7 @@ endif ! decide whether to compute dr_surf
   enddo
 #ifdef __OMP
 !$omp end parallel do
- endif ! rigid body restraint
+#endif
 !
 #ifdef __FD_CHECK
   __ALLOC(ffd(3,nsurface_atoms))
@@ -2025,23 +2049,32 @@ endif ! decide whether to compute dr_surf
   enddo ; enddo ! j, i
   __SCALE(ffd, - half * rigid_body_force_constant * oonsurface / ( 2*h ) )
 
-! write(600,*) ffd(1,:)
-! write(600,*) fr(1,isurface_atoms(:))
-! close(600)
+#ifdef __DEBUG
+ write(600,*) iteration
+ write(600,*) ffd(1,:)
+ write(600,*) fr(1,isurface_atoms(:))
+ close(600)
+#endif
 
-   d0=sqrt(sum ( ffd(1,:)-fr(1,isurface_atoms(:)) )**2 * oonsurface)
-   d0=d0/sqrt( sum ( fr(1,isurface_atoms(:)) )**2 * oonsurface )
+   d0=sqrt(sum ( ffd(1,:)-(fr(1,isurface_atoms(:))-ffd2(1,:)) )**2 * oonsurface)
+   __WARN(whoami, ' ABSOLUTE RMS X-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
+   d0=d0/sqrt( sum ( fr(1,isurface_atoms(:))-ffd2(1,:) )**2 * oonsurface )
    __WARN(whoami, ' RELATIVE RMS X-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
 !
-   d0=sqrt(sum ( ffd(2,:)-fr(2,isurface_atoms(:)) )**2 * oonsurface)
-   d0=d0/sqrt( sum ( fr(2,isurface_atoms(:)) )**2 * oonsurface )
+   d0=sqrt(sum ( ffd(2,:)-(fr(2,isurface_atoms(:))-ffd2(2,:)) )**2 * oonsurface)
+   __WARN(whoami, ' ABSOLUTE RMS Y-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
+   d0=d0/sqrt( sum ( fr(2,isurface_atoms(:))-ffd2(2,:) )**2 * oonsurface )
    __WARN(whoami, ' RELATIVE RMS Y-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
 !
-   d0=sqrt(sum ( ffd(3,:)-fr(3,isurface_atoms(:)) )**2 * oonsurface)
-   d0=d0/sqrt( sum ( fr(3,isurface_atoms(:)) )**2 * oonsurface )
+   d0=sqrt(sum ( ffd(3,:)-(fr(3,isurface_atoms(:))-ffd2(3,:)) )**2 * oonsurface)
+   __WARN(whoami, ' ABSOLUTE RMS Z-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
+   d0=d0/sqrt( sum ( fr(3,isurface_atoms(:))-ffd2(3,:) )**2 * oonsurface )
    __WARN(whoami, ' RELATIVE RMS Z-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
 !
+  __DBGOUT('Free surface arrays for FD check')
   __FREE(ffd)
+  __FREE(ffd2)
+  __DBGOUT('Recompute correct rigid restraint forces')
 ! recompute A and dcom correctly for energy calc in the output section
 !
   call RMSBestFit(r_surf_ref, dr_surf, rb_wgt, A_rb, qdimswap_=.true.)
@@ -2053,10 +2086,10 @@ endif ! decide whether to compute dr_surf
   __SCALE(A_rb, rigid_body_force_constant*oonsurface)
   dcom=(r_com_inst-r_com_ref)*rigid_body_force_constant*oonsurface
 
-#endif
-#endif
+#endif __FD_CHECK
+ endif
 !============================================= compute contour value/distance and gradient at solvent coordinates
-#endif
+#endif // __ROTRES
 !
  surface_energy=zero
  distance_from_solute=zero
@@ -2065,6 +2098,7 @@ endif ! decide whether to compute dr_surf
 !========================== compute contour value if needed
 ! if surface distance value is zero, estimate a reasonable value from current coordinates
  if ( abs(surface_distance) .lt. __ERRTOL) then
+  __DBGOUT('Will compute approximate surface distance')
   if (qminimum_distance) then ! simple algorithm
    call __NM(compute_mindist_grad)(.false.) ! need entire sum
    do i=1, nsolvent
@@ -2075,7 +2109,7 @@ endif ! decide whether to compute dr_surf
    enddo
    pre=1.0d0 ! prefactor for scaling std in computing reference distance
   else ! (NOT) qminimum_distance -- original erf algorithm
-! first, set surface_contour value to an upper bound to make sure that the 
+! first, set surface_contour value to an upper bound to make sure that
 ! no atoms can be marked as "inside" atoms; this ensures that the density routine cannot quit early
    surface_contour_value=nsurface_coord
 #ifdef __DASYSTAT
@@ -2084,7 +2118,7 @@ endif ! decide whether to compute dr_surf
    call __NM(compute_density_grad)(.false.) ! need entire sum
    do i=1, nsolvent
 ! convert to distance
-    if ( abs(rho_solv(i)) .eq. zero ) then ! warn that we are outside of the support
+    if ( rho_solv(i) .le. zero ) then ! warn that we are outside of the support
      __WRN(whoami, 'SOLVENT ATOM '//itoa(isolvent_atoms(i))//' OUTSIDE OF SOLUTE SUPPORT. RESTART WITH A LARGER FILTER CUTOFF OR PADDING.')
     endif
     d0 = __RHO_INVSAFE(rho_solv(i))
@@ -2111,24 +2145,29 @@ endif ! decide whether to compute dr_surf
 !
 #ifdef __DASYSTAT
 !
-! also check for distance to bulk boundary note that, since the bulk
+! also check for distance to bulk boundary; note that, since the bulk
 ! boundary distance is held fixed, it is possible that surface will shrink
 ! to be very close to the bulk boundary,  in which case we would need to
 ! recompute the bulk boundary distance to avoid instabilities (or
 ! ill-definedness, if the BBD happens to be OUTSIDE !)
+! 4/19 : also recompute if the BBD is too far from the SD ; (e.g. so that simulations that converge on the same SD also converge on similar BBDs)
 !
   if (dasystat) then
-   if(abs(bulk_boundary_distance).ge.abs(surface_distance)) then
+   if ( abs(bulk_boundary_distance).le.__ERRTOL ) then ! zero value signals auto-compute
+    __MESSAGE(whoami, 'COMPUTING INITIAL LOCATION OF BULK BOUNDARY FROM SURFACE BOUNDARY:')
+!
+   elseif(abs(bulk_boundary_distance).ge.abs(surface_distance)) then
     __WRN(whoami, 'BULK BOUNDARY MUST BE INSIDE SHELL SURFACE. ABORT');
     __ASSERT(abs(bulk_boundary_distance),<,abs(surface_distance));
     goto 999
 !
-   elseif( (abs(surface_distance) - abs(bulk_boundary_distance)) .le. &
+   elseif( (abs(surface_distance) - abs(bulk_boundary_distance)) .lt. &
 &    ( __BULK_BOUNDARY_RECOMPUTE_FACTOR * abs(surface_distance) ) ) then ! recompute bulk_bdry
     __MESSAGE(whoami, 'BULK BOUNDARY IS TOO CLOSE TO SURFACE BOUNDARY. WILL RECOMPUTE:')
 !
-   elseif ( abs(bulk_boundary_distance).le.__ERRTOL ) then ! zero value signals auto-compute
-    __MESSAGE(whoami, 'COMPUTING INITIAL LOCATION OF BULK BOUNDARY FROM SURFACE BOUNDARY:')
+   elseif( (abs(surface_distance) - abs(bulk_boundary_distance)) .gt. &
+&    ( ( 2*(one-(__BULK_DISTANCE_SCALE)) - __BULK_BOUNDARY_RECOMPUTE_FACTOR) * abs(surface_distance) ) ) then ! recompute bulk_bdry
+    __MESSAGE(whoami, 'BULK BOUNDARY ('//ftoa(bulk_boundary_distance)//') IS TOO FAR FROM SURFACE BOUNDARY ('//ftoa(surface_distance)//'). WILL RECOMPUTE:')
 !
    else !
     goto 999
@@ -2165,8 +2204,8 @@ endif ! decide whether to compute dr_surf
   if (.not. qneighbor_list) solute_neighbor_mind=nsurface_coord
 #endif
 !=========================================================================
- else ! compute reference surface distance
-! aa :  this is the most time consuming part of the force calculation ; perhaps we can do it on the GPU ? Or perhaps can regulate cost otherwise ?
+ else ! compute approximate reference surface distance from coordinates
+! NOTE :  this is the most time consuming part of the force calculation ; perhaps in time we can move it to the GPU ?
   if (qminimum_distance) then ! simple min-dist calculation
 !
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
@@ -2231,8 +2270,14 @@ endif ! decide whether to compute dr_surf
  endif
 #endif
 !
-! NOTE: here OPENMP does not make much difference but keeping because we are good
+! if running a FD check, first save current forces, in case they are nonzero
+#ifdef __FD_CHECK
+ __DBGOUT('Allocate solvent arrays for FD check')
+ __ALLOC(ffd2(3,nsolvent))
+ ffd2=-fr(:,isolvent_atoms(:))
+#endif
 ! simple minimum distance algorithm
+! NOTE: here OPENMP does not make much difference but keeping for consistency and completeness
  if (qminimum_distance) then
 #ifdef __OMP
 !$omp parallel &
@@ -2422,12 +2467,78 @@ if (dasystat) then
 endif
 #endif
 #endif
+!
+#ifdef __FD_CHECK
+ __DBGOUT('save forces before torque removal code')
+! make sure torque removal forces do not contaminate shell the potential forces in the FD comparison :
+#ifdef __OMP
+!$omp do schedule(runtime)
+#endif
+ do i=1,nsolvent
+  __INCR(ffd2(:,i), fr(:,isolvent_atoms(i))) ! ffd2 was set to -fr earlier
+ enddo
+#ifdef __OMP
+!$omp end do
+#endif
+#endif
 ! code section for torque removal; sorry, not a subroutine, but repeated below, hence outside
 #include "watershell_rmft_aux1.ftn"
 !
 #ifdef __OMP
 !$omp end parallel
 #endif
+!
+#ifdef __FD_CHECK
+! FD test of shell potential
+ __ALLOC(ffd(3,nsolvent))
+  do i=1, nsolvent ; do j=1, 3
+   ffd(j,i)=zero ! initialize
+   d0=r_solv(j,i) ! save coordinate
+   do ii=-1,1,2
+    __INCR ( r_solv(j,i) , ii * h ) ! perturb
+#if (_DBGLEV>1)
+    __DBGOUT('calling compute_mindist_grad to compute forces by FD on coordinate', i, j)
+#endif
+#if defined(NEIGHBOR_LIST) && defined(SORT_LIST)
+    call __NM(compute_mindist_grad)(.not.qneighbor_list) ! do not quit early
+#else
+    call __NM(compute_mindist_grad)(.true.)
+#endif
+! incorporate into FD
+    __INCR  ( ffd(j,i), ii * (min(zero, dist_solv(i)-surface_distance))**2 ) ! recall that distance is negative, or inside shell
+! restore coordinate
+    r_solv(j,i)=d0
+   enddo ! ii
+  enddo ; enddo ! j, i
+  __SCALE(ffd, - half * surface_force_constant / ( 2*h ) ) ! negative for force direction
+
+#ifdef __DEBUG
+ write(700,*) iteration
+ write(700,*) ffd(1,:)
+ write(700,*) ffd2(1,isolvent_atoms(:))
+ close(700)
+#endif
+
+   d0=sqrt(sum ( ffd(1,:)-ffd2(1,:) )**2 / nsolvent_outside)
+   __WARN(whoami, ' ABSOLUTE RMS X-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
+   d0=d0/sqrt( sum ( ffd2(1,:) )**2 / nsolvent_outside )
+   __WARN(whoami, ' RELATIVE RMS X-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
+!
+   d0=sqrt(sum ( ffd(2,:)-ffd2(2,:) )**2 / nsolvent_outside)
+   __WARN(whoami, ' ABSOLUTE RMS Y-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
+   d0=d0/sqrt( sum ( ffd2(2,:) )**2 / nsolvent_outside )
+   __WARN(whoami, ' RELATIVE RMS Y-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
+!
+   d0=sqrt(sum ( ffd(3,:)-ffd2(3,:) )**2 / nsolvent_outside)
+   __WARN(whoami, ' ABSOLUTE RMS Z-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
+   d0=d0/sqrt( sum ( ffd2(3,:) )**2 / nsolvent_outside )
+   __WARN(whoami, ' RELATIVE RMS Z-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
+!
+  __FREE(ffd)
+  __FREE(ffd2)
+! at this point the distance and derivatives are computed with one coordinate off ; is there any need to recompute them correctly ? They do not seem to be used below.
+#endif //__FD_CHECK
+!
  else ! not qminimum_distance, i.e. original algorithm
   nsolvent_unsupported=0 ! for counting unsupported atoms in the erf density method
 !================= original density based algorithm ==================
@@ -2512,12 +2623,13 @@ endif
 #ifdef __DASYSTAT
    if(dasystat) __INCR(__U(solvent_mass_outside), mass_solv(i))
 #endif
-   if ( abs(rho_solv(i)) .eq. zero ) then ! proceed if the density is positive ; otherwise warn that we are outside of the support and cycle
+   if ( rho_solv(i) .le. zero ) then ! proceed if the density is positive ; otherwise warn that we are outside of the support and cycle
+! note that is is also possible that erf/exp approximations (or single precision calc) near zero densities will produce negative numbers, hence above
 !    __WRN(whoami, '#'//itoa(iteration)//': SOLVENT ATOM '//itoa(isolvent_atoms(i))//' OUTSIDE OF SOLUTE SUPPORT. RESTART WITH A SMALLER SURFACE DISTANCE OR A LARGER FILTER CUTOFF OR PADDING.')
 #ifdef __OMP
 !$omp atomic update
 #endif
-    nsolvent_unsupported = nsolvent_unsupported + 1 ! compiler cannot take __INC()
+    nsolvent_unsupported = nsolvent_unsupported + 1 ! openmp compiler cannot take __INC()
 #ifdef __OMP
 !$omp end atomic
 #endif
@@ -2681,30 +2793,104 @@ if (dasystat) then
 !$omp atomic
  __REDUCE(solvent_mass_outside)
 endif
+#endif // __DASYSTAT
+#endif // __OMP
+!
+#ifdef __FD_CHECK
+! make sure torque removal forces do not contaminate shell the potential forces in the FD comparison :
+#ifdef __OMP
+!$omp do schedule(runtime)
 #endif
+ do i=1,nsolvent
+  __INCR(ffd2(:,i), fr(:,isolvent_atoms(i))) ! ffd2 was set to -fr earlier
+ enddo
+#ifdef __OMP
+!$omp end do
 #endif
+#endif //__FD_CHECK
+!
 #include "watershell_rmft_aux1.ftn"
 #ifdef __OMP
 !$omp end parallel
 #endif
 !
+#ifdef __FD_CHECK
+! FD test of shell potential
+ __ALLOC(ffd(3,nsolvent))
+  do i=1, nsolvent ; do j=1, 3
+   ffd(j,i)=zero ! initialize
+   d0=r_solv(j,i) ! save coordinate
+   do ii=-1,1,2
+    __INCR ( r_solv(j,i) , ii * h ) ! perturb
+#if defined(NEIGHBOR_LIST) && defined(SORT_LIST)
+    call __NM(compute_density_grad)(.not.qneighbor_list)
+#else
+    call __NM(compute_density_grad)(.true.)
+#endif
+! incorporate into FD
+    __INCR ( ffd(j,i), ii * min(zero, (__RHO_INVERSE(rho_solv(i))-surface_distance))**2 ) ! recall that distance is negative, or inside shell
+! restore coordinate
+    r_solv(j,i)=d0
+   enddo ! ii
+  enddo ; enddo ! j, i
+  __SCALE(ffd, - half * surface_force_constant / ( 2*h ) ) ! negative for force direction
+
+#ifdef __DEBUG
+ write(800,*) iteration
+ write(800,*) ffd(1,:)
+ write(800,*) ffd2(1,isurface_atoms(:))
+ close(800)
+#endif
+
+   d0=sqrt(sum ( ffd(1,:)-ffd2(1,:) )**2 / nsolvent_outside)
+   __WARN(whoami, ' ABSOLUTE RMS X-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
+   d0=d0/sqrt( sum ( ffd2(1,:) )**2 / nsolvent_outside )
+   __WARN(whoami, ' RELATIVE RMS X-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
+!
+   d0=sqrt(sum ( ffd(2,:)-ffd2(2,:) )**2 / nsolvent_outside)
+   __WARN(whoami, ' ABSOLUTE RMS Y-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
+   d0=d0/sqrt( sum ( ffd2(2,:) )**2 / nsolvent_outside )
+   __WARN(whoami, ' RELATIVE RMS Y-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
+!
+   d0=sqrt(sum ( ffd(3,:)-ffd2(3,:) )**2 / nsolvent_outside)
+   __WARN(whoami, ' ABSOLUTE RMS Z-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
+   d0=d0/sqrt( sum ( ffd2(3,:) )**2 / nsolvent_outside )
+   __WARN(whoami, ' RELATIVE RMS Z-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
+!
+  __FREE(ffd)
+  __FREE(ffd2)
+! at this point the distance and derivatives are computed with one coordinate off ; is there any need to recompute them correctly ? They do not seem to be used below.
+#endif //__FD_CHECK
+!
+!
   if (nsolvent_unsupported.gt.0) then
 #ifdef __ADAPTIVE_SUPPORT
+#ifdef __ADAPTIVE_CUTOFF
    __WRN(whoami, 'DETECTED '//itoa(nsolvent_unsupported)//' ATOM(S) OUTSIDE SOLUTE SUPPORT. DENSITY CUTOFF IS '//ftoa(cutoff_surf));
-! increase support adaptively
+! increase cutoff adaptively
    __INCR(cutoff_surf, solvent_support_factor_grow)
   else
    if (cutoff_surf.gt.cutoff_surf_stdev*surf_stdev) then 
     __INCR(cutoff_surf, solvent_support_factor_shrink)
    endif
 #else
+   __WRN(whoami, 'DETECTED '//itoa(nsolvent_unsupported)//' ATOM(S) OUTSIDE SOLUTE SUPPORT. SURFACE PADDING IS '//ftoa(surf_padding));
+! increase padding adaptively
+   __INCR(surf_padding, solvent_support_factor_grow)
+  else
+   if (surf_padding.gt.surf_padding_input) then
+    __INCR(surf_padding, solvent_support_factor_shrink)
+   else
+    surf_padding=surf_padding_input
+   endif
+#endif
+#else
    __WRN(whoami, 'DETECTED '//itoa(nsolvent_unsupported)//' ATOM(S) OUTSIDE SOLUTE SUPPORT. RESTART WITH A LARGER CUTOFF OR SURFACE PADDING.')
 #endif
   endif
- endif ! qminimum_dist
 !
-! compute current surface distance from pre :
 ! NOTE: check below to make sure consistent for erf/density ; yes it is;
+! NOTE: just notes, nocode
 #ifdef __LOGISTIC_INVERSE
 ! we are using the boundary potential : k/2 x [ L^-1 (rho) - d0 ] ^ 2 ;
 ! d0 is the quasi-distance to boundary
@@ -2714,6 +2900,7 @@ endif
 ! the forces on the atoms are obtained by differentiation w.r.t position (x) :
 ! F(x) = - k ( L^-1(rho) - d0 ) * logistic_const / (1-L) / L * grad (rho)
 #endif
+ endif ! qminimum_dist
 
  if (nsolvent_outside .gt. 0) then
   oonsolvent_outside=one/nsolvent_outside
@@ -3043,13 +3230,19 @@ __DBGVAR(density_ave,1)
 ! make sure that the bulk boundary is not too close to the surface to obtain an accurate density
    if( (abs(surface_distance) - abs(bulk_boundary_distance)) .lt. &
 &    ( __BULK_BOUNDARY_RECOMPUTE_FACTOR * abs(surface_distance) ) ) then ! recompute bulk_bdry
-    __MESSAGE(whoami, 'BULK BOUNDARY IS TOO CLOSE TO SURFACE BOUNDARY. WILL RECOMPUTE:') 
-    bulk_boundary_distance = -(__BULK_DISTANCE_SCALE)*abs(surface_distance)
-    bulk_boundary_contour_value = __RHO(bulk_boundary_distance)
-    __MESSAGE(whoami, 'LOCATION OF BULK BOUNDARY SET TO '//ftoa(bulk_boundary_distance)//' A FROM PROTEIN. CONTOUR VALUE IS '//ftoa(bulk_boundary_contour_value))
-   endif ! bulk_bdry
+    __MESSAGE(whoami, 'BULK BOUNDARY IS TOO CLOSE TO SURFACE BOUNDARY. WILL RECOMPUTE:')
 !
-  endif
+   elseif( (abs(surface_distance) - abs(bulk_boundary_distance)) .gt. &
+&    ( ( 2*(one-(__BULK_DISTANCE_SCALE)) - __BULK_BOUNDARY_RECOMPUTE_FACTOR) * abs(surface_distance) ) ) then ! recompute bulk_bdry
+    __MESSAGE(whoami, 'BULK BOUNDARY ('//ftoa(bulk_boundary_distance)//') IS TOO FAR FROM SURFACE BOUNDARY ('//ftoa(surface_distance)//'). WILL RECOMPUTE:')
+   else !
+    goto 998
+   endif ! bulk_bdry distance
+   bulk_boundary_distance = -(__BULK_DISTANCE_SCALE)*abs(surface_distance)
+   bulk_boundary_contour_value = __RHO(bulk_boundary_distance)
+   __MESSAGE(whoami, 'LOCATION OF BULK BOUNDARY SET TO '//ftoa(bulk_boundary_distance)//' A FROM PROTEIN. CONTOUR VALUE IS '//ftoa(bulk_boundary_contour_value))
+ 998  continue
+  endif ! distance update
  endif ! dasystat-related
 #endif
 !============================================= output restart file
@@ -3387,7 +3580,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 !#define _nonce  rho_solv(i)=0.0001d0;
 !    if (qtruncate_sum.and.rho.gt.surface_contour_value) &     ! density threshold exceeded ; will not apply force to this atom
 !    exit
-!     cycle ! could actually be faster than exit (vectorization?) ; get 107 w/o if above
+!     cycle ! could actually be faster than exit (vectorization?)
 ! determine if atoms are too far away :
 ! _nonce cycle ! aa get 110
     rp=r_surf(:,j)
@@ -3952,7 +4145,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
     rp=r_surf(:,j) ! protein atom coordinate
 !
-    dr = rp-rw ; ! note : there is no fast way to incorporate radii without a square root somewhere in the inner loop, so for now, radii are effectively zero
+    dr = rp-rw ; ! note : there is no fast way to incorporate radii without a square root somewhere in the inner loop, so for now, radii are effectively zero (not used)
 #ifdef __UNWRAP_PBC
     if (qper_parser_override) then
      __DIST_PBC(dr(1),ucell%a)
@@ -4698,7 +4891,7 @@ __DBGVAR(kmax,2)
  ivolume=0
  ivolume_nonbulk=0
 !
-#ifdef __VOLUME_THREAD_REDUCE
+#if defined(__VOLUME_THREAD_REDUCE) || !defined(__OMP)
  oos=one/surface_contour_value
  oobs=one/bulk_boundary_contour_value
 #else
@@ -4853,7 +5046,7 @@ __DBGVAR(kmax,2)
 ! not clear how to do this in the fastest way possible
 ! perhaps an if/else statement would be faster, densities that map to the outside of the main shell, also map to the outside of
 ! the nonbulk (i.e. interfacial) region
-#ifdef __VOLUME_THREAD_REDUCE
+#if defined(__VOLUME_THREAD_REDUCE) || !defined(__OMP)
      __INCR(__U(ivolume), min(1,INT(rho(ii,jj,kk)*oos)))
      __INCR(__U(ivolume_nonbulk), min(1,INT(rho(ii,jj,kk)*oobs)))
 #else
@@ -5067,7 +5260,7 @@ __DBGVAR(kmax,2)
  do kk=2,nz
   do jj=2,ny
    do ii=2,nx
-#ifdef __VOLUME_THREAD_REDUCE
+#if defined(__VOLUME_THREAD_REDUCE) || !defined(__OMP)
      __INCR(__U(ivolume), rho(ii,jj,kk))
      __INCR(__U(ivolume_nonbulk), inrho(ii,jj,kk))
 #else

@@ -6,10 +6,11 @@ q3d=false;
 ascii=true;
 
 gridname='xy_test.xyz';
-dataname='solution.dat';
+#dataname='solution.dat';
 %dataname='uexact_test.dat';
 %dataname='rhs_test.dat';
 %dataname='rhs.dat';
+dataname='eps.dat';
 
 if ~exist('read')
  read=1;

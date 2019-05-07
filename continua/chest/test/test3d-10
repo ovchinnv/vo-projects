@@ -1,30 +1,42 @@
 #!/bin/bash
 # 3D test case for chest
-# V. Ovchinnikov 2012
+# V. Ovchinnikov 2019
 # Numerical solution to the poisson equation in three dimensions (known analytical solution)
 #
 # Requires a fortran compiler
 . ./fcheck "$1" "$2" "$3" ;# execute script in the current context
+# electrostatic potential due to a single Gaussian charge, i.e.
+# rho=-Q/(sqrt(2*pi)*s)**3 * exp(-0.5d0*(dr/s)**2)
+# the potential is represented analytically only if the permittivity is uniform
+# in which case the solution is expressed via the error function :
+# U = Q / (4*pi*eps) * erf( r / (sqrt(2) * s )) / r
+# where Q is the charge, eps is the permittivity, s is the std of the Gaussian
+# and r is the distance to the charge.
+# Otherwise, analytical solution can be computed as a 1D numerical integral
 #
-# u = ( 1 - exp (-ax) ) * cos (2*pi*n*y)
-a=4; m=1; n=2;
-#
+# parameters :
 omega=1.44 # SOR acceleration
+eps0=1; # permittivity units/normalization
+ein=4 ;# scaled permittivity inside
+eout=80 ;# scaled permittivity outside
+s=0.1
+Q=1
+R=0.5 ;# nominal radius of born cavity
 echo
 echo " *********************************************************************************************"
-echo " (test3d-5) "
+echo " (test3d-9) "
 echo " Test case for solving 3D Poisson equation using CHES" 
 echo " Laplacian U  = f"
-echo " U = ( 1 - exp (-${a} * x) ) * cos (2 * pi * ${m} * y) * sin (2 * pi * ${n} * z) ; "
+echo " U(t) = ${Q} INT_t^oo  1/ ( r^2 ${eps} ) * ( erf( r / (sqrt(2) * ${s} )) / (4*pi) - (r/${s}) * exp(-0.5 (r/${s})^2) / (2*pi)^(3/2) )"
 echo " Dirichlet boundary conditions assigned on the boundary"
 #echo " Jacobi smoother with step (omega) = $omega " ;# varies
 echo " *********************************************************************************************"
 #
 #
 nx=98; ny=98; nz=98;
-xstretch=1.01; x0=0; x1=1
-ystretch=1.015; y0=0; y1=2
-zstretch=1.02; z0=0; z1=1.5
+xstretch=1.0; x0=0; x1=1
+ystretch=1.0; y0=0; y1=1
+zstretch=1.0; z0=0; z1=1
 #
 #
 echo " Generating test data..."
@@ -35,11 +47,32 @@ echo "
   float :: xbc0($ny,$nz), xbc1($ny,$nz)
   float :: ybc0($nx,$nz), ybc1($nx,$nz)
   float :: zbc0($nx,$ny), zbc1($nx,$ny)
-  float :: rhs($nx,$ny,$nz), u($nx,$ny,$nz)
-  float, parameter :: err = 1d-12
-  float :: a, b, l, z, pi, delta
-  float :: fx, fy, fz
+  float :: rhs($nx,$ny,$nz), u($nx,$ny,$nz), eps($nx, $ny, $nz)
+  float, parameter :: err = 1d-12, sq2=sqrt(2d0)
+  float :: a, b, l, z, pi, delta, xcen, ycen, zcen, drn
   integer :: i, j, k, n
+! variables for analytical solution
+  integer, parameter :: npt = 10000
+  float, parameter :: rmin=0d0, rmax=10d0, dr=(rmax-rmin)/(npt-1)
+  float :: r(npt), phi(npt), rhoint(npt)
+!
+  pi=atan(1d0)*4d0
+! construct analytical solution numerically
+! charge density integral :
+  rhoint(1)=0d0
+  r(1)=0d0
+  do i=2, npt
+   r(i)=r(i-1)+dr
+   drn=r(i)/${s}
+   delta=${eps0}*(${eout} + (${ein}-${eout})*ball(r(i),${R}d0,${s}d0))
+   rhoint(i)=${Q} * ( erf(drn/sq2) / (4*pi) - (drn) * exp(-0.5d0*drn**2) / sqrt(2*pi)**3 )/r(i)**2/delta
+  enddo
+! integrate from infinity to 1 to obtain potential :
+  phi(npt)=0d0
+  do i=npt-1, 1,-1
+    phi(i)=phi(i+1) + 0.5d0 * (rhoint(i) + rhoint(i+1)) * (r(i+1)-r(i));
+  enddo
+! now, we can use phi as an approximation to the true solution
 !
 !
 ! xgrid:
@@ -82,14 +115,14 @@ echo "
   write(1,'(F30.15)') y1 
   close(1)
 !
-  y2(2:$ny)=0.5d0*(y1(1:$ny-1)+y1(2:$ny)); y2(1)=y1(1)-0.5d0*(y1(2)-y1(1)); 
+  y2(2:$ny)=0.5d0*(y1(1:$ny-1)+y1(2:$ny)); y2(1)=y1(1)-0.5d0*(y1(2)-y1(1));
 !
 ! zgrid:
   a=${z0}d0; b=${z1}d0; z=${zstretch}d0; n=$nz-1
-  l=b-a 
+  l=b-a
   if (ABS(z-1.0d0).lt.ERR) then 
-   delta=l/(n-1) 
-  else 
+   delta=l/(n-1)
+  else
    delta=l*(1.0d0-z)/(1.0d0-(z**(n-1)))
   endif
 !
@@ -105,15 +138,25 @@ echo "
 !
   z2(2:$nz)=0.5d0*(z1(1:$nz-1)+z1(2:$nz)); z2(1)=z1(1)-0.5d0*(z1(2)-z1(1)); 
 !
-! data arrays
+! data :
+! charge center :
+ xcen=0.5d0*(${x0}+${x1});
+ ycen=0.5d0*(${y0}+${y1});
+ zcen=0.5d0*(${z0}+${z1});
 !
- pi=atan(1d0)*4d0
  do i=1,$nx ; do j=1, $ny; do k=1, $nz
-  fx=1d0-exp(-${a}d0*x2(i))
-  fy=cos(2d0*pi*${m}*y2(j))
-  fz=sin(2d0*pi*${n}*z2(k))
-  u(i,j,k) = fx*fy*fz
-  rhs(i,j,k) = ${a}d0**2 * (fx-1d0) * fy * fz - 4d0*pi*pi*(${m}*${m}+${n}*${n})*u(i,j,k)
+  drn=sqrt( (x2(i)-xcen)**2 + (y2(j)-ycen)**2 + (z2(k)-zcen)**2 )
+! right-hand side :
+  rhs(i,j,k)=-${Q}/(sqrt(2d0*pi)*${s})**3 * exp(-0.5d0*(drn/${s})**2) ;
+! permittivity :
+  eps(i,j,k)= ${eps0}*(${eout} + (${ein}-${eout})*ball(drn,${R}d0,${s}d0))
+! compute exact solution by interpolation from phi
+  drn=min(drn, r(npt-1))
+  drn=max(drn, r(1))
+  n = int(drn/dr) + 1
+  a = (r(n+1)-drn)/dr
+  b = 1d0-a
+  u(i,j,k) = a*phi(n)+b*(phi(n+1))
  enddo;       enddo;       enddo
 !
 ! write datafiles in chest format
@@ -122,7 +165,7 @@ echo "
  write(1,'(3I5)') $nx,$ny,$nz
  write(1,'(${nx}F30.15)') u 
 ! write(1) $nx,$ny,$nz
-! write(1) u 
+! write(1) u
  close(1)
  open(1,file='rhs_test.dat',form='formatted', status='unknown')
  write(1,'(3I5)') $nx,$ny,$nz
@@ -130,31 +173,66 @@ echo "
 ! write(1) $nx,$ny,$nz
 ! write(1) rhs 
  close(1)
+ open(1,file='eps_test.dat',form='formatted', status='unknown')
+ write(1,'(3I5)') $nx,$ny,$nz
+ write(1,'(${nx}F30.15)') eps 
+ close(1)
 ! bc arrays
- a=(1d0-exp (-${a}d0*${x0}))
- b=(1d0-exp (-${a}d0*${x1}))
- do k=1,$nz ; fz=sin(2d0*pi*${n}*z2(k))
-  do j=1,$ny ; fy=cos(2d0*pi*${m}*y2(j))
-   xbc0(j,k) = a * fy * fz
-   xbc1(j,k) = b * fy * fz
+ do k=1,$nz
+  do j=1,$ny
+   drn = sqrt( (${x0}-xcen)**2 + (y2(j)-ycen)**2 + (z2(k)-zcen)**2 )
+   drn=min(drn, r(npt-1))
+   drn=max(drn, r(1))
+   n = int(drn/dr) + 1
+   a = (r(n+1)-drn)/dr
+   b = 1d0-a
+   xbc0(j,k) = a*phi(n)+b*(phi(n+1))
+!
+   drn = sqrt( (${x1}-xcen)**2 + (y2(j)-ycen)**2 + (z2(k)-zcen)**2 )
+   drn=min(drn, r(npt-1))
+   drn=max(drn, r(1))
+   n = int(drn/dr) + 1
+   a = (r(n+1)-drn)/dr
+   b = 1d0-a
+   xbc1(j,k) = a*phi(n)+b*(phi(n+1))
   enddo
  enddo
 !
- a=cos(2d0*pi*$m*${y0})
- b=cos(2d0*pi*$m*${y1})
- do k=1,$nz ; fz=sin(2d0*pi*${n}*z2(k))
-  do i=1,$nx ; fx=(1d0-exp (-${a}d0*x2(i)))
-   ybc0(i,k) = fx * a * fz
-   ybc1(i,k) = fx * b * fz
+ do k=1,$nz
+  do i=1,$nx
+   drn = sqrt( (x2(i)-xcen)**2 + (${y0}-ycen)**2 + (z2(k)-zcen)**2 )
+   drn=min(drn, r(npt-1))
+   drn=max(drn, r(1))
+   n = int(drn/dr) + 1
+   a = (r(n+1)-drn)/dr
+   b = 1d0-a
+   ybc0(i,k) = a*phi(n)+b*(phi(n+1))
+   drn = sqrt( (x2(i)-xcen)**2 + (${y1}-ycen)**2 + (z2(k)-zcen)**2 )
+   drn=min(drn, r(npt-1))
+   drn=max(drn, r(1))
+   n = int(drn/dr) + 1
+   a = (r(n+1)-drn)/dr
+   b = 1d0-a
+   ybc1(i,k) = a*phi(n)+b*(phi(n+1))
   enddo
  enddo
 !
- a=sin(2d0*pi*$n*${z0})
- b=sin(2d0*pi*$n*${z1})
- do j=1,$ny ; fy=cos(2d0*pi*${m}*y2(j))
-  do i=1,$nx ; fx=(1d0-exp (-${a}d0*x2(i)))
-   zbc0(i,j) = fx * fy * a
-   zbc1(i,j) = fx * fy * b
+ do j=1,$ny
+  do i=1,$nx
+   drn = sqrt( (x2(i)-xcen)**2 + (y2(j)-ycen)**2 + (${z0}-zcen)**2 )
+   drn=min(drn, r(npt-1))
+   drn=max(drn, r(1))
+   n = int(drn/dr) + 1
+   a = (r(n+1)-drn)/dr
+   b = 1d0-a
+   zbc0(i,j) = a*phi(n)+b*(phi(n+1))
+   drn = sqrt( (x2(i)-xcen)**2 + (y2(j)-ycen)**2 + (${z1}-zcen)**2 )
+   drn=min(drn, r(npt-1))
+   drn=max(drn, r(1))
+   n = int(drn/dr) + 1
+   a = (r(n+1)-drn)/dr
+   b = 1d0-a
+   zbc1(i,j) = a*phi(n)+b*(phi(n+1))
   enddo
  enddo
 !
@@ -172,6 +250,24 @@ echo "
  write(14,'(F30.15)') zbc0(2:$nx-1,2:$ny-1); close(14)
  write(15,'(F30.15)') zbc1(2:$nx-1,2:$ny-1); close(15)
 !
+  contains
+  function ball(dr, R, s)
+! R : ball radius
+! s : std of Gaussian filter
+  float, parameter ::TOL=1d-13, sq2=sqrt(2d0), pi=4d0*atan(1d0)
+  float :: ball
+  float, intent(in) :: dr, R, s
+!
+  ball= 0.5d0 * ( erf( (dr+R)/s/sq2 ) - erf ( (dr-R)/s/sq2 ) );
+! exponential term
+  if (abs(dr)>TOL) then
+   ball = ball + 1d0/sqrt(2*pi)*s/dr * ( exp ( -0.5d0*((dr+R)/s)**2 ) - exp ( -0.5d0*((dr-R)/s)**2 ) );
+! note that the expression above will be divergent when dr is zero
+! therefore, use a taylor expansion :
+  else
+   ball = ball - s/sqrt(2*pi)*exp(-0.5d0*(R**2+dr**2)/s**2)*( 2*R/s**2 + R**3/s**6*dr**2/3d0)
+  endif
+  end function ball
 end " > test.F90
 #
 $FC $FFLAGS $DEFS test.F90 -o test ; ./test; rm -f test;
@@ -215,7 +311,7 @@ ches {
 
 #Initial 3D data
 
- epsinit=constant   ; epsconst=1.
+ epsinit=file       ; epsfile=eps_test.dat; eps_mode=text ; eps_format=chest
  kappainit=constant ; kappaconst=0.
  rhsinit=file       ; rhsfile=rhs_test.dat ;  rhs_mode=text ; rhs_format=chest
  phiinit=constant   ; phiconst=0. % initial solution
@@ -237,11 +333,11 @@ ches {
 
 multigrid {
 # multigrid solver parameters
- multigrid_maximum_cycles=4
- multigrid_smooth_iterations=8
- multigrid_maximum_levels=4
+# multigrid_maximum_cycles=4
+# multigrid_smooth_iterations=4
+# multigrid_maximum_levels=4
 # multigrid_smoother=Jacobi
-# multigrid_residual=1e-4 # for shorter running times
+ multigrid_residual=1e-6 # for shorter running times
 # multigrid_smoother=Jacobi-Tiled-LM
 # multigrid_compute_ini_residual=no
 # multigrid_skip_convergence_test=1
@@ -255,6 +351,7 @@ ln -s ../ches .
 fi
 echo " Running CHES..."
 #echo " ********************************************************************************************"
+ulimit -s unlimited
 ./ches < test.dat #>/dev/null
 #
 # compare solutions
