@@ -121,6 +121,7 @@ module _N
  __PAR(surface_distance, float, zero) ! in the original density method, obtained by `inverting` density (as an approximation)
 #ifdef __DASYSTAT
  __PAR(bulk_boundary_distance, float, zero) ! distance to the bulk solvent boundary (should obviously be smaller than the shell surface distance)
+ __PAR(qbulk_boundary_recompute, bool, .true.) ! whether to allow recomputing the bulk boundary if it becomes too close or too far relative to surface_dist
 #ifdef __BULK2_DISTANCE_SCALE
  __PAR(bulk2_boundary_distance, float, zero) ! distance to the outer bulk solvent boundary
 #endif
@@ -842,6 +843,16 @@ module _N
 ! NB: it is possible that bulk value is set but not the surface value ! Need to be aware of this when computing the surface val. below
 ! check in all contexts :
 #include "parser/parser_macro3.src"
+!
+#define __BOOL
+#define __VAR qbulk_boundary_recompute
+#define __TAG bulk_boundary_recompute
+#define __NAME flag to allow automatic adjustment of bulk boundary
+#undef __WARNIFMISSING
+#include "parser/parser_macro3.src"
+#define __WARNIFMISSING
+#undef __BOOL
+
 ! check distances here
 #ifdef __DEBUG
  write(666,*) 'bulk_distance', bulk_boundary_distance
@@ -1598,6 +1609,13 @@ __DBGVAR(r_com_sa,1)
  _W 'density=',density_ave, '# (units of g/mL)'
  _W 'density_num_samples=',density_num_samples
  _W 'bulk_boundary_distance=',bulk_boundary_distance, ' # distance from solute to bulk solvent'
+ if (qbulk_boundary_recompute .neqv. default_qbulk_boundary_recompute) then
+  if (qbulk_boundary_recompute) then
+   _W 'bulk_boundary_recompute=on # adjust bulk boundary automatically'
+  else
+   _W 'bulk_boundary_recompute=off # do not adjust bulk boundary automatically'
+  endif
+ endif
  endif
 #endif
 ! write the current reference atoms :
@@ -2198,12 +2216,12 @@ endif ! decide whether to compute dr_surf
     __ASSERT(abs(bulk_boundary_distance),<,abs(surface_distance));
     goto 999
 !
-   elseif( (abs(surface_distance) - abs(bulk_boundary_distance)) .lt. &
-&    ( __BULK_BOUNDARY_RECOMPUTE_FACTOR * abs(surface_distance) ) ) then ! recompute bulk_bdry
+   elseif( qbulk_boundary_recompute .and. ((abs(surface_distance) - abs(bulk_boundary_distance)) .lt. &
+&    ( __BULK_BOUNDARY_RECOMPUTE_FACTOR * abs(surface_distance) )) ) then ! recompute bulk_bdry
     __MESSAGE(whoami, 'BULK BOUNDARY IS TOO CLOSE TO SURFACE BOUNDARY. WILL RECOMPUTE:')
 !
-   elseif( (abs(surface_distance) - abs(bulk_boundary_distance)) .gt. &
-&    ( ( 2*(one-(__BULK_DISTANCE_SCALE)) - __BULK_BOUNDARY_RECOMPUTE_FACTOR) * abs(surface_distance) ) ) then ! recompute bulk_bdry
+   elseif( qbulk_boundary_recompute .and. ((abs(surface_distance) - abs(bulk_boundary_distance)) .gt. &
+&    ( ( 2*(one-(__BULK_DISTANCE_SCALE)) - __BULK_BOUNDARY_RECOMPUTE_FACTOR) * abs(surface_distance) )) ) then ! recompute bulk_bdry
     __MESSAGE(whoami, 'BULK BOUNDARY ('//ftoa(bulk_boundary_distance)//') IS TOO FAR FROM SURFACE BOUNDARY ('//ftoa(surface_distance)//'). WILL RECOMPUTE:')
 !
    else !
@@ -3290,28 +3308,30 @@ __DBGVAR(density_target,1)
    __DBGVAR(surface_contour_value,1)
 !
 ! make sure that the bulk boundary is not too close to the surface to obtain an accurate density
-   if( (abs(surface_distance) - abs(bulk_boundary_distance)) .lt. &
+   if( qbulk_boundary_recompute ) then
+    if ((abs(surface_distance) - abs(bulk_boundary_distance)) .lt. &
 &    ( __BULK_BOUNDARY_RECOMPUTE_FACTOR * abs(surface_distance) ) ) then ! recompute bulk_bdry
     __MESSAGE(whoami, 'BULK BOUNDARY ('//ftoa(bulk_boundary_distance)//') IS TOO CLOSE TO SURFACE BOUNDARY ('//ftoa(surface_distance)//'). WILL RECOMPUTE:')
 !
-   elseif( (abs(surface_distance) - abs(bulk_boundary_distance)) .gt. &
+    elseif( (abs(surface_distance) - abs(bulk_boundary_distance)) .gt. &
 &    ( ( 2*(one-(__BULK_DISTANCE_SCALE)) - __BULK_BOUNDARY_RECOMPUTE_FACTOR) * abs(surface_distance) ) ) then ! recompute bulk_bdry
     __MESSAGE(whoami, 'BULK BOUNDARY ('//ftoa(bulk_boundary_distance)//') IS TOO FAR FROM SURFACE BOUNDARY ('//ftoa(surface_distance)//'). WILL RECOMPUTE:')
-   else !
-    goto 998
-   endif ! bulk_bdry distance
-   bulk_boundary_distance = -(__BULK_DISTANCE_SCALE)*abs(surface_distance)
-   bulk_boundary_contour_value = __RHOSAFE(bulk_boundary_distance)
-   if (qminimum_distance) then
-    __MESSAGE(whoami, 'LOCATION OF BULK BOUNDARY SET TO '//ftoa(bulk_boundary_distance)//' A FROM PROTEIN.')
-   else
-    __MESSAGE(whoami, 'LOCATION OF BULK BOUNDARY SET TO '//ftoa(bulk_boundary_distance)//' A FROM PROTEIN. CONTOUR VALUE IS '//ftoa(bulk_boundary_contour_value))
-   endif
+    else !
+     goto 998
+    endif ! bulk_bdry distance
+    bulk_boundary_distance = -(__BULK_DISTANCE_SCALE)*abs(surface_distance)
+    bulk_boundary_contour_value = __RHOSAFE(bulk_boundary_distance)
+    if (qminimum_distance) then
+     __MESSAGE(whoami, 'LOCATION OF BULK BOUNDARY SET TO '//ftoa(bulk_boundary_distance)//' A FROM PROTEIN.')
+    else
+     __MESSAGE(whoami, 'LOCATION OF BULK BOUNDARY SET TO '//ftoa(bulk_boundary_distance)//' A FROM PROTEIN. CONTOUR VALUE IS '//ftoa(bulk_boundary_contour_value))
+    endif
 #ifdef __BULK2_DISTANCE_SCALE
-   bulk2_boundary_distance = surface_distance + (__BULK2_DISTANCE_SCALE) * ( bulk_boundary_distance - surface_distance )
-   bulk2_boundary_contour_value = __RHOSAFE(bulk2_boundary_distance)
+    bulk2_boundary_distance = surface_distance + (__BULK2_DISTANCE_SCALE) * ( bulk_boundary_distance - surface_distance )
+    bulk2_boundary_contour_value = __RHOSAFE(bulk2_boundary_distance)
 #endif
  998  continue
+   endif ! qbulk_recompute
   endif ! distance update
  endif ! dasystat-related
 #endif
@@ -4433,7 +4453,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 !$omp shared ( dist_solv, ddist_solv, r_solv, nsolvent, nsurface_coord, surface_distance2 &
 #ifdef __DASYSTAT
 !$omp , bulk_distance2, solvent_mass_nonbulk &
-#ifdef __BULK2_DISTANEC_SCALE
+#ifdef __BULK2_DISTANCE_SCALE
 !$omp , bulk2_distance2, solvent_mass_bulk &
 #endif
 #endif
@@ -4450,7 +4470,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 !$omp private ( rw, i, j, rp, dr, drmin, dr2, dr2min, qforced &
 #ifdef __DASYSTAT
 !$omp , __U(solvent_mass_nonbulk), qbulk &
-#ifdef __BULK2_DISTANCE_SCALED
+#ifdef __BULK2_DISTANCE_SCALE
 !$omp , __U(solvent_mass_bulk), qchkbulk &
 #endif
 #endif
@@ -4464,7 +4484,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #ifdef __DASYSTAT
  if (dasystat) then
   __U(solvent_mass_nonbulk)=zero
-#ifdef __BULK2_DISTANCE_SCALED
+#ifdef __BULK2_DISTANCE_SCALE
   __U(solvent_mass_bulk)=zero
 #endif
  endif
@@ -4480,7 +4500,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #ifdef __DASYSTAT
    if (dasystat) then
     qbulk=.true. ! assume atom is outside of the bulk boundary
-#ifdef __BULK2_DISTANCE_SCALED
+#ifdef __BULK2_DISTANCE_SCALE
     qchkbulk=.true.
 #endif
    endif
