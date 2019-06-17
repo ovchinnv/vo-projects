@@ -1,7 +1,7 @@
 NAME=watershell
 ROOT=..
 HEADS=watershell.h
-OBJS= watershell.o watershell_plugin.o watershell_plugin_acemd.o ugrid.o
+OBJS= watershell.o watershell_plugin.o ugrid.o
 
 DEPS=files dynamol continua output parser constants erf lu unitcell bestfit
 
@@ -10,6 +10,9 @@ LIBS+=$(LIB)
 
 include linkobjs.inc
 include $(ROOT)/Makefile.inc
+ifeq ($(strip($ACEMD_PLUGIN)),1)
+ OBJS+=watershell_plugin_acemd.o
+endif
 
 LOCALMACROS+=-include source.defs -D__BINDC -include $(ROOT)/erf/erf_as.def -include $(ROOT)/erf/exp_as.def  #-D__erf=erfo7
 LOCALDEPS+=source.defs $(ROOT)/erf/erf_as.def $(ROOT)/erf/exp_as.def

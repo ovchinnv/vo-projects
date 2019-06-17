@@ -1,7 +1,7 @@
 NAME=dynamo
 ROOT=..
 HEADS=plugin.h plugin.hpp
-OBJS= plugin_master.o plugin_acemd.o
+OBJS= plugin_master.o
 
 DEPS=files dynamol continua output parser constants adaptive string watershell
 
@@ -19,6 +19,9 @@ include struna.inc
 include adaptive.inc
 
 include $(ROOT)/Makefile.inc
+ifeq ($(strip($ACEMD_PLUGIN)),1)
+ OBJS+=plugin_acemd.o
+endif
 
 $(LIB) : $(OBJS) $(COBJS) $(LOBJS)
 

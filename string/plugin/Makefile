@@ -1,7 +1,7 @@
 NAME=string/plugin
 ROOT=../..
 COMMON=..
-OBJS=sm_plugin.o sm_plugin_acemd.o
+OBJS=sm_plugin.o
 HEADS=struna.h struna.hpp
 DEPS=dynamol mpi_stub unitcell
 
@@ -12,6 +12,9 @@ LOCALDEFS+=-D__BINDC
 
 include linkobjs.inc
 include $(ROOT)/Makefile.inc
+ifeq ($(strip($ACEMD_PLUGIN)),1)
+ OBJS+=sm_plugin_acemd.o
+endif
 
 
 default : plugin
