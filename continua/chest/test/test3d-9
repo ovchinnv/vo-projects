@@ -15,6 +15,14 @@ omega=1.44 # SOR acceleration
 eps=1
 s=0.1
 Q=1
+useBornBC=1 # to use BC from the DH approximation, rather than from the solution for a gaussian ; should make no difference as long as the domain is large enough
+if [ $useBornBC -eq 1 ]; then
+ DEFS="$DEFS -Dbcscale=1d0"
+else
+# NOTE that this is fragile, and possibly not portable :
+ DEFS="$DEFS -Dbcscale='erf(dr/(sq2*${s}))'"
+fi
+#echo $DEFS
 echo
 echo " *********************************************************************************************"
 echo " (test3d-9) "
@@ -118,11 +126,11 @@ echo "
  pi=atan(1d0)*4d0
  do i=1,$nx ; do j=1, $ny; do k=1, $nz
   dr=sqrt( (x2(i)-xcen)**2 + (y2(j)-ycen)**2 + (z2(k)-zcen)**2 )
-  rhs(i,j,k)=-${Q}/(sqrt(2d0*pi)*${s})**3 * exp(-0.5d0*(dr/${s})**2) ;
+  rhs(i,j,k)=-(1d0*${Q})/(sqrt(2d0*pi)*${s})**3 * exp(-0.5d0*(dr/${s})**2) ;
   if (dr>err) then
-   u(i,j,k) = ${Q} / (4d0*pi*${eps}) * erf( dr / (sq2 * ${s} )) / dr
+   u(i,j,k) = (1d0*${Q}) / (4d0*pi*${eps}) * erf( dr / (sq2 * ${s} )) / dr
   else
-   u(i,j,k) = ${Q} / ( ${eps} * sqrt ( (2d0 * pi)**3 ) * ${s} )
+   u(i,j,k) = (1d0*${Q}) / ( ${eps} * sqrt ( (2d0 * pi)**3 ) * ${s} )
   endif
  enddo;       enddo;       enddo
 !
@@ -144,27 +152,32 @@ echo "
  do k=1,$nz
   do j=1,$ny
    dr = sqrt( (${x0}-xcen)**2 + (y2(j)-ycen)**2 + (z2(k)-zcen)**2 )
-   xbc0(j,k) = ${Q} / (4*pi*${eps}) * erf( dr / (sq2 * ${s} )) / dr
+   xbc0(j,k) = (1d0*${Q}) / (4*pi*${eps}) * bcscale / dr
+!   xbc0(j,k) = (1d0*${Q}) / (4*pi*${eps}) * erf( dr / (sq2 * ${s} )) / dr
    dr = sqrt( (${x1}-xcen)**2 + (y2(j)-ycen)**2 + (z2(k)-zcen)**2 )
-   xbc1(j,k) = ${Q} / (4*pi*${eps}) * erf( dr / (sq2 * ${s} )) / dr
+!   xbc1(j,k) = (1d0*${Q}) / (4*pi*${eps}) * erf( dr / (sq2 * ${s} )) / dr
+   xbc1(j,k) = (1d0*${Q}) / (4*pi*${eps}) * bcscale / dr
   enddo
  enddo
 !
  do k=1,$nz
   do i=1,$nx
    dr = sqrt( (x2(i)-xcen)**2 + (${y0}-ycen)**2 + (z2(k)-zcen)**2 )
-   ybc0(i,k) = ${Q} / (4*pi*${eps}) * erf( dr / (sq2 * ${s} )) / dr
+!   ybc0(i,k) = (1d0*${Q}) / (4*pi*${eps}) * erf( dr / (sq2 * ${s} )) / dr
+   ybc0(i,k) = (1d0*${Q}) / (4*pi*${eps}) * bcscale / dr
    dr = sqrt( (x2(i)-xcen)**2 + (${y1}-ycen)**2 + (z2(k)-zcen)**2 )
-   ybc1(i,k) = ${Q} / (4*pi*${eps}) * erf( dr / (sq2 * ${s} )) / dr
+!   ybc1(i,k) = (1d0*${Q}) / (4*pi*${eps}) * erf( dr / (sq2 * ${s} )) / dr
+   ybc1(i,k) = (1d0*${Q}) / (4*pi*${eps}) * bcscale / dr
   enddo
  enddo
 !
  do j=1,$ny
   do i=1,$nx
    dr = sqrt( (x2(i)-xcen)**2 + (y2(j)-ycen)**2 + (${z0}-zcen)**2 )
-   zbc0(i,j) = ${Q} / (4*pi*${eps}) * erf( dr / (sq2 * ${s} )) / dr
+!   zbc0(i,j) = (1d0*${Q}) / (4*pi*${eps}) * erf( dr / (sq2 * ${s} )) / dr
+   zbc0(i,j) = (1d0*${Q}) / (4*pi*${eps}) * bcscale / dr
    dr = sqrt( (x2(i)-xcen)**2 + (y2(j)-ycen)**2 + (${z1}-zcen)**2 )
-   zbc1(i,j) = ${Q} / (4*pi*${eps}) * erf( dr / (sq2 * ${s} )) / dr
+   zbc1(i,j) = (1d0*${Q}) / (4*pi*${eps}) * bcscale / dr
   enddo
  enddo
 !
@@ -184,13 +197,15 @@ echo "
 !
 end " > test.F90
 #
+#echo $FC $FFLAGS $DEFS test.F90 -o test
 $FC $FFLAGS $DEFS test.F90 -o test ; ./test; rm -f test;
+#exit
 #
 # prepare input file for CHES
 #
 echo " Preparing input file..."
-echo "
-
+echo "\
+!charmm
 continuum {
 #Size
  nx=${nx}; ny=${ny}; nz=${nz}
@@ -345,6 +360,7 @@ echo "
  write(6,'(F25.12)') error
  end " > compare.F90
 #
+#echo $FC $FFLAGS $DEFS compare.F90 -o compare
 $FC $FFLAGS $DEFS compare.F90 -o compare
 j=0
 for f in `./compare`; do
