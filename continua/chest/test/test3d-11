@@ -24,9 +24,11 @@ eout=80 ;# scaled permittivity outside
 s=0.2
 Q=1
 R=3 ;# nominal radius of born cavity
+useBornBC=1 ;# test using Born/DH BCs, rather than exact ; Born should be acceptable in this case (generally, as long as boundary far from charge)
+useObjectBC=0;# test using Born/DH BCs computed from the pqr file by the code, rather than specified here in precomputed arrays
 echo
 echo " *********************************************************************************************"
-echo " (test3d-9) "
+echo " (test3d-11) "
 echo " Test case for solving 3D Poisson equation using CHES" 
 echo " Laplacian U  = f"
 echo " U(t) = ${Q} INT_t^oo  1/ ( r^2 ${eps} ) * ( erf( r / (sqrt(2) * ${s} )) / (4*pi) - (r/${s}) * exp(-0.5 (r/${s})^2) / (2*pi)^(3/2) )"
@@ -36,7 +38,7 @@ echo " *************************************************************************
 #
 #
 nx=98; ny=98; nz=98;
-nx=50; ny=50; nz=50;
+#nx=50; ny=50; nz=50;
 xstretch=1.0; x0=0; x1=7
 ystretch=1.0; y0=0; y1=7
 zstretch=1.0; z0=0; z1=7
@@ -82,8 +84,8 @@ echo "
   a=${x0}d0; b=${x1}d0; z=${xstretch}d0; n=$nx-1
   l=b-a
   if (ABS(z-1.0d0).lt.ERR) then 
-   delta=l/(n-1) 
-  else 
+   delta=l/(n-1)
+  else
    delta=l*(1.0d0-z)/(1.0d0-(z**(n-1)))
   endif
 !
@@ -181,6 +183,36 @@ echo "
  write(1,'(${nx}F30.15)') eps 
  close(1)
 ! bc arrays
+ if ( ${useBornBC} > 0 ) then
+ do k=1,$nz
+  do j=1,$ny
+   drn = sqrt( (${x0}-xcen)**2 + (y2(j)-ycen)**2 + (z2(k)-zcen)**2 )
+   xbc0(j,k) = (1d0*${Q}) / (4*pi*${eps0}*${eout}) / drn
+   drn = sqrt( (${x1}-xcen)**2 + (y2(j)-ycen)**2 + (z2(k)-zcen)**2 )
+   xbc1(j,k) = (1d0*${Q}) / (4*pi*${eps0}*${eout}) / drn
+  enddo
+ enddo
+!
+ do k=1,$nz
+  do i=1,$nx
+   drn = sqrt( (x2(i)-xcen)**2 + (${y0}-ycen)**2 + (z2(k)-zcen)**2 )
+   ybc0(i,k) = (1d0*${Q}) / (4*pi*${eps0}*${eout}) / drn
+   drn = sqrt( (x2(i)-xcen)**2 + (${y1}-ycen)**2 + (z2(k)-zcen)**2 )
+   ybc1(i,k) = (1d0*${Q}) / (4*pi*${eps0}*${eout}) / drn
+  enddo
+ enddo
+!
+ do j=1,$ny
+  do i=1,$nx
+   drn = sqrt( (x2(i)-xcen)**2 + (y2(j)-ycen)**2 + (${z0}-zcen)**2 )
+   zbc0(i,j) = (1d0*${Q}) / (4*pi*${eps0}*${eout}) / drn
+   drn = sqrt( (x2(i)-xcen)**2 + (y2(j)-ycen)**2 + (${z1}-zcen)**2 )
+   zbc1(i,j) = (1d0*${Q}) / (4*pi*${eps0}*${eout}) / drn
+  enddo
+ enddo
+!
+ else ! exact analytical BCs
+!
  do k=1,$nz
   do j=1,$ny
    drn = sqrt( (${x0}-xcen)**2 + (y2(j)-ycen)**2 + (z2(k)-zcen)**2 )
@@ -238,6 +270,8 @@ echo "
    zbc1(i,j) = a*phi(n)+b*(phi(n+1))
   enddo
  enddo
+!
+ endif ! bc
 !
  open(10,file='xbc0_test.dat',form='formatted', status='unknown')
  open(11,file='xbc1_test.dat',form='formatted', status='unknown')
@@ -336,13 +370,28 @@ molecule {
 
 ches {
 # BC
+" > test.dat
+if [ ${useObjectBC} -eq 1 ]; then
+echo "\
+ phi_bcx0=object
+ phi_bcx1=object
+ phi_bcy0=object
+ phi_bcy1=object
+ phi_bcz0=object
+ phi_bcz1=object
+" >> test.dat
+else # use precomputed arrays
+echo "\
  phi_bcx0=dirichlet; phi_bcx0_file=xbc0_test.dat
  phi_bcx1=dirichlet; phi_bcx1_file=xbc1_test.dat
  phi_bcy0=dirichlet; phi_bcy0_file=ybc0_test.dat
  phi_bcy1=dirichlet; phi_bcy1_file=ybc1_test.dat
  phi_bcz0=dirichlet; phi_bcz0_file=zbc0_test.dat
  phi_bcz1=dirichlet; phi_bcz1_file=zbc1_test.dat
-
+" >> test.dat
+fi
+#continue with the rest of inout file
+echo "\
 #Initial 3D data
 
 ! note : object init gives error of ~0.005 vs 0.00004 for direct init ; using gridded eps reduces error to 0.00004 (with charge cutoff=5)
@@ -386,7 +435,7 @@ multigrid {
  multigrid_omega=$omega
 }
 
-" > test.dat
+" >> test.dat
 if !([ -L ches ]); then
 ln -s ../ches .
 fi
