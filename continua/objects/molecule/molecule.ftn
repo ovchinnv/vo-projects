@@ -68,7 +68,7 @@ module _N
 !    KAPPA2=2530.362733*CONC/TEMP
  __FPAR(kappa_akma , -2530.362733d0)
 
- __FPPARDEF(eps_scale, eps_charmm)
+ __FPPARDEF(eps_scale, one/(eps_charmm*four*pi))
  __FPPARDEF(kappa_scale, kappa_akma/(four*pi*temperature_default))
 !
  __FPPARDEF(charge_scale, -one) ! in the MG solver, the equation is  lap(u) = q, but we need lap(u) = -q, i.e. with a negative sign
@@ -82,6 +82,7 @@ module _N
  public molecule_dimens ! translate to center
  public molecule_done ! deallocate memory
  public molecule_grid_objects ! public routine used to obtain grid values from this module
+ public molecule_compute_bc
  public molecule_ndim ! return number of dimensions (inherited from system)
  public molecule_surface_pointer
 !
@@ -459,6 +460,89 @@ module _N
   endif
 !
   end subroutine molecule_grid_objects
+!**********************************************************************************
+  subroutine molecule_compute_bc(d, bctype, bcloc, xcor, ycor, zcor, xcen, ycen, zcen, nx, ny, nz, ok)
+  use fieldbcdef
+  float, dimension(:,:), intent(inout) :: d ! BC data
+  float, dimension(:), intent(in) :: xcen,ycen,zcen ! grid centers
+  float, dimension(:), intent(in) :: xcor,ycor,zcor ! grid corners
+  int, intent(inout) :: bctype
+  int, intent(in) :: bcloc, nx, ny, nz
+  bool, intent(inout) :: ok
+  float :: xpt, ypt, zpt, dz2, dy2, dr, rad, charge
+!
+! automatic boundary resolution adapted from bc_apply in state
+  int :: ib, ie, jb, je, kb, ke
+  int*1 :: di, dj, omdi, omdj
+  int :: i, j, k, l
+!
+  __IAM(molecule_compute_bc)
+!
+  ok=.false.
+! for now, only supporting Debye-Huckel Dirichlet boundary conditions at ghost point
+  if (.not.molecule_initialized) call molecule_initialize()
+! make sure we have radii
+  if (.not.system_radii_initialized) then
+    __WRN(whoami, 'Atomic radii not initialized. Abort.')
+    return
+  endif
+!    preset indices:
+!
+  ib=2; ie=nx-1; di=1 ! limiting indices of inner points 
+  jb=2; je=ny-1; dj=1
+  kb=2; ke=nz-1;
+!
+  select case(bcloc)
+    case(left);
+     ib=1; ie=1; di=0
+    case(right);
+     ib=nx; ie=nx ; di=0
+    case(bottom);
+     jb=1; je=1 ; dj=0
+    case(top);
+     jb=ny; je=ny ; dj=0
+    case(front);
+     kb=1; ke=1 ;
+    case(back);
+     kb=nz; ke=nz ;
+    case default;
+     ke=0 ! set invalid indices so that no loops are executed; better than early return
+  end select ! which boundary
+!
+  call message(whoami, 'Will use Debye-Huckel superposition for boundary "'//bc_names(bcloc)//'"')
+!
+  omdi=1-di
+  dj=di*dj
+  omdj=1-dj
+
+  d=zero
+
+  do l=1, natom ! this loop should be parallelized
+   xpt=r(1,l)
+   ypt=r(2,l)
+   zpt=r(3,l)
+!   rad=radius(l)+kappa_padding ! not sure this is the best radius
+   rad=radius(l)+eps_padding ! not sure this is the best radius
+   charge=q(l)
+!
+   do k=kb, ke
+    dz2=(zcen(k)-zpt)**2
+    do j=jb, je
+     dy2=dz2+(ycen(j)-ypt)**2
+     do i=ib, ie
+      dr=sqrt(dy2+(xcen(i)-xpt)**2)
+      __INCR(d(di*i+omdi*j, dj*j+omdj*k), charge*exp(-kappa_scale*kappa_solvent*(dr-rad))/((one+kappa_scale*kappa_solvent*rad)*dr))
+     enddo
+    enddo
+   enddo
+!
+  enddo ! over atoms
+
+  __SCALE(d, one/(four*pi*eps_scale*eps_solvent)) ! recheck scaling
+  bctype=dirichletg
+  ok=.true.
+!
+  end subroutine molecule_compute_bc
 !**********************************************************************************
   subroutine molecule_initialize()
   call system_initialize() ; molecule_initialized=system_initialized
