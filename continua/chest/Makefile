@@ -2,9 +2,6 @@ ROOT=../..
 COMMON=..
 OBJS=multigrid.o ches.o mgutil.o
 CUOBJS=CUmgutil.o
-ifdef __CUDA
-OBJC+=$(CUOBJS)
-endif
 HEADS=multigrid_c.h
 NAME=continua/chest
 SUBDIRS=
@@ -14,11 +11,15 @@ LOCALDEPS=macro1.def macro2.def setcomm.def
 LOCALDEPS+=source.defs
 LOCALMACROS+=-include source.defs
 LOCALDEFS+=-D__BINDC 
-#LOCALDEFS+=-D__CUDA
 CUINCLUDES+=-I mgutil
 
 include $(COMMON)/Makefile.inc
 include $(ROOT)/Makefile.inc
+
+ifdef __CUDA
+OBJS+=$(CUOBJS)
+LOCALDEFS+=-D__CUDA
+endif
 
 chest : $(EXE)
 

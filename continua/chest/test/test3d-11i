@@ -18,17 +18,22 @@
 #
 # parameters :
 omega=1.44 # SOR acceleration
-eps0=1; # permittivity units/normalization
-ein=4 ;# scaled permittivity inside
-eout=80 ;# scaled permittivity outside
-s=0.2
-Q=1
-R=3 ;# nominal radius of born cavity
+ccelec=332.0716;
+pi=3.141592653589793;
+eps0=`echo "1.0 / (${ccelec} * 4.0 * $pi )" | bc -l` ; # charmm electrostatics constant
+#eps0=1
+ein=1 ;# scaled permittivity inside
+eout=1 ;# scaled permittivity outside
+s=0.4;
+Q=1;
+R=1.316 ;# nominal radius of born cavity
+pad=1.142;# cavity padding
 useBornBC=1 ;# test using Born/DH BCs, rather than exact ; Born should be acceptable in this case (generally, as long as boundary far from charge)
 useObjectBC=1;# test using Born/DH BCs computed from the pqr file by the code, rather than specified here in precomputed arrays
+blen=5;# box side half-length
 echo
 echo " *********************************************************************************************"
-echo " (test3d-11) "
+echo " (test3d-11i) "
 echo " Test case for solving 3D Poisson equation using CHES" 
 echo " Laplacian U  = f"
 echo " U(t) = ${Q} INT_t^oo  1/ ( r^2 ${eps} ) * ( erf( r / (sqrt(2) * ${s} )) / (4*pi) - (r/${s}) * exp(-0.5 (r/${s})^2) / (2*pi)^(3/2) )"
@@ -37,11 +42,13 @@ echo " Dirichlet boundary conditions assigned on the boundary"
 echo " *********************************************************************************************"
 #
 #
-nx=98; ny=98; nz=98;
 #nx=50; ny=50; nz=50;
-xstretch=1.0; x0=0; x1=7
-ystretch=1.0; y0=0; y1=7
-zstretch=1.0; z0=0; z1=7
+#nx=98; ny=98; nz=98;
+nx=130; ny=130; nz=130;
+
+xstretch=1.0; x0=-$blen; x1=$blen
+ystretch=1.0; y0=-$blen; y1=$blen
+zstretch=1.0; z0=-$blen; z1=$blen
 #
 #
 echo " Generating test data..."
@@ -57,10 +64,11 @@ echo "
   float :: a, b, l, z, pi, delta, xcen, ycen, zcen, drn
   integer :: i, j, k, n
 ! variables for analytical solution
-  integer, parameter :: npt = 10000
-  float, parameter :: rmin=0d0, rmax=10d0, dr=(rmax-rmin)/(npt-1)
+  integer, parameter :: npt = 100000
+  float, parameter :: rmin=0d0, rmax=${R}d0 + ${pad}d0 + 4d0*${s}/${eps0}, dr=(rmax-rmin)/(npt-1)
   float :: r(npt), phi(npt), rhoint(npt)
 !
+write(666,*) rmax
   pi=atan(1d0)*4d0
 ! construct analytical solution numerically
 ! charge density integral :
@@ -68,9 +76,9 @@ echo "
   r(1)=0d0
   do i=2, npt
    r(i)=r(i-1)+dr
-   drn=r(i)/${s}
-   delta=${eps0}*(${eout} + (${ein}-${eout})*ball(r(i),${R}d0,${s}d0))
-   rhoint(i)=${Q} * ( erf(drn/sq2) / (4*pi) - (drn) * exp(-0.5d0*drn**2) / sqrt(2*pi)**3 )/r(i)**2/delta
+   drn=r(i)/${s}d0
+   delta=${eps0}d0*(${eout} + (${ein}-${eout})*ball(r(i),${R}d0+${pad}d0,${s}d0))
+   rhoint(i)=${Q}d0 * ( erf(drn/sq2) / (4*pi) - (drn) * exp(-0.5d0*drn**2) / sqrt(2*pi)**3 )/r(i)**2/delta
   enddo
 ! integrate from infinity to 1 to obtain potential :
   phi(npt)=0d0
@@ -152,9 +160,9 @@ echo "
  do i=1,$nx ; do j=1, $ny; do k=1, $nz
   drn=sqrt( (x2(i)-xcen)**2 + (y2(j)-ycen)**2 + (z2(k)-zcen)**2 )
 ! right-hand side :
-  rhs(i,j,k)=-${Q}/(sqrt(2d0*pi)*${s})**3 * exp(-0.5d0*(drn/${s})**2) ;
+  rhs(i,j,k)=-${Q}d0/(sqrt(2d0*pi)*${s})**3 * exp(-0.5d0*(drn/${s})**2) ;
 ! permittivity :
-  eps(i,j,k)= ${eps0}*(${eout} + (${ein}-${eout})*ball(drn,${R}d0,${s}d0))
+  eps(i,j,k)= ${eps0}d0*(${eout} + (${ein}-${eout})*ball(drn,${R}d0+${pad}d0,${s}d0))
 ! compute exact solution by interpolation from phi
   drn=min(drn, r(npt-1))
   drn=max(drn, r(1))
@@ -187,27 +195,27 @@ echo "
  if ( ${useBornBC} > 0 ) then
  do k=1,$nz
   do j=1,$ny
-   drn = sqrt( (${x0}-xcen)**2 + (y2(j)-ycen)**2 + (z2(k)-zcen)**2 )
+   drn = sqrt( (${x0}d0-xcen)**2 + (y2(j)-ycen)**2 + (z2(k)-zcen)**2 )
    xbc0(j,k) = (1d0*${Q}) / (4*pi*${eps0}*${eout}) / drn
-   drn = sqrt( (${x1}-xcen)**2 + (y2(j)-ycen)**2 + (z2(k)-zcen)**2 )
+   drn = sqrt( (${x1}d0-xcen)**2 + (y2(j)-ycen)**2 + (z2(k)-zcen)**2 )
    xbc1(j,k) = (1d0*${Q}) / (4*pi*${eps0}*${eout}) / drn
   enddo
  enddo
 !
  do k=1,$nz
   do i=1,$nx
-   drn = sqrt( (x2(i)-xcen)**2 + (${y0}-ycen)**2 + (z2(k)-zcen)**2 )
+   drn = sqrt( (x2(i)-xcen)**2 + (${y0}d0-ycen)**2 + (z2(k)-zcen)**2 )
    ybc0(i,k) = (1d0*${Q}) / (4*pi*${eps0}*${eout}) / drn
-   drn = sqrt( (x2(i)-xcen)**2 + (${y1}-ycen)**2 + (z2(k)-zcen)**2 )
+   drn = sqrt( (x2(i)-xcen)**2 + (${y1}d0-ycen)**2 + (z2(k)-zcen)**2 )
    ybc1(i,k) = (1d0*${Q}) / (4*pi*${eps0}*${eout}) / drn
   enddo
  enddo
 !
  do j=1,$ny
   do i=1,$nx
-   drn = sqrt( (x2(i)-xcen)**2 + (y2(j)-ycen)**2 + (${z0}-zcen)**2 )
+   drn = sqrt( (x2(i)-xcen)**2 + (y2(j)-ycen)**2 + (${z0}d0-zcen)**2 )
    zbc0(i,j) = (1d0*${Q}) / (4*pi*${eps0}*${eout}) / drn
-   drn = sqrt( (x2(i)-xcen)**2 + (y2(j)-ycen)**2 + (${z1}-zcen)**2 )
+   drn = sqrt( (x2(i)-xcen)**2 + (y2(j)-ycen)**2 + (${z1}d0-zcen)**2 )
    zbc1(i,j) = (1d0*${Q}) / (4*pi*${eps0}*${eout}) / drn
   enddo
  enddo
@@ -216,7 +224,7 @@ echo "
 !
  do k=1,$nz
   do j=1,$ny
-   drn = sqrt( (${x0}-xcen)**2 + (y2(j)-ycen)**2 + (z2(k)-zcen)**2 )
+   drn = sqrt( (${x0}d0-xcen)**2 + (y2(j)-ycen)**2 + (z2(k)-zcen)**2 )
    drn=min(drn, r(npt-1))
    drn=max(drn, r(1))
    n = int(drn/dr) + 1
@@ -224,7 +232,7 @@ echo "
    b = 1d0-a
    xbc0(j,k) = a*phi(n)+b*(phi(n+1))
 !
-   drn = sqrt( (${x1}-xcen)**2 + (y2(j)-ycen)**2 + (z2(k)-zcen)**2 )
+   drn = sqrt( (${x1}d0-xcen)**2 + (y2(j)-ycen)**2 + (z2(k)-zcen)**2 )
    drn=min(drn, r(npt-1))
    drn=max(drn, r(1))
    n = int(drn/dr) + 1
@@ -236,14 +244,14 @@ echo "
 !
  do k=1,$nz
   do i=1,$nx
-   drn = sqrt( (x2(i)-xcen)**2 + (${y0}-ycen)**2 + (z2(k)-zcen)**2 )
+   drn = sqrt( (x2(i)-xcen)**2 + (${y0}d0-ycen)**2 + (z2(k)-zcen)**2 )
    drn=min(drn, r(npt-1))
    drn=max(drn, r(1))
    n = int(drn/dr) + 1
    a = (r(n+1)-drn)/dr
    b = 1d0-a
    ybc0(i,k) = a*phi(n)+b*(phi(n+1))
-   drn = sqrt( (x2(i)-xcen)**2 + (${y1}-ycen)**2 + (z2(k)-zcen)**2 )
+   drn = sqrt( (x2(i)-xcen)**2 + (${y1}d0-ycen)**2 + (z2(k)-zcen)**2 )
    drn=min(drn, r(npt-1))
    drn=max(drn, r(1))
    n = int(drn/dr) + 1
@@ -255,14 +263,14 @@ echo "
 !
  do j=1,$ny
   do i=1,$nx
-   drn = sqrt( (x2(i)-xcen)**2 + (y2(j)-ycen)**2 + (${z0}-zcen)**2 )
+   drn = sqrt( (x2(i)-xcen)**2 + (y2(j)-ycen)**2 + (${z0}d0-zcen)**2 )
    drn=min(drn, r(npt-1))
    drn=max(drn, r(1))
    n = int(drn/dr) + 1
    a = (r(n+1)-drn)/dr
    b = 1d0-a
    zbc0(i,j) = a*phi(n)+b*(phi(n+1))
-   drn = sqrt( (x2(i)-xcen)**2 + (y2(j)-ycen)**2 + (${z1}-zcen)**2 )
+   drn = sqrt( (x2(i)-xcen)**2 + (y2(j)-ycen)**2 + (${z1}d0-zcen)**2 )
    drn=min(drn, r(npt-1))
    drn=max(drn, r(1))
    n = int(drn/dr) + 1
@@ -323,6 +331,7 @@ PQR FORMAT
 ATOM 1 Q ION 1 $xc $yc $zc ${Q} 0.00
 " > born.pqr
 #
+rpad=`echo "$R + $pad" | bc -l `; # padded radius
 # prepare input file for CHES
 #
 echo " Preparing input file..."
@@ -362,13 +371,14 @@ molecule {
  kappa_solvent=0
  eps_solute=${ein}
  eps_solvent=${eout}
- eps_scale=none
- eps_padding=${R} ! this is added to the radius to compute the eps array
+ eps_scale=${eps0}
+# eps_scale=charmm
+ eps_padding=${rpad} ! this is added to the radius to compute the eps array
  charge_padding=0 ! added to radius to compute smoothed right-hand-side
  stdev_eps=${s} ! might be worthwhile to be able to set a single stdev
  stdev_charge=${s}
  cutoff_eps_stdev=10 ! does not seem to make much difference
- cutoff_charge_stdev=5
+ cutoff_charge_stdev=10
 }
 
 ches {
@@ -429,8 +439,9 @@ multigrid {
 # multigrid_maximum_cycles=4
 # multigrid_smooth_iterations=4
 # multigrid_maximum_levels=4
-# multigrid_smoother=Jacobi
- multigrid_residual=1e-6 # for shorter running times
+ multigrid_smoother=Gauss-Seidel-CUDA
+# multigrid_smoother=Gauss-Seidel
+ multigrid_residual=2e-4 # for shorter running times
 # multigrid_smoother=Jacobi-Tiled-LM
 # multigrid_compute_ini_residual=no
 # multigrid_skip_convergence_test=1

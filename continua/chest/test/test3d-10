@@ -14,17 +14,23 @@
 # and r is the distance to the charge.
 # Otherwise, analytical solution can be computed as a 1D numerical integral
 #
+# 6/24/19 : there is a question of whether approximate BCs could be used
+# and, if so, to what detriment in the accuracy. In particular,
+# how accurate would be a Born/Debye-Huckel BC ? Adding flags to test this here
+# rather than generating separate test case (which in the future could become e.g. test3d-10i)
+#
 # parameters :
 omega=1.44 # SOR acceleration
 eps0=1; # permittivity units/normalization
 ein=4 ;# scaled permittivity inside
 eout=80 ;# scaled permittivity outside
-s=0.1
+s=0.2
 Q=1
-R=0.5 ;# nominal radius of born cavity
+R=3 ;# nominal radius of born cavity
+useBornBC=1 ;# test using Born/DH BCs, rather than exact ; Born should be acceptable in this case (generally, as long as boundary far from charge)
 echo
 echo " *********************************************************************************************"
-echo " (test3d-9) "
+echo " (test3d-10) "
 echo " Test case for solving 3D Poisson equation using CHES" 
 echo " Laplacian U  = f"
 echo " U(t) = ${Q} INT_t^oo  1/ ( r^2 ${eps} ) * ( erf( r / (sqrt(2) * ${s} )) / (4*pi) - (r/${s}) * exp(-0.5 (r/${s})^2) / (2*pi)^(3/2) )"
@@ -33,10 +39,11 @@ echo " Dirichlet boundary conditions assigned on the boundary"
 echo " *********************************************************************************************"
 #
 #
+#nx=50; ny=50; nz=50;
 nx=98; ny=98; nz=98;
-xstretch=1.0; x0=0; x1=1
-ystretch=1.0; y0=0; y1=1
-zstretch=1.0; z0=0; z1=1
+xstretch=1.0; x0=0; x1=7
+ystretch=1.0; y0=0; y1=7
+zstretch=1.0; z0=0; z1=7
 #
 #
 echo " Generating test data..."
@@ -65,7 +72,7 @@ echo "
    r(i)=r(i-1)+dr
    drn=r(i)/${s}
    delta=${eps0}*(${eout} + (${ein}-${eout})*ball(r(i),${R}d0,${s}d0))
-   rhoint(i)=${Q} * ( erf(drn/sq2) / (4*pi) - (drn) * exp(-0.5d0*drn**2) / sqrt(2*pi)**3 )/r(i)**2/delta
+   rhoint(i)=(1d0*${Q}) * ( erf(drn/sq2) / (4*pi) - (drn) * exp(-0.5d0*drn**2) / sqrt(2*pi)**3 )/r(i)**2/delta
   enddo
 ! integrate from infinity to 1 to obtain potential :
   phi(npt)=0d0
@@ -147,7 +154,7 @@ echo "
  do i=1,$nx ; do j=1, $ny; do k=1, $nz
   drn=sqrt( (x2(i)-xcen)**2 + (y2(j)-ycen)**2 + (z2(k)-zcen)**2 )
 ! right-hand side :
-  rhs(i,j,k)=-${Q}/(sqrt(2d0*pi)*${s})**3 * exp(-0.5d0*(drn/${s})**2) ;
+  rhs(i,j,k)=-(1d0*${Q})/(sqrt(2d0*pi)*${s})**3 * exp(-0.5d0*(drn/${s})**2) ;
 ! permittivity :
   eps(i,j,k)= ${eps0}*(${eout} + (${ein}-${eout})*ball(drn,${R}d0,${s}d0))
 ! compute exact solution by interpolation from phi
@@ -178,6 +185,36 @@ echo "
  write(1,'(${nx}F30.15)') eps 
  close(1)
 ! bc arrays
+ if ( ${useBornBC} > 0 ) then
+ do k=1,$nz
+  do j=1,$ny
+   drn = sqrt( (${x0}-xcen)**2 + (y2(j)-ycen)**2 + (z2(k)-zcen)**2 )
+   xbc0(j,k) = (1d0*${Q}) / (4*pi*${eps0}*${eout}) / drn
+   drn = sqrt( (${x1}-xcen)**2 + (y2(j)-ycen)**2 + (z2(k)-zcen)**2 )
+   xbc1(j,k) = (1d0*${Q}) / (4*pi*${eps0}*${eout}) / drn
+  enddo
+ enddo
+!
+ do k=1,$nz
+  do i=1,$nx
+   drn = sqrt( (x2(i)-xcen)**2 + (${y0}-ycen)**2 + (z2(k)-zcen)**2 )
+   ybc0(i,k) = (1d0*${Q}) / (4*pi*${eps0}*${eout}) / drn
+   drn = sqrt( (x2(i)-xcen)**2 + (${y1}-ycen)**2 + (z2(k)-zcen)**2 )
+   ybc1(i,k) = (1d0*${Q}) / (4*pi*${eps0}*${eout}) / drn
+  enddo
+ enddo
+!
+ do j=1,$ny
+  do i=1,$nx
+   drn = sqrt( (x2(i)-xcen)**2 + (y2(j)-ycen)**2 + (${z0}-zcen)**2 )
+   zbc0(i,j) = (1d0*${Q}) / (4*pi*${eps0}*${eout}) / drn
+   drn = sqrt( (x2(i)-xcen)**2 + (y2(j)-ycen)**2 + (${z1}-zcen)**2 )
+   zbc1(i,j) = (1d0*${Q}) / (4*pi*${eps0}*${eout}) / drn
+  enddo
+ enddo
+
+ else ! exact analytical BCs
+
  do k=1,$nz
   do j=1,$ny
    drn = sqrt( (${x0}-xcen)**2 + (y2(j)-ycen)**2 + (z2(k)-zcen)**2 )
@@ -235,6 +272,8 @@ echo "
    zbc1(i,j) = a*phi(n)+b*(phi(n+1))
   enddo
  enddo
+!
+ endif ! Born BC vs exact analytical
 !
  open(10,file='xbc0_test.dat',form='formatted', status='unknown')
  open(11,file='xbc1_test.dat',form='formatted', status='unknown')
@@ -361,11 +400,11 @@ echo " Comparing to analytical solution..."
 #
 echo "
  implicit none
- float, dimension($nx,$ny,$nz)  :: uanl, uches
+ float, dimension($nx,$ny,$nz)  :: uanl, uches, rhs
  float :: grid($nx,$ny,$nz,3)
  float :: x1($nx), x2($nx), y1($ny), y2($ny), z1($nz), z2($nz)
  float :: griderror, error
- integer :: where(3)
+ integer :: where(3), i, j, k
 !
 ! compare grids
 !
@@ -409,10 +448,26 @@ echo "
  read(1,*) uches
  close(1)
 !
- uches=abs(uanl-uches);
- error=maxval(uches(2:$nx-1,2:$ny-1,2:$nz-1))
- where=maxloc(uches(2:$nx-1,2:$ny-1,2:$nz-1))
+ uanl=abs(uanl-uches);
+ error=maxval(uanl(2:$nx-1,2:$ny-1,2:$nz-1))
+ where=maxloc(uanl(2:$nx-1,2:$ny-1,2:$nz-1))
  write(6,'(2F25.12,3I10)') griderror, error, where
+! RMS error :
+ error=sqrt ( sum ( uanl(2:$nx-1,2:$ny-1,2:$nz-1)**2 ) / (( $nx-2 )*( $ny-2 )*( $nz-2 )) )
+ write(6,'(F25.12)') error
+! read rhs file to compute potential energy :
+ open(1,file='rhs_test.dat',form='formatted', status='old')
+ read(1,*)
+ read(1,*) rhs
+ close(1)
+ error=0d0;
+! error = 0.5d0 * sum ( uches(2:$nx-1,2:$ny-1,2:$nz-1) * rhs(2:$nx-1,2:$ny-1,2:$nz-1)) * (x1(2)-x1(1)) * (y1(2)-y1(1)) * (z1(2)-z1(1));
+! integrate for nonuniform mesh
+ do k=2,$nz-1 ; do j=2,$ny-1 ; do i=2,$nx-1
+  error = error + uches(i,j,k) * rhs(i,j,k) * (x1(i)-x1(i-1)) * (y1(j)-y1(j-1)) * (z1(k)-z1(k-1))
+ enddo ; enddo ; enddo
+ error=0.5d0 * error
+ write(6,'(F25.12)') error
  end " > compare.F90
 #
 $FC $FFLAGS $DEFS compare.F90 -o compare
@@ -429,6 +484,8 @@ if [ `echo "${i[0]} > $griderr" | bc` -eq 1 ]; then
  test_passed=0
 else
  ermax=0.06; # ad-hoc criterion
+ echo " The electrostatic energy is ${i[6]}"
+ echo " The RMS error is ${i[5]}"
  echo " The maximum absolute error is "${i[1]}" at grid point ["${i[2]}","${i[3]}","${i[4]}"]"
  echo " Comparing with maximum allowed error ("$ermax")"
  if [ `echo "${i[1]} < $ermax" | bc` -eq 1 ]; then
