@@ -13,15 +13,10 @@ else
 CFLAGS =-O3 -fno-math-errno -c -fPIC
 endif
 #
-# NVIDIA CUDA COMPILER ######
-NVCC=nvcc
-#NVCCFLAGS=-O3 -m32 -Xcompiler -mfloat-abi=hard -gencode arch=compute_32,code=sm_32 -ccbin $(CC) --use_fast_math -c
-NVCCFLAGS=-O3 -ccbin $(CC) --use_fast_math -c
-#NVCCFLAGS=-O3 -m32 -Xcompiler -mfloat-abi=hard -gencode arch=compute_32,code=sm_32 -ccbin $(CC) -c
-#NVCCFLAGS=-O3 -m32 -Xcompiler -mfloat-abi=hard -gencode arch=compute_32,code=sm_32 -ccbin $(CC) --prec-div=false --ftz=true --prec-sqrt=false -c
-
-CUINCLUDES+=-I/usr/local/cuda/samples/common/inc
-#############################
+ifndef CUDA
+ CUDA=0
+endif
+#
 #---GNU
 ifndef FC
 FC=gfortran
@@ -137,10 +132,19 @@ LD=$(FC)
 LDFLAGS=-Ofast -dynamic -Bdynamic $(LOMP) -Wl,-z,defs # to list unresolved symbols during linking
 #LDFLAGS=-static -ipa
 
-# extra libs for linking fortran and cuda objects together using c/nvcc/gfortran as linker front ends
-ifdef __CUDA
+ifeq ($(strip $(CUDA)),1)
+__CUDA=1
+# NVIDIA CUDA COMPILER ######
+NVCC=nvcc
+#NVCCFLAGS=-O3 -m32 -Xcompiler -mfloat-abi=hard -gencode arch=compute_32,code=sm_32 -ccbin $(CC) --use_fast_math -c
+NVCCFLAGS=-O3 -ccbin $(CC) --use_fast_math -c
+#-gencode arch=compute_30,code=sm_30 -c
+#NVCCFLAGS=-O3 -m32 -Xcompiler -mfloat-abi=hard -gencode arch=compute_32,code=sm_32 -ccbin $(CC) -c
+#NVCCFLAGS=-O3 -m32 -Xcompiler -mfloat-abi=hard -gencode arch=compute_32,code=sm_32 -ccbin $(CC) --prec-div=false --ftz=true --prec-sqrt=false -c
+CUINCLUDES+=-I/usr/local/cuda/samples/common/inc -I/opt/cuda/samples/common/inc 
 EXTRA_LIBS+=-L/usr/local/cuda/lib -L/opt/cuda/lib64  -lcudart -lcuda 
 endif
+#
 EXTRA_LIBS+=-lgfortran -lstdc++ -lgcc -lm
 # extra libs for ifort
 #EXTRA_LIBS+=-lirc -limf -lifcore -ldl
@@ -294,7 +298,7 @@ libs : libraries
 libraries: $(ROOT)/$(NAME).stamp
 	for d in $(DIRS); do (cd $$d; $(MAKE) libraries); done
 
-.SILENT : %.stamp $(DISTRIB) force_look
+#.SILENT : %.stamp $(DISTRIB) force_look
 #.SILENT : clean
 clean::
 	rm -f *.mod *.a *.so $(ROOT)/$(NAME).stamp $(CHARMM_SOURCES) $(SOURCES) $(OBJS) $(COBJS) $(CBINDOBJS) $(SBINDOBJS) $(DBINDOBJS) $(EXE) $(HEADS) test.F90 test.dat test.out test.o 

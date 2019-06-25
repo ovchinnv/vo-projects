@@ -32,7 +32,7 @@
 extern "C" void AllocDevMem(__CUFLOAT **p, __CINT n) {
 // note that p is a double pointer, so that we do not have to take its address
 // not sure everything is done correctly
-// cudaMalloc(&p, n*sizeof(__CUFLOAT));
+// checkCudaErrors(cudaMalloc(&p, n*sizeof(__CUFLOAT)));
  checkCudaErrors(cudaMalloc(p, n*sizeof(__CUFLOAT)));
 // checkCudaErrors(cudaMemset(*p, 0, sizeof(float)));
 //
