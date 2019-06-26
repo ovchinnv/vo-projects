@@ -115,6 +115,8 @@ extern "C" void Residual_Cuda(__CUFLOAT *devres, __CUFLOAT *devp, __CUFLOAT *dev
 // same code as for GS kernel below
   unsigned int bx=4 ; while ( ( (_SX*bx) <= nnx) && (bx <= _BGSMAX_X) && !(nnx % (_SX*bx))) { bx<<=1; }; bx>>=1;
   unsigned int by=4 ; while ( ( (_SY*by) <= nny) && (by <= _BGSMAX_Y) && !(nny % (_SY*by))) { by<<=1; }; by>>=1;
+//  unsigned int bx=2 ; while ( ( (_SX*bx) <= nnx) && (bx <= _BGSMAX_X) && !(nnx % (_SX*bx))) { bx<<=1; }; bx>>=1;
+//  unsigned int by=2 ; while ( ( (_SY*by) <= nny) && (by <= _BGSMAX_Y) && !(nny % (_SY*by))) { by<<=1; }; by>>=1;
 #define _BX bx
 #define _BY by
 
