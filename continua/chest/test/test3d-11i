@@ -17,6 +17,14 @@
 # here the molecule context is used, which prepares a single gaussian-filtered ball
 #
 # parameters :
+# grid size
+nx=34; ny=34; nz=34;
+#nx=50; ny=50; nz=50;
+#nx=98; ny=98; nz=98;
+nx=66; ny=66; nz=66;
+nx=130; ny=130; nz=130;
+nx=258; ny=258; nz=258;
+#
 omega=1.44 # SOR acceleration
 ccelec=332.0716;
 pi=3.141592653589793;
@@ -28,23 +36,26 @@ s=0.4;
 Q=1;
 R=1.316 ;# nominal radius of born cavity
 pad=1.142;# cavity padding
-useBornBC=1 ;# test using Born/DH BCs, rather than exact ; Born should be acceptable in this case (generally, as long as boundary far from charge)
+useBornBC=1 ;# test using Born/DH BCs, rather than exact ; Born should be acceptable in this case (generally, as long as the boundary is far from charge)
 useObjectBC=1;# test using Born/DH BCs computed from the pqr file by the code, rather than specified here in precomputed arrays
-blen=5;# box side half-length
+blen=6;# box side half-length
+qbin=1;# binary I/O for speed
+if [ $qbin -eq 1 ] ; then
+ DEFS+=" -Ufloat -Dfloat=real*4 " # only single precision output in binary
+ IOMODE="binary"
+else
+ IOMODE="text"
+fi
+#
 echo
 echo " *********************************************************************************************"
 echo " (test3d-11i) "
-echo " Test case for solving 3D Poisson equation using CHES" 
+echo " Test case for solving 3D Poisson equation using CHES"
 echo " Laplacian U  = f"
-echo " U(t) = ${Q} INT_t^oo  1/ ( r^2 ${eps} ) * ( erf( r / (sqrt(2) * ${s} )) / (4*pi) - (r/${s}) * exp(-0.5 (r/${s})^2) / (2*pi)^(3/2) )"
 echo " Dirichlet boundary conditions assigned on the boundary"
 #echo " Jacobi smoother with step (omega) = $omega " ;# varies
 echo " *********************************************************************************************"
 #
-#
-#nx=50; ny=50; nz=50;
-#nx=98; ny=98; nz=98;
-nx=130; ny=130; nz=130;
 
 xstretch=1.0; x0=-$blen; x1=$blen
 ystretch=1.0; y0=-$blen; y1=$blen
@@ -65,22 +76,41 @@ echo "
   integer :: i, j, k, n
 ! variables for analytical solution
   integer, parameter :: npt = 100000
-  float, parameter :: rmin=0d0, rmax=${R}d0 + ${pad}d0 + 4d0*${s}/${eps0}, dr=(rmax-rmin)/(npt-1)
+  float, parameter :: rmin=0d0
+  float :: rmax
+  float :: dr
   float :: r(npt), phi(npt), rhoint(npt)
+  float, parameter :: rpad=${R}d0+${pad}d0, s=${s}d0
 !
+  if (${useBornBC}.eq.1) then
+   rmax = max ( ${R}d0 + ${pad}d0 + 5d0*${s}d0 , 1d0 + 0.5d0 * sqrt( ((${x1}d0)-(${x0}d0))**2 + ((${y1}d0)-(${y0}d0))**2 + ((${z1}d0)-(${z0}d0))**2 ) )
+  else
+   rmax=${R}d0 + ${pad}d0 + 5d0*${s}/${eps0}d0 ! need to go out far if phi(rmax) ~= 0 ! Otherwise, would need to use another BC, e.g. Born/DH
+  endif
+  dr=(rmax-rmin)/(npt-1)
+! write(0,*) rmax
+
   pi=atan(1d0)*4d0
 ! construct analytical solution numerically
 ! charge density integral :
   rhoint(1)=0d0
-  r(1)=0d0
+  r(1)=rmin
   do i=2, npt
    r(i)=r(i-1)+dr
    drn=r(i)/${s}d0
-   delta=${eps0}d0*(${eout} + (${ein}-${eout})*ball(r(i),${R}d0+${pad}d0,${s}d0))
-   rhoint(i)=${Q}d0 * ( erf(drn/sq2) / (4*pi) - (drn) * exp(-0.5d0*drn**2) / sqrt(2*pi)**3 )/r(i)**2/delta
+   delta=${eps0}d0*(${eout} + (${ein}-${eout})*ball(r(i),rpad,s))
+   if (r(i).lt.1e-3) then
+    rhoint(i)=${Q}d0 * r(i)/( 3d0 * (s*sqrt(2d0*pi))**3 ) ! Taylor
+   else
+    rhoint(i)=${Q}d0 * ( erf(drn/sq2) / (4d0*pi) - (drn) * exp(-0.5d0*drn**2) / sqrt(2d0*pi)**3 )/r(i)**2/delta
+   endif
   enddo
 ! integrate from infinity to 1 to obtain potential :
-  phi(npt)=0d0
+  if (${useBornBC}.eq.1) then
+   phi(npt)=${Q}d0/(4d0*pi*r(npt)*${eps0}*${eout})
+  else
+   phi(npt)=0d0
+  endif
   do i=npt-1, 1,-1
     phi(i)=phi(i+1) + 0.5d0 * (rhoint(i) + rhoint(i+1)) * (r(i+1)-r(i));
   enddo
@@ -90,7 +120,7 @@ echo "
 ! xgrid:
   a=${x0}d0; b=${x1}d0; z=${xstretch}d0; n=$nx-1
   l=b-a
-  if (ABS(z-1.0d0).lt.ERR) then 
+  if (ABS(z-1.0d0).lt.ERR) then
    delta=l/(n-1)
   else
    delta=l*(1.0d0-z)/(1.0d0-(z**(n-1)))
@@ -111,9 +141,9 @@ echo "
 ! ygrid:
   a=${y0}d0; b=${y1}d0; z=${ystretch}d0; n=$ny-1
   l=b-a 
-  if (ABS(z-1.0d0).lt.ERR) then 
-   delta=l/(n-1) 
-  else 
+  if (ABS(z-1.0d0).lt.ERR) then
+   delta=l/(n-1)
+  else
    delta=l*(1.0d0-z)/(1.0d0-(z**(n-1)))
   endif
 !
@@ -161,7 +191,7 @@ echo "
 ! right-hand side :
   rhs(i,j,k)=-${Q}d0/(sqrt(2d0*pi)*${s})**3 * exp(-0.5d0*(drn/${s})**2) ;
 ! permittivity :
-  eps(i,j,k)= ${eps0}d0*(${eout} + (${ein}-${eout})*ball(drn,${R}d0+${pad}d0,${s}d0))
+  eps(i,j,k)= ${eps0}d0*(${eout} + (${ein}-${eout})*ball(drn,rpad,s))
 ! compute exact solution by interpolation from phi
   drn=min(drn, r(npt-1))
   drn=max(drn, r(1))
@@ -173,22 +203,34 @@ echo "
 !
 ! write datafiles in chest format
 !
- open(1,file='uexact_test.dat',form='formatted', status='unknown')
- write(1,'(3I5)') $nx,$ny,$nz
- write(1,'(${nx}F30.15)') u 
-! write(1) $nx,$ny,$nz
-! write(1) u
- close(1)
- open(1,file='rhs_test.dat',form='formatted', status='unknown')
- write(1,'(3I5)') $nx,$ny,$nz
- write(1,'(${nx}F30.15)') rhs 
-! write(1) $nx,$ny,$nz
-! write(1) rhs 
- close(1)
- open(1,file='eps_test.dat',form='formatted', status='unknown')
- write(1,'(3I5)') $nx,$ny,$nz
- write(1,'(${nx}F30.15)') eps 
- close(1)
+ if ($qbin.eq.0) then ! ASCII
+  open(1,file='uexact_test.dat',form='formatted', status='unknown')
+  write(1,'(3I5)') $nx,$ny,$nz
+  write(1,'(${nx}F30.15)') u
+  close(1)
+  open(1,file='rhs_test.dat',form='formatted', status='unknown')
+  write(1,'(3I5)') $nx,$ny,$nz
+  write(1,'(${nx}F30.15)') rhs
+  close(1)
+  open(1,file='eps_test.dat',form='formatted', status='unknown')
+  write(1,'(3I5)') $nx,$ny,$nz
+  write(1,'(${nx}F30.15)') eps
+  close(1)
+ else ! BINARY
+  open(1,file='uexact_test.dat',form='unformatted', status='unknown')
+  write(1) $nx,$ny,$nz
+  write(1) u
+  close(1)
+  open(1,file='rhs_test.dat',form='unformatted', status='unknown')
+  write(1) $nx,$ny,$nz
+  write(1) rhs
+  close(1)
+  open(1,file='eps_test.dat',form='unformatted', status='unknown')
+  write(1) $nx,$ny,$nz
+  write(1) eps
+  close(1)
+ endif
+
  if ( ${useObjectBC}.eq.0 ) then ! do not need these if generating BCs from Object using Born/DH superposition
 ! bc arrays
  if ( ${useBornBC} > 0 ) then
@@ -317,7 +359,9 @@ echo "
   end function ball
 end " > test.F90
 #
-$FC $FFLAGS $DEFS test.F90 -o test ; ./test; rm -f test;
+#echo $FC $FFLAGS $DEFS test.F90 -o test
+$FC $FFLAGS $DEFS test.F90 -o test ; ./test; #rm -f test;
+#exit
 #
 # write ion parameters to pqr file
 # compute center :
@@ -347,8 +391,9 @@ continuum {
  zgrid=exp; zstretch=${zstretch}; z0=${z0}; z1=${z1}
 
 #Continuum output options
- output_format=plot3d
- output_mode=text
+! output_format=plot3d
+ output_format=chest
+ output_mode=${IOMODE}
  gridoutput=xyz_test.xyz
 
  exec:output
@@ -376,8 +421,8 @@ molecule {
  charge_padding=0 ! added to radius to compute smoothed right-hand-side
  stdev_eps=${s} ! might be worthwhile to be able to set a single stdev
  stdev_charge=${s}
- cutoff_eps_stdev=10 ! does not seem to make much difference
- cutoff_charge_stdev=10
+ cutoff_eps_stdev=6
+ cutoff_charge_stdev=6
 }
 
 ches {
@@ -406,9 +451,6 @@ fi
 echo "\
 #Initial 3D data
 
-! note : object init gives error of ~0.005 vs 0.00004 for direct init ; using gridded eps reduces error to 0.00004 (with charge cutoff=5)
-! so the problem is with eps gridding. Investigate !
-! perhaps need to compare the arrays. (NOTE: increasing filtering cutoff does not help)
  epsinit=object
 ! epsinit=file ; epsfile=eps_test.dat ; eps_mode=text ; eps_format=chest
  kappainit=constant ; kappaconst=0.
@@ -420,10 +462,10 @@ echo "\
  solver=multigrid
 
 #Output
- output_format=plot3d
- output_mode=text
+ output_format=chest
+ output_mode=${IOMODE}
  phioutput=solution.dat
- epsoutput=eps.dat
+# epsoutput=eps.dat
  rhsoutput=rhs.dat
 
 #Execution
@@ -436,14 +478,14 @@ echo "\
 multigrid {
 # multigrid solver parameters
 # multigrid_maximum_cycles=4
-# multigrid_smooth_iterations=4
+ multigrid_smooth_iterations=5
 # multigrid_maximum_levels=4
  multigrid_smoother=Gauss-Seidel-CUDA
 # multigrid_smoother=Gauss-Seidel
  multigrid_residual=2e-4 # for shorter running times
 # multigrid_smoother=Jacobi-Tiled-LM
 # multigrid_compute_ini_residual=no
-# multigrid_skip_convergence_test=1
+ multigrid_skip_convergence_test=3
 # multigrid_smoother_unroll=-1
  multigrid_omega=$omega
 }
@@ -467,7 +509,7 @@ echo "
  float, dimension($nx,$ny,$nz)  :: uanl, uches, rhs
  float :: grid($nx,$ny,$nz,3)
  float :: x1($nx), x2($nx), y1($ny), y2($ny), z1($nz), z2($nz)
- float :: griderror, error, totq, dx, dy, dz
+ float :: griderror, error, totq, dx, dy, dz, urms, pote
  integer :: where(3), i, j, k
 !
 ! compare grids
@@ -488,12 +530,20 @@ echo "
 !
 ! grid output from CHEST is at center
 !
- open(1,file='xyz_test.xyz',form='formatted', status='old')
- read(1,*)
- read(1,*) grid
+ if (${qbin}.eq.0) then
+  open(1,file='xyz_test.xyz',form='formatted', status='old')
+  read(1,*)
+!  read(1,*) grid ! plot3d
+  read(1,*) x2, y2, z2 ! chest
+ else
+  open(1,file='xyz_test.xyz',form='unformatted', status='old')
+  read(1)
+!  read(1) grid ! plot3d
+  read(1) x2, y2, z2 ! chest
+ endif
  close(1)
 !
- x2=grid(:,1,1,1); y2=grid(1,:,1,2); z2=grid(1,1,:,3)
+! x2=grid(:,1,1,1); y2=grid(1,:,1,2); z2=grid(1,1,:,3) ! plot3d
  griderror=max(maxval(abs(x1-x2)), maxval(abs(y1-y2)), maxval(abs(z1-z2)))
 ! write(0,*) x1-x2
 ! write(0,*) y1-y2
@@ -501,16 +551,37 @@ echo "
 !
 ! compare solutions
 !
- open(1,file='uexact_test.dat',form='formatted', status='old')
- read(1,*)
- read(1,*) uanl
- close(1)
+ if (${qbin}.eq.0) then
+  open(1,file='uexact_test.dat',form='formatted', status='old')
+  read(1,*)
+  read(1,*) uanl
+  close(1)
 !
- open(1,file='solution.dat',form='formatted', status='old')
- read(1,*)
- read(1,*)
- read(1,*) uches
- close(1)
+  open(1,file='solution.dat',form='formatted', status='old')
+  read(1,*)
+  read(1,*) uches
+  close(1)
+! read rhs file to compute potential energy :
+  open(1,file='rhs.dat',form='formatted', status='old')
+  read(1,*)
+  read(1,*) rhs
+  close(1)
+ else
+  open(1,file='uexact_test.dat',form='unformatted', status='old')
+  read(1)
+  read(1) uanl
+  close(1)
+!
+  open(1,file='solution.dat',form='unformatted', status='old')
+  read(1)
+  read(1) uches
+  close(1)
+!
+  open(1,file='rhs.dat',form='unformatted', status='old')
+  read(1)
+  read(1) rhs
+  close(1)
+ endif
 !
  uanl=abs(uanl-uches);
  error=maxval(uanl(2:$nx-1,2:$ny-1,2:$nz-1))
@@ -519,27 +590,24 @@ echo "
 ! RMS error :
  error=sqrt ( sum ( uanl(2:$nx-1,2:$ny-1,2:$nz-1)**2 ) / (( $nx-2 )*( $ny-2 )*( $nz-2 )) )
  write(6,'(F25.12)') error
-! read rhs file to compute potential energy :
-! open(1,file='rhs_test.dat',form='formatted', status='old')
- open(1,file='rhs.dat',form='formatted', status='old')
- read(1,*)
- read(1,*)
- read(1,*) rhs
- close(1)
  error=0d0;
  totq=0d0;
+ urms=0d0;
 ! error = 0.5d0 * sum ( uches(2:$nx-1,2:$ny-1,2:$nz-1) * rhs(2:$nx-1,2:$ny-1,2:$nz-1)) * (x1(2)-x1(1)) * (y1(2)-y1(1)) * (z1(2)-z1(1));
 ! integrate for nonuniform mesh
  do k=2,$nz-1 ; dz=(z1(k)-z1(k-1))
-  do j=2,$ny-1 ; dy=(y1(j)-y1(j-1))
-   do i=2,$nx-1 ; dx=(x1(i)-x1(i-1))
-    error = error + uches(i,j,k) * rhs(i,j,k) * dx * dy * dz
-    totq = totq + rhs(i,j,k) * dx * dy * dz
+  do j=2,$ny-1 ; dy=(y1(j)-y1(j-1))*dz
+   do i=2,$nx-1 ; dx=(x1(i)-x1(i-1))*dy
+    pote = pote + uches(i,j,k) * rhs(i,j,k) * dx
+    totq = totq + rhs(i,j,k) * dx
+    urms = urms + uanl(i,j,k)**2 * dx
  enddo ; enddo ; enddo
- error=0.5d0 * error
- totq=-1d0*totq
- write(6,'(F25.12)') error
+ pote=0.5d0 * pote
+ totq=-totq
+ urms=sqrt(urms)
+ write(6,'(F25.12)') pote
  write(6,'(F25.12)') totq
+ write(6,'(F25.12)') urms
  end " > compare.F90
 #
 $FC $FFLAGS $DEFS compare.F90 -o compare
@@ -558,7 +626,8 @@ else
  ermax=0.06; # ad-hoc criterion
  echo " The electrostatic energy is ${i[6]}"
  echo " Total charge is ${i[7]}"
- echo " The RMS error is ${i[5]}"
+ echo " The absolute RMS error is ${i[5]}"
+ echo " The relative RMS error is ${i[5]} / ${i[8]} = `echo ${i[5]}/${i[8]} |bc -l`"
  echo " The maximum absolute error is "${i[1]}" at grid point ["${i[2]}","${i[3]}","${i[4]}"]"
  echo " Comparing with maximum allowed error ("$ermax")"
  if [ `echo "${i[1]} < $ermax" | bc` -eq 1 ]; then
