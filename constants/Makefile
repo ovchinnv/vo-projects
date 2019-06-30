@@ -1,7 +1,7 @@
 ROOT=..
 OBJS=constants.o
 MODS=constants.mod
-NAME=constants
+NAME=constants parser
 
 # make sure not to use ofast in single precision
 # this will cause error tolerances to appear zero
