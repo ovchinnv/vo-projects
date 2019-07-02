@@ -7,34 +7,69 @@ tmpfile="tmp.dat"
 echo -n > $tmpfile
 . ./fcheck "$1" "$2" "$3" ;# execute script in the current context
 
-nx=34; ny=34; nz=34;
-nx=50; ny=50; nz=50;
-#nx=66; ny=66; nz=66;
-#nx=98; ny=98; nz=98;
-#nx=130; ny=130; nz=130;
-l=7; # box half-length
+nx=34; ny=34; nz=34; # too coarse
+nx=66; ny=66; nz=66; # acceptable
+#nx=130; ny=130; nz=130; # slightly smaller error
+l=5; # box half-length
 xstretch=1.0; x0=-$l; x1=$l
 ystretch=1.0; y0=-$l; y1=$l
 zstretch=1.0; z0=-$l; z1=$l
+#
+maxerr=4; # maximum allowed % error
+qbin=1; # binary or text I/O
+#
+if [ $qbin -eq 1 ] ; then
+ IOMODE="binary"
+# find out precision with which code was compiled
+ echo "
+ init=none
+ exec=info
+ info{
+  exec:precision
+ }" > test.dat
+#
+ if [ -z "`./ches test.dat 2>&1 | grep -i double`" ]; then
+  qdouble=0
+  echo "SINGLE PRECISION COMPILATION DETECTED"
+ else
+  qdouble=1
+  echo "DOUBLE PRECISION COMPILATION DETECTED"
+ fi
+#
+ if [ $qdouble -eq 0 ] ; then
+  DEFS+=" -Ufloat -Dfloat=real*4 " # only single precision output in binary
+ fi
+else
+ IOMODE="text"
+fi
+#
 echo "
  implicit none
  float, dimension($nx,$ny,$nz)  :: uches, rhs
  float :: grid($nx,$ny,$nz,3)
  float :: e, totq
  integer :: i, j, k
- float, parameter :: dx=1d0*(${x1} - ${x0})/(${nx}-2)
- float, parameter :: dy=1d0*(${y1} - ${y0})/(${ny}-2)
- float, parameter :: dz=1d0*(${z1} - ${z0})/(${nz}-2)
+ float, parameter :: dx=1d0*(${x1} - (${x0}))/(${nx}-2)
+ float, parameter :: dy=1d0*(${y1} - (${y0}))/(${ny}-2)
+ float, parameter :: dz=1d0*(${z1} - (${z0}))/(${nz}-2)
 !
- open(1,file='solution.dat',form='formatted', status='old')
- read(1,*)
- read(1,*)
- read(1,*) uches
- close(1)
- open(1,file='rhs.dat',form='formatted', status='old')
- read(1,*)
- read(1,*)
- read(1,*) rhs
+ if (${qbin}.eq.1) then
+  open(1,file='solution.dat',form='unformatted', status='old')
+  read(1)
+  read(1) uches
+  close(1)
+  open(1,file='rhs.dat',form='unformatted', status='old')
+  read(1)
+  read(1) rhs
+ else
+  open(1,file='solution.dat',form='formatted', status='old')
+  read(1,*)
+  read(1,*) uches
+  close(1)
+  open(1,file='rhs.dat',form='formatted', status='old')
+  read(1,*)
+  read(1,*) rhs
+ endif
  close(1)
  totq=-sum ( rhs(2:$nx-1,2:$ny-1,2:$nz-1) ) * dx * dy * dz
  e=0.5d0 * sum ( uches(2:$nx-1,2:$ny-1,2:$nz-1) * rhs(2:$nx-1,2:$ny-1,2:$nz-1)) * dx * dy * dz
@@ -50,11 +85,11 @@ nq=${#radii[@]}
 
 omega=1.44 # SOR acceleration
 ein=1 ;  # scaled permittivity inside
-#eout=80 ;# scaled permittivity outside
-#eout=1 ;# scaled permittivity outside
+esolv=80 ;
+deps=0.1 ;# epsilon perturbation to compute the FD
 
 s=0.4; # standard deviation
-pad=1.142; # radius padding
+pad=1.168; # radius padding
 #
 # write ion parameters to pqr file
 # compute center :
@@ -63,6 +98,9 @@ yc=`echo "scale=6 ; 0.5*($y0 + $y1)" | bc`
 zc=`echo "scale=6 ; 0.5*($z0 + $z1)" | bc`
 #
 # prepare input file for CHES
+esolvm=`echo $esolv - $deps |bc -l`;
+esolvp=`echo $esolv + $deps |bc -l`;
+#for iq in `seq 1 0`; do
 for iq in `seq 0 $((nq-1))`; do
 R=${radii[$iq]}
 Q=${charges[$iq]}
@@ -73,8 +111,8 @@ ATOM 1 Q ION 1 $xc $yc $zc ${Q} 0.00
 " > ion.pqr
 rpad=`echo "$R + $pad" | bc -l `; # padded radius
 #for eout in 80 1; do # two permittivities for dg
-#for eout in 1 79.9 80 80.1; do # four permittivities for dh, computed usign FD
-for eout in 1 80; do # four permittivities for dh, computed usign FD
+for eout in $ein $esolvm $esolv $esolvp; do # four permittivities for dh, computed usign FD
+#for eout in 1 80; do # four permittivities for dh, computed usign FD
 #
 echo " Preparing input file..."
 echo "\
@@ -90,8 +128,8 @@ continuum {
  zgrid=exp; zstretch=${zstretch}; z0=${z0}; z1=${z1}
 
 #Continuum output options
- output_format=plot3d
- output_mode=text
+ output_format=chest
+ output_mode=${IOMODE}
  gridoutput=xyz_test.xyz
 
 # exec:output
@@ -119,7 +157,7 @@ molecule {
  charge_padding=0 ! added to radius to compute smoothed right-hand-side
  stdev_eps=${s} ! might be worthwhile to be able to set a single stdev
  stdev_charge=${s}
- cutoff_eps_stdev=10 ! does not seem to make much difference
+ cutoff_eps_stdev=5 ! does not seem to make much difference
  cutoff_charge_stdev=5
 }
 
@@ -152,8 +190,8 @@ ches {
  solver=multigrid
 
 #Output
- output_format=plot3d
- output_mode=text
+ output_format=chest
+ output_mode=${IOMODE}
  phioutput=solution.dat
 ! epsoutput=eps.dat
  rhsoutput=rhs.dat
@@ -171,6 +209,7 @@ multigrid {
 # multigrid_smooth_iterations=4
 # multigrid_maximum_levels=4
 # multigrid_smoother=Jacobi
+ multigrid_smoother=Gauss-Seidel-CUDA
  multigrid_residual=1e-4 # for shorter running times
 # multigrid_smoother=Jacobi-Tiled-LM
 # multigrid_compute_ini_residual=no
@@ -201,11 +240,60 @@ echo " Total charge is ${i[1]} "
 echo -n "${i[0]} " >> $tmpfile
 done # eps
 echo >>$tmpfile ;#newline
-f=(`cat $tmpfile`);
-cat $tmpfile
-echo ${f[1]} - ${f[0]} | bc -l
-exit
+#f=(`cat $tmpfile`);
+#cat $tmpfile
+#echo ${f[1]} - ${f[0]} | bc -l
+#exit
 done # ions
 
-cat $tmpfile
-#rm -f post;
+# compute dH and errors w.r.t experiment
+echo "
+! exp data
+integer, parameter :: ndata=31
+float :: dhexp(ndata) ! experimental data (from Honig 85 paper)
+float :: dhh(ndata) ! data calculated by Honig 1985
+float :: gs(ndata,4) ! current data
+float :: dh(ndata)
+float :: err(ndata)
+character(len=10) :: datafile=\"$tmpfile\";
+character(len=250) :: dexp='-125.8 -98.5 -78.4 -73.4 -67.6 -119.3 -85.3 -78.8 -69.0 -143.5 -115.1 -504.5 -462.4 &
+&-383.6 -348.3 -314.3 -491.6 -434.6 -439.4 -1118.1 -939.8 -868.6 -789.0 -1556.7 -853.5 -1124.1 -986.4 -77.2 -108.8 -325.0 -78.8 ';
+character(len=250) :: dhon='-126.7 -99.3 -76.8 -72.2 -66.3 -117.2 -86.1 -79.9 -71.2 -133.2 -116.3 -532.8 -458.4 &
+&-358.3 -324.7 -314.8 -498.7 -442.1 -432.9 -1122.7 -974.1 -865.8 -830.0 -1515.0 -852.2 -1122.1 -935.1 -77.9 -111.3 -338.8 -84.7 ';
+
+float, parameter :: C=-1.357d0;
+float, parameter :: eout=${esolv}d0;
+float, parameter :: ein=${ein}d0;
+float, parameter :: deps=${deps}d0;
+
+read(dexp,*) dhexp
+read(dhon,*) dhh
+
+open(1, file=datafile, form='formatted', status='old')
+
+do i=1, ndata
+ read(1,*) gs(i,:)
+enddo
+
+dh = gs(:,3) - gs(:,1) - C * eout * ( gs(:,4) - gs(:,2) ) / (2d0*deps)
+err = (dhexp+dh)/dhexp * 100 ! percent error
+
+write(6,*) maxval(abs(err)) ! max error
+write(6,*) sqrt(sum(err**2)/ndata) ! RMS error
+
+end " > echeck.F90
+$FC $FFLAGS $DEFS echeck.F90 -o echeck
+j=0
+for f in `./echeck`; do
+ i[$j]=$f
+ j=$(($j+1))
+done
+echo " Maximum (%) enthalpy error is ${i[0]}"
+echo " RMS (%) enthalpy error is ${i[1]}"
+if [ `echo "${i[1]} < $maxerr" | bc` -eq 1 ]; then
+  echo " TEST PASSED";
+  test_passed=1
+else
+  echo " TEST FAILED";
+  test_passed=0
+fi
