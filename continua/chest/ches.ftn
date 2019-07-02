@@ -1,5 +1,6 @@
 #define __COMMUNICATOR __CHESCOMM
 #define __CONTEXT __CHESCTX
+#define _N CHES
 #include "setcomm.def"
 !
       module ches ! (Cartesian Helmholtz Equation Solver)
@@ -16,6 +17,7 @@
       use SIZE      ! basic size information
       use grid      ! grid module
       __DEP_OUTPUT    ! runtime output
+      __DEP_CONST
       use object    ! objects that modify problem coefficients
 !      use plot3Dio ! output in plot3D (CFD) format; compile as a library, not as a module
       use multigrid ! multigrid solver module
@@ -31,14 +33,16 @@
       public ches_done
       private ches_solve
       private ches_output
+      private ches_energy
 !
 !     variables:
 !
-      bool :: ches_initialized=.false.
+      bool :: ches_initialized=.false., ches_solved=.false.
       __STRING_PAR(ctx,__CONTEXT)
       type(varray3df), pointer, save :: p_, eps_, kappa_, rhs_
 !      type(varray3df), save :: p_, eps_, kappa_, rhs_
       int :: warnlev=-1
+      float :: energy=__NAN
 !
       contains
 !=========================================================================
@@ -387,6 +391,34 @@ __SETWARNLEV
 #define _DOS3 output
 #define _IFS4 'DONE','STOP','END'
 #define _DOS4 done
+#define _IFS5 'ENER','ENERGY','POTE','ELEC'
+#define _DOS5 energy
 #include "exec.def"
+!=================================================================================
+#define _S energy
+  __SUB(_S)
+  int :: i, j, k
+  float :: dz, dzdy
+  float, pointer, dimension(:,:,:) :: rhs, p
+  __IAM( __NM(_S) )
+  __CHKINIT(PHI,p)
+  __CHKINIT(RHS,rhs)
+  if (fatal_warning(__COMM)) return
+  rhs=>rhs_%v
+  p=>p_%v
+  if (.not.ches_solved) then
+   call warning(whoami, 'SOLUTION DOES NOT SEEM TO HAVE BEEN COMPUTED', warnlev+1)
+  endif
+  energy=zero
+  do k=2,nz-1
+   dz=dzcor(k)
+   do j=2,ny-1
+    dzdy=dz*dycor(j)
+    do i=2,nx-1
+     __INCR(energy,p(i,j,k)*rhs(i,j,k)*dzdy*dxcor(i))
+  enddo;enddo;enddo
+  __SCALE(energy,half)
+  __MESG(whoami, 'Electrostatic energy ( = -1/2 x \int PHI x RHS dV ) is: ', energy)
+  end __SUB(_S)
 !=================================================================================
        end module ches
