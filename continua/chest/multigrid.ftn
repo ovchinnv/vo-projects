@@ -125,8 +125,10 @@
  float, save :: omega ! overrelaxation parameter in GS
  float, parameter :: default_omega=1
  bool, save :: multigrid_loud=.true.
- bool, save :: compute_initial_residual
- bool, parameter :: default_compute_initial_residual=.true.
+ __PAR(compute_initial_residual, bool, .true.)
+ __PAR(scale_residual, bool, .true.) ! whether to scale the current residual by the initial residual
+! bool, save :: compute_initial_residual
+! bool, parameter :: default_compute_initial_residual=.false.
  int1, save :: i3D=1, i2D=0
 !
 #ifdef __TIMER
@@ -277,7 +279,12 @@
 #undef __MINUSERR
 #define __VAR	compute_initial_residual
 #define __TAG	multigrid_compute_ini_residual
-#define __NAME	compute-initial-residual
+#define __NAME	flag whether to compute initial residual
+#include "parser/parser_macro1.src"
+!
+#define __VAR	scale_residual
+#define __TAG	multigrid_scale_residual
+#define __NAME	flag to scale current residual by the initial residual
 #include "parser/parser_macro1.src"
 !
 #undef __BOOL
@@ -866,7 +873,7 @@
 #define __RNORM
 #endif
 !
-  if (compute_initial_residual) then
+  if (compute_initial_residual .or. scale_residual) then
 #ifdef __TIMER
  mgtime=timer_stamp(mgtimer)
 #endif
@@ -874,7 +881,7 @@
  if (qusecuda) then
 ! compute residual within a cuda kernel
    qmaxres=1 ! whether to compute maximum residual
-   __CUDBG('computing initial resiual');
+   __CUDBG('computing initial residual');
    call Residual_Cuda(CUres,CUallp,CUallrhs,CUalleps,CUallkappa,CUodxall,CUodyall,CUodzall,i3b,i3,i1,j1,k1,nnx+2,nny+2,nnz+2,i2d,qmaxres,_QRESNORM,curr_residual,imax)
    __INC(imax) ; ! change to Fortran indexing convention
  else
@@ -891,12 +898,12 @@
   else
    curr_residual=one
   endif ! compute_initial_residual
-  init_residual=curr_residual
+  init_residual=max(zero,one/curr_residual) ! compute reciprocal
 !
 ! begin multigrid iterations
 !
   icycle=1;
-  do while (curr_residual.gt.max_residual)
+  do while (curr_residual*init_residual.gt.max_residual)
    if (icycle.gt.maxcycle) then
     call warning(whoami, 'Maximum number of cycles reached.',0)
     exit
