@@ -8,11 +8,12 @@ module _N
  __IMPNONE
 !
  bool, private :: molecule_initialized=.false.
+ bool, private :: closest_pt_found=.false.
 
  float, private, allocatable :: epsatom(:) ! relative dielectric as a function of atom (not currently used)
 !
 !
- int, private, allocatable :: closest_pt(:,:)
+ int, private, allocatable :: closest_pt(:,:) ! these arrays refer to the grid, which is not actually stored here; a bit dirty
  float, public, pointer :: rho(:,:,:)         ! surface 'density', the isosurfaces of which are used to assign the molecular surface
 !
  float, private, parameter :: osq2=one/sqrt2
@@ -396,6 +397,7 @@ module _N
   __OUT('The closest grid point to atom is', closest_pt(1,l), closest_pt(2,l), closest_pt(3,l))
 #endif
   enddo ! over all atoms
+  closest_pt_found=.true.
   end __SUB(_NAME)
 #undef _NAME
 !**********************************************************************************
@@ -487,22 +489,106 @@ module _N
 !
   end subroutine molecule_grid_objects
 !**********************************************************************************
-  function molecule_coulomb_energy() result(e)
-  float :: e, de
-  int :: i, j
+  subroutine molecule_coulomb_energy(p,xcen,ycen,zcen,nx,ny,nz,ecoul,esr,elr,eself)
+  int, intent(in) :: nx, ny, nz
+  float, intent(in) :: p(nx,ny,nz), xcen(nx), ycen(ny), zcen(nz)
+  float, intent(out) :: ecoul, esr, elr, eself
+! locals
+! for the time being we are not considering periodic boundary conditions
+  int :: i, j, ii, jj, kk, iip, jjp, kkp
+  float :: de, desr, odr, ri(3), qsum2
+  float :: xm, xp, ym, yp, zm, zp ! trilinear interpolation coefficients
+  float :: p_interp ! interpolated potential
   if (.not.molecule_initialized) call molecule_initialize()
-  e=zero
+  if (.not.closest_pt_found) call molecule_find_closest_pt(xcen, ycen, zcen, nx, ny, nz)
+  ecoul=zero ! coulomb sum
+  esr=zero ! short-range energy from Ewald decomposition
+  elr=zero ! long-range nergy from Ewald decomposition
+  qsum2=zero
   do i=1,natom
    de=zero
-   do j=i+1, natom
-    __INCR(de, q(j)/sqrt( (r(1,j) - r(1,i))**2 + (r(2,j) - r(2,i))**2 + (r(3,j) - r(3,i))**2))
+   desr=zero
+   ri=r(:,i)
+   do j=i+1, natom ! self-interaction terms are excluded
+    odr=one/sqrt( (r(1,j) - ri(1))**2 + (r(2,j) - ri(2))**2 + (r(3,j) - ri(3))**2 )
+    __INCR(de, q(j)*odr)
+    __INCR(desr, (q(j)*odr)*(one-__erf(one/(odr*stdev_charge*sqrt2))))
    enddo
    __SCALE(de,q(i))
-   __INCR(e,de)
-  enddo
-  __SCALE(e,one/(four*pi*eps_solute*eps_scale))
-  end function molecule_coulomb_energy
+   __SCALE(desr,q(i))
+   __INCR(qsum2,q(i)**2)
+   __INCR(ecoul,de)
+   __INCR(esr,desr)
 !
+! the remaining component is elr : the long-range potential energy, to be computed from the
+! Poisson solution on the grid (passed in here as p) via interpolation to the charge locations
+! fortunately, we should already know the 'closest_pt' array, which will aid in the interpolation :
+! note that we assume that the boundary points of p, e.g. 1, nx, are usable
+!
+! x-coeffs
+   ii=closest_pt(1,i)
+   de=xcen(ii)-ri(1) ! reuse
+   if (de>0d0) then !
+    iip=ii
+    ii=max(1,ii-1)
+    xm=abs(de)
+    xp=abs(xcen(ii)-ri(1))
+   else
+    iip=min(nx,ii+1)
+    xp=abs(de)
+    xm=abs(xcen(iip)-ri(1))
+   endif
+! artifice to protect against zero coeffs :
+   xm=xp+xm ; if (abs(xm).lt.__ERRTOL) xm=one
+   xp=xp/xm; xm=one-xp ! normalize coeffs
+! y-coeffs
+   jj=closest_pt(2,i)
+   de=ycen(jj)-ri(2) ! reuse
+   if (de>0d0) then !
+    jjp=jj
+    jj=max(1,jj-1)
+    ym=abs(de)
+    yp=abs(ycen(jj)-ri(2))
+   else
+    jjp=min(ny,jj+1)
+    yp=abs(de)
+    ym=abs(ycen(jjp)-ri(2))
+   endif
+! artifice to protect against zero coeffs :
+   ym=yp+ym ; if (abs(ym).lt.__ERRTOL) ym=one
+   yp=yp/ym;ym=one-yp
+! z-coeffs
+   kk=closest_pt(3,i)
+   de=zcen(kk)-ri(3) ! reuse
+   if (de>0d0) then !
+    kkp=kk
+    kk=max(1,kk-1)
+    zm=abs(de)
+    zp=abs(zcen(kk)-ri(3))
+   else
+    kkp=min(nz,kk+1)
+    zp=abs(de)
+    zm=abs(zcen(kkp)-ri(3))
+   endif
+! artifice to protect against zero coeffs :
+   zm=zp+zm ; if (abs(zm).lt.__ERRTOL) zm=one
+   zp=zp/zm;zm=one-zp
+! whew !
+   p_interp = xm*(ym*(zm*p(ii,jj,kk) + zp*p(ii,jj,kkp)) + yp*(zm*p(ii,jjp,kk) + zp*p(ii,jjp,kkp))) + &
+&          xp*(ym*(zm*p(iip,jj,kk) + zp*p(iip,jj,kkp)) + yp*(zm*p(iip,jjp,kk) + zp*p(iip,jjp,kkp)))
+   __INCR(elr,q(i)*p_interp)
+#ifdef __DEBUG
+ write(666,*) xm, xp, ym, yp, zm, zp, xm+xp, ym+yp, zm+zp
+ write(666,*) ii, iip, jj, jjp, kk, kkp
+#endif
+  enddo
+  __SCALE(ecoul,one/(four*pi*eps_solute*eps_scale))
+  __SCALE(esr,one/(four*pi*eps_solute*eps_scale))
+  eself=qsum2 * one/(four*pi*eps_solute*eps_scale) * osq2pi * oo_stdev_charge ! self-energy
+  __SCALE(elr,half)
+!
+  end subroutine molecule_coulomb_energy
+!**********************************************************************************
   subroutine molecule_compute_bc(d, bctype, bcloc, xcor, ycor, zcor, xcen, ycen, zcen, nx, ny, nz, ok)
   use fieldbcdef
   float, dimension(:,:), intent(inout) :: d ! BC data
@@ -660,6 +746,7 @@ module _N
 !***********************************************************************************
   subroutine molecule_done()
   molecule_initialized=.false.
+  closest_pt_found=.false.
   if (allocated(closest_pt)) deallocate(closest_pt)
   if (associated(rho)) deallocate(rho)
   call system_done()
