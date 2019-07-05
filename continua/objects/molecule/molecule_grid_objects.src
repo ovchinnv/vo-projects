@@ -51,6 +51,12 @@
 #endif
 #ifdef __RHS
   float, dimension(nx,ny,nz) :: rhs
+#ifdef __NORMALIZE_FILTER
+  float :: temp(nx,ny,nz)
+  float :: fnorm ! discrete filter norm
+  int, dimension(-1:1) :: ilim, jlim, klim ! grid support indices for a given charge ; 0th position wasted
+#endif
+
 #endif
   float, dimension(nx), intent(in) :: xcen, dxcor
   float, dimension(ny), intent(in) :: ycen, dycor
@@ -179,6 +185,11 @@
 #ifdef __KAPPA
   kappa=zero
 #endif
+#ifdef __RHS
+#ifdef _NORMALIZE_FILTER
+ temp=zero
+#endif
+#endif
 ! gridding
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 ! for each atom, find the closest gridpoint
@@ -210,6 +221,9 @@
    rcharge=(charge_radius_scale*radius(l)+charge_padding);  rchargen=rcharge * oo_stdev_charge
 !   r2chargen=rchargen**2
    rmax2charge=(cutoff_charge+rcharge)**2
+#ifdef __NORMALIZE_FILTER
+   fnorm=zero
+#endif
 #ifdef __DEBUG
  __OUT('Maximum radius for gridding charge for atom', l, 'is', sqrt(rmax2charge))
 #endif
@@ -241,6 +255,9 @@
 #endif
 #ifdef __RHS
     qchargek=.true.;
+#ifdef __NORMALIZE_FILTER
+    klim(kdir)=kdir*k
+#endif
 #endif
 #ifdef __SURF
     qsurfk=.true.
@@ -262,7 +279,12 @@
      if (qkappak)  qkappak=(dz2.lt.rmax2kappa)
 #endif
 #ifdef __RHS
-     if (qchargek) qchargek=(dz2.lt.rmax2charge)
+     if (qchargek) then
+      qchargek=(dz2.lt.rmax2charge)
+#ifdef __NORMALIZE_FILTER
+      klim(kdir)=max(klim(kdir), kdir*k) ! note that klim(-1) will be negative
+#endif
+     endif
 #endif
 #ifdef __SURF
      if (qsurfk)   qsurfk=(dz2.lt.rmax2surf  )
@@ -291,10 +313,11 @@
       qepsj=qepsk; 
 #endif
 #ifdef __KAPPA
-      qkappaj=qkappak; 
+      qkappaj=qkappak;
 #endif
 #ifdef __RHS
-      qchargej=qchargek; 
+      qchargej=qchargek 
+      jlim(jdir)=jdir*j
 #endif
 #ifdef __SURF
       qsurfj=qsurfk
@@ -316,7 +339,12 @@
        if (qkappaj)  qkappaj=(dzdy2.lt.rmax2kappa)
 #endif
 #ifdef __RHS
-       if (qchargej) qchargej=(dzdy2.lt.rmax2charge)
+       if (qchargej) then 
+       qchargej=(dzdy2.lt.rmax2charge)
+#ifdef __NORMALIZE_FILTER
+       jlim(jdir)=max(jlim(jdir), jdir*j) ! note that jlim(-1) will be negative
+#endif
+       endif
 #endif
 #ifdef __SURF
        if (qsurfj)   qsurfj=(dzdy2.lt.rmax2surf  )
@@ -341,13 +369,16 @@
        do idir=-1,1,2 
         i=closest_pt(1,l)+(idir+1)/2;
 #ifdef __EPS
-        qepsi=qepsj; 
+        qepsi=qepsj;
 #endif
 #ifdef __KAPPA
-        qkappai=qkappaj; 
+        qkappai=qkappaj;
 #endif
 #ifdef __RHS
-        qchargei=qchargej; 
+        qchargei=qchargej;
+#ifdef __NORMALIZE_FILTER
+       ilim(idir)=idir*i
+#endif
 #endif
 #ifdef __SURF
         qsurfi=qsurfj
@@ -369,7 +400,12 @@
          if (qkappai)  qkappai=(dzdydx2.lt.rmax2kappa)
 #endif
 #ifdef __RHS
-         if (qchargei) qchargei=(dzdydx2.lt.rmax2charge)
+         if (qchargei) then
+          qchargei=(dzdydx2.lt.rmax2charge)
+#ifdef __NORMALIZE_FILTER
+          ilim(idir)=max(ilim(idir), idir*i) ! note that ilim(-1) will be negative
+#endif
+         endif
 #endif
 #ifdef __SURF
          if (qsurfi)   qsurfi=(dzdydx2.lt.rmax2surf  )
@@ -478,7 +514,12 @@
        __OUT('Atom', l, 'makes a contribution of', val, 'to rhs array at point', i, j, k)
 #endif
 !
+#ifdef __NORMALIZE_FILTER
+           temp(i,j,k) = val * qn
+           __INCR(fnorm, val * dxcor(i) * dycor(j) * dzcor(k))
+#else
            __INCR(rhs(i,j,k), val * qn) ! qn is nominal charge density: q / ( 4/3pi r^3 ), or q(l) [if unit mass]
+#endif
          endif ! charge
 #endif
 #ifdef __SURF
@@ -519,6 +560,19 @@
     enddo
    enddo ! kdir changes from -1 to 1
 !if (l.eq.100) exit ! aa -- grid a few atoms
+
+#ifdef __RHS
+#ifdef __NORMALIZE_FILTER
+  if (fnorm > (__ERRTOL) .and. normalize_charge_support ) then ; fnorm=one/fnorm; else ; fnorm=one; endif
+  do k=-klim(-1), klim(1)
+   do j=-jlim(-1), jlim(1)
+    do i=-ilim(-1), ilim(1)
+     __INCR(rhs(i,j,k), temp(i,j,k) * fnorm )
+     temp(i,j,k)=0d0
+  enddo ; enddo ; enddo
+#endif
+#endif
+
   enddo ! over all atoms
 !
 ! 3) Need to scale gridded coefficients so that they add up correctly
@@ -530,11 +584,9 @@
 !    grid values uniformly so that the charge density integrated over the entire domain
 !    adds up to the total charge
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-#ifdef __PRESERVE_GLOBAL_CHARGE
 #ifdef __RHS
 ! scale charges uniformly
   qn=0d0  ! total grid charge
-#endif
 #endif
 #ifdef __EPS
 ! scaling factors for kappa and eps
@@ -553,10 +605,8 @@
     dzdy2=dz2*dycor(j)
     do i=2, nx-1
 !
-#ifdef __PRESERVE_GLOBAL_CHARGE
 #ifdef __RHS
      __INCR( qn , rhs(i,j,k) * dxcor(i) * dzdy2 ) ! charge integral
-#endif
 #endif
 !
 ! scale rho, eps and kappa below
@@ -642,9 +692,17 @@
   enddo     ; enddo
 !
 #ifdef __RHS
+  d=sum(q)
+  if (abs(qn-d).gt.__FERRTOL) then
+   call warning(whoami, 'GRID CHARGE DENSITY INTEGRAL IS '//trim(ftoa(qn))//', AND THE TOTAL CHARGE IS '//ftoa(d),0)
+  endif
 #ifdef __PRESERVE_GLOBAL_CHARGE
-  __SCALE(rhs, charge_scale * sum(q) / qn); ! preserve total charge and apply charge scaling, if any
+  if (preserve_total_charge) then
+   __MESG(whoami, 'RESCALING GRID DENSITY TO MATCH TOTAL CHARGE.')
+   __SCALE(rhs, charge_scale * d / qn); ! preserve total charge and apply charge scaling, if any
+  endif
 #else
+! invert the sign to match the definition of the Poisson problem
   __SCALE(rhs, charge_scale)
 #endif
 #endif

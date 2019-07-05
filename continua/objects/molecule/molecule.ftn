@@ -79,7 +79,16 @@ module _N
  float :: energy_scale=one ! native units are kcal/mol
 !
  __CPPARDEF(energy_units,'kcalmol')
-
+!
+ __CPPARDEF(bcname, 'DEBYE') ! needs to be upper-case
+!
+#ifdef __PRESERVE_GLOBAL_CHARGE
+ __BPPARDEF(preserve_total_charge,.false.)
+#endif
+!
+#ifdef __NORMALIZE_FILTER
+ __BPPARDEF(normalize_charge_support,.true.)
+#endif
 !***************************** subroutines ****************
  public molecule_initialize ! initialize molecular coordinates, radii and charges
  public molecule_ok
@@ -261,12 +270,33 @@ module _N
 #define __NAME Units of reported energy
 #define __DOIFOK call toupper(energy_units); select case(energy_units) ; \
                                              case('KCAL','KCALMOL','NONE');energy_scale=one;\
+                                             case('KJ','KJMOL','JOULEMOL','JOULESMOL');energy_scale=kjoule;\
                                              case('KT','KBT');energy_scale=(kboltz*temperature);\
                                              case default; call warning(whoami, 'Unsupported energy units requested ("'//trim(energy_units)//'"), will use kcal/mol',-1);energy_scale=one;\
                                              end select;__SCALE(eps_scale,energy_scale)
 #include "mol_macro1.src"
-
-
+!
+#define __VAR	bcname
+#define __NAME Electrostatic boundary condition type
+#define __DOIFOK call toupper(__VAR)
+#include "mol_macro1.src"
+!
+#undef __CHAR
+!
+#ifdef __PRESERVE_GLOBAL_CHARGE
+#define __BOOL
+#define __VAR preserve_total_charge
+#define __NAME Flag to scale grid charge integral to match net charge
+#include "mol_macro1.src"
+#endif
+!
+#ifdef __NORMALIZE_FILTER
+#define __BOOL
+#define __VAR normalize_charge_support
+#define __NAME Flag to scale the grid contribution of each charge
+#include "mol_macro1.src"
+#endif
+!
 !%%%%%%%%%%%%%%%%%%%%% compute normalized parameters %%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  oo_stdev_charge=1d0/stdev_charge;  oo_stdev_eps=1d0/stdev_eps; oo_stdev_kappa=1d0/stdev_kappa;  oo_stdev_surf=1d0/stdev_surf
 ! oo_stdev_charge2=oo_stdev_charge**2;oo_stdev_eps2=oo_stdev_eps**2;oo_stdev_surf2=oo_stdev_surf**2;oo_stdev_kappa2=oo_stdev_kappa**2
@@ -590,6 +620,7 @@ module _N
   end subroutine molecule_coulomb_energy
 !**********************************************************************************
   subroutine molecule_compute_bc(d, bctype, bcloc, xcor, ycor, zcor, xcen, ycen, zcen, nx, ny, nz, ok)
+! for now, use a single subroutine for all bc types ; may split in the future if things get more comlicated
   use fieldbcdef
   float, dimension(:,:), intent(inout) :: d ! BC data
   float, dimension(:), intent(in) :: xcen,ycen,zcen ! grid centers
@@ -598,8 +629,12 @@ module _N
   int, intent(in) :: bcloc, nx, ny, nz
   bool, intent(inout) :: ok
   float :: xpt, ypt, zpt, dz2, dy2, dr, rad, charge
+! for dipolar/delphi BC
+  float :: rpm(3,2), qtotpm(2)
+  int :: npm(2)
 !
 ! automatic boundary resolution adapted from bc_apply in state
+!
   int :: ib, ie, jb, je, kb, ke
   int*1 :: di, dj, omdi, omdj
   int :: i, j, k, l
@@ -637,38 +672,82 @@ module _N
      ke=0 ! set invalid indices so that no loops are executed; better than early return
   end select ! which boundary
 !
-  call message(whoami, 'Will use Debye-Huckel superposition for boundary "'//bc_names(bcloc)//'"')
-!
   omdi=1-di
   dj=di*dj
   omdj=1-dj
-
+! initialize bc array (even if nothing done here)
   d=zero
-
-  do l=1, natom ! this loop should be parallelized
-   xpt=r(1,l)
-   ypt=r(2,l)
-   zpt=r(3,l)
-!   rad=radius(l)+kappa_padding ! not sure this is the best radius
-   rad=radius(l)+eps_padding ! not sure this is the best radius
-   charge=q(l)
 !
-   do k=kb, ke
-    dz2=(zcen(k)-zpt)**2
-    do j=jb, je
-     dy2=dz2+(ycen(j)-ypt)**2
-     do i=ib, ie
-      dr=sqrt(dy2+(xcen(i)-xpt)**2)
-      __INCR(d(di*i+omdi*j, dj*j+omdj*k), charge*exp(-kappa_scale*kappa_solvent*(dr-rad))/((one+kappa_scale*kappa_solvent*rad)*dr))
+  call message(whoami, 'Will compute boundary conditions for boundary "'//bc_names(bcloc)//'"')
+! decide on the type
+  select case(bcname)
+   case('DH', 'DEBYE','DEBYEHUCKEL','DHUCKEL','HUCKEL','BORN','COUL','COULOMB', 'COULB')
+    call message(whoami,'Will use Debye-Huckel/Born/Coulomb BC')
+!
+!
+    do l=1, natom ! this loop should be parallelized
+     xpt=r(1,l)
+     ypt=r(2,l)
+     zpt=r(3,l)
+!    rad=radius(l)+kappa_padding ! not sure this is the best radius
+     rad=radius(l)+eps_padding ! not sure this is the best radius
+     charge=q(l)
+!
+     do k=kb, ke
+      dz2=(zcen(k)-zpt)**2
+      do j=jb, je
+       dy2=dz2+(ycen(j)-ypt)**2
+       do i=ib, ie
+        dr=sqrt(dy2+(xcen(i)-xpt)**2)
+        __INCR(d(di*i+omdi*j, dj*j+omdj*k), charge*exp(-kappa_scale*kappa_solvent*(dr-rad))/((one+kappa_scale*kappa_solvent*rad)*dr))
+       enddo
+      enddo
      enddo
-    enddo
-   enddo
 !
-  enddo ! over atoms
+    enddo ! over atoms
+!
+    __SCALE(d, one/(four*pi*eps_scale*eps_solvent)) ! recheck scaling
+    bctype=dirichletg
+    ok=.true.
+!
+   case('DIPOLE','DIPOLAR','DELPHI')
+    call message(whoami,'Will use dipolar BC from DelPhi')
+    rpm=zero; qtotpm=zero ; npm=0
+    do l=1, natom
+     charge=q(l)
+     if(charge>zero) then
+      i=1
+     else
+      i=2
+     endif
+      __INCR(rpm(:,i),r(:,l)) ; __INCR(qtotpm(i),charge); __INC(npm(i))
+    enddo
+    npm=max(npm,1)
+!
+    rad=zero
+    do l=1,2
+     xpt=rpm(1,l)/npm(l)
+     ypt=rpm(2,l)/npm(l)
+     zpt=rpm(3,l)/npm(l)
+     charge=qtotpm(l)/npm(l)
+!
+     do k=kb, ke
+      dz2=(zcen(k)-zpt)**2
+      do j=jb, je
+       dy2=dz2+(ycen(j)-ypt)**2
+       do i=ib, ie
+        dr=sqrt(dy2+(xcen(i)-xpt)**2)
+        __INCR(d(di*i+omdi*j, dj*j+omdj*k), charge*exp(-kappa_scale*kappa_solvent*(dr-rad))/((one+kappa_scale*kappa_solvent*rad)*dr))
+       enddo
+      enddo
+     enddo
+    enddo ! over the two dipole groups
+    __SCALE(d, one/(four*pi*eps_scale*eps_solvent)) ! recheck scaling
+    bctype=dirichletg
+    ok=.true.
 
-  __SCALE(d, one/(four*pi*eps_scale*eps_solvent)) ! recheck scaling
-  bctype=dirichletg
-  ok=.true.
+   case default ; __WRN(whoami, 'Usupported boundary condition requested ("'//trim(bcname)//'")')
+  end select
 !
   end subroutine molecule_compute_bc
 !**********************************************************************************
