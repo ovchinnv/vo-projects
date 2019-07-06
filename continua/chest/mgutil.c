@@ -7,7 +7,7 @@
 //#include <stdio.h>
 
 void GaussSeidel_C(__CFLOAT *p, __CFLOAT *rhs, __CFLOAT *w, __CFLOAT *e, __CFLOAT *s, __CFLOAT *n, __CFLOAT *f, __CFLOAT *b,
-                    __CINT nx, __CINT ny, __CINT nz, __CFLOAT dt, int8_t i2d) {
+                    __CINT nx, __CINT ny, __CINT nz, __CFLOAT dt, __CINT1 i2d) {
 #define IO(i,j,k) ((((k)-1)*(ny) + ((j)-1))*(nx) + i-1)
 #define II(i,j,k) ((((k)-1)*(nny) + ((j)-1))*(nnx) + i-1)
 // translated from f90

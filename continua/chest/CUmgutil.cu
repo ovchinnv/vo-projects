@@ -98,7 +98,7 @@ extern "C" void UnbindTextures() {
 #define _NBLK(N,n) (N)/(n) + ( (N) % (n) > 0 )
 extern "C" void Residual_Cuda(__CUFLOAT *devres, __CUFLOAT *devp, __CUFLOAT *devrhs, __CUFLOAT *deveps, __CUFLOAT *devkappa, __CUFLOAT *devoodx, __CUFLOAT *devoody, __CUFLOAT *devoodz,
                               const __CINT i3b, const __CINT i3, const __CINT i1, const __CINT j1, const __CINT k1, const __CINT nx, const __CINT ny, const __CINT nz, 
-                              const int8_t i2d, const __CINT qmaxres, const __CINT qresnorm, __CFLOAT *maxres, __CINT *imax) {
+                              const __CINT1 i2d, const __CINT qmaxres, const __CINT qresnorm, __CFLOAT *maxres, __CINT *imax) {
  int nnx=nx-2; // inner points
  int nny=ny-2;
 #ifdef __MGTEX
@@ -186,7 +186,7 @@ extern "C" void Residual_Cuda(__CUFLOAT *devres, __CUFLOAT *devp, __CUFLOAT *dev
 }
 
 //=========================================================================================================================================================================//
-extern "C" void Coarsen_Cuda(__CUFLOAT *fine, __CUFLOAT *coarse, const __CINT i3, const __CINT nx, const __CINT ny, const __CINT nz, const int8_t i2d, const __CINT ibc) {
+extern "C" void Coarsen_Cuda(__CUFLOAT *fine, __CUFLOAT *coarse, const __CINT i3, const __CINT nx, const __CINT ny, const __CINT nz, const __CINT1 i2d, const __CINT ibc) {
 // NOTE that the dimensions passed in correspond to the fine grid
  int nnx=nx/2; // coarse grid points (INNER GRID)
  int nny=ny/2;
@@ -205,7 +205,7 @@ extern "C" void Coarsen_Cuda(__CUFLOAT *fine, __CUFLOAT *coarse, const __CINT i3
  } //i2d
 }
 //=========================================================================================================================================================================//
-extern "C" void Refine_Cuda(__CUFLOAT *fine, __CUFLOAT *coarse, const __CINT i3f, const __CINT i3c, const __CINT nx, const __CINT ny, const __CINT nz, const int8_t i2d) {
+extern "C" void Refine_Cuda(__CUFLOAT *fine, __CUFLOAT *coarse, const __CINT i3f, const __CINT i3c, const __CINT nx, const __CINT ny, const __CINT nz, const __CINT1 i2d) {
 // NOTE that the dimensions passed in correspond to the fine grid
 //
  int nnx=nx/2; // coarse grid points (INNER GRID)
@@ -231,7 +231,7 @@ extern "C" void Refine_Cuda(__CUFLOAT *fine, __CUFLOAT *coarse, const __CINT i3f
 //=========================================================================================================================================================================//
 extern "C" void GaussSeidel_Cuda(__CUFLOAT *devp, __CUFLOAT *devrhs, __CUFLOAT *deveps, __CUFLOAT *devkappa, __CUFLOAT *devoodx, __CUFLOAT *devoody, __CUFLOAT *devoodz,
                                  const __CINT i3b, const __CINT i3, const __CINT i1, const __CINT j1, const __CINT k1, const __CINT nx, const __CINT ny, const __CINT nz, 
-                                 const __CFLOAT dt, const int8_t i2d, int8_t *qpinitzero) {
+                                 const __CFLOAT dt, const __CINT1 i2d, __CINT1 *qpinitzero) {
 
  int nnx=nx-2; // inner points
  int nny=ny-2;
@@ -295,7 +295,7 @@ extern "C" const int bcwest, bceast, bcnorth, bcsouth, bcback, bcfront ; // from
 
 extern "C" void ApplyBC_Cuda(__CUFLOAT *devp, __CUFLOAT *devbcw, __CUFLOAT *devbce, __CUFLOAT *devbcn, __CUFLOAT *devbcs, __CUFLOAT *devbcf, __CUFLOAT *devbcb,
                              const __CINT i3b, const __CINT i2, const __CINT j2, const __CINT k2, const __CINT nx, const __CINT ny, const __CINT nz, 
-                             __CINT *bc_type, __CFLOAT *bc_wgt, const int8_t i2d, const int8_t qpinitzero) {
+                             __CINT *bc_type, __CFLOAT *bc_wgt, const __CINT1 i2d, const __CINT1 qpinitzero) {
  int nnx=nx-2; // inner points
  int nny=ny-2;
  int nnz=nz-2;

@@ -115,7 +115,7 @@
 #else
  __global__ void  Apply_BC_Cuda_3Dx2(__CUFLOAT *devu, const __CINT i3b, const __CINT ind2, const __CINT nx, const __CINT ny, const __CINT nz,
 #endif
-                                   const __CINT boundary, const __CINT boundary2, const __CINT bctype, const __CINT bctype2, const __CFLOAT wgt, const __CUFLOAT wgt2, const int8_t qpinitzero){
+                                   const __CINT boundary, const __CINT boundary2, const __CINT bctype, const __CINT bctype2, const __CFLOAT wgt, const __CUFLOAT wgt2, const __CINT1 qpinitzero){
 // translated from FORTRAN apply_bc_dnp
 // g has inner points only ; u of course has ghost points
 // this version applies BC to two OPPOSING sides simultaneously ; user is responsible for passing in the correct boundaries

@@ -6,7 +6,7 @@ interface
  __FCFLOAT, VALUE :: dt
  TYPE (C_PTR), VALUE :: p
  TYPE (C_PTR), VALUE :: rhs,w,e,s,n,f,b
- int(C_INT8_T), VALUE :: i2d
+ int(__CONCAT(C_,__CINT1)), VALUE :: i2d
  end subroutine GaussSeidel_C
 
 #ifdef __CUDA
@@ -69,8 +69,8 @@ interface
  __FCINT, VALUE :: i1, j1, k1 ! indices into metric arrays
  __FCINT, VALUE :: nx, ny, nz ! array dimensions, incl. ghost points
  __FCFLOAT, VALUE :: omega ! overrelaxation parameter
- int(C_INT8_T), VALUE :: i2d ! whether this is a 2D calculation
- int(C_INT8_T) :: qpinitzero ! whether to initialize solution to zero
+ int(__CONCAT(C_,__CINT1)), VALUE :: i2d ! whether this is a 2D calculation
+ int(__CONCAT(C_,__CINT1)) :: qpinitzero ! whether to initialize solution to zero
  end subroutine GaussSeidel_Cuda
 
  subroutine Residual_Cuda(CUres,CUallp,CUallrhs,CUalleps,CUallkappa,CUdxall,CUdyall,CUdzall,i3b,i3,i1,j1,k1,nx,ny,nz,i2d,qmaxres,qresnorm,curr_residual,imax) bind(c,name='Residual_Cuda')
@@ -84,7 +84,7 @@ interface
  __FCINT, intent(in) :: imax
  __FCINT, VALUE :: qmaxres ! whether to compute maximum residual
  __FCINT, VALUE :: qresnorm ! whether to normalize the residual by central coefficient (o)
- int(C_INT8_T), VALUE :: i2d
+ int(__CONCAT(C_,__CINT1)), VALUE :: i2d
  end subroutine Residual_Cuda
 
  subroutine Coarsen_Cuda(CUfine,CUcoarse,i3,nx,ny,nz,i2d,ibc) bind(c,name='Coarsen_Cuda')
@@ -93,7 +93,7 @@ interface
  type(C_PTR), VALUE :: CUfine, CUcoarse
  __FCINT, VALUE :: i3 ! index into rhs array
  __FCINT, VALUE :: nx, ny, nz ! fine array dimensions, _not_ incl. ghost points
- int(C_INT8_T), VALUE :: i2d
+ int(__CONCAT(C_,__CINT1)), VALUE :: i2d
  __FCINT, VALUE :: ibc ! whether arrays include ghostpoints (notwithstanding the inner dimensions nx/ny/nz)
  end subroutine Coarsen_Cuda
 
@@ -103,7 +103,7 @@ interface
  type(C_PTR), VALUE :: CUfine, CUcoarse
  __FCINT, VALUE :: i3f, i3c ! indices into fine and coarse arrays, respectively
  __FCINT, VALUE :: nx, ny, nz ! fine array dimensions, _not_ incl. ghost points
- int(C_INT8_T), VALUE :: i2d
+ int(__CONCAT(C_,__CINT1)), VALUE :: i2d
  end subroutine Refine_Cuda
 
  subroutine ApplyBC_Cuda(CUallp,CUallwest,CUalleast,CUallnorth,CUallsouth,CUallfront,CUallback,i3b,i2,j2,k2,nx,ny,nz,bc_type,bc_wgt,i2d,qpinitzero) bind(c,name='ApplyBC_Cuda')
@@ -115,8 +115,8 @@ interface
  __FCINT, VALUE :: nx, ny, nz ! array dimensions, incl. ghost points
  __FCINT, dimension(6) :: bc_type ! boundary condition codes
  __FCFLOAT, dimension(6) :: bc_wgt ! boundary condition values at current level only
- int(C_INT8_T), VALUE :: i2d
- int(C_INT8_T), VALUE :: qpinitzero
+ int(__CONCAT(C_,__CINT1)), VALUE :: i2d
+ int(__CONCAT(C_,__CINT1)), VALUE :: qpinitzero
  end subroutine ApplyBC_Cuda
 
 

@@ -204,7 +204,7 @@ module _N
 !%%%%%%%%%%%%%%%%%%%% padding parameters for grid smoothing %%%%%%%%%%%%%%%%%%%%%%%%%%%%
 ! charge padding
 #undef __LEZEROERR
-#define __MINUSERR
+#//define __MINUSERR
 #define __VAR	charge_padding
 #define __NAME	Charge padding
 #include "mol_macro1.src"
@@ -221,6 +221,7 @@ module _N
 #define __NAME	Density padding
 #include "mol_macro1.src"
 !%%%%%%%%%%%%%% cutoffs beyond which the grid values are assumed to be zero %%%%%%%%%%%%%%%%%%%%%%
+#define __MINUSERR
 ! cutoff for dielectric
 #define __VAR	cutoff_eps_stdev
 #define __NAME	Cutoff for dielectric smoothing
@@ -685,26 +686,49 @@ module _N
     call message(whoami,'Will use Debye-Huckel/Born/Coulomb BC')
 !
 !
-    do l=1, natom ! this loop should be parallelized
-     xpt=r(1,l)
-     ypt=r(2,l)
-     zpt=r(3,l)
-!    rad=radius(l)+kappa_padding ! not sure this is the best radius
-     rad=radius(l)+eps_padding ! not sure this is the best radius
-     charge=q(l)
+    if (abs(kappa_solvent).le.__ERRTOL) then
+     do l=1, natom ! this loop should be parallelized
+      xpt=r(1,l)
+      ypt=r(2,l)
+      zpt=r(3,l)
+!     rad=radius(l)+kappa_padding ! not sure this is the best radius
+      rad=radius(l)+eps_padding ! not sure this is the best radius
+      charge=q(l)
 !
-     do k=kb, ke
-      dz2=(zcen(k)-zpt)**2
-      do j=jb, je
-       dy2=dz2+(ycen(j)-ypt)**2
-       do i=ib, ie
-        dr=sqrt(dy2+(xcen(i)-xpt)**2)
-        __INCR(d(di*i+omdi*j, dj*j+omdj*k), charge*exp(-kappa_scale*kappa_solvent*(dr-rad))/((one+kappa_scale*kappa_solvent*rad)*dr))
+      do k=kb, ke
+       dz2=(zcen(k)-zpt)**2
+       do j=jb, je
+        dy2=dz2+(ycen(j)-ypt)**2
+        do i=ib, ie
+         dr=one/sqrt(dy2+(xcen(i)-xpt)**2)
+         __INCR(d(di*i+omdi*j, dj*j+omdj*k), charge*dr)
+        enddo
        enddo
       enddo
-     enddo
 !
-    enddo ! over atoms
+     enddo ! over atoms
+    else
+     do l=1, natom
+      xpt=r(1,l)
+      ypt=r(2,l)
+      zpt=r(3,l)
+!     rad=radius(l)+kappa_padding ! not sure this is the best radius
+      rad=radius(l)+eps_padding ! not sure this is the best radius
+      charge=q(l)
+!
+      do k=kb, ke
+       dz2=(zcen(k)-zpt)**2
+       do j=jb, je
+        dy2=dz2+(ycen(j)-ypt)**2
+        do i=ib, ie
+         dr=sqrt(dy2+(xcen(i)-xpt)**2)
+         __INCR(d(di*i+omdi*j, dj*j+omdj*k), charge*exp(-kappa_scale*kappa_solvent*(dr-rad))/((one+kappa_scale*kappa_solvent*rad)*dr))
+        enddo
+       enddo
+      enddo
+!
+     enddo ! over atoms
+    endif
 !
     __SCALE(d, one/(four*pi*eps_scale*eps_solvent)) ! recheck scaling
     bctype=dirichletg
@@ -729,7 +753,7 @@ module _N
      xpt=rpm(1,l)/npm(l)
      ypt=rpm(2,l)/npm(l)
      zpt=rpm(3,l)/npm(l)
-     charge=qtotpm(l)/npm(l)
+     charge=qtotpm(l)
 !
      do k=kb, ke
       dz2=(zcen(k)-zpt)**2

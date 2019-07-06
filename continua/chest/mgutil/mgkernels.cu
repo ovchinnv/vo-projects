@@ -25,7 +25,7 @@
  __global__ void Gauss_Seidel_Cuda_3D(__CUFLOAT *devp, __CUFLOAT *devoodx, __CUFLOAT *devoody, __CUFLOAT *devoodz,
 #endif
                         const __CINT i3b, const __CINT i3, const __CINT i1, const __CINT j1, const __CINT k1, const __CINT nx, const __CINT ny, const __CINT nz, const __CFLOAT dt, 
-                        const int which, const int8_t qpinitzero) {
+                        const int which, const __CINT1 qpinitzero) {
 
 #ifdef __MGTEX
 //use texture addressing

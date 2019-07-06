@@ -205,7 +205,7 @@
 !  write(888,*) r(:,l), radius(l), closest_pt(:,l) ! aa; coords correct
 ! precomputation of parameters for the smoothed densities
 #ifdef __EPS
-   reps=   (radius(l)+eps_padding   );  repsn   =reps    * oo_stdev_eps   ! normalize by stdev
+   reps=   max(radius(l)+eps_padding, zero   );  repsn   =reps    * oo_stdev_eps   ! normalize by stdev
 !   r2epsn   =repsn   **2
    rmax2eps   =(cutoff_eps   +reps   )**2
 #ifdef __DEBUG
@@ -213,16 +213,19 @@
 #endif
 #endif
 #ifdef __KAPPA
-   rkappa= (radius(l)+kappa_padding );  rkappan =rkappa  * oo_stdev_kappa
+   rkappa= max(radius(l)+kappa_padding, zero );  rkappan =rkappa  * oo_stdev_kappa
 !   r2kappan =rkappan **2
    rmax2kappa =(cutoff_kappa +rkappa )**2
 #endif
 #ifdef __RHS
-   rcharge=(charge_radius_scale*radius(l)+charge_padding);  rchargen=rcharge * oo_stdev_charge
+   rcharge=max(charge_radius_scale*radius(l)+charge_padding, zero);  rchargen=rcharge * oo_stdev_charge
 !   r2chargen=rchargen**2
    rmax2charge=(cutoff_charge+rcharge)**2
 #ifdef __NORMALIZE_FILTER
    fnorm=zero
+    ilim(-1)=-closest_pt(1,l) ; ilim(1)=1-ilim(-1) ! note that representing min(i) as -max(-i)
+    jlim(-1)=-closest_pt(2,l) ; jlim(1)=1-jlim(-1)
+    klim(-1)=-closest_pt(3,l) ; klim(1)=1-klim(-1)
 #endif
 #ifdef __DEBUG
  __OUT('Maximum radius for gridding charge for atom', l, 'is', sqrt(rmax2charge))
@@ -240,7 +243,7 @@
 #endif
 
 #ifdef __SURF
-   rsurf  =(radius(l)+surf_padding  );  rsurfn  =rsurf   * oo_stdev_surf
+   rsurf  =max(radius(l)+surf_padding, zero  );  rsurfn  =rsurf   * oo_stdev_surf
 !   r2surfn  =rsurfn  **2
    rmax2surf  =(cutoff_surf  +rsurf  )**2
 #endif
@@ -255,9 +258,6 @@
 #endif
 #ifdef __RHS
     qchargek=.true.;
-#ifdef __NORMALIZE_FILTER
-    klim(kdir)=kdir*k
-#endif
 #endif
 #ifdef __SURF
     qsurfk=.true.
@@ -310,14 +310,13 @@
      do jdir=-1,1,2 
       j=closest_pt(2,l)+(jdir+1)/2;
 #ifdef __EPS
-      qepsj=qepsk; 
+      qepsj=qepsk;
 #endif
 #ifdef __KAPPA
       qkappaj=qkappak;
 #endif
 #ifdef __RHS
       qchargej=qchargek 
-      jlim(jdir)=jdir*j
 #endif
 #ifdef __SURF
       qsurfj=qsurfk
@@ -376,9 +375,6 @@
 #endif
 #ifdef __RHS
         qchargei=qchargej;
-#ifdef __NORMALIZE_FILTER
-       ilim(idir)=idir*i
-#endif
 #endif
 #ifdef __SURF
         qsurfi=qsurfj
@@ -563,6 +559,15 @@
 
 #ifdef __RHS
 #ifdef __NORMALIZE_FILTER
+#ifdef __DEBUG
+write(666,*) qn
+write(666,*) ilim
+write(666,*) jlim
+write(666,*) klim
+write(666,*) fnorm
+write(666,*) sum(temp(-ilim(-1):ilim(1),-jlim(-1):jlim(1),-klim(-1):klim(1)))/qn*dxcor(1)*dycor(1)*dzcor(1)
+#endif
+
   if (fnorm > (__ERRTOL) .and. normalize_charge_support ) then ; fnorm=one/fnorm; else ; fnorm=one; endif
   do k=-klim(-1), klim(1)
    do j=-jlim(-1), jlim(1)
@@ -700,10 +705,13 @@
   if (preserve_total_charge) then
    __MESG(whoami, 'RESCALING GRID DENSITY TO MATCH TOTAL CHARGE.')
    __SCALE(rhs, charge_scale * d / qn); ! preserve total charge and apply charge scaling, if any
+  else
+! invert the sign to match the definition of the Poisson problem
+   __SCALE(rhs, charge_scale)
   endif
 #else
 ! invert the sign to match the definition of the Poisson problem
-  __SCALE(rhs, charge_scale)
+   __SCALE(rhs, charge_scale)
 #endif
 #endif
 !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
