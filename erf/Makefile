@@ -9,6 +9,7 @@ FPPFLAGS+=
 TESTOBJS=$(OBJS)
 
 include $(ROOT)/Makefile.inc
+LOCALDEFS+=-fprotect-parens
 
 clean::
 	rm -f $(ROOT)/$(NAME).stamp $(SOURCES) $(OBJS)

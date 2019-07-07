@@ -17,6 +17,8 @@ endif
 LOCALMACROS+=-include source.defs -D__BINDC -include $(ROOT)/erf/erf_as.def -include $(ROOT)/erf/exp_as.def  #-D__erf=erfo7
 LOCALDEPS+=source.defs $(ROOT)/erf/erf_as.def $(ROOT)/erf/exp_as.def
 
+LOCALDEFS+=-fprotect-parens
+
 default : plugin
 plugin : $(LIB)
 $(LIB) : $(OBJS) $(COBJS) $(LOBJS) linkobjs.inc

@@ -205,7 +205,7 @@
 !  write(888,*) r(:,l), radius(l), closest_pt(:,l) ! aa; coords correct
 ! precomputation of parameters for the smoothed densities
 #ifdef __EPS
-   reps=   max(radius(l)+eps_padding, zero   );  repsn   =reps    * oo_stdev_eps   ! normalize by stdev
+   reps=   max(eps_radius_scale*radius(l)+eps_padding, zero   );  repsn   =reps    * oo_stdev_eps   ! normalize by stdev
 !   r2epsn   =repsn   **2
    rmax2eps   =(cutoff_eps   +reps   )**2
 #ifdef __DEBUG
@@ -251,7 +251,8 @@
    do kdir=-1,1,2 ! directions 
     k=closest_pt(3,l)+(kdir+1)/2; ! when kdir = 1, shift to the the right relative to closest point, but not when kdir=-1
 #ifdef __EPS
-    qepsk=.true.;
+! disable eps gridding if the solute and solvent dielectrics are the same:
+    qepsk=(abs(eps_solute-eps_solvent).gt.__FERRTOL)
 #endif
 #ifdef __KAPPA
     qkappak=.true.;
@@ -445,15 +446,19 @@
 ! compute atomic contribution to mesh point
            d2=d*oo_stdev_eps ; e  = osq2 * (d2 + repsn) ; e2= osq2 * (d2 - repsn)
 !
+           if (repsn .gt. TOL) then
 #ifdef __REGULARIZE
-           if ( d2 .lt. TOL ) then ! Taylor expansion for exponentials
-            val=__SMOOTH_GAUSS_C0(e,e2)
-           else
+            if ( d2 .lt. TOL ) then ! Taylor expansion for exponentials
+             val=__SMOOTH_GAUSS_C0(e,e2)
+            else
 #endif
-            val=__SMOOTH_GAUSS(e,e2,d2)
+             val=__SMOOTH_GAUSS(e,e2,d2)
 #ifdef __REGULARIZE
+            endif
+#endif
+           else ! Gaussian asymptote
+            val =  exp(-half*d2**2) * (one + tenth * repsn**2 * (d2**2 - three))
            endif
-#endif
 #ifdef __DDEBUG
        __OUT('Atom', l, 'makes a contribution of', val, 'to eps array at point', i, j, k)
 #endif
@@ -483,7 +488,6 @@
 #ifdef __REGULARIZE
            endif
 #endif
-!
            __INCR(kappa(i,j,k), val)
          endif ! kappa
 #endif
