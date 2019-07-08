@@ -10,21 +10,23 @@ template=template-np.dat
  np=66 ;
  qsig=1.05
  epssig=1.;
- epsin=1;
- epsout=78;
+ epsvac=1;
+ epswat=78;
  config="run.dat"
+ output="${config}.out"
  epspad=0. ;
  len=29 ; # box half-length
 
+ epsin=${epsvac}
 # for dgrid in 1 0.8 0.6 0.5 0.4 0.3 0.2 ; do
- for np in 32 48 64 96 128 192 256 320 384 ; do
-# for np in 32 48 64 96 128 192 ; do
+# for np in 32 48 64 96 128 192 256 320 384 ; do
+ for np in 32 64 128 256 ; do # works with CUDA
   nx=$((np+2))
   ny=$((np+2))
   nz=$((np+2))
   echo
 #  echo "Grid resolution : $dgrid"
-  dgrid=`echo "(29 - (-29) )/${np}" | bc -l`
+  dgrid=`echo "(${len} - (-${len}) )/${np}" | bc -l`
   echo "Grid size : ${np}^3"
   echo "Grid resolution : $dgrid"
   echo "------------------"
@@ -32,24 +34,49 @@ template=template-np.dat
 #  epssig=`echo "0.2 * $dgrid" | bc -l`;
 
 # calc in water
-  epsout=78
+  epsout=${epswat}
   cp $template $config
   for key in dgrid gbuf qsig epssig epspad epsin epsout nx ny nz len; do
     update $config $key
   done
-  esol=`./ches 2>&1 $config | grep "grid energy" |awk '{print $NF}'`
-  esollr=`./ches 2>&1 $config | grep "Long-range" |awk '{print $NF}'`
-  echo "E_solvent : $esol, $esollr"
+#
+# the timing directly from the MG solver might be too low;
+# thus, let's compare running times with and without the solver
+  cp $config tmp
+  update tmp solver none
+  ./ches tmp 2&> $output
+  esoltime0=`grep "Total time" $output |awk '{print $NF}'`
+#
+  update $config solver multigrid
+  ./ches $config 2&> $output
+  esoltime1=`grep "Total time" $output |awk '{print $NF}'`
+
+  esol=`grep "grid energy" $output |awk '{print $NF}'`
+  esollr=`grep "Long-range" $output |awk '{print $NF}'`
+  esolmgtime=`grep "Time within multigrid" $output |awk '{print $NF}'`
+  desoltime=`echo "$esoltime1 - $esoltime0" | bc -l `
+  echo "E_solvent : $esol, $esollr, $esolmgtime (s), $desoltime (s)"
 
 # repeat in vacuum
-  epsout=${epsin}
+  epsout=${epsvac}
   cp $template $config
   for key in dgrid gbuf qsig epssig epspad epsin epsout nx ny nz len ; do
     update $config $key
   done
-  evac=`./ches 2>&1 $config | grep "grid energy" |awk '{print $NF}'`
-  evaclr=`./ches 2>&1 $config | grep "Long-range" |awk '{print $NF}'`
-  echo "E_vacuum : $evac, $evaclr"
+  cp $config tmp
+  update tmp solver none
+  ./ches tmp 2&> $output
+  evactime0=`grep "Total time" $output |awk '{print $NF}'`
+#
+  update $config solver multigrid
+  ./ches $config 2&> $output
+  evactime1=`grep "Total time" $output |awk '{print $NF}'`
+
+  evac=`grep "grid energy" $output |awk '{print $NF}'`
+  evaclr=`grep "Long-range" $output |awk '{print $NF}'`
+  evacmgtime=`grep "Time within multigrid" $output |awk '{print $NF}'`
+  devactime=`echo "$evactime1 - $evactime0" | bc -l `
+  echo "E_vacuum : $evac, $evaclr, $evacmgtime (s), $devactime (s)"
   de=`echo "$esol - ($evac)" | bc -l`
   delr=`echo "$esollr - ($evaclr)" | bc -l`
   echo "-------------------"
