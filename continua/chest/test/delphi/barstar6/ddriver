@@ -1,0 +1,60 @@
+#!/bin/bash
+# run multiple chest calcs with different parameters
+source ~/scripts/struna.sh
+template=delphi.inp
+
+ dgrid=1 ;
+ np=66 ;
+ qsig=1.05
+ epssig=1.;
+ epsvac=1;
+ epswat=78;
+ config="run.inp"
+ output="${config}.out"
+
+ epsin=${epsvac}
+# for dgrid in 1 0.8 0.6 0.5 0.4 0.3 0.2 ; do
+# for np in 32 48 64 96 128 192 256 320 384 ; do
+ for np in 32 64 128 256 ; do # works with CUDA
+  echo
+#  echo "Grid resolution : $dgrid"
+#  dgrid=`echo "(${len} - (-${len}) )/${np}" | bc -l`
+  echo "Grid size : ${np}^3"
+#  echo "Grid resolution : $dgrid"
+  echo "------------------"
+#  qsig=`echo "0.2 * $dgrid" | bc -l`;
+#  epssig=`echo "0.2 * $dgrid" | bc -l`;
+
+# calc in water
+  epsout=${epswat}
+  cp $template $config
+  for key in dgrid epsin epsout np; do
+    update $config $key
+  done
+#
+  delphi95 $config 2&> $output
+  esoltime=`grep "time elapsed so far" $output |awk '{print $(NF-1)}'`
+
+  esol=`grep "total grid energy" $output |awk '{print $(NF-1)}'`
+  esollr=`grep "total reaction field energy" $output |awk '{print $(NF-1)}'`
+  echo "E_solvent : $esol, $esollr, $esoltime (s)"
+
+# repeat in vacuum
+  epsout=${epsvac}
+  cp $template $config
+  for key in dgrid epsin epsout np; do
+    update $config $key
+  done
+#
+  delphi95 $config 2&> $output
+  evactime=`grep "time elapsed so far" $output |awk '{print $(NF-1)}'`
+
+  evac=`grep "total grid energy" $output |awk '{print $(NF-1)}'`
+  evaclr=`grep "total reaction field energy" $output |awk '{print $(NF-1)}'`
+  echo "E_vacuum : $evac, $evaclr, $evactime (s)"
+
+  de=`echo "$esol - ($evac)" | bc -l`
+  delr=`echo "$esollr - ($evaclr)" | bc -l`
+  echo "-------------------"
+  echo "dE: $de, $delr"
+ done
