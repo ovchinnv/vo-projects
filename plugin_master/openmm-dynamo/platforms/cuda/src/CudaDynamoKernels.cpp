@@ -155,7 +155,9 @@ void CudaCalcDynamoForceKernel::initialize(const System& system, const DynamoFor
         }
     }
     // initialize dynamo
-    int ierr=master_init_plugin(natoms, m, q, inputfile, ilen, logfile, llen, &atomlist, usesPeriodic, box);
+    int ierr = (sizeof(_FLOAT)==sizeof(double)) ? \
+      master_init_plugin(natoms, 0, (double*)m, NULL, (double*)q, NULL, inputfile, ilen, logfile, llen, &atomlist, usesPeriodic, (double*)box, NULL) : \
+      master_init_plugin(natoms, 1, NULL, (float*)m, NULL, (float*)q, inputfile, ilen, logfile, llen, &atomlist, usesPeriodic, NULL, (float*)box);
     free(m);
     free(q);
     pos.resize(natoms);
@@ -211,8 +213,8 @@ void CudaCalcDynamoForceKernel::executeOnWorkerThread() {
     // compute plugin forces and energy
 // cerr << "CALLING DYNAMO"<<endl;
      ierr = (sizeof(_FLOAT)==sizeof(double)) ? \
-      master_dyna_plugin(iteration, r, (double*)fr, NULL, 0, &master_energy, &atomlist, usesPeriodic, box) : \
-      master_dyna_plugin(iteration, r, NULL,  (float*)fr, 1, &master_energy, &atomlist, usesPeriodic, box)   ; // might return valid atomlist
+      master_dyna_plugin(iteration, 0, (double*)r, NULL, (double*)fr, NULL, (double*)&master_energy, NULL, &atomlist, usesPeriodic, (double*)&box, NULL) : \
+      master_dyna_plugin(iteration, 1, NULL, (float*)r,  NULL, (float*)fr, NULL,  (float*)&master_energy, &atomlist, usesPeriodic, NULL, (float*)&box) ; // might return valid atomlist
     // copy plugin forces
 //=============
      if (qdble) { // double precision version
@@ -265,8 +267,8 @@ void CudaCalcDynamoForceKernel::executeOnWorkerThread() {
 //
 // cerr << "CALLING DYNAMO"<<endl;
      ierr = (sizeof(_FLOAT)==sizeof(double)) ? \
-      master_dyna_plugin(iteration, r, (double*)fr, NULL, 0, &master_energy, &atomlist, usesPeriodic, box) : \
-      master_dyna_plugin(iteration, r, NULL,  (float*)fr, 1, &master_energy, &atomlist, usesPeriodic, box)   ; // atomlist should not be modified in this call
+      master_dyna_plugin(iteration, 0, (double*)r, NULL, (double*)fr, NULL, (double*)&master_energy, NULL, &atomlist, usesPeriodic, (double*)&box, NULL) : \
+      master_dyna_plugin(iteration, 1, NULL, (float*)r,  NULL, (float*)fr, NULL, (float*)&master_energy, &atomlist, usesPeriodic, NULL, (float*)&box) ; // atomlist should not be modified in this call
 //
      if (qdble) { // double
       double *frc = (double*) cu.getPinnedBuffer();
