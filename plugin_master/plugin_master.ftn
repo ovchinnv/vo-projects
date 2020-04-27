@@ -46,7 +46,7 @@ module __NM(plugin)
 #define __CFUN(__NAME, ...) function __NAME (__VA_ARGS__) bind(c, name=__STRING(__NAME))
 !
 #define _ME __NM(init_plugin)
- __CFUN(_ME, n, mass, charge, inputname, il, outputname, ol, alist, qper, box) result(initerr)
+ __CFUN(_ME, n, qsingle, mass_double, mass_single, charge_double, charge_single, inputname, il, outputname, ol, alist, qper, box_double, box_single) result(initerr)
  __DEP_PARSER
  __DEP_FILES
 #ifdef __PARALLEL
@@ -56,10 +56,14 @@ module __NM(plugin)
  int(__FCINT) :: initerr
  int(__FCINT), intent(in), value :: n, il, ol
  type(c_ptr), value, intent(in) :: inputname, outputname
- real(__FCFLOAT), intent(in), dimension(n) :: mass, charge
+ logical(__FCBOOL), value, intent(in) :: qsingle
+ real(c_double), intent(in), dimension(n) :: mass_double, charge_double
+ real(c_float), intent(in), dimension(n) :: mass_single, charge_single
  type(c_ptr), intent(out) :: alist ! send back a list of atom indices
  logical(__FCBOOL), value, intent(in) :: qper
- real(__FCFLOAT), intent(in), dimension(3,3) :: box ! lattice vectors
+ real(c_float), intent(in), dimension(3,3) :: box_single ! lattice vectors
+ real(c_double), intent(in), dimension(3,3) :: box_double
+ float :: box(3,3)=0d0
 !
  character(len=il), pointer :: ifname
  character(len=ol), pointer :: ofname
@@ -157,6 +161,9 @@ module __NM(plugin)
  call atoms%init()        ! all atoms needed by plugins
  call forced_atoms%init() ! forced atoms only (e.g. watershell plugin)
 !
+ if(qper) then
+  if(qsingle) then ; box=box_single ; else ; box=box_double ; endif
+ endif
 ! module specific code
  __NM(initialized)=.true.
 !==========================
@@ -181,8 +188,13 @@ module __NM(plugin)
 ! set mass and charge after all modules initialized
 ! currently, mass and charge can only be passed in from external code:
  if (system_PDB_initialized.or.system_initialized) then
-  m=mass
-  q=charge
+  if (qsingle) then
+   m=mass_single
+   q=charge_single
+  else
+   m=mass_double
+   q=charge_double
+  endif
 #ifdef __DEBUG
  __DBGOUT('SET MASS AND CHARGE FROM EXTERNAL ARRAYS');
 #endif
@@ -221,19 +233,28 @@ end function _ME
 #undef _ME
 !===================================================================
 #define _ME __NM(dyna_plugin)
- __CFUN(_ME, iteration_, r_plugin, f_plugin_double, f_plugin_single, qsingle, e, alist, qper, box)
+ __CFUN(_ME, iteration_, qsingle, r_plugin_double, r_plugin_single, f_plugin_double, f_plugin_single,
+                         e_double, e_single, alist, qper, box_double, box_single)
  __DEP_PARSER
  int(__FCINT) :: _ME
  int(C_LONG), value, intent(in) :: iteration_
- real(__FCFLOAT), intent(in), dimension(3, natom) :: r_plugin
+ real(c_float),  intent(in), dimension(3, natom) :: r_plugin_single
+ real(c_double), intent(in), dimension(3, natom) :: r_plugin_double
  real(c_double), intent(out), dimension(3, natom) :: f_plugin_double
  real(c_float),  intent(out), dimension(3, natom) :: f_plugin_single
+#ifdef __STRUNA
+ float :: r_plugin(3, natom) ! needed for compatibility with string
+#endif
  logical(__FCBOOL), value, intent(in) :: qsingle
- real(__FCFLOAT), intent(out) :: e
+ real(__FCFLOAT) :: e ! local
+ real(c_float), intent(out) :: e_single
+ real(c_double), intent(out) :: e_double
  type(c_ptr), intent(out) :: alist ! send back a list of atom indices if smcv not initialized
  logical(__FCBOOL), value, intent(in) :: qper
  logical(__FCBOOL) :: qper_ ! copy that I can modify
- real(__FCFLOAT), intent(in), dimension(3,3) :: box ! lattice vectors
+ real(c_float), intent(in), dimension(3,3) :: box_single ! lattice vectors
+ real(c_double), intent(in), dimension(3,3) :: box_double
+ float :: box(3,3)
  __IAM(_ME)
 #ifdef __STRUNA
  int :: i
@@ -249,8 +270,7 @@ end function _ME
   return
  endif
 !
- e=0d0
-!
+  e=0d0
 ! reset forces to zero
 #ifdef __DEBUG
  fr=0d0
@@ -258,7 +278,14 @@ end function _ME
  fr(:,__NM(forced_atomlist(2:)))=0d0
 #endif
 ! update coordinates :
- r(:,__NM(atomlist(2:)))=r_plugin(:,__NM(atomlist(2:)))
+ if (qsingle) then
+  if (qper) box=box_single
+  r(:,__NM(atomlist(2:)))=r_plugin_single(:,__NM(atomlist(2:)))
+ else
+  r(:,__NM(atomlist(2:)))=r_plugin_double(:,__NM(atomlist(2:)))
+  if (qper) box=box_double
+ endif
+!
 #ifdef __DDEBUG
 ! write out coordinates
  write(666,*) iteration_
@@ -274,7 +301,14 @@ end function _ME
 ! (this is done inside string macro below) ; master atom list must also be recomputed (also inside macro)
 !======================
 #ifdef __STRUNA
- if (sm_initialized.or.defer_init_until_dyna) then
+ if (sm_initialized .or. defer_init_until_dyna) then
+  if (defer_init_until_dyna) then ! in this version, need to make sure r_plugin is defined
+   if (qsingle) then
+    r_plugin=r_plugin_single
+   else
+    r_plugin=r_plugin_double
+   endif
+  endif
   __STRUNA_MAIN
 #ifdef __DDEBUG
 ! write out coordinates
@@ -309,7 +343,7 @@ end function _ME
    call adaptive_kforce_main(dbedk, cv%k(cvind), ad_iteration)
  endif ! adaptive_kforce
 #endif
- endif ! sm_initializes .or. defer_init_until_dyna
+ endif ! sm_initialized .or. defer_init_until_dyna
 #endif
 !======================
 #ifdef __WATERSHELL
@@ -326,17 +360,19 @@ end function _ME
  write(888, *) fr(:,__NM(forced_atomlist(2:)))
  close(888)
 #endif
-! update forces
+! update forces and energy
  if (qsingle) then
 #ifdef __INIT_OUTPUT_FORCE_ZERO
   f_plugin_single=0e0
 #endif
   f_plugin_single(:,__NM(forced_atomlist(2:)))=fr(:,__NM(forced_atomlist(2:)))
+  e_single=e
  else
 #ifdef __INIT_OUTPUT_FORCE_ZERO
   f_plugin_double=0d0
 #endif
   f_plugin_double(:,__NM(forced_atomlist(2:)))=fr(:,__NM(forced_atomlist(2:)))
+  e_double=e
  endif
 !
  if (.not.fatal_warning()) _ME=0
