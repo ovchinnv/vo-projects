@@ -30,6 +30,12 @@ else
 CUmgutil.o : mgutil/mgkernels.cu mgutil/bckernels.cu mgutil/residual.cu mgutil/coarsen.cu mgutil/refine.cu
 multigrid.o : mgutil.o $(HEADS)
 endif
+#
+# 6/20 : in GNU 10, need a -fallow-argument-mismatch to pass array sections in F77 style; the new standard way would
+# require an explicit interface
+multigrid.o:multigrid.F90 $(LIBDEPS)
+	@echo " "$<" ==> "$@" ..."
+	$(FC) $(FFLAGS) -fallow-argument-mismatch $(DEFS) $(PIC) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $< -o $@
 
 multigrid.F90: mgutil/multigrid_bc.src $(ROOT)/parser/parser_macro1.src mgutil/mg_resout.src \
                mgutil/GS.src mgutil/Jacobi.src mgutil/residual.src mgutil/coarsen.src mgutil/refine.src\
