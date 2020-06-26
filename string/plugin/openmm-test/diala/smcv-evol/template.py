@@ -7,7 +7,7 @@ from __future__ import print_function
 #==============================
 # parameters required by CHOMM (some have default values)
 psffile='./diala22-x.psf' ;
-pdbfile='@{coordinates}' ;
+pdbfile='@{pdbfile}' ;
 paramfile='par_all22_prot.inp';
 topfile='top_all22_prot.inp' ;
 
@@ -28,7 +28,7 @@ nsteps=@{nsteps};    # number of simulation steps
 outputfreq=@{freq}; # frequency of generating output
 dcdfreq=@{freq};   # frequency of dcd output
 
-outputName='diala.smcv@{irep}';
+outputName='@{outputname}'
 #
 from os.path import expanduser
 exec(open(expanduser('CHOMM.py')).read())

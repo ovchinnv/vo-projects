@@ -32,7 +32,7 @@ for i=1:length(fnames)
 end
 %
 [niter,m]=size(fc);
-ncv=3;
+ncv=2;
 niter=niter/ncv;
 
 cv=[]; for i=1:ncv ; cv=[cv ; 1:m]; end ;
