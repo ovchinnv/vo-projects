@@ -1,0 +1,59 @@
+#!/bin/bash
+# openMP variables
+export OMP_NUM_THREADS=5
+export OMP_SCHEDULE=STATIC
+export OMP_NESTED=FALSE
+
+mkdir -p data
+
+pythoncmd=python2
+
+brep=0
+erep=15
+
+vmd -dispdev text < alist.vmd >/dev/null #generate ftsm atom indices
+
+for irep in `seq $brep $erep`; do
+# prepare input file from template
+#
+  config=${irep}.in
+  output=${irep}.out
+  pluginfile=diala.fts${irep}
+  pluginout=${pluginfile}.out
+
+# boundary replicas :
+  ileft=$((irep-1))
+  iright=$((irep+1))
+#
+  if [ $irep -eq $brep ] ; then
+   dpar=0
+   ileft=$irep
+  elif [ $erep -eq $irep ] ; then
+   dpar=1
+   iright=$irep
+  else
+   dpar=0.5
+  fi
+
+  cat template.sm | \
+  sed "s/@{orient.*}/atomid `cat orient.dat`/g" | \
+  sed "s/@{forc.*}/atomid `cat forced.dat`/g" | \
+  sed "s/@{dpar}/$dpar/g" | \
+  sed "s/@{ileft}/$ileft/g" | \
+  sed "s/@{irep}/$irep/g" | \
+  sed "s/@{iright}/$iright/g" | \
+  sed "s/@{datadir}/data/g" | \
+  cat > $pluginfile
+
+  cat template.py |\
+   sed "s/@{coordinates}/data\/diala22_zts_$irep.pdb/g" | \
+   sed "s/@{input}/$pluginfile/g" | \
+   sed "s/@{log}/$pluginout/g" | \
+   sed "s/@{irep}/$irep/g" | \
+   cat > $config
+
+  echo " ===> Running replica #$irep ..."
+  $pythoncmd $config > $output
+#
+#exit
+done
