@@ -20,6 +20,9 @@ cutoff=12;     # nonbonded cutoff
 thermostat=1;  # whether to use a thermostat
 temperature=300; # kelvin
 
+mini=@{mini}
+ministeps=100
+
 dynamo=1
 dynamoConfig='@{input}'
 dynamoLog='@{log}'
