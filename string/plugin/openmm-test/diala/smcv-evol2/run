@@ -1,0 +1,159 @@
+#!/bin/bash
+#
+# openmp thread parameters
+export OMP_NUM_THREADS=5
+export OMP_SCHEDULE=static
+export OMP_NESTED=false
+#
+# preliminaries
+source struna.sh
+pythoncmd=python2
+charmmcmd=charmm_repo
+#
+# output directories
+datadir=data
+dcddir=scratch
+#
+mkdir -p $datadir
+mkdir -p $dcddir
+#
+#================== string replica parameters
+brep=0  # first replica index
+erep=16 # last replica index
+name=diala22
+
+# string update parameters
+psffile=${name}.psf
+stringname=cv
+inistringfile=diala22_smcv_ini.txt # initial string
+cvrep="${stringname}" # local replica CV files
+kf=200 # force constant
+qupdate=1 ; # string update
+evofreq=1000 ; # running average structure updated after this many iterations
+evostep=0.01; # evolution step
+reqfreq=100 ; # number of samples over which to adjust to new string
+hisf=10; # frequency of saving slices
+staf=1000 ; # statistics output frequency
+# string evolution specification
+evospec="evof @{evofreq} evst @{estep} evos @{evoskip}"
+
+qfixep=0; # set to 1 to fix endpoints
+repatype="bspline defi 1.1 iter 1" # use bsplines with a maximum of 1 iteration ; do nothing if deficit < 1.1
+#============================================================
+nsteps=10000 ;
+freq=1000 ;
+firstrun=0 ;
+numrun=50 ;
+#
+#============ make sure that charmm is accessible if evolving string:
+if [ $qupdate -eq 1 ]; then
+ assert_exists "$charmm"
+ assert_exists "mpirun"
+fi
+#outer loop over number of runs
+lastrun=$((firstrun+numrun-1))
+for irun in `seq $firstrun $lastrun`; do 
+ echo " ===> Run $irun (will quit after $lastrun) "
+ echo " ========================="
+if [ 0 -eq 0 ]; then
+ for irep in `seq $brep $erep`; do
+# run each string replica
+# prepare input file from template
+  basename=${irun}_${irep}
+  config=${basename}.py
+  output=${basename}.out
+  pluginfile=${basename}.plg
+  pluginout=${pluginfile}.out
+
+# prepare config file
+  outputname=$basename
+  outputprev=$((irun-1))_$irep
+#
+# starting ftsm string files :
+  stringfile=$inistringfile
+  oldstringfile=$stringfile
+#
+  echo -n > $config
+  if [ $irun -gt 0 ]; then
+   restart=1
+   restartfile=${dcddir}/${outputprev}.xml
+#  update string file names :
+   if [ $qupdate -eq 1 ] ; then
+    stringfile=${stringname}${irun}.txt
+    if [ $irun -gt 1 ] ; then # previous string
+     oldstringfile=${stringname}$((irun-1)).txt
+    fi
+   fi
+  else
+   restart=0
+   restartfile='None'
+  fi
+#
+  forceappend=""
+
+# for string method config file
+  cpp -P template.smcv > $pluginfile # use cpp to process includes
+  for var in datadir forceappend freq hisf staf irun stringfile oldstringfile irep kf; do
+    update $pluginfile $var
+  done
+#============= string update =============
+  if [ $qupdate -eq 1 ] ; then
+   evol=evol
+#============ deal with fixed endpoints
+   if [ $qfixep -eq 1 ]; then
+    if [ $irep -eq $brep ] || [ $irep -eq $erep ] ; then
+     estep=0
+    else
+     estep=$evostep
+    fi
+   else
+    estep=$evostep
+   fi
+# ^ fixed endpoints
+   evoskip=$reqfreq
+   for var in evospec evofreq reqfreq evoskip estep ; do
+     update $pluginfile $var
+   done
+  else
+   evol="- ! evol"; # turn off evolution and skip to the next line
+  fi
+  update $pluginfile evol
+#
+# for md config file
+  pdbfile=data/diala22_zts_${irep}.pdb # this is also the starting coordinate file
+#
+  cat template.py >> $config
+  update $config input $pluginfile
+  update $config log $pluginout
+  for var in pdbfile \
+             irep nsteps freq restart restartfile; do
+   update $config $var
+  done
+
+  update $config outputname "$dcddir\/$outputname"
+####### run calculation
+  echo "  ===> Running replica #$irep ..."
+#
+#  exit
+  $pythoncmd $config > $output
+ done
+fi
+#exit
+################################ string update ##############################
+ if [ $qupdate -eq 1 ] ; then
+  ncv=`grep num_cv $inistringfile | awk '{print $3}'`
+  mpirun -np $((erep-brep+1)) $charmmcmd \
+    psffile=$psffile \
+    smcv_new=${stringname}$((irun+1)).txt \
+    smcv_old_local=${cvrep}${irun} \
+    smcv_first=${inistringfile} \
+    repatype="${repatype}" \
+    nrun=$irun \
+    datadir=$datadir \
+    ncv=${ncv} \
+    -i update2.inp \
+    -o update.out
+    grep --text "DEF=" update.out # extract reparametrization deficit from update.log file
+ fi
+#exit
+done # over all runs

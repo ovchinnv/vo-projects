@@ -1,0 +1,72 @@
+* CHARMM manual FTSM update/reparametrization
+*
+
+if @?{ftsm_runave} eq 0 set ftsm_runave runave0.txt  ! running average files
+if @?{ftsm_new} eq 0 set ftsm_new new                ! new string
+if @?{ftsm_first} eq 0 set ftsm_first first          ! first string for rmsd
+if @?{ftsm_evolving} eq 0 set ftsm_evolving evolving ! first string for rmsd
+if @?{firstrun} eq 0 set firstrun 1
+
+! need to initialize multicom if compiled in parallel
+if ?PARALLEL eq 1 mcom string 1 by ?numnode
+string ftsm init
+!**************************** replica variables ***********
+set ncpu ?nstring
+set me ?mestring
+!**********************************************************
+string open read card name @{psffile} unit 1
+! can read older (non xplor) psfs w/o parameters/topology
+! but need to turn off warnings (of course, energy is undefined!)
+wrnlev -4
+bomlev -4
+read psf card unit 1
+wrnlev 0
+bomlev 0
+! define ftsm atoms
+stream ftsm_define_coordinates.str
+! read fts coords
+set S string ftsm ! command shortcut
+!
+nobomb ! tolerate non-default behaviour
+!
+! update string
+! read individual files
+!
+set irep 0
+calc erep = ?numnodeg - 1
+label read
+ set from -1 ! by default, do not read string coordinates
+ if @me .eq. @irep set from 0
+ @S read txt name @{ftsm_runave} from @from col main ! read new coordinates into main array
+ incr irep
+ if @irep le @erep -
+goto read
+!
+! write single evolution file (if needed for compatibility implementation)
+! (i.e. this is the same data as what is read above, up to a rototranslation, just written differently)
+@S write txt name @{ftsm_evolving} col main
+! reparametrize
+@S repa @{repatype} ! initialize
+@S repa ! compute
+! write new string file
+@S write txt name @{ftsm_new} col main
+!
+! compute string statistics
+! set file append options
+if @nrun eq 0 then
+ set rapp
+ set aapp
+ set capp
+else
+ set rapp rapp
+ set aapp aapp
+ set capp capp
+endif
+! read initial string for comparison (rmsd)
+@S read txt name @{ftsm_first} col ref ! read coordinates into reference array
+@S stat - ! initialize
+      rmsd rnam @{datadir}/rmsd.dat @{rapp} - ! compute rmsd from reference coordinate
+      arcl anam @{datadir}/arcl.dat @{aapp} - ! compute arclength
+      curv cvnm @{datadir}/curv.dat @{capp} - ! compute curvature
+
+@S stat ! compute
