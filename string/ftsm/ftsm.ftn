@@ -399,6 +399,7 @@ __MPI_ONLY &            1, mpibool, MPI_LAND, MPI_COMM_STRNG, ierror)
         if (evolve_aver_on) then
          num_evolve_samples=0
          max_evolve_samples=0
+         evolve_average_exponent=zero
 !        setting this large will dampen initial fluctuations
          if (__INDX(comlyn, comlen,'NAVE' ,4).gt.0) then
           num_ave_samples=__GET_RM_I(comlyn,comlen,'NAVE',-1)
@@ -417,6 +418,17 @@ __MPI_ONLY &            1, mpibool, MPI_LAND, MPI_COMM_STRNG, ierror)
   __WRN(whoami,'INVALID MAXIMUM NUMBER OF SAMPLES SPECIFIED. WILL SET TO ZERO.')
           endif ! num_samples
          endif ! MAXAVE
+! 9/20 generalize to power law averaging (i.e. sub/super linear sample growth)
+!
+         if (__INDX(comlyn, comlen,'AVEXP',5).gt.0) then
+          zval=__GET_RM_F(comlyn,comlen,'AVEXP',zero)
+          if (zval.lt.one) then
+            evolve_average_exponent=zval
+          else
+  __WRN(whoami,'AVERAGE UNDEFINED FOR EXPONENT > ONE. WILL SET EXPONENT TO ZERO (STANDARD AVERAGE).')
+          endif ! average_exponent
+         endif ! AVEXP
+!
         endif ! evolve_aver
 !
         i=0
@@ -513,10 +525,17 @@ __MPI_ONLY &            1, mpibool, MPI_LAND, MPI_COMM_STRNG, ierror)
  6710 format(A,' CV EVOLUTION WILL BE OF THE FORM:',/,                  &
      & A,' R(N)=AVERAGE_1^{N}(RINST).  INITIAL NUMBER OF SAMPLES IS ',  &
      & I9,'.')
-             if (max_evolve_samples.gt.0)                               &
-     &          write(_MSGBUF, 6711) whoami, max_evolve_samples ; __PRINT(_MSGBUF)
+             if (max_evolve_samples.gt.0) then
+               write(_MSGBUF, 6711) whoami, max_evolve_samples ; __PRINT(_MSGBUF)
  6711 format(A, ' ONLY THE MOST RECENT ', I9,' SAMPLES WILL BE USED.')
-
+             endif
+!
+             if (evolve_average_exponent.ne.zero) then
+                write(_MSGBUF, 6712) whoami, evolve_average_exponent, whoami; __PRINT(_MSGBUF)
+ 6712 format(A, ' STRING AVERAGE WILL BE COMPUTED WITH A NON-ZERO EXPONENT (X=',F9.5,')',/, &
+     &       A, ' WHICH MODIFIES EVOLUTION TO R(N)=AVERAGE_1^{N}(I^-X RINST) WITH I THE STEP #.')
+             endif
+!
             endif
         endif ! evolve_ftsm_on
 !===================================================================
@@ -2250,11 +2269,11 @@ __CHARMM_ONLY iolev=1 ! open file on root (which may not be zero if rex is used)
        if (num_evolve_samples.lt.max_evolve_samples.or.                 &
      &     max_evolve_samples.le.0)                                     &
      &                num_evolve_samples=num_evolve_samples+1
-       omt=1d0/num_evolve_samples
-       t=1d0-omt
+       omt=min(one,(one-evolve_average_exponent)/num_evolve_samples) ! negative values for t or omt can cause oscillations
+       t=one-omt
       elseif (evolve_expo_on) then
        t=evolve_expo_mem
-       omt=1d0-t
+       omt=one-t
       endif
 !
       if (.not. restraint_force_on) then ! load coordinates unless restraints on, in which case they are loaded
