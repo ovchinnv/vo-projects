@@ -1,0 +1,173 @@
+#!/bin/bash
+#
+# openmp thread parameters
+export OMP_NUM_THREADS=5
+export OMP_SCHEDULE=static
+export OMP_NESTED=false
+#
+# preliminaries
+source struna.sh
+pythoncmd=python2
+charmmcmd=charmm_repo
+#
+# output directories
+datadir=data
+dcddir=scratch
+#
+mkdir -p $datadir
+mkdir -p $dcddir
+#
+#================== string replica parameters
+brep=0  # first replica index
+erep=7 # last replica index
+name=diala22
+vmd -dispdev text < alist.vmd >/dev/null #generate ftsm atom indices
+orientation="atomid `cat orient.dat`";
+forcing="atomid `cat forced.dat`";
+
+# string update parameters
+psffile=${name}.psf
+stringname=ftsm_string
+inistringfile=diala22_fts_ini.txt # initial string
+evolvingrep="${stringname}_evol@{irep}.txt" # irep must be substituted below after evolvingrep
+qupdate=1 ; # string update
+evofreq=10 ; # running average structure updated after this many iterations
+reqfreq=1000 ; # number of samples over which to adjust to new string
+# string evolution type
+evotype="expo memo @{memo}" # exponential -- note that need to specify memory below
+memory=0.999 ;
+
+qfixep=0; # set to 1 to fix endpoints
+repatype="bspline defi 1.1 iter 1" # use bsplines with a maximum of 1 iteration ; do nothing if deficit < 1.1
+#============================================================
+nsteps=10000 ;
+freq=1000 ;
+firstrun=0 ;
+numrun=50 ;
+#
+#============ make sure that charmm is accessible if evolving string:
+if [ $qupdate -eq 1 ]; then
+ assert_exists "$charmm"
+ assert_exists "mpirun"
+ evolvingfile=${stringname}_evol.txt
+ if [ $firstrun -eq 0 ]; then
+  cp -f $inistringfile $evolvingfile
+ fi
+else
+ evolvingfile=$inistringfile
+fi
+#outer loop over number of runs
+lastrun=$((firstrun+numrun-1))
+for irun in `seq $firstrun $lastrun`; do
+ echo " ===> Run $irun (will quit after $lastrun) "
+ echo " ========================="
+if [ 0 -eq 0 ]; then
+ for irep in `seq $brep $erep`; do
+# run each string replica
+# prepare input file from template
+  basename=${irun}_${irep}
+  config=${basename}.py
+  output=${basename}.out
+  pluginfile=${basename}.plg
+  pluginout=${pluginfile}.out
+
+# replica parameters
+  dpar=`dpar     $irep $brep $erep`
+  ileft=`ileft   $irep $brep $erep`
+  iright=`iright $irep $brep $erep`
+#
+# prepare config file
+  outputname=$basename
+  outputprev=$((irun-1))_$irep
+#
+# starting ftsm string files :
+  stringfile=$inistringfile
+  oldstringfile=$stringfile
+#
+  echo -n > $config
+  if [ $irun -gt 0 ]; then
+   restart=1
+   restartfile=${dcddir}/${outputprev}.xml
+#  update string file names :
+   if [ $qupdate -eq 1 ] ; then
+    stringfile=${stringname}${irun}.txt
+    if [ $irun -gt 1 ] ; then # previous string
+     oldstringfile=${stringname}$((irun-1)).txt
+    fi
+   fi
+  else
+   restart=0
+   restartfile='None'
+  fi
+#
+  forceappend=""
+  distappend=""
+  fcurv=fcurv
+
+# for string method config file
+  cpp -P template.sm > $pluginfile # use cpp to process includes
+  for var in datadir dpar ileft iright forceappend distappend fcurv freq irun \
+             stringfile oldstringfile evolvingfile evolvingrep irep orientation forcing; do
+    update $pluginfile $var
+  done
+#============= string update =============
+  if [ $qupdate -eq 1 ] ; then
+   evol=evol
+#============ deal with fixed endpoints
+   if [ $qfixep -eq 1 ]; then
+    if [ $irep -eq $brep ] || [ $irep -eq $erep ] ; then
+     memo=1
+    else
+     memo=$memory
+    fi
+   else
+    memo=$memory
+   fi
+# ^ fixed endpoints
+   evoskip=$reqfreq
+   for var in evos evofreq reqfreq evoskip evotype memo ; do
+     update $pluginfile $var
+   done
+  else
+   evol="- ! evol"; # turn off evolution and skip to the next line
+  fi
+  update $pluginfile evol
+#
+# for md config file
+  pdbfile=data/diala22_zts_${irep}.pdb # this is also the starting coordinate file
+#
+  cat template.py >> $config
+  update $config input $pluginfile
+  update $config log $pluginout
+  for var in pdbfile \
+             irep nsteps freq restart restartfile; do
+   update $config $var
+  done
+
+  update $config outputname "$dcddir\/$outputname"
+####### run calculation
+  echo "  ===> Running replica #$irep ..."
+#
+#  exit
+  $pythoncmd $config > $output
+ done
+fi
+#exit
+################################ string update ##############################
+ if [ $qupdate -eq 1 ] ; then
+  mpirun -np $((erep-brep+1)) $charmmcmd \
+    psffile=$psffile \
+    ftsm_new=${stringname}$((irun+1)).txt \
+    ftsm_first=${inistringfile} \
+    ftsm_runave=${evolvingrep} \
+    ftsm_evolving=${evolvingfile} \
+    repatype="${repatype}" \
+    nrun=$irun \
+    datadir=$datadir \
+    firstrun=$firstrun \
+    -i update.inp \
+    -o update.out
+    grep "DEF=" update.out # extract reparametrization deficit from update.log file
+ fi
+#exit
+done # over all runs
