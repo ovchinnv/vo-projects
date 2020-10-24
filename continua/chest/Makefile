@@ -23,7 +23,7 @@ endif
 
 ifeq ($(strip $(FC)),gfortran)
 GCCVERSIONGTEQ10 := $(shell expr `gcc -dumpversion | cut -f1 -d.` \>= 10)
-ifeq "$(GCCVERSIONGTEQ4)" "1"
+ifeq "$(GCCVERSIONGTEQ10)" "1"
     ARGMISMATCH = -fallow-argument-mismatch
 else
     ARGMISMATCH =
