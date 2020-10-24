@@ -21,6 +21,15 @@ OBJS+=$(CUOBJS)
 LOCALDEFS+=-D__CUDA
 endif
 
+ifeq ($(strip $(FC)),gfortran)
+GCCVERSIONGTEQ10 := $(shell expr `gcc -dumpversion | cut -f1 -d.` \>= 10)
+ifeq "$(GCCVERSIONGTEQ4)" "1"
+    ARGMISMATCH = -fallow-argument-mismatch
+else
+    ARGMISMATCH =
+endif
+endif
+
 chest : $(EXE)
 
 ches.o :  multigrid.o
@@ -35,7 +44,7 @@ endif
 # require an explicit interface
 multigrid.o:multigrid.F90 $(LIBDEPS)
 	@echo " "$<" ==> "$@" ..."
-	$(FC) $(FFLAGS) -fallow-argument-mismatch $(DEFS) $(PIC) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $< -o $@
+	$(FC) $(FFLAGS) $(ARGMISMATCH) $(DEFS) $(PIC) $(LOCALDEFS) $(INCLUDES) $(MPI_INCLUDE) $< -o $@
 
 multigrid.F90: mgutil/multigrid_bc.src $(ROOT)/parser/parser_macro1.src mgutil/mg_resout.src \
                mgutil/GS.src mgutil/Jacobi.src mgutil/residual.src mgutil/coarsen.src mgutil/refine.src\
