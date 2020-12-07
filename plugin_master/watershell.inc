@@ -4,9 +4,7 @@ DEPS+=watershell
 include $(ROOT)/watershell/linkobjs.inc
 LINKOBJS+=watershell.o ugrid.o
 
-
-LOCALMACROS+=-D__WATERSHELL -include watershell.defs
-LOCALDEPS+=watershell.defs
+LOCALMACROS+=-D__WATERSHELL
 
 plugin_master.F90 : $(ROOT)/watershell.stamp  watershell_vars.src watershell_init.src watershell_done.src
 
@@ -22,3 +20,5 @@ watershell_done.src : force_look
 .SILENT : *src
 
 endif
+LOCALMACROS+=-include watershell.defs
+LOCALDEPS+=watershell.defs

@@ -13,6 +13,7 @@ LOCALDEPS+=source.defs
 
 all : $(LIB)
 
+include linkobjs.inc
 include plugins.inc
 include watershell.inc
 include struna.inc
