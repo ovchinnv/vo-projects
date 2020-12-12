@@ -1,4 +1,4 @@
 #// define which plugins to compile here
-WATERSHELL=1
-STRUNA=0
+WATERSHELL=0
+STRUNA=1
 ADAPTIVE=0
