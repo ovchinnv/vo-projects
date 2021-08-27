@@ -1,0 +1,1 @@
+/home/taly/MODYN/PB/delphi/examples_basic/Example2_Protein/README_Example2_Protein.txt
