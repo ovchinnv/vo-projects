@@ -31,7 +31,7 @@ __CHARMM_ONLY##IF STRINGM
       use cmd
 
 #include "mpitype.def"
-__DECL_MSGBUF
+__DECL_LONGMSGBUF
 !
       int, intent(in) :: ifile
 !
@@ -103,7 +103,7 @@ __MPI_ONLY call mpi_gather(from, 1, mpiint, from_all, 1, mpiint, 0, MPI_COMM_STR
          nboth_=i/2 ;
          if (nboth.gt.0) then
           allocate(iatom_both_(2,nboth)); 
-          iatom_both=reshape( atoiv(line,2*nboth), (/2,nboth/) )
+          iatom_both_=reshape( atoiv(line,2*nboth), (/2,nboth/) )
          endif
 ! now compare indices
 !
@@ -115,6 +115,7 @@ __MPI_ONLY call mpi_gather(from, 1, mpiint, from_all, 1, mpiint, 0, MPI_COMM_STR
         if ( nboth_.gt.0 .and. nboth.eq.nboth_) then
          __COMPARE_PAR(iatom_both,==,.not.all)
         endif
+        __FREE(iatom_both_)
 !=====================================================
 ! read actual coordinates
         if (from_all(me).ge.0) then ! if negative replica specified then skip
@@ -203,7 +204,6 @@ __MPI_ONLY   call MPI_SEND(r_o(:,:,dummy), 3*norient, mpifloat, me, me, MPI_COMM
       bool :: qroot
       int :: c, i, j, k, l, me, ierror, stat(MPI_STATUS_SIZE)
       type (int_vector) :: iorient
-      character(len=20) :: keyword
 !
       __IAM(FTSM_WRITE_TXT)
 !
@@ -244,7 +244,7 @@ __MPI_ONLY   call MPI_SEND(r_o(:,:,dummy), 3*norient, mpifloat, me, me, MPI_COMM
          do j=1, norient
           if ( nboth.eq.0 .or. all(j.ne.iatom_both(2,:)) ) then
            k=int_vector_add(iorient,j)
-           _W 'ro'//keyword(1:l)//trim(itoa(j)),'=(',r_o(j,:,c),')'
+           _W 'ro'//trim(itoa(me))//'_'//trim(itoa(j)),'=(',r_o(j,:,c),')'
           endif
          enddo
         endif ! qo
@@ -283,7 +283,7 @@ __MPI_ONLY        call MPI_SEND(r_o(:,:,c),3*norient,mpifloat,0,ME_STRNG,MPI_COM
       subroutine ftsm_write_dcd(ifile, col, ibeg, iend, nframes)
 !
 #ifdef __CHARMM
-      __DEP_PSF 
+      __DEP_PSF
       use cveloci_mod      !##CVELOCI
       use version
 #endif
@@ -293,10 +293,10 @@ __MPI_ONLY        call MPI_SEND(r_o(:,:,c),3*norient,mpifloat,0,ME_STRNG,MPI_COM
       __DEP_MULTICOM       __CHARMM_ONLY !##MULTICOM
       __DEP_PARSER 
       __DEP_COORIO
-! ugly fix for CHARMM compilation (mnodule dependency tree generation part)
+! ugly fix for CHARMM compilation (module dependency tree generation part)
 #ifdef __CHARMM
-##USE coorio_mod
-##USE ctitla
+use coorio_mod
+use ctitla
 #endif
       __DEP_MPI
       __DEP_NUMBER
@@ -499,8 +499,8 @@ __MPI_ONLY        call MPI_SEND(r_o(:,:,c),3*norient,rtype,0,ME_STRNG,MPI_COMM_S
       use ftsm_util
 ! ugly fix for CHARMM compilation (module dependency tree generation part)
 #ifdef __CHARMM
-##USE coorio_mod
-##USE ctitla
+use coorio_mod
+use ctitla
 #endif
 !
       __IAM(FTSM_READ_DCD)
@@ -694,10 +694,10 @@ __MPI_ONLY   call MPI_RECV(r3,3*natom,rtype,0,ME_STRNG,MPI_COMM_STRNG,stat,ierro
       __DEP_SIZE
       __DEP_PARSER
       __DEP_COORIO
-! ugly fix for CHARMM compilation (mnodule dependency tree generation part)
+! ugly fix for CHARMM compilation (module dependency tree generation part)
 #ifdef __CHARMM
-##USE coorio_mod
-##USE ctitla
+use coorio_mod
+use ctitla
 #endif
       __DEP_NUMBER
       use ftsm_util
@@ -712,6 +712,7 @@ __MPI_ONLY   call MPI_RECV(r3,3*natom,rtype,0,ME_STRNG,MPI_COMM_STRNG,stat,ierro
       int :: natom
 #ifdef __DMOL
       bool :: ok
+      float, pointer :: r3transpose(:,:)
 #endif
 #endif
       float, pointer :: r3(:,:)
@@ -779,7 +780,10 @@ __MPI_ONLY   call MPI_RECV(r3,3*natom,rtype,0,ME_STRNG,MPI_COMM_STRNG,stat,ierro
 #endif
      &              nres,natom,stringatoms,modew,0,0,.false.)
 #elif defined (__DMOL)
-      ok=ch_coor_write(ifile, r3, MASK=stringatoms)
+      allocate(r3transpose(3,natom))
+      r3transpose=transpose(r3)
+      ok=ch_coor_write(ifile, r3transpose, MASK=stringatoms)
+      __FREE(r3transpose)
 #else
       __WRN(whoami, 'CHARMM COORDINATE WRITER NOT IMPLEMENTED FOR THIS COMPILATION.')
 #endif
@@ -801,10 +805,10 @@ __MPI_ONLY   call MPI_RECV(r3,3*natom,rtype,0,ME_STRNG,MPI_COMM_STRNG,stat,ierro
 #endif
       __DEP_NUMBER
       __DEP_COORIO
-! ugly fix for CHARMM compilation (mnodule dependency tree generation part)
+! ugly fix for CHARMM compilation (module dependency tree generation part)
 #ifdef __CHARMM
-##USE coorio_mod
-##USE ctitla
+use coorio_mod
+use ctitla
 #endif
       use ftsm_util
 !
@@ -823,6 +827,9 @@ __MPI_ONLY   call MPI_RECV(r3,3*natom,rtype,0,ME_STRNG,MPI_COMM_STRNG,stat,ierro
       int :: icntrl(20), moder, ntitle=0
       int :: ifree(natom)
 #else
+#ifdef __DMOL
+      float, pointer :: r3transpose(:,:)
+#endif
       int :: natom
 #endif
 !
@@ -876,7 +883,10 @@ __MPI_ONLY   call MPI_RECV(r3,3*natom,rtype,0,ME_STRNG,MPI_COMM_STRNG,stat,ierro
 !     &  MODEL,OFFICIAL)
 !
 #elif defined(__DMOL)
-      call ch_coor_read(ifile, r3, MASK=stringatoms)
+      allocate(r3transpose(3,natom)); r3transpose=0d0
+      call ch_coor_read(ifile, r3transpose, MASK=stringatoms)
+      r3=transpose(r3transpose)
+      __FREE(r3transpose)
 #else
       __WRN(whoami, 'CHARMM COORDINATE READER NOT IMPLEMENTED FOR THIS COMPILATION.')
 #endif

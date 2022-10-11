@@ -22,7 +22,8 @@ ifndef FC
 FC=gfortran
 endif
 
-ifeq ($(strip $(FC)),gfortran)
+# below, we also treat gfortran-* as gfortran : replace - with space, and take the first word
+ifeq ($(word 1, $(subst -, ,$(strip $(FC)))),gfortran)
 ifeq ($(strip $(DEBUG)),1)
 # WARNING: WHEN DEBUGGING DO NOT USE THE LINE BELOW. OPTIMIZATION DESTROYS SYNCHRONIZATION
 #FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fcheck=all -g
@@ -31,7 +32,7 @@ ifeq ($(strip $(DEBUG)),1)
 else
 # NOTE : Ofast math has -fno-protect-parens which causes __erfo7 to fail in some cases
 # FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno #-fno-protect-parens #-Wall -fopenmp
- FFLAGS=-Ofast -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno
+ FFLAGS=-Ofast -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fno-math-errno -fmax-stack-var-size=65536
 endif
 #---INTEL
 else ifeq ($(strip $(FC)),ifort)

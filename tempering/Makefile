@@ -6,17 +6,21 @@ COBJS=tempering_plugin_acemd.o
 
 DEPS=files output parser random constants vectors
 
-PYTHONH=-I /usr/include/python3.6m/
-PYTHONINSTALL=/usr/lib/python3.6/site-packages
-LPYTHON=-lpython3.6m
+PYTHONH=-I /usr/include/python3.8/
+PYTHONINSTALL=/usr/lib/python3.8/site-packages
+LPYTHON=-lpython3.8
 
-PYTHONH=-I /usr/include/python3.2mu/
-PYTHONINSTALL=/usr/lib64/python3.2/site-packages
-LPYTHON=-lpython3.2mu
+#PYTHONH=-I /usr/include/python3.6m/
+#PYTHONINSTALL=/usr/lib/python3.6/site-packages
+#LPYTHON=-lpython3.6m
 
-PYTHONH=-I /usr/include/python2.7/
-PYTHONINSTALL=/usr/lib64/python2.7/site-packages
-LPYTHON=-lpython2.7
+#PYTHONH=-I /usr/include/python3.2mu/
+#PYTHONINSTALL=/usr/lib64/python3.2/site-packages
+#LPYTHON=-lpython3.2mu
+
+#PYTHONH=-I /usr/include/python2.7/
+#PYTHONINSTALL=/usr/lib64/python2.7/site-packages
+#LPYTHON=-lpython2.7
 
 LTCL=-ltcl
 
