@@ -14,7 +14,7 @@ __CHARMM_ONLY##IF STRINGM
       subroutine smcv_stat_init(comlyn, comlen)
 !
       use sm_var
-      use sm_config,only: vtime_offset, rextime_offset, evolve_smooth_on
+      use sm_config,only: vtime_offset, rextime_offset, window_offset, evolve_smooth_on
       use cv_common,only:cv_common_neq_work_init, cv_common_rex_read_map, max_hist_base, instant, histcol
 !
       __DEP_OUTPUT
@@ -113,7 +113,9 @@ __CHARMM_ONLY##IF STRINGM
       output_M=.false.
 !
       window_fname='' ! double half-harmonic window restraint
+#ifdef __WINXSLOG
       output_window_xs_log=.false. ! crossing log
+#endif
       output_window_ave=.false.    ! window average position for FE computation
 !
 !=============== first process the RMSD-related commands
@@ -602,6 +604,7 @@ __CHARMM_ONLY##IF STRINGM
       if (__INDX_RM(comlyn,comlen,'WIAV').gt.0) then
 !       get file name
         __GET_RM_A(COMLYN,COMLEN,'WINM',4,window_fname,80,window_flen)
+! note that the average will not be written if the window width is zero ; no check for this here (i.e. you'll get empty files)
 !============= print summary
         if (window_flen.gt.0) then
          output_window_ave=.true.
@@ -620,6 +623,41 @@ __CHARMM_ONLY##IF STRINGM
  6629 format(A,' WILL WRITE WINDOW AVERAGE TO FILE ',A,'.DAT')
 !
       endif ! window average
+!==========================================================================
+#ifdef __WINXSLOG
+!cccccccccccccc window crossing log cccccccccccccccccccccccccccccccccccccccc
+! from ftsm
+      if (__INDX_RM(comlyn,comlen,'WXSL').gt.0) then
+!       get file name
+        if (window_flen.eq.0) then ! in the case file name was not read above in the window average section
+         __GET_RM_A(COMLYN,COMLEN,'WINM',4,window_fname,80,window_flen)
+        endif
+!       check for timestep offset
+        window_offset=__GET_RM_I(comlyn, comlen, 'WXOF', 0);
+        if (window_offset.gt.0) then
+         if (qprint) then ; write(_MSGBUF,6730) whoami, whoami, window_offset ; __PRINT(_MSGBUF) ; endif
+ 6730 format(A,' WILL OFFSET STEP COUNTER IN WINDOW CROSSING LOG BY '  &
+     &       /,A,' ',I10)
+        endif
+!
+        if (window_flen.gt.0) then
+         output_window_xs_log=.true.
+         if (qprint) then
+          write(_MSGBUF,6731) whoami,window_fname(1:window_flen) ; __PRINT(_MSGBUF)
+         endif
+         if (__INDX_RM(comlyn,comlen,'WIAP').gt.0) then ! APPEND?
+           windowform='APPEND'
+         else
+           windowform='WRITE'
+         endif ! wiap
+        else
+          __WRN(whoami,'NO FILE NAME GIVEN. WILL NOT WRITE WINDOW CROSSING LOG.')
+        endif ! window_flen.gt.0
+ 6731 format(A,' WILL WRITE WINDOW CROSSING LOG TO FILE ',A,'.LOG')
+!
+      endif ! window crossing log
+#endif
+!===================================================================
 !ccccccccccccccccc process M matrix output options ccccccccccccccccc
       if (__INDX_RM(comlyn, comlen, 'MMAT').gt.0) then
 !
@@ -645,7 +683,7 @@ __CHARMM_ONLY##IF STRINGM
 !     output statistics for SMCV
       use sm_var
       use sm_config, only: calc_cv_para, calc_Mtensor_para, cv_send_count, &
-     &                     cv_send_displ, MPI_CV_TYPE2 __CHARMM_ONLY , izero, ione, itwo, ithree, ifour
+     &                     cv_send_displ, MPI_CV_TYPE2, restraint_force_on __CHARMM_ONLY , izero, ione, itwo, ithree, ifour
       use cv_common
       __DEP_OUTPUT
       __DEP_MULTICOM       !__CHARMM_ONLY##MULTICOM
@@ -1095,18 +1133,25 @@ __MPI_ONLY     &      cv%voronoi_map,1,mpiint,MPI_COMM_STRNG,ierror)
         __WRN(whoami,'NO FILE NAME SPECIFIED. WILL NOT WRITE WINDOW AVERAGE.')
        else
 ! use temp array for counts:
-        cv%r(:,fbave_count)=one*cv%num_fb_ave
+        cv%r(:,fbave_count)=one*cv%num_fb_ave ! convert to float
 !    first, gather averages and weights (num. samples) on root processor
-        if (SIZE_LOCAL.gt.1) then ! only in parallel
+        if ((.not.restraint_force_on).and.         &
+     &      (MPI_COMM_LOCAL.ne.MPI_COMM_NULL).and. &
+     &      (SIZE_LOCAL.gt.1).and.                 &
+     &      calc_cv_para) then ! local root already has all values in most cases
 !    assemble complete cv array on local root
+! 10/22 : note that in most cases, the roots should already have the entire array -- see smcv_master, addhist w/ restraints on
+! in the case of addhist w/ restraints off, yes, we need this b/c that loop is generally over local inds (unless cv_para=off)
+! BUT, it might be worthwhile to rewrite there to remove need for the local gather here
+! also, could use the same flags here as in addhist, i.e. !restraint_force_on & qgroup & qpara
          ibeg=cv_send_displ(ME_LOCAL+1)+1
          iend=cv_send_displ(ME_LOCAL+1)+cv_send_count(ME_LOCAL+1)
 __MPI    if (ME_LOCAL.eq.0) then
-__MPI     call mpi_gatherv(MPI_IN_PLACE, cv_send_count(ME_LOCAL+1), MPI_CV_TYPE2,     &
+__MPI     call mpi_gatherv(MPI_IN_PLACE,      cv_send_count(ME_LOCAL+1), MPI_CV_TYPE2,    &
 __MPI  &                 cv%r(1,fbave),    cv_send_count, cv_send_displ, MPI_CV_TYPE2, 0, &
 __MPI  &                 MPI_COMM_LOCAL, ierror)
 __MPI    else
-__MPI     call mpi_gatherv(cv%r(ibeg, fbave), cv_send_count(ME_LOCAL+1), MPI_CV_TYPE2,     &
+__MPI     call mpi_gatherv(cv%r(ibeg, fbave), cv_send_count(ME_LOCAL+1), MPI_CV_TYPE2,    &
 __MPI  &                 cv%r(1,fbave),    cv_send_count, cv_send_displ, MPI_CV_TYPE2, 0, &
 __MPI  &                 MPI_COMM_LOCAL, ierror)
 __MPI    endif
@@ -1134,6 +1179,29 @@ __MPI    endif
        cv%num_fb_ave=zero
 !
       endif ! output_window_ave
+!===========================================================================
+#ifdef __WINXSLOG
+! adapted from FTSM
+      if (output_window_xs_log) then
+       if (window_flen.eq.0) then
+         __WRN(whoami,'NO FILE NAME SPECIFIED. WILL NOT WRITE WINDOW CROSSING LOG.')
+       else
+        if (qprint) then
+         window_funit=-1
+         window_fname(window_flen+1:window_flen+4)='.log' ! append to name
+         __OPEN_FILE(window_funit,window_fname(1:window_flen+4),'UNFORMATTED', windowform)
+         window_fname(window_flen+1:)='' ! erase extension
+        endif
+        call cv_common_winxs_print_log(window_funit, &
+     &    calc_cv_para.and.qgrp.and..not.restraint_force_on & ! if these flags are on, then assume all slaved in a group have partial logs & do a global collect
+     & ) ! all processes can call (and clear their logs)
+        if (qprint) then
+         __CLOSE_FILE(window_funit,'KEEP',ierror)
+        endif
+        windowform='APPEND'
+       endif
+      endif
+#endif
 !===========================================================================
       if (output_M) then
 !    if running in parallel, combine partial M entries
