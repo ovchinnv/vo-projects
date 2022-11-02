@@ -1,8 +1,9 @@
 #---------------------------------------------------
 # OpenMM Dynamo Plugin
 #----------------------------------------------------
+PROJECT(OPENMM-DYNAMO)
 
-CMAKE_MINIMUM_REQUIRED(VERSION 2.8)
+CMAKE_MINIMUM_REQUIRED(VERSION 3.0.0)
 
 IF (NOT CMAKE_BUILD_TYPE)
 SET(CMAKE_BUILD_TYPE "Release" CACHE STRING "Select build type" FORCE)
@@ -115,7 +116,7 @@ ADD_SUBDIRECTORY(serialization/tests)
 ADD_SUBDIRECTORY(platforms/reference)
 
 SET(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}")
-FIND_PACKAGE(OpenCL QUIET)
+FIND_PACKAGE(OPENCL QUIET)
 IF(OPENCL_FOUND)
     SET(DYNAMO_BUILD_OPENCL_LIB ON CACHE BOOL "Build implementation for OpenCL")
 ELSE(OPENCL_FOUND)
