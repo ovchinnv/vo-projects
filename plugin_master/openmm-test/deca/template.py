@@ -14,8 +14,8 @@ restart=1 ; # 0 -- start from PDB coordinates; 1 -- restart from native xml file
 restartfile=None ;
 restartfile='.xml';
 
-psffile='deca-x.psf' ;
-pdbfile='deca.pdb' ;
+psffile='deca22c.psf' ;
+pdbfile='deca22c.pdb' ;
 paramfile='par_all22_prot.prm' ;
 topfile='top_all22_prot.rtf' ;
 
@@ -48,14 +48,14 @@ membrane_on=0; # whether to use a barostat for membrane simulations (z-axis is t
 pme=0; # whether to use PME
 pbc=0; # whether periodic boundary conditions are on
 
-struna=1; # whether string plugin is active
-strunaConfig=@smconfig; # config name for string plugin
-strunaLog=@smlog; # lof name for string plugin
+dynamo=1; # whether string plugin is active
+dynamoConfig=@smconfig; # config name for string plugin
+dynamoLog=@smlog; # lof name for string plugin
 
 mini=0;          # whether to minimize before dynamics
 ministeps=100;   # number of minimization iterations
 
-nsteps=100000;    # number of simulation steps
+nsteps=1000000;    # number of simulation steps
 outputfreq=1000; # frequency of generating output
 dcdfreq=10000;   # frequency of dcd output
 

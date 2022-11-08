@@ -1,15 +1,22 @@
 % compute FE from double half-harmonic window simulations
+if ( exist('OCTAVE_VERSION') )
+ qoct=1;
+end
+if qoct
+ graphics_toolkit('fltk')
+ graphics_toolkit('gnuplot')
+endif
 %
-
-close all;
-
+addpath '~/scripts/matlab'; %for xave_
+%
+fefile='wfe.mat' ; % optional file to save FE data (incl. what is needed to compute diffusion via wdiff.m)
+%
 if ~exist('styles')
  styles={'r-','g-','b-','m-','c-','k-','r--','g--','b--','m--','c--','k--'};
 end
+%
 lw=1;
 leg={};
-
-addpath '~/scripts/matlab'; %for xave_
 
 kboltz=1.987191d-3;        % boltzmann constant
 Temp=300;
@@ -28,20 +35,20 @@ if (read)
 % set limits
  d0=12 ; d1=32;
 
- fbw=1;
+ fbw=0.5;
 
- nwin=32;
+ nwin=16;
 
- nbox =1 % number of statistical samples
+ nbox =3 % number of statistical samples
 
  df=zeros(nwin, ncv, nbox) ; %derivative matrix
 
  for j=1:nwin
    dref = d0 + (j-1) / (nwin-1) * (d1-d0);
-   % round to 2 decimap pts
+   % round to 2 decimal pts
    dref=0.01 * fix (dref*100);
 
-   ds(j)=dref ; % save for integration
+   cvs0(j)=dref ; % save for integration
 
    drefs=sprintf('%.2f',dref);
 
@@ -113,16 +120,18 @@ if (read)
    end % over all cvs
 %
  end
+ df=reshape(df(:,1,:), nwin, nbox)' ; % for consistency with prior code
  read=0;
 end;
 %%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-dfc=reshape(df(:,1,:), nwin, nbox)' ;
-
+%
 % compute center derivative
-dfc = 0.5 * ( dfc(:,1:end-1) + dfc(:,2:end) );
-fe = [ zeros(nbox,1)  cumsum( dfc.*(ones(nbox,1)*diff(ds)), 2) ];
-
+dfc = 0.5 * ( df(:,1:end-1) + df(:,2:end) );
+fe = [ zeros(nbox,1)  cumsum( dfc.*(ones(nbox,1)*diff(cvs0)), 2) ];
+% save :
+if exist('fefile')
+ save(fefile, 'fe', 'cvs0', 'df', 'kboltz', 'Temp', 'fbw');
+end
 %============= PLOT FE =============
 if ~nofig
  close all;
@@ -130,19 +139,19 @@ if ~nofig
 end
 %
 for i=1:nbox
- plot(ds,fe(i,1:end),[char(styles(mod(i-1,length(styles))+1)),'x'], 'linewidth', lw)
+ plot(cvs0,fe(i,1:end),[char(styles(mod(i-1,length(styles))+1)),'x'], 'linewidth', lw)
 end
 %
 fave=mean(fe,1);
 fstd=std(fe,1);
 %mean
-plot(ds,fave,'k--','linewidth',lw);
+plot(cvs0,fave,'k--','linewidth',lw);
 %std
 %plot(alpha,fave+fstd,'k--','linewidth',1);
 %plot(alpha,fave-fstd,'k--','linewidth',1);
 leg=[leg {['Average']}];
 
-legend(leg,2);
+legend(leg,'location','northwest');
 box on;
 ylabel('\it F(\alpha) (kcal/mol)', 'fontsize',14);
 xlabel('\it x', 'fontsize',14);
@@ -150,5 +159,6 @@ xlabel('\it x', 'fontsize',14);
 %xlim([0 1]);
 %ylim([0 9]);
 set(gcf, 'paperpositionmode', 'auto');
-print(gcf, '-dpsc', 'wfe.eps');
+%print(gcf, '-depsc2', 'wfe.eps');
+print(gcf, '-dpng', 'wfe.png');
 

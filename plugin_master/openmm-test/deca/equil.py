@@ -10,12 +10,12 @@ name='deca' ; #prefix for output files
 
 #==============================
 # parameters required by CHOMM (some have default values)
-restart=1 ; # 0 -- start from PDB coordinates; 1 -- restart from native xml file
+restart=0 ; # 0 -- start from PDB coordinates; 1 -- restart from native xml file
 restartfile=None ;
 restartfile='.xml';
 
-psffile='deca-x.psf' ;
-pdbfile='deca.pdb' ;
+psffile='deca22c.psf' ;
+pdbfile='deca22c.pdb' ;
 paramfile='par_all22_prot.prm' ;
 topfile='top_all22_prot.rtf' ;
 
@@ -51,7 +51,7 @@ pbc=0; # whether periodic boundary conditions are on
 mini=0;          # whether to minimize before dynamics
 ministeps=100;   # number of minimization iterations
 
-nsteps=10000;    # number of simulation steps
+nsteps=100000;    # number of simulation steps
 outputfreq=1000; # frequency of generating output
 dcdfreq=10000;   # frequency of dcd output
 
