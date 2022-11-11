@@ -1,0 +1,107 @@
+#!/charmm
+#
+# input file for SMCV Plugin
+#
+
+output {
+ minwarnlev=-1
+}
+
+structure_file=../alad_ms.pdb
+
+smcv_init {
+ defer_init_dyna=yes ! runs initialization stack at first step of dynamics, when coordinates are available
+!=======================
+ : init maxcv 5
+!======================= CV selection :
+ : add posi_com_x sele ANAME=CLP OR ANAME=NL OR ANAME=CA OR ANAME=CRP OR ANAME=NR end force 5
+ : add posi_com_y sele ANAME=CLP OR ANAME=NL OR ANAME=CA OR ANAME=CRP OR ANAME=NR end force 5
+ : add posi_com_z sele ANAME=CLP OR ANAME=NL OR ANAME=CA OR ANAME=CRP OR ANAME=NR end force 5
+ : read name cv0.dat
+! additional dihedral CVs :
+ : add dihe_com select atomid 5 end - ! 1st atom selection
+                select atomid 7 end - ! 2nd atom selection
+                select atomid 9 end - ! 3rd atom selection
+                select atomid 15 end -   ! 4th atom selection
+                force 200 fbwidth @{fbw}
+ : add dihe_com select atomid 7 end -
+                select atomid 9 end -
+                select atomid 15 end -
+                select atomid 17 end -
+                force 200 fbwidth @{fbw}
+!========================
+ : set ind 4 CVZ @{phirad} col main ! set CV value for cv #1 in main column (where the target restraint sits after equilibration for reeq iterations)
+ : set ind 5 CVZ @{psirad} col main !
+!========================
+ : list                     ! list all CV
+ : write name cv1.dat ! check to make sure OK
+!========================
+ : fill col old             ! compute CV values from coordinates ; store in the "old", x-compatible, set (for SMD)
+                            ! since coordinates are only available when the plugin is called from dynamics, defer_init_dyna=yes is important for this to work
+!========================
+! : write name cv0.txt restart col old local  ! write string output/restart file
+!======================================
+! : test grad step 0.1 ! test gradients
+!=======================================
+ : stat -                                  ! parameters for statistics
+    hist hname hist_@{phi}_@{psi}.dat local hcol inst @{append} -  ! local means that only histories from one replica will be present, so hey are written in more compact form
+    wiave winm fbwin_@{phi}_@{psi} @{append}                       ! compute window averages; the name follows "winm" with .dat appended
+!=======================================
+ : dyna -                ! parameters for dynamics
+        rstr reeq @{reeq} -  ! impose restraints; switch to restraints in col main from those in col old over this many steps
+        hisf 10 -        ! collect history samples after this many steps
+        stat staf 10000 - ! run statistics output after this many steps
+        smd              ! flag to adjust to restraints from old to main (works with reeq above) ; note that reeq=0 means immediately switch to main
+}
+
+smcv_done {
+! : write name cv1.txt restart col instant
+}
+
+watershell {
+  radii=file
+  radiifile=../alad_ms.pdb
+  radiifiletype=PDB
+  radiicol=O
+
+  mass=file
+  massfile=../alad_msm.pdb
+  massfiletype=PDB
+  masscol=B
+
+  structure_update_freq=7
+  structure_update_memory=0.9999 ! the closer to zero, the shorter the memory, the faster the evolution
+  surface_force_constant=1 ! 1 and above seems to be reasonable
+
+  dasystat=yes ! density controller
+  density_relax_time=100
+  density_update_freq=100
+! volume computation parameters (adjusting from defaults should be unnecessary)
+!  volume_grid_spacing=1
+!  volume_grid_buffer=10
+!  volume_compute_freq=1 ! surface area gets recomputed every pressure_update_freq times this
+! distance update parameters
+  distance_update_freq=100    ! frequency of updating contour/distance value for pressure control
+  distance_update_step=0.005 ! contour/distance value update step
+!  surface_distance = -7.21 ! value after equil
+  bulk_boundary_distance=-4.811644 ! hardwiring to match equil restart ; should do this in a better way !
+
+!  full_sum_freq=100
+!  remove_net_torque=yes ! may be a good idea to use this in all cases to minimize shearing forces
+!  neighbor_list=no ! in the restart file
+!
+! use a simple minimum distance algorithm
+  minimum_distance=yes
+! more aggressive params to increase speed (only for regular method)
+!  cutoff_surf_stdev=5
+
+!  surface_atoms="ANAME=CA OR ANAME=CL OR ANAME=CR"
+  surface_atoms="ANAME=CLP OR ANAME=NL OR ANAME=CA OR ANAME=CRP OR ANAME=NR" ! same atoms as used for torque removal above
+  solvent_atoms="ANAME=OH2 OR ANAME=SOD OR ANAME=CLA"
+
+  restart_file=@{watershell_restart}
+  output_file=@{watershell_output}
+
+  output_freq=10000
+
+ }
