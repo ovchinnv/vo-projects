@@ -22,8 +22,11 @@ if ~exist('read')
  read=1;
 end
 
-qper=1 ;% whether to include periodicity implicitly ; this is more correct
-qlsq=1 ;% least squares integration -- theoretically, the most accurate
+integ='direct'; % direct
+integ='lsq2a'; %least squares smoothed by averaging x & y dirs
+%integ='lsq2c'; %the solution is computed at center (assuming f is at corners, i.e. offset) ; can reinterpolate ontp the corner grid
+%integ='lsq4c'; %4th order FD
+%integ='lsq4ca'; %averaged between x & y (ad hoc)
 
 todeg=180/pi;
 torad=1./todeg;
@@ -156,7 +159,7 @@ end
 fx=dfm(:,:,1);
 fy=dfm(:,:,2);
 
-if (~qper) % direct computation -- approximate ;  note that we are not accounting for periodicity
+if strcmp(integ,'direct') % direct computation -- approximate ;  note that we are not accounting for periodicity
 % corner
 f(1,1)=0 ;
 % boundaries
@@ -174,11 +177,10 @@ for i=2:nphi
  end
 end
 %
-elseif (~qlsq)
+elseif strcmp(integ,'lsq2a')
 % construct equation matrix and account for periodicity
 % note that even this seems to be a somewhat adhoc construction
-% you can see that something is "funny" because the BC point often creates an outlier
-% will need to debug this to make sure it is correct ; the artifacts could be due to the system being overdetermined by periodicity
+% actually, this is also a least squares solution, after we added an extra condition at the end
 n=nphi*npsi;
 M=eye(n,n);
 rhs=zeros(n,1);
@@ -209,10 +211,10 @@ residual = M*f - rhs;
 fprintf('%s%12.5e\n','Maximum residual ',max(abs(residual)))
 f=reshape(f,nphi, npsi)'; %f=f-mean(mean(f));
 
-else % least squares - similar matrix construction to above, but the individual gradient eqs are separate for each dim
+elseif strcmp(integ,'lsq2')  % least squares - similar matrix construction to above, but the individual gradient eqs are separate for each dim
  n=nphi*npsi;
- M=zeros(2*n+1,n);
- rhs=zeros(2*n+1,1);
+ M=zeros(2*n,n);
+ rhs=zeros(2*n,1);
  for i=1:nphi
   im=mod( (i-1)-1, nphi)+1; % 1 maps to nphi+1, and there is no 0 index ; thus, we subtract 1 to get 0 ~ nphi , here: (i-1)-1 mod nphi  + 1 (add one at the end)
   io=(i-1)*npsi ; % compute offset due to previous points
@@ -239,6 +241,123 @@ else % least squares - similar matrix construction to above, but the individual 
  fprintf('%s%12.5e\n','Maximum residual ',max(abs(residual)))
  f=reshape(f,nphi, npsi)';
  f=f-mean(f(:));
+#
+elseif strcmp(integ,'lsq2c')
+ n=nphi*npsi;
+ M=zeros(2*n,n);
+ rhs=zeros(2*n,1);
+ for i=1:nphi
+  im=mod( (i-1)-1, nphi)+1; % 1 maps to nphi+1, and there is no 0 index ; thus, we subtract 1 to get 0 ~ nphi , here: (i-1)-1 mod nphi  + 1 (add one at the end)
+  io=(i-1)*npsi ; % compute offset due to previous points
+  for j=1:npsi
+   o=io+j ;           % center index in M
+   l=(im-1)*npsi+j ; % slowly varying index
+   jm=mod( (j-1)-1, npsi)+1;
+   b=io+jm; % quickly varying index
+% x-grad
+   M(o,o)=1 ;
+   M(o,l)=-1 ;
+   rhs(o)=fx(i,j)*dx(1);
+% y-grad
+   M(2*o,o)=1 ;
+   M(2*o,b)=-1 ;
+   rhs(2*o)=fy(i,j)*dy(1);
+%if (o==2) ;return;end
+  end % nphi
+ end % npsi
+% M(end+1,:)=1 ; rhs(end+1)=0; % average solution
+ f=M\rhs; % note that in octave can automatically switch to approximate methods ; noting this because the periodic system seems to be overdetermined !
+% f=pinv(M)*rhs ;
+ residual = M*f - rhs;
+ fprintf('%s%12.5e\n','Maximum residual ',max(abs(residual)))
+ f=reshape(f,nphi, npsi)';
+ f=f-mean(f(:));
+%
+elseif strcmp(integ,'lsq4c') 
+ n=nphi*npsi;
+ M=zeros(2*n,n);
+ rhs=zeros(2*n,1);
+ for i=1:nphi
+  im=mod( (i-1)-1, nphi)+1; % 1 maps to nphi+1, and there is no 0 index ; thus, we subtract 1 to get 0 ~ nphi , here: (i-1)-1 mod nphi  + 1 (add one at the end)
+  imm=mod( (im-1)-1, nphi)+1; %
+  ip=mod( (i+1)-1, nphi)+1; % 1 maps to nphi+1, and there is no 0 index ; thus, we subtract 1 to get 0 ~ nphi , here: (i-1)-1 mod nphi  + 1 (add one at the end)
+  io=(i-1)*npsi ; % compute offset due to previous points
+  for j=1:npsi
+   o=io+j ;           % center index in M
+   l=(im-1)*npsi+j ; % slowly varying index
+   ll=(imm-1)*npsi+j ; % slowly varying index
+   r=(ip-1)*npsi+j ; % slowly varying index
+   jm=mod( (j-1)-1, npsi)+1;
+   jmm=mod( (jm-1)-1, npsi)+1;
+   jp=mod( (j+1)-1, npsi)+1;
+   b=io+jm; % quickly varying index
+   bb=io+jmm; % quickly varying index
+   t=io+jp;
+% note the coeffs are nonstandard because of the offsets
+% x-grad
+   M(o,r)=-1/24 ;
+   M(o,o)=9/8 ;
+   M(o,l)=-9/8 ;
+   M(o,ll)=1/24 ;
+   rhs(o)=fx(i,j)*dx(1);
+% y-grad
+   M(2*o,t)=-1/24 ;
+   M(2*o,o)=9/8 ;
+   M(2*o,b)=-9/8 ;
+   M(2*o,bb)=1/24 ;
+   rhs(2*o)=fy(i,j)*dy(1);
+%if (o==2) ;return;end
+  end % nphi
+ end % npsi
+% M(end+1,:)=1 ; rhs(end+1)=0; % average solution
+ f=M\rhs; % note that in octave can automatically switch to approximate methods ; noting this because the periodic system seems to be overdetermined !
+% f=pinv(M)*rhs ;
+ residual = M*f - rhs;
+ fprintf('%s%12.5e\n','Maximum residual ',max(abs(residual)))
+ f=reshape(f,nphi, npsi)';
+ f=f-mean(f(:));
+elseif strcmp(integ,'lsq4ca') 
+ n=nphi*npsi;
+ M=zeros(n,n);
+ rhs=zeros(n,1);
+ for i=1:nphi
+  im=mod( (i-1)-1, nphi)+1; % 1 maps to nphi+1, and there is no 0 index ; thus, we subtract 1 to get 0 ~ nphi , here: (i-1)-1 mod nphi  + 1 (add one at the end)
+  imm=mod( (im-1)-1, nphi)+1; %
+  ip=mod( (i+1)-1, nphi)+1; % 1 maps to nphi+1, and there is no 0 index ; thus, we subtract 1 to get 0 ~ nphi , here: (i-1)-1 mod nphi  + 1 (add one at the end)
+  io=(i-1)*npsi ; % compute offset due to previous points
+  for j=1:npsi
+   o=io+j ;           % center index in M
+   l=(im-1)*npsi+j ; % slowly varying index
+   ll=(imm-1)*npsi+j ; % slowly varying index
+   r=(ip-1)*npsi+j ; % slowly varying index
+   jm=mod( (j-1)-1, npsi)+1;
+   jmm=mod( (jm-1)-1, npsi)+1;
+   jp=mod( (j+1)-1, npsi)+1;
+   b=io+jm; % quickly varying index
+   bb=io+jmm; % quickly varying index
+   t=io+jp;
+% note the coeffs are nonstandard because of the grid offsets
+% x-grad
+   M(o,r)=-1/24 ;
+   M(o,o)=9/8 ;
+   M(o,l)=-9/8 ;
+   M(o,ll)=1/24 ;
+% y-grad
+   M(o,t)=-1/24 ;
+   M(o,o)+=9/8 ;
+   M(o,b)=-9/8 ;
+   M(o,bb)=1/24 ;
+   rhs(o)=fx(i,j)*dx(1) + fy(i,j)*dy(1) ;
+%if (o==2) ;return;end
+  end % nphi
+ end % npsi
+ M(end+1,:)=1 ; rhs(end+1)=0; % average solution
+ f=M\rhs; % note that in octave can automatically switch to approximate methods ; noting this because the periodic system seems to be overdetermined !
+% f=pinv(M)*rhs ;
+ residual = M*f - rhs;
+ fprintf('%s%12.5e\n','Maximum residual ',max(abs(residual)))
+ f=reshape(f,nphi, npsi)';
+ f=f-mean(f(:));
 end
 
 save('-mat',fefile) ;
@@ -255,6 +374,7 @@ mycolor(y*todeg,x*todeg,f');
 %x2=[ x x+2*pi ]; y2=[ y y+2*pi];
 %pcolor( y2*todeg, x2*todeg, f4 ) ;
 
+caxis([-8 10]);
 shading interp ;
 colorbar ; colormap(jet)
 

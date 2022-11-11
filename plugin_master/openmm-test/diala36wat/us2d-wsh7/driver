@@ -1,0 +1,88 @@
+#!/bin/bash 
+#2D umbrella sampling
+#
+source ~/scripts/struna.sh
+mkdir -p scratch
+#
+# simulation parameters
+pi=3.1415926535 ;
+phis=-180
+psis=-180
+phie=`echo "$phis+360.0" |bc -l`
+psie=`echo "$psis+360.0" |bc -l`
+
+fbw=5 # degrees;
+fbwrad=`echo "$fbw/180*$pi" |bc -l` # flat bottom region in radians
+
+nphi=20
+npsi=20
+
+irun=1 ; # run index for possibility of extending statistics
+
+restart=`test $irun -gt 1 && echo 1 || echo 0`
+count=0; # run counter for skipping
+
+# loop over specific pairs (crashed sims)
+#js=(9 20)
+#is=(`cat repeat | awk '{print $1}'`);
+#js=(`cat repeat | awk '{print $2}'`);
+#echo ${is[@]}
+#echo ${js[@]}
+#exit
+nrun=${#is[@]};
+
+#for i in `seq 1 $nrun`; do
+#  iphi=${is[$count]}
+#  jpsi=${js[$count]}
+#  echo "$iphi $jpsi"
+#
+for iphi in `seq 1 $nphi`; do
+ for jpsi in `seq 1 $npsi`; do
+
+  count=$((count+1))
+#  if [ $count -le 1 ] ; then # skip
+#   continue
+#  fi
+
+  myphi=`echo "scale=2; $phis + ( $phie - $phis ) * ( $iphi - 1 ) / ( $nphi ) " |bc -l` ; # not going up to phie in view of periodicity
+  mypsi=`echo "scale=2; $psis + ( $psie - $psis ) * ( $jpsi - 1 ) / ( $npsi ) " |bc -l` ;
+
+  phirad=`echo "$myphi/180*$pi" | bc -l` 
+  psirad=`echo "$mypsi/180*$pi" | bc -l` 
+
+# RUN SIMULATION
+####################
+  echo "Running window ($iphi,$jpsi) ~ ($myphi, $mypsi) ..."
+#
+# prepare input file from template
+#
+  flag=${iphi}_${jpsi}
+#
+  sconfig=us2d.dyn
+  cp template.dyn $sconfig
+#
+  update $sconfig flag
+  update $sconfig phirad
+  update $sconfig psirad
+  update $sconfig psi $mypsi
+  update $sconfig phi $myphi
+  update $sconfig fbw $fbwrad
+  update $sconfig append `test $restart -eq 1 && echo append || echo -n`
+  update $sconfig reeq `test $restart -eq 1 && echo 0 || echo 1000`
+  update $sconfig watershell_restart `test $restart -eq 1 && echo watershell$flag.txt || echo watershell.txt`
+#  update $sconfig watershell_restart NONE
+  update $sconfig watershell_output watershell$flag.txt
+
+  config=${flag}.py
+  cp template.py $config
+  update $config dynamoConfig $sconfig
+  update $config dynamoLog ${sconfig}.log
+  update $config irun
+  update $config restartfile `test $restart -eq 1 && echo "'scratch/'"+name+"'@{flag}'"+"'.xml'" || echo "'alad0eq.xml'"`
+  update $config flag
+#exit
+  ./$config > ${flag}.out
+#exit
+ done
+done
+
