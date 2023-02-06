@@ -11,8 +11,8 @@ restart=1 ; # 0 -- start from PDB coordinates; 1 -- restart from native xml file
 restartfile=None ;
 restartfile=@{restartfile};
 
-psffile='../alad_s.psf' ;
-pdbfile='../alad_ms.pdb' ;
+psffile='./alad_s.psf' ;
+pdbfile='./alad_ms.pdb' ;
 topfile='../param/alad36w.top';
 paramfile='../param/alad36w.par' ;
 
@@ -29,7 +29,7 @@ xmlfile=restartfile ;        # to obtain cell vectors from xml file produced wit
 
 hmass=1;       # amu, can use heavy hydrogens
 friction=1     # 1/ps, thermostat coupling
-dt=1;        # timestep in fs
+dt=2;        # timestep in fs
 pmefreq=1;     # >1 requires multiple timestepping, which _dramatically_ slows down the code
 cutoff=12;     # nonbonded cutoff
 
@@ -46,8 +46,8 @@ andersen=0;    # to use Andersen instead of Langevin ; (Note that I see energy u
 barostat=0;
 pressure=1;    # units of atm
 membrane_on=0; # whether to use a barostat for membrane simulations (z-axis is the membrane normal)
-pme=0; # whether to use PME
-pbc=0; # whether periodic boundary conditions are on
+pme=1; # whether to use PME
+pbc=1; # whether periodic boundary conditions are on
 
 mini=0;          # whether to minimize before dynamics
 ministeps=100;   # number of minimization iterations
@@ -56,7 +56,7 @@ dynamo=1
 dynamoConfig='@{dynamoConfig}'
 dynamoLog='@{dynamoLog}'
 
-nsteps=600000;    # number of simulation steps
+nsteps=@{nsteps};    # number of simulation steps
 outputfreq=10000; # frequency of generating output
 dcdfreq=10000;   # frequency of dcd output
 
