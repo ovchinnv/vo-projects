@@ -9,6 +9,7 @@
 !     (4) calculate theta(x) for Voronoi calculations
       module smcv_master
 !
+#define _N smcv
 __CHARMM_ONLY##IF STRINGM
 !
       use cv_common
@@ -138,8 +139,8 @@ __CHARMM_ONLY##IF STRINGM
 !
         if ( mod(iteration,hist_freq).eq.0 ) then
          call smcv_add_hist(x,y,z,mass,                                 &
-     &  (iteration-restrained_eq0.gt.evolve_nskip)) ! add slice; the last argument is a flag
-!                                                    indicating whether to update running averages
+     &  (iteration-restrained_eq0.gt.evolve_nskip),iteration) ! add slice; the penultimate argument is a flag
+! 10/22 NOTE that FB averages are computed inside add_hist, which means that they are not necessarily updated at every time step (ok for ave, not for crossings)                                                  indicating whether to update running averages
         endif
        endif
 !===================== EVOLUTION ========================
@@ -273,7 +274,7 @@ __MPI_ONLY     &          mpifloat, MPI_SUM, MPI_COMM_LOCAL, ierror)
 !
       smcv_restraint_energy=zero
 !
-      calctheta=.true. ; deriv=.true. ; addforce2=.true.
+      calctheta=.true. ; deriv=.true.
 !
       qgrp=qgrp.and.calc_cv_para
 !
@@ -290,6 +291,8 @@ __MPI_ONLY     &          mpifloat, MPI_SUM, MPI_COMM_LOCAL, ierror)
        addforce2=.false. ! do not add force on first pass with planar sampling
                          ! do _not_ addforce after first pass if
                          ! cvs are computed in parallel, because I first need to communicate their values + gradients !
+      else
+       addforce2=.true.  ! add forces on first pass
       endif
 !       update current z-restraints, compute non-eq work, and add new forces
 !      do i=1, cv%num_cv ! loop over all CV
@@ -356,7 +359,7 @@ __MPI_ONLY     &          mpifloat, MPI_SUM, MPI_COMM_LOCAL, ierror)
        case(dihe_com)
 !    compute average accounting for periodicity (i.e. choosing the smallest angular displacement)
          r = cv%r(i,comp) - cv%r(i,main) ; r=modulo(r,TWOPI); if (r.gt.PI) __INCR(r,-TWOPI)
-         r = cv%r(i,comp) - s * r ;
+         r = cv%r(i,comp) - s * r ; ! for s=1 becomes main ; otherwise an intermediate value between comp & main
          dummy=(r-cv%r(i,zcur)); dummy=modulo(dummy,TWOPI) ; if (dummy.gt.PI) __INCR(dummy,-TWOPI)
 !
        case(angle_com, anglvec) ! cannot tell between theta/-theta ; mod(t,2pi) needed when t is not necessarily within [0,360)
@@ -375,33 +378,47 @@ __MPI_ONLY     &          mpifloat, MPI_SUM, MPI_COMM_LOCAL, ierror)
 !      compute nonequilibrium work -- u
        cv%work=cv%work+cv%r(i,forces2)*dummy ! update work; forces2 contains instantaneous force
                                              ! note, however, that zcur set is NAN at 1st iteration
-       __INCR(cv%r(i,zcur), dummy)           ! update current restrains
+       __INCR(cv%r(i,zcur), dummy)           ! update current restrain center
 !ccccccccccccccccccccccccc ADD FORCES cccccccccccccccccccc
-       addforce=addforce2.and.cv%active(i)
+       addforce=addforce2.and.cv%active(i) ! recall : active cv flag allows flexibility in making compound restraints, etc.
 !
-#define __ARGS i,x,y,z,mass,fx,fy,fz,calctheta,deriv,addforce
+#define _ARGS i,x,y,z,mass,fx,fy,fz,calctheta,deriv,addforce
+!#define __
 !
        select case(cv%type(i))
-          case(posi_com);                          call cv_posi_com_calc(__ARGS)
-          case(qcomp_1, qcomp_2, qcomp_3, qcomp_4);call cv_qcomp_calc(__ARGS)
-          case(angle_com);                         call cv_angle_com_calc(__ARGS)
-          case(anglvec);                           call cv_anglvec_calc(__ARGS)
-          case(dihe_com);                          call cv_dihe_com_calc(__ARGS)
-          case(dist_com);                          call cv_dist_com_calc(__ARGS)
-          case(rmsd);                              call cv_rmsd_calc(__ARGS)
-          case(drmsd);                             call cv_drmsd_calc(__ARGS)
-          case(proj);                              call cv_proj_calc(__ARGS)
-          case(rmsd2av);                           call cv_rmsd2av_calc(__ARGS)
+! not much point to this macro
+#define __CALC_CV(_CV) case(_CV);call __CONCAT3(cv_,_CV,_calc(_ARGS))
+          __CALC_CV(posi_com)
+          case(qcomp_1, qcomp_2, qcomp_3, qcomp_4);call cv_qcomp_calc(_ARGS)
+          __CALC_CV(angle_com)
+          __CALC_CV(anglvec)
+          __CALC_CV(dihe_com)
+          __CALC_CV(dist_com)
+          __CALC_CV(rmsd)
+          __CALC_CV(drmsd)
+          __CALC_CV(proj)
+          __CALC_CV(rmsd2av)
+!          case(posi_com);                          call cv_posi_com_calc(_ARGS)
+!          case(qcomp_1, qcomp_2, qcomp_3, qcomp_4);call cv_qcomp_calc(_ARGS)
+!          case(angle_com);                         call cv_angle_com_calc(_ARGS)
+!          case(anglvec);                           call cv_anglvec_calc(_ARGS)
+!          case(dihe_com);                          call cv_dihe_com_calc(_ARGS)
+!          case(dist_com);                          call cv_dist_com_calc(_ARGS)
+!          case(rmsd);                              call cv_rmsd_calc(_ARGS)
+!          case(drmsd);                             call cv_drmsd_calc(_ARGS)
+!          case(proj);                              call cv_proj_calc(_ARGS)
+!          case(rmsd2av);                           call cv_rmsd2av_calc(_ARGS)
           case(cvrms); ! may not be correct if running in parallel in case slave cvs on a different node -- so skip here & force compute below
-           if (.not. qgrp) then 
-            call cv_cvrms_calc(__ARGS)
-           else
+           if (.not. qgrp) then
+            call cv_cvrms_calc(_ARGS)
+           else ! nothing to do this time around
             cycle
            endif
           case default;           __WRN( whoami, 'UNKNOWN CV SPECIFIED.')
        end select
-#undef __ARGS
+#undef _ARGS
 !     update force prefactor (planar sampling)
+! as of 10/22, planar sampling not reimplemented ; this is an experimental hold-over
        if (planar_on) fpre=fpre+cv%r(i,forces2)*cv%r(i,dz)/cv%weight(i) ! for planar force; incorrect for inactive cv or cvrms; also obsolete
       enddo ! over all cv
 !
@@ -433,7 +450,7 @@ __MPI_ONLY      endif
        calctheta=.false. ! already calculated above
        deriv=.false.     ! already calculated above
 !       deriv=.true.
-       addforce2=.true.
+       addforce2=.true.  ! add forces this time around
 !
        do i=1, cv%num_cv ! loop over all CV
 !ccccccccccccccccccccccccc ADD FORCES cccccccccccccccccccccccccccccccccccc
@@ -442,29 +459,34 @@ __MPI_ONLY      endif
          fpara=fpre*cv%r(i,dz)*cv%weight(i) ! force acting parallel to dz
          fperp=(cv%r(i,forces2)-fpara)/cv%kpara*cv%kperp ! force perpendicular to dz
          f=fpara+fperp
-        else ! qgrp -- just use the force computed above
+        else ! qgrp -- use the force computed above
          f=cv%r(i,forces2)
         endif ! planar
 !
         addforce=addforce2.and.cv%active(i)
 !
-#define __ARGS i,x,y,z,mass,fx,fy,fz,calctheta,deriv,addforce,f
+#define _ARGS i,x,y,z,mass,fx,fy,fz,calctheta,deriv,addforce,f
 !
         select case(cv%type(i))
-          case(posi_com);                          call cv_posi_com_calc(__ARGS)
-          case(qcomp_1, qcomp_2, qcomp_3, qcomp_4);call cv_qcomp_calc(__ARGS)
-          case(angle_com);                         call cv_angle_com_calc(__ARGS)
-          case(anglvec);                           call cv_anglvec_calc(__ARGS)
-          case(dihe_com);                          call cv_dihe_com_calc(__ARGS)
-          case(dist_com);                          call cv_dist_com_calc(__ARGS)
-          case(rmsd);                              call cv_rmsd_calc(__ARGS)
-          case(drmsd);                             call cv_drmsd_calc(__ARGS)
-          case(proj);                              call cv_proj_calc(__ARGS)
-          case(rmsd2av);                           call cv_rmsd2av_calc(__ARGS)
-          case(cvrms);                             call cv_cvrms_calc(__ARGS)
+          case(posi_com);                          call cv_posi_com_calc(_ARGS)
+          case(qcomp_1, qcomp_2, qcomp_3, qcomp_4);call cv_qcomp_calc(_ARGS)
+          case(angle_com);                         call cv_angle_com_calc(_ARGS)
+          case(anglvec);                           call cv_anglvec_calc(_ARGS)
+          case(dihe_com);                          call cv_dihe_com_calc(_ARGS)
+          case(dist_com);                          call cv_dist_com_calc(_ARGS)
+          case(rmsd);                              call cv_rmsd_calc(_ARGS)
+          case(drmsd);                             call cv_drmsd_calc(_ARGS)
+          case(proj);                              call cv_proj_calc(_ARGS)
+          case(rmsd2av);                           call cv_rmsd2av_calc(_ARGS)
+          case(cvrms);
+           if (qgrp) then ! need to first compute cv value & gradient
+            call cv_cvrms_calc(i,x,y,z,mass,fx,fy,fz,.true.,.true.,.false.)
+           endif
+!     unclear how to handle planar forces (or whether it even makes sense to do so), so this code is incorrect for it
+           call cv_cvrms_calc(_ARGS)
           case default ;                  __WRN( whoami, 'UNKNOWN CV SPECIFIED.')
         end select
-#undef __ARGS
+#undef _ARGS
        enddo ! over all cv
       endif ! planar .or. qgrp
 ! total restraint energy :
@@ -476,29 +498,37 @@ __MPI_ONLY      endif
 !
       end subroutine smcv_addforce
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-      subroutine smcv_add_hist(x,y,z,mass,update_average)
+      subroutine smcv_add_hist(x,y,z,mass,update_average,iteration_)
 !     this is a driver to routines
 !     that calculates the M matrix and cv time series
       __DEP_OUTPUT
       __DEP_MULTICOM
       __DEP_CONST
       __DEP_MPI
-      use sm_var, only : hist_calc_M
+      __DEP_PARSER
+      use sm_var, only : hist_calc_M &
+#ifdef __WINXSLOG
+     &  ,output_window_xs_log
+#endif
+     & ! nothing
       use cv_common, only : histcol
 !
       float :: x(:), y(:), z(:), mass(:) ! mass(size(x,1))
       bool :: update_average ! whether the current dataset should be included with the cv running average
 !                                (it is always added to history)
+      int*8, intent(in), optional :: iteration_
       int :: i, j, k, imap, ibeg, iend, kbeg, kend, ierror
-      float :: u, v, t, t1, dot_pr, tfb, tfb1
+#ifdef __WINXSLOG
+      int :: qwhere
+#endif
+      float :: v, t, t1, dot_pr, tfb, tfb1
       bool :: deriv, calctheta, qgrp, qgrp1
       int :: cvlist(cv%num_cv) ! for fast M tensor computation
       int :: cvlistsize, ii, jj
       __IAM(SMCV_ADD_HIST)
       float, pointer :: M(:,:)
 !
-      qgrp=(MPI_COMM_LOCAL.ne.MPI_COMM_NULL)                            &
-     &  .and.(SIZE_LOCAL.gt.1)
+      qgrp=(MPI_COMM_LOCAL.ne.MPI_COMM_NULL).and.(SIZE_LOCAL.gt.1)
 !
 ! if running in parallel (SIZE_LOCAL>1), force recalculation + communication here
       if (qgrp) call smcv_compute_frames_quat_para(x,y,z,mass)
@@ -512,22 +542,21 @@ __MPI_ONLY      endif
 !
       calctheta=.true. ! compute cv values
       deriv=.true. ! compute derivatives
-      j=cv_common_add_hist() ! determine index into the history array
+      j=cv_common_add_hist() ! updated index into the history array for next entry
 !    also update running average
       t=zero ! default behavior does not modify runinng average (see below)
 !
       if (update_average) then
-       cv%num_run_ave=cv%num_run_ave+1
+       __INC(cv%num_run_ave)
        t=one/(cv%num_run_ave);
       endif
 !
       t1=one-t ! used in the averaging of M
 !
-      if (restraint_force_on) then ! if this flag is set, then cv and derivatives are already known
+      if (restraint_force_on) then ! if this flag is set, then cv and derivatives are already known, and will not be recomputed
 !
-       do i=1, cv%num_cv ! loop over all CV
+       do i=1, cv%num_cv ! loop over all CV ; note that all LOCAL nodes do this, although they do not have to
         cv%r(i,j)=cv%r(i,histcol) ! history output; histcol typically, but not necessarily, instant
-        v=cv%r(i,instant)
 !     VO 3.24.09: correct for angle averages
 !     VO : 8/2016 : removing running average "runave" ; replacing it with frunave : running average of the displacement used in force calculation
 !                   the problem with runave is that it cannot be used to compute the average forces unless a quadratic potential is used (e.g. flat bottom)
@@ -539,23 +568,42 @@ __MPI_ONLY      endif
            v=modulo(v,TWOPI); if (v.gt.PI) __INCR(v,-TWOPI)
 !=============
           case(angle_com, anglvec)
-           v=cv%r(i,zcur)-sign(cv%r(i,instant),cv%r(i,zcur))
+           v=cv%r(i,zcur)-sign(cv%r(i,instant),cv%r(i,zcur)) ! enforcing +/- angles to be indistinguishable (otherwise, need 4th pt as ref)
            v=modulo(v,TWOPI); if (v.gt.PI) __INCR(v,-TWOPI)
 !=============
           case default ;
            v=cv%r(i,zcur)-cv%r(i,instant)
         end select
 !        FB modification (other potentials possible here in the future ) :
-        u=max(zero, v - cv%fbwidth(i)) + min(zero, v + cv%fbwidth(i))
-        __INCR(cv%r(i,frunave), t * ( u - cv%r(i,frunave) ) ) ! add inst. displacement to frunave index
+! 10/22 : NOTE FB needs to be used with greater care in the case of angles, e.g. if the size of the FB region is large, as the angles
+! wrap around. Here we assume that the above wrapping is reasonable
+        v=max(zero, v - cv%fbwidth(i)) + min(zero, v + cv%fbwidth(i))
+        __INCR(cv%r(i,frunave), t * ( v - cv%r(i,frunave) ) ) ! add inst. displacement to frunave to give update running average
 !
-! NOTE that I preserved v computed above
-! also deal with flat-bottom potential averages here.
+! deal with flat-bottom potential averages below
 ! Note that this average is used for statistics purposes
 ! it is reset after every stats output
 ! if sample within flat bottom window, add to flat-bottom average
+! NOTE that the window crossing log should not, in principle, be recorded here, because crossings could happen at any time step, but the history routine is called
+! generally sparsely ; however, we may do this anyway, as there are no "good" places that would not entail either rewriting the code or violating what original
+! code organization remains
+! note that the loop is over all cvs, but the logs can be computed for local cv indices, and then merged before output via a global gather
+#ifdef __WINXSLOG
+        if (output_window_xs_log) then
+         if (present(iteration_) ) then ! does not make sense to record this without time, hence iteration
+          if (v.lt.-(__ERRTOL)) then ; qwhere=-ione ; elseif (v.gt.(__ERRTOL)) then ; qwhere=ione ; else ; qwhere=izero ; endif
+          if (qwhere.ne.cv%fb_whereami(i)) then ! update crossing log if needed
+           call cv_common_winxs_add( (/INT(ME_STRNG+1,8),INT(i,8),INT(qwhere,8),iteration_+window_offset/) ) ! add array in int 8 representation ; itime is i8 natively
+           cv%fb_whereami(i)=qwhere ! save current position
+          endif
+         else
+          __WRN(whoami, 'SKIPPING WINDOW CROSSING LOG FOR CV #'//itoa(i)//' BECAUSE ITERATION # WAS NOT PROVIDED.')
+         endif
+        endif
+#endif
+!============= deal w/ FB average :
         if (cv%fbwidth(i).gt.zero) then
-         if (abs(v).le.cv%fbwidth(i)) then ! update average
+         if (abs(v).lt.__ERRTOL) then ! update average (v is zero if we are inside the FB part)
           select case(cv%type(i));
            case(dihe_com)
             v=cv%r(i,fbave)-cv%r(i,instant)
@@ -574,9 +622,9 @@ __MPI_ONLY      endif
          endif ! abs(v)
         endif ! fbwidth
 !
-       enddo !cv
+       enddo ! over all cv indices
 !
-      else ! need to compute
+      else ! .not.restraint_force_on, so probably need to compute cv values ; compute derivative also, which are needed for the M tensor (see at the end)
 !
        qgrp1=qgrp.and.calc_cv_para
        if (qgrp1) then
@@ -589,23 +637,23 @@ __MPI_ONLY      endif
 !
        do i=ibeg, iend ! loop over local CVs only (NOTE: hist first updated for local cv; then for remaining cv; see end of loop )
 !
-! force arrays not used in args below
-#define __ARGS i,x,y,z,mass,x,y,z,calctheta,deriv,.false. 
+! force arrays not used in args below because we are not applying forces, just computing CV-related statistics
+#define _ARGS i,x,y,z,mass,x,y,z,calctheta,deriv,.false.
 !
         select case(cv%type(i))
-         case(posi_com);                          call cv_posi_com_calc(__ARGS)
-         case(qcomp_1, qcomp_2, qcomp_3, qcomp_4);call cv_qcomp_calc(__ARGS)
-         case(angle_com);                         call cv_angle_com_calc(__ARGS)
-         case(anglvec);                           call cv_anglvec_calc(__ARGS)
-         case(dihe_com);                          call cv_dihe_com_calc(__ARGS)
-         case(dist_com);                          call cv_dist_com_calc(__ARGS)
-         case(rmsd);                              call cv_rmsd_calc(__ARGS)
-         case(drmsd);                             call cv_drmsd_calc(__ARGS)
-         case(proj);                              call cv_proj_calc(__ARGS)
-         case(rmsd2av);                           call cv_rmsd2av_calc(__ARGS)
-         case(cvrms);
+         case(posi_com);                          call cv_posi_com_calc(_ARGS)
+         case(qcomp_1, qcomp_2, qcomp_3, qcomp_4);call cv_qcomp_calc(_ARGS)
+         case(angle_com);                         call cv_angle_com_calc(_ARGS)
+         case(anglvec);                           call cv_anglvec_calc(_ARGS)
+         case(dihe_com);                          call cv_dihe_com_calc(_ARGS)
+         case(dist_com);                          call cv_dist_com_calc(_ARGS)
+         case(rmsd);                              call cv_rmsd_calc(_ARGS)
+         case(drmsd);                             call cv_drmsd_calc(_ARGS)
+         case(proj);                              call cv_proj_calc(_ARGS)
+         case(rmsd2av);                           call cv_rmsd2av_calc(_ARGS)
+         case(cvrms); ! NOTE that by construction, a cvrms CV cannot depend on CVs whose indices follow the cvrms index (see cvrms_add)
           if (.not.qgrp1) then
-           call cv_cvrms_calc(__ARGS)
+           call cv_cvrms_calc(_ARGS)
           else
            cycle ! continue without updating average since it would be incorrect
           endif
@@ -614,8 +662,7 @@ __MPI_ONLY      endif
         end select
 !    update running average
 !    add history
-        cv%r(i,j)=cv%r(i,histcol)
-        v=cv%r(i,instant)
+!        cv%r(i,j)=cv%r(i,histcol) ! commented -- see end of sub
 !====================================================================
 ! see notes above
 ! (1) compute absolute distance between sample and restraint center
@@ -632,15 +679,30 @@ __MPI_ONLY      endif
            v=cv%r(i,zcur)-cv%r(i,instant)
         end select
 !        FB modification (other potentials possible here in the future ) :
-        u=max(zero, v - cv%fbwidth(i)) + min(zero, v + cv%fbwidth(i))
-        __INCR(cv%r(i,frunave), t * ( u - cv%r(i,frunave) ) ) ! add inst. displacement to frunave index
-! NOTE that I preserved v computed above
+        v=max(zero, v - cv%fbwidth(i)) + min(zero, v + cv%fbwidth(i))
+        __INCR(cv%r(i,frunave), t * ( v - cv%r(i,frunave) ) ) ! add inst. displacement to frunave index
 ! also deal with flat-bottom potential averages here.
 ! Note that this average is used for statistics purposes
 ! it is reset after every stats output
-! if sample within flat bottom window, add to flat-bottom average
+! if the sample falls within the flat bottom window region, add it to the flat-bottom average
+! repeated code from above (also see comments above)
+#ifdef __WINXSLOG
+        if (output_window_xs_log) then
+         if (present(iteration_) ) then ! does not make sense to record this without time, hence iteration
+          if (v.lt.-(__ERRTOL)) then ; qwhere=-ione ; elseif (v.gt.(__ERRTOL)) then ; qwhere=ione ; else ; qwhere=izero ; endif
+          if (qwhere.ne.cv%fb_whereami(i)) then ! update crossing log if needed
+           call cv_common_winxs_add( (/ INT(ME_STRNG+1,8),INT(i,8),INT(qwhere,8),iteration_+window_offset/) ) ! add array in int 8 representation ; itime is i8 natively
+           cv%fb_whereami(i)=qwhere
+          endif
+         else
+          __WRN(whoami, 'SKIPPING WINDOW CROSSING LOG FOR CV #'//itoa(i)//' BECAUSE ITERATION # WAS NOT PROVIDED.')
+         endif
+        endif
+#endif
+! note that the indices for which fbave is computed below are ibeg-iend (i.e. local) but a gather is performed in stats before output
+! that is _not_ the case for the crossing logs (above) which means that I have to gather those between from the slaves later
         if (cv%fbwidth(i).gt.zero) then
-         if (abs(v).le.cv%fbwidth(i)) then ! update average
+         if (abs(v).le.__ERRTOL) then ! update average
           select case(cv%type(i));
            case(dihe_com)
             v=cv%r(i,fbave)-cv%r(i,instant)
@@ -661,7 +723,7 @@ __MPI_ONLY      endif
 !
        enddo ! loop over cv
 !
-       if (qgrp1) then
+       if (qgrp1) then ! CVs computed in parallel, so gather below
 ! note : MPI_CV_TYPE3I sends frunave, instant and forces2
 ! runave was obsolescent, because for FB potentials the force is not a linear function of r
 ! so that the average force cannot be computed by multiplying runave minus r_ref by the force constant
@@ -677,34 +739,53 @@ __MPI_ONLY     &    cv_send_count(ME_LOCAL+1),MPI_GRAD_TYPE,                    
 __MPI_ONLY     &    cv%grad, cv_send_count, cv_send_displ,                        &
 __MPI_ONLY     &    MPI_GRAD_TYPE, MPI_COMM_LOCAL, ierror)
 !
-! cvrms fix below:
+! cvrms fix below to update frunave, now that all "regular" cvs are known:
+! note that various optimizations are possible, but keep in mind that history is typically stored infrequently
 !*************************************************************************
-        do i=1, cv%num_cv
+        do i=ibeg, iend ! note that "i=1,cv%num_cv" possible breaks xs_log with repeated entries
+
          if (cv%type(i).eq.cvrms) then
-          call cv_cvrms_calc(__ARGS)
+          call cv_cvrms_calc(_ARGS)
 !    update force running average
-          cv%r(i,j)=cv%r(i,histcol) ! if histcol is instant then it is changed above for cvrms
+!          cv%r(i,j)=cv%r(i,histcol) ! if histcol is instant then it is changed above for cvrms; commented--see end of sub
           v=cv%r(i,zcur) - cv%r(i,instant)
           v=max(zero, v - cv%fbwidth(i)) + min(zero, v + cv%fbwidth(i))
           __INCR(cv%r(i,frunave), t * ( v - cv%r(i,frunave) ) ) ! add inst. displacement to frunave index
-         endif
-        enddo
-#undef __ARGS
+! NOTE that also need to update crossing log & FB average:
+! XS LOG:
+#ifdef __WINXSLOG
+          if (output_window_xs_log) then
+           if (present(iteration_) ) then ! does not make sense to record this without time, hence iteration
+            if (v.lt.-(__ERRTOL)) then ; qwhere=-ione ; elseif (v.gt.(__ERRTOL)) then ; qwhere=ione ; else ; qwhere=izero ; endif
+            if (qwhere.ne.cv%fb_whereami(i)) then ! update crossing log if needed
+             call cv_common_winxs_add( (/ INT(ME_STRNG+1,8),INT(i,8),INT(qwhere,8),iteration_+window_offset/) ) ! add array in int 8 representation ; itime is i8 natively
+             cv%fb_whereami(i)=qwhere
+            endif
+           else
+            __WRN(whoami, 'SKIPPING WINDOW CROSSING LOG FOR CV #'//itoa(i)//' BECAUSE ITERATION # WAS NOT PROVIDED.')
+           endif
+          endif
+#endif
+! FB average
+          if (cv%fbwidth(i).gt.zero) then
+            v=cv%r(i,fbave)-cv%r(i,instant)
+            if (abs(v).le.__ERRTOL) then ! update average
+             __INC(cv%num_fb_ave(i))                    ! update counter
+             __INCR(cv%r(i,fbave), -v/cv%num_fb_ave(i)) ! update average
+            endif ! within FB region
+          endif ! fbw > 0
+         endif ! cv=cvrms
+        enddo ! over all cvs to check for cvrms
+#undef _ARGS
 !*************************************************************************
-       endif ! qgrp1
+       endif ! qgrp1 -- for parallel CV computation only
 !
-! also need to add history for non-local indices (could also gather history on root before output, but is this not faster?)
-       cv%r(1:cv%num_cv, j)=cv%r(1:cv%num_cv, histcol)
+! also need to add history for non-local indices (could also gather history on root before output, but is this not faster?) Could be a problem is histcol values
+! are not know by all slaves (there must be some hist column spec that will cause failure here)
+       cv%r(1:cv%num_cv, j)=cv%r(1:cv%num_cv, histcol) ! update for all active cvs
 !
       endif ! restraint_force_on
 !
-!         write(600+ME_GLOBAL,*) cv%r(1:cv%num_cv,1:2)
-!           close(600+ME_GLOBAL)
-!         write(700+ME_GLOBAL,*) cv%gradx(59,:,2)
-!         write(700+ME_GLOBAL,*) cv%gradx(60,:,2)
-!         write(700+ME_GLOBAL,*) cv%grad
-!           close(700+ME_GLOBAL)
-!            stop
       if (hist_calc_M) then ! if false, can skip M update if not running SMCV evolution ( to speed up calculations if many cv are used )
 !==================================
 !     now update M = < grad(theta_i) . grad(theta_j) >
@@ -859,23 +940,23 @@ __MPI_ONLY     &    MPI_GRAD_TYPE, MPI_COMM_LOCAL, ierror)
 !
        do i=ibeg, iend
 ! force arrays not used below
-#define __ARGS i,x,y,z,mass,x,y,z,calctheta,deriv,.false.
+#define _ARGS i,x,y,z,mass,x,y,z,calctheta,deriv,.false.
 !
         select case(cv%type(i))
-          case(posi_com);                          call cv_posi_com_calc(__ARGS)
-          case(qcomp_1, qcomp_2, qcomp_3, qcomp_4);call cv_qcomp_calc(__ARGS)
-          case(angle_com);                         call cv_angle_com_calc(__ARGS)
-          case(anglvec);                           call cv_anglvec_calc(__ARGS)
-          case(dihe_com);                          call cv_dihe_com_calc(__ARGS)
-          case(dist_com);                          call cv_dist_com_calc(__ARGS)
-          case(rmsd);                              call cv_rmsd_calc(__ARGS)
-          case(drmsd);                             call cv_drmsd_calc(__ARGS)
-          case(proj);                              call cv_proj_calc(__ARGS)
-          case(rmsd2av);                           call cv_rmsd2av_calc(__ARGS)
-          case(cvrms);                             call cv_cvrms_calc(__ARGS)
+          case(posi_com);                          call cv_posi_com_calc(_ARGS)
+          case(qcomp_1, qcomp_2, qcomp_3, qcomp_4);call cv_qcomp_calc(_ARGS)
+          case(angle_com);                         call cv_angle_com_calc(_ARGS)
+          case(anglvec);                           call cv_anglvec_calc(_ARGS)
+          case(dihe_com);                          call cv_dihe_com_calc(_ARGS)
+          case(dist_com);                          call cv_dist_com_calc(_ARGS)
+          case(rmsd);                              call cv_rmsd_calc(_ARGS)
+          case(drmsd);                             call cv_drmsd_calc(_ARGS)
+          case(proj);                              call cv_proj_calc(_ARGS)
+          case(rmsd2av);                           call cv_rmsd2av_calc(_ARGS)
+          case(cvrms);                             call cv_cvrms_calc(_ARGS)
           case default ;                  __WRN( whoami, 'UNKNOWN CV SPECIFIED.')
         end select
-#undef __ARGS
+#undef _ARGS
        enddo ! i-loop over cv
 !
 __MPI_ONLY       if (qgrp.and.calc_cv_para) then
@@ -1212,23 +1293,23 @@ __CHARMM_ONLY call setmsi('MESTRING',mestring)
        __WRN(whoami,'NO CV DEFINED.')
       endif
       do i=1, cv%num_cv
-#define __ARGS i,x,y,z,mass,x,y,z,calcz,deriv,.false.
+#define _ARGS i,x,y,z,mass,x,y,z,calcz,deriv,.false.
 !
        select case(cv%type(i))
-          case(posi_com);                          call cv_posi_com_calc(__ARGS)
-          case(qcomp_1, qcomp_2, qcomp_3, qcomp_4);call cv_qcomp_calc(__ARGS)
-          case(angle_com);                         call cv_angle_com_calc(__ARGS)
-          case(anglvec);                           call cv_anglvec_calc(__ARGS)
-          case(dihe_com);                          call cv_dihe_com_calc(__ARGS)
-          case(dist_com);                          call cv_dist_com_calc(__ARGS)
-          case(rmsd);                              call cv_rmsd_calc(__ARGS)
-          case(drmsd);                             call cv_drmsd_calc(__ARGS)
-          case(proj);                              call cv_proj_calc(__ARGS)
-          case(rmsd2av);                           call cv_rmsd2av_calc(__ARGS)
-          case(cvrms);                             call cv_cvrms_calc(__ARGS)
+          case(posi_com);                          call cv_posi_com_calc(_ARGS)
+          case(qcomp_1, qcomp_2, qcomp_3, qcomp_4);call cv_qcomp_calc(_ARGS)
+          case(angle_com);                         call cv_angle_com_calc(_ARGS)
+          case(anglvec);                           call cv_anglvec_calc(_ARGS)
+          case(dihe_com);                          call cv_dihe_com_calc(_ARGS)
+          case(dist_com);                          call cv_dist_com_calc(_ARGS)
+          case(rmsd);                              call cv_rmsd_calc(_ARGS)
+          case(drmsd);                             call cv_drmsd_calc(_ARGS)
+          case(proj);                              call cv_proj_calc(_ARGS)
+          case(rmsd2av);                           call cv_rmsd2av_calc(_ARGS)
+          case(cvrms);                             call cv_cvrms_calc(_ARGS)
           case default ;                  __WRN( whoami, 'UNKNOWN CV SPECIFIED.')
        end select
-#undef __ARGS
+#undef _ARGS
 !     now cv%r(i,instant) is filled: copy from instant to desired column
        if (present(c)) then
         call cv_common_fill(i,cv%r(i,instant),c)
@@ -1440,23 +1521,23 @@ __CHARMM_ONLY call setmsi('MESTRING',mestring)
       call quat_reset_calculate(.false.)
 !
       do i=1, cv%num_cv
-#define __ARGS i,x,y,z,mass,x,y,z,calcz,deriv,addforce
+#define _ARGS i,x,y,z,mass,x,y,z,calcz,deriv,addforce
 !
        select case(cv%type(i))
-          case(posi_com);                          call cv_posi_com_calc(__ARGS)
-          case(qcomp_1, qcomp_2, qcomp_3, qcomp_4);call cv_qcomp_calc(__ARGS)
-          case(angle_com);                         call cv_angle_com_calc(__ARGS)
-          case(anglvec);                           call cv_anglvec_calc(__ARGS)
-          case(dihe_com);                          call cv_dihe_com_calc(__ARGS)
-          case(dist_com);                          call cv_dist_com_calc(__ARGS)
-          case(rmsd);                              call cv_rmsd_calc(__ARGS)
-          case(drmsd);                             call cv_drmsd_calc(__ARGS)
-          case(proj);                              call cv_proj_calc(__ARGS)
-          case(rmsd2av);                           call cv_rmsd2av_calc(__ARGS)
-          case(cvrms);                             call cv_cvrms_calc(__ARGS)
+          case(posi_com);                          call cv_posi_com_calc(_ARGS)
+          case(qcomp_1, qcomp_2, qcomp_3, qcomp_4);call cv_qcomp_calc(_ARGS)
+          case(angle_com);                         call cv_angle_com_calc(_ARGS)
+          case(anglvec);                           call cv_anglvec_calc(_ARGS)
+          case(dihe_com);                          call cv_dihe_com_calc(_ARGS)
+          case(dist_com);                          call cv_dist_com_calc(_ARGS)
+          case(rmsd);                              call cv_rmsd_calc(_ARGS)
+          case(drmsd);                             call cv_drmsd_calc(_ARGS)
+          case(proj);                              call cv_proj_calc(_ARGS)
+          case(rmsd2av);                           call cv_rmsd2av_calc(_ARGS)
+          case(cvrms);                             call cv_cvrms_calc(_ARGS)
           case default ;                  __WRN( whoami, 'UNKNOWN CV SPECIFIED.')
        end select
-#undef __ARGS
+#undef _ARGS
        rtemp(i)=cv%r(i,instant)
       enddo
 !
@@ -1575,22 +1656,22 @@ __MPI_ONLY     &      mpiint, m, m, MPI_COMM_STRNG, request(m), ierror)
       call quat_reset_calculate(.false.)
 !
       do i=1, cv%num_cv
-#define __ARGS i,x,y,z,mass,x,y,z,calcz,deriv,addforce
+#define _ARGS i,x,y,z,mass,x,y,z,calcz,deriv,addforce
        select case(cv%type(i))
-          case(posi_com);                          call cv_posi_com_calc(__ARGS)
-          case(qcomp_1, qcomp_2, qcomp_3, qcomp_4);call cv_qcomp_calc(__ARGS)
-          case(angle_com);                         call cv_angle_com_calc(__ARGS)
-          case(anglvec);                           call cv_anglvec_calc(__ARGS)
-          case(dihe_com);                          call cv_dihe_com_calc(__ARGS)
-          case(dist_com);                          call cv_dist_com_calc(__ARGS)
-          case(rmsd);                              call cv_rmsd_calc(__ARGS)
-          case(drmsd);                             call cv_drmsd_calc(__ARGS)
-          case(proj);                              call cv_proj_calc(__ARGS)
-          case(rmsd2av);                           call cv_rmsd2av_calc(__ARGS)
-          case(cvrms);                             call cv_cvrms_calc(__ARGS)
+          case(posi_com);                          call cv_posi_com_calc(_ARGS)
+          case(qcomp_1, qcomp_2, qcomp_3, qcomp_4);call cv_qcomp_calc(_ARGS)
+          case(angle_com);                         call cv_angle_com_calc(_ARGS)
+          case(anglvec);                           call cv_anglvec_calc(_ARGS)
+          case(dihe_com);                          call cv_dihe_com_calc(_ARGS)
+          case(dist_com);                          call cv_dist_com_calc(_ARGS)
+          case(rmsd);                              call cv_rmsd_calc(_ARGS)
+          case(drmsd);                             call cv_drmsd_calc(_ARGS)
+          case(proj);                              call cv_proj_calc(_ARGS)
+          case(rmsd2av);                           call cv_rmsd2av_calc(_ARGS)
+          case(cvrms);                             call cv_cvrms_calc(_ARGS)
           case default ;                  __WRN( whoami, 'UNKNOWN CV SPECIFIED.')
        end select
-#undef __ARGS
+#undef _ARGS
        rtemp(i)=cv%r(i,instant)
       enddo
 !
@@ -1775,23 +1856,23 @@ __MPI_ONLY          call MPI_WAITALL(nstring-1, request, MPI_STATUSES_IGNORE, ie
      & (hist_freq.gt.0).and.(mod(iteration,hist_freq).ne.0) ) then ! cv%r(:,instant) was not computed in smcv_add_hist
        do i=1, cv%num_cv
 !    compute rnew
-#define __ARGS i,x,y,z,mass,x,y,z,calcz,deriv,addforce
+#define _ARGS i,x,y,z,mass,x,y,z,calcz,deriv,addforce
 !
         select case(cv%type(i))
-          case(posi_com);                          call cv_posi_com_calc(__ARGS)
-          case(qcomp_1, qcomp_2, qcomp_3, qcomp_4);call cv_qcomp_calc(__ARGS)
-          case(angle_com);                         call cv_angle_com_calc(__ARGS)
-          case(anglvec);                           call cv_anglvec_calc(__ARGS)
-          case(dihe_com);                          call cv_dihe_com_calc(__ARGS)
-          case(dist_com);                          call cv_dist_com_calc(__ARGS)
-          case(rmsd);                              call cv_rmsd_calc(__ARGS)
-          case(drmsd);                             call cv_drmsd_calc(__ARGS)
-          case(proj);                              call cv_proj_calc(__ARGS)
-          case(rmsd2av);                           call cv_rmsd2av_calc(__ARGS)
-          case(cvrms);                             call cv_cvrms_calc(__ARGS)
+          case(posi_com);                          call cv_posi_com_calc(_ARGS)
+          case(qcomp_1, qcomp_2, qcomp_3, qcomp_4);call cv_qcomp_calc(_ARGS)
+          case(angle_com);                         call cv_angle_com_calc(_ARGS)
+          case(anglvec);                           call cv_anglvec_calc(_ARGS)
+          case(dihe_com);                          call cv_dihe_com_calc(_ARGS)
+          case(dist_com);                          call cv_dist_com_calc(_ARGS)
+          case(rmsd);                              call cv_rmsd_calc(_ARGS)
+          case(drmsd);                             call cv_drmsd_calc(_ARGS)
+          case(proj);                              call cv_proj_calc(_ARGS)
+          case(rmsd2av);                           call cv_rmsd2av_calc(_ARGS)
+          case(cvrms);                             call cv_cvrms_calc(_ARGS)
           case default ;                  __WRN( whoami, 'UNKNOWN CV SPECIFIED.')
         end select
-#undef __ARGS
+#undef _ARGS
         rnew(i)=cv%r(i,instant)
        enddo
       else
@@ -1811,23 +1892,23 @@ __MPI_ONLY          call MPI_WAITALL(nstring-1, request, MPI_STATUSES_IGNORE, ie
       endif
 !
       do i=1, cv%num_cv
-#define __ARGS i,xcomp,ycomp,zcomp,mass,xcomp,ycomp,zcomp,calcz,deriv,addforce
+#define _ARGS i,xcomp,ycomp,zcomp,mass,xcomp,ycomp,zcomp,calcz,deriv,addforce
 !
         select case(cv%type(i))
-          case(posi_com);                          call cv_posi_com_calc(__ARGS)
-          case(qcomp_1, qcomp_2, qcomp_3, qcomp_4);call cv_qcomp_calc(__ARGS)
-          case(angle_com);                         call cv_angle_com_calc(__ARGS)
-          case(anglvec);                           call cv_anglvec_calc(__ARGS)
-          case(dihe_com);                          call cv_dihe_com_calc(__ARGS)
-          case(dist_com);                          call cv_dist_com_calc(__ARGS)
-          case(rmsd);                              call cv_rmsd_calc(__ARGS)
-          case(drmsd);                             call cv_drmsd_calc(__ARGS)
-          case(proj);                              call cv_proj_calc(__ARGS)
-          case(rmsd2av);                           call cv_rmsd2av_calc(__ARGS)
-          case(cvrms);                             call cv_cvrms_calc(__ARGS)
+          case(posi_com);                          call cv_posi_com_calc(_ARGS)
+          case(qcomp_1, qcomp_2, qcomp_3, qcomp_4);call cv_qcomp_calc(_ARGS)
+          case(angle_com);                         call cv_angle_com_calc(_ARGS)
+          case(anglvec);                           call cv_anglvec_calc(_ARGS)
+          case(dihe_com);                          call cv_dihe_com_calc(_ARGS)
+          case(dist_com);                          call cv_dist_com_calc(_ARGS)
+          case(rmsd);                              call cv_rmsd_calc(_ARGS)
+          case(drmsd);                             call cv_drmsd_calc(_ARGS)
+          case(proj);                              call cv_proj_calc(_ARGS)
+          case(rmsd2av);                           call cv_rmsd2av_calc(_ARGS)
+          case(cvrms);                             call cv_cvrms_calc(_ARGS)
           case default ;                  __WRN( whoami, 'UNKNOWN CV SPECIFIED.')
         end select
-#undef __ARGS
+#undef _ARGS
         rold(i)=cv%r(i,instant)
         cv%r(i,instant)=rnew(i) ! restore correct instantaneous values (note, if frames are present, they will have incorrect axes)
       enddo

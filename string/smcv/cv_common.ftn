@@ -7,6 +7,7 @@
 !     WHERE I IS THE CV INDEX
 !
 !
+#define _N cv_common
 #define __GETPAR(__WHAT,__TYPE) __CONCAT(__WHAT,_) =__CONCAT(ato,__TYPE) (getval_nocase(__STRING(__WHAT),__MYCTX))
 #define __COMPARE_PAR(__WHAT, __HOW, __NEG)\
 if (__NEG(__CONCAT(__PRE,__WHAT) __HOW __CONCAT(__WHAT,_)))then;__WARN(whoami,'MISMATCH IN SMCV PARAMETER "',__STRING(__WHAT),'":',__CONCAT(__PRE,__WHAT),'(PROGRAM) vs.',__CONCAT(__WHAT,_),'(FILE)');qerror=.true.;endif
@@ -58,7 +59,7 @@ __CHARMM_ONLY##IF STRINGM
       float, dimension(:), pointer   :: minval, maxval
       float :: wrss ! one over root-sum-square of the weight array
 ! 2016 : for flat-bottom potential
-      float, dimension(:), pointer :: fbwidth ! HALF-width of flat-bottom (fb) region of harmonic potential
+      float, dimension(:), pointer :: fbwidth ! HALF-width of flat-bottom (fb) region of harmonic potential (INPUT AS FBWIDTH BUT STORED AS HALF -- UNFORTUNATE CHOICE)
       int, dimension(:), pointer :: num_fb_ave ! number of averages in the fb region of the potential
       int :: num_cv=0 ! number of active collective vars
       int :: num_hist=0 ! number of snapshots in the history
@@ -93,6 +94,11 @@ __CHARMM_ONLY##IF STRINGM
       type (int8_vector) :: rex_log  ! logs the history of replica exchanges ( which replica and when ); local to each replica
       int, dimension(:), pointer :: rex_map ! holds the map between replica number and the process rank
       float :: rex_beta ! ensemble temperature in replica exchange (usually will be the same as the simulation temperature)
+#ifdef __WINXSLOG
+      type (int8_vector) :: winxs_log       ! logs the history of window crossings in windowed simulations
+      int, dimension(:), pointer :: fb_whereami  ! logs the location of the previous history location relative to the FB window
+#endif
+!
 ! unit cell data 10/2017
       type(cell) :: ucell
       end type cv_base
@@ -110,7 +116,8 @@ __CHARMM_ONLY##IF STRINGM
       public cv_common_print_header ! output basic string info
       public cv_common_print_local  ! print out cv values (i.e. z) to separate files
       public cv_common_print_global  ! print out cv values (i.e. z) to a combined file
-      public cv_common_add_hist ! save an instance of theta(x)
+      public cv_common_add_hist ! return an (updated) index into cv storage array, intended to save an instance of theta(x)
+      public cv_common_last_hist ! return current index into cv history array
       public cv_common_print_hist_local ! write history of computed cv values (i.e. theta(x)) to file
       public cv_common_print_hist_global ! write history of computed cv values (i.e. theta(x)) to file
       public cv_common_clear_hist ! clear history
@@ -178,9 +185,14 @@ __CHARMM_ONLY##IF STRINGM
       public cv_common_rex_compute_dE ! compute energy difference
       public cv_common_rex_read_map   ! read replica map from file
       public cv_common_rex_print_map  ! print replica map
-      public cv_common_rex_print_log  ! print replica map
+      public cv_common_rex_print_log  ! print replica log
       public cv_common_parser_done
-
+#ifdef __WINXSLOG
+      public cv_common_winxs_init  ! initialize
+      public cv_common_winxs_done  ! finalize
+      public cv_common_winxs_add  ! add entry to log
+      public cv_common_winxs_print_log  ! print window crossing log
+#endif
 !    variables
  __DECL_MSGBUF
  private _MSGBUF
@@ -199,7 +211,11 @@ __CHARMM_ONLY##IF STRINGM
      &                          cv_common_k_initialized=.false.,          & ! added for off_path sampling
      &                          cv_common_kpara_initialized=.false.,      & ! parallel force constant (off-path)
      &                          cv_common_kperp_initialized=.false.,      & ! perpendicular force constant (off-path)
-     &                          cv_common_rex_initialized=.false.    ! exchange of adjacent replicas
+     &                          cv_common_rex_initialized=.false.         & ! exchange of adjacent replicas
+#ifdef __WINXSLOG
+     &                          ,cv_common_winxs_initialized=.false.      & ! window crossing log initialized
+#endif
+     & ! nothing
 !
       int, public, save ::  cv_common_fixed_0_bc=0,                   &  ! first point fixed (not simulated)
      &                      cv_common_fixed_1_bc=0                       ! last point fixed (not simulated)
@@ -213,16 +229,21 @@ __CHARMM_ONLY##IF STRINGM
      &                              zcur=5,                             & ! z at current MD iteration (combination of main and comp)
      &                              zold=6,                             & ! z at previous MD iterations (combination of main and comp); currently not used
      &                              dz=7,                               & ! vector tangent to the path
-     &                              frunave=8,                          & ! running average between string steps
+     &                              frunave=8,                          & ! running average (but not force) between string steps
      &                              instant=9,                          & ! (instantaneous) theta(x)
      &                              previnst=10,                        & ! previous value of (instantaneous) theta(x)
      &                              forces=11,                          & ! average forces on z (dF/dz) for evolution
      &                              forces2=12,                         & ! instantaneous forces (not used for evolution)
      &                              fbave=13,                           & ! average conditional on flat-bottom region of potential
      &                              fbave_count=14,                     & ! must follow fbave for fb-stats to output correctly
-     &                              energy=15                             ! energy of this restraint
+     &                              energy=15                           & ! energy of this restraint
+     & ! nothing
 !
+#ifdef __WINXSLOG
+      int, parameter, public :: main_offset=16 ! num of parameters above
+#else
       int, parameter, public :: main_offset=15 ! num of parameters above
+#endif
 !
       character(len=8), parameter, public :: real_format='(E23.15)'
       character(len=5), parameter, public :: int_format='(I10)'
@@ -290,10 +311,13 @@ __CHARMM_ONLY##IF STRINGM
         allocate(cv%curvature(nrep-2))
         allocate(cv%fe(nrep))
         allocate(cv%feav(nrep))
+#ifdef __WINXSLOG
+        allocate(cv%fb_whereami(max_cv_common))
+#endif
 !=============================================== INITIALIZATION
         cv_common_initialized=.true.
         cv%r=__NAN
-        cv%r(:,frunave)=zero    ! 8/2016 : displacement for force running average (formerly CV running average)
+        cv%r(:,frunave)=zero    ! 8/2016 : displacement for force running average (formerly CV running average; note that it's not a force)
         cv%r(:,previnst)=zero  !
         cv%r(:,fbave)=zero  !
         cv%M=__NAN
@@ -317,6 +341,9 @@ __CHARMM_ONLY##IF STRINGM
         cv%num_average_samples=0
         cv%num_fe_samples=0
         cv%num_fb_ave=0
+#ifdef __WINXSLOG
+        cv%fb_whereami=__INAN
+#endif
        endif
        end subroutine cv_common_init
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -362,6 +389,9 @@ __CHARMM_ONLY##IF STRINGM
         deallocate(cv%weight)
         deallocate(cv%fbwidth)
         deallocate(cv%num_fb_ave)
+#ifdef __WINXSLOG
+        deallocate(cv%fb_whereami)
+#endif
         deallocate(cv%ds)
         deallocate(cv%curvature)
         deallocate(cv%fe)
@@ -1281,13 +1311,27 @@ __CHARMM_ONLY##ENDIF
        endif
        end subroutine cv_common_set_bc
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-       function cv_common_add_hist()
-!
-       int :: cv_common_add_hist
-       __IAM(CV_COMMON_ADD_HIST)
+       __FUN(last_hist)()
+       int :: __NM(last_hist)
+       __IAM(last_hist)
+         __NM(last_hist)=-one ! initialize to a bad value :
 !      returns index into cv%r array; the addition is done elsewhere
        if (cv%num_cv.eq.0) then
          __WRN( whoami,'NO CV DEFINED. NOTHING DONE');
+       elseif (cv%num_hist.eq.0) then ! there are no history samples ; this is normal at the beginning of a simulation, so we will not print a warning here
+!       no warning
+       else
+        __NM(last_hist)=cv%end_hist+main_offset ! good value + offset the reference coords
+       endif
+       end __FUN(last_hist)
+!cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+       __FUN(add_hist)()
+       int :: __NM(add_hist)
+       __IAM(add_hist)
+!      returns index into cv%r array; the addition is done elsewhere
+       if (cv%num_cv.eq.0) then
+         __WRN( whoami,'NO CV DEFINED. NOTHING DONE');
+         __NM(add_hist)=-one
          return
        endif
 !
@@ -1298,8 +1342,8 @@ __CHARMM_ONLY##ENDIF
         cv%end_hist=cv%end_hist+1 ! location of the last slice
         cv%num_hist=cv%num_hist+1 ! total number of slices in history
        endif
-       cv_common_add_hist=cv%end_hist+main_offset ! offset the reference coords
-       end function cv_common_add_hist
+       __NM(add_hist)=cv%end_hist+main_offset ! offset the reference coords
+       end __FUN(add_hist)
 !cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_smooth_hist(d,nskip) ! not used in regular SMCV
 !      filter the history of CV values so as to obtain new restraining sets
@@ -2196,7 +2240,7 @@ __CHARMM_ONLY##ENDIF
 !      local
        character(len=80) :: frm
        interface
-        subroutine smcv_init(maxcv);; int, optional :: maxcv ; end subroutine smcv_init
+        subroutine smcv_init(maxcv); int, optional :: maxcv ; end subroutine smcv_init
        end interface
 !      begin
        if (.not.smcv_initialized) call smcv_init()
@@ -2218,7 +2262,7 @@ __CHARMM_ONLY##ENDIF
 !      local
        character(len=80) :: frm
        interface
-        subroutine smcv_init(maxcv);; int, optional :: maxcv ; end subroutine smcv_init
+        subroutine smcv_init(maxcv); int, optional :: maxcv ; end subroutine smcv_init
        end interface
 !      begin
        if (.not.smcv_initialized) call smcv_init()
@@ -2241,7 +2285,7 @@ __CHARMM_ONLY##ENDIF
        character(len=80) :: frm
 !      begin
        interface
-        subroutine smcv_init(maxcv);; int, optional :: maxcv ; end subroutine smcv_init
+        subroutine smcv_init(maxcv); int, optional :: maxcv ; end subroutine smcv_init
        end interface
        if (.not.smcv_initialized) call smcv_init()
        if (.not.present(fmt)) then
@@ -2498,6 +2542,134 @@ __CHARMM_ONLY##ENDIF
        int :: n
        if (n.ge.0) cv%num_average_samples=n
        end subroutine cv_common_set_ave_samples
+!============================================================
+#ifdef __WINXSLOG
+       __SUB(winxs_init)()
+       use sm_var, only: nstring, smcv_initialized
+       __IAM(__NM(winxs_init))
+!
+       if (.not.cv_common_winxs_initialized) then
+        if (.not.smcv_initialized) return ! unclear whether we need this
+        call int8_vector_reinit(cv%winxs_log)
+        cv_common_winxs_initialized=cv%winxs_log%initialized
+        if (.not.cv_common_winxs_initialized) then ; __WRN(whoami,'COULD NOT INITIALIZE.') ; endif
+       endif
+!
+       end subroutine cv_common_winxs_init
+!============================================================
+       subroutine cv_common_winxs_done()
+       if (cv_common_winxs_initialized) then
+        call int8_vector_done(cv%winxs_log) ! destroy log
+        cv_common_winxs_initialized=.false.
+       endif
+       end subroutine cv_common_winxs_done
+!============================================================
+       __SUB(winxs_add)(i8array)
+       int*8, dimension(:), intent(in) :: i8array
+       int :: i
+       int :: iok
+       __IAM(__NM(winxs_add))
+       do i=1,size(i8array) ; iok=int8_vector_add(cv%winxs_log, i8array(i)) ; enddo
+       end __SUB(winxs_add)
+!============================================================
+       __SUB(winxs_print_log)(iunit, global_)
+!      assume that unit is prepared
+!      NOTE that this is a global print!
+! 10/22 : NOTE further that I would like to option to gather from all nodes into a single log, w/o distinguising between slave and string root notes
+! to do this easily, I am defining the communicator here, at the preprocessor level, for now
+! 11/22 : instead of the defs below, I have decided pass in a flag that determines whether to use global or string comm
+!#define _COMM GLOBAL
+!#define _COMM STRNG
+!#define MPI_COMM __CONCAT(MPI_COMM_,_COMM)
+!#define SIZE_COMM __CONCAT(SIZE_,_COMM)
+!#define ME_COMM __CONCAT(ME_,_COMM)
+!
+      __DEP_MULTICOM
+      __DEP_MPI
+!
+       int iunit
+       int :: i
+       int :: SIZE_COMM, MPI_COMM, ME_COMM
+       int4mpi, pointer :: winxs_log_size4(:)=>null()
+       int, pointer :: winxs_log_size8(:)=>null()
+       int4mpi, pointer :: winxs_log_disp4(:)=>null()
+       int :: total_size
+       INTEGER*8, pointer :: winxs_log_all(:)=>null()
+       int :: ierror
+       __OPAR(global,bool)
+!
+       __IAM(__NM(winxs_print_log))
+#include "mpitype.def"
+!      do work
+       if (.not.cv%winxs_log%initialized) then
+        __WRN(whoami,'WINDOW CROSSING LOG NOT INITIALIZED. NOTHING DONE.')
+        return
+       elseif ( all ( abs(cv%fbwidth(1:cv%num_cv)).lt.__ERRTOL )) then
+        __WRN(whoami,'NO CVS SEEM TO BE USING A FLAT-BOTTOM POTENTIAL. WILL CONTINUE')
+       endif
+!      gather all data on root
+       __PRESENT(global,.true.) ! the default is that everyone contributes to the log ; this is arguably safer, because in the worst case, we can remove duplicates
+       if (global) then
+        MPI_COMM=MPI_COMM_GLOBAL ; SIZE_COMM=SIZE_GLOBAL ; ME_COMM=ME_GLOBAL
+       else
+        MPI_COMM=MPI_COMM_STRNG ; SIZE_COMM=SIZE_STRNG ; ME_COMM=ME_STRNG
+       endif
+!
+       if (MPI_COMM.ne.MPI_COMM_NULL) then
+        if (SIZE_COMM.gt.1) then
+         allocate(winxs_log_size8(SIZE_COMM),winxs_log_size4(SIZE_COMM),winxs_log_disp4(SIZE_COMM))
+!     calculate size of logs
+         winxs_log_size8=0
+!
+ __MPI_ONLY     call MPI_GATHER(cv%winxs_log%last,1,mpiint,                    &
+ __MPI_ONLY     &                 winxs_log_size8,1,mpiint,                          &
+ __MPI_ONLY     &                 0,MPI_COMM,ierror)
+! we only need to gather on root, but, in the past I've seen better performance with allgather in some cases !
+! __MPI_ONLY     call MPI_ALLGATHER(cv%winxs_log%last,1,mpiint,                    &
+! __MPI_ONLY     &                 winxs_log_size8,1,mpiint,                          &
+! __MPI_ONLY     &                 MPI_COMM,ierror)
+!
+! note : if using gather rather than allgather, only root needs to compute below :
+         if (ME_COMM.eq.0) then
+          total_size=sum(winxs_log_size8)
+          winxs_log_size4=winxs_log_size8 ! type cast to 4 byte int
+!     allocate space to hold entire log
+          allocate(winxs_log_all(total_size))
+!     calculate send displacements
+          winxs_log_disp4(1)=0;
+          do i=1,SIZE_COMM-1
+           winxs_log_disp4(i+1)=winxs_log_disp4(i)+winxs_log_size4(i)
+          enddo
+         endif
+!      now gather the logs
+__MPI_ONLY        call MPI_GATHERV(cv%winxs_log%i8,cv%winxs_log%last,mpiint8,          &
+__MPI_ONLY     &                  winxs_log_all,winxs_log_size4,winxs_log_disp4,mpiint8,   &
+__MPI_ONLY     &                  0,MPI_COMM,ierror)
+!__MPI_ONLY        call MPI_ALLGATHERV(cv%winxs_log%i8,cv%winxs_log%last,mpiint8,          &
+!__MPI_ONLY     &                  winxs_log_all,winxs_log_size4,winxs_log_disp4,mpiint8,   &
+!__MPI_ONLY     &                  MPI_COMM,ierror)
+!
+         __FREE(winxs_log_size8)
+         __FREE(winxs_log_size4)
+         __FREE(winxs_log_disp4)
+        else ! string_size=1
+         total_size=cv%winxs_log%last
+         allocate(winxs_log_all(total_size)) ; winxs_log_all=cv%winxs_log%i8(1:total_size)
+        endif ! SIZE_COMM
+!
+        if(ME_COMM.eq.0.and.total_size.gt.0) &
+#ifdef __WXSLOGTXT
+     &     write(iunit, '(4I9)') winxs_log_all ! formatted file for debugging
+#else
+     &     write(iunit) winxs_log_all ! simple binary write without formatting
+#endif
+!
+        call int8_vector_reinit(cv%winxs_log) ! erase log
+        __FREE(winxs_log_all)
+       endif ! COMM not null
+       end subroutine cv_common_winxs_print_log
+!===================================================================================================
+#endif
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_rex_init(temp)
        use sm_var, only: nstring, smcv_initialized
@@ -2521,7 +2693,6 @@ __CHARMM_ONLY##ENDIF
        end subroutine cv_common_rex_init
 !ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
        subroutine cv_common_rex_done()
-       
        if (cv_common_rex_initialized) then
         deallocate(cv%rex_map)
         call int8_vector_done(cv%rex_log) ! destroy rex log
@@ -2621,7 +2792,7 @@ __CHARMM_ONLY##ENDIF
 !
 #include "mpitype.def"
 !      do work
-!      gather all data on root
+!      gather all data on root, well actually an allgather, for some reason
        if (.not.cv_common_rex_initialized) call cv_common_rex_init()
 !
        if (MPI_COMM_STRNG.ne.MPI_COMM_NULL) then
