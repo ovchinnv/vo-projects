@@ -149,6 +149,7 @@ module _N
  __PAR(structure_update_freq, int, ione)         ! frequency of updating coordinates from which the surface is generated
  __PAR(structure_update_memory, float, 0.999d0)  ! memory constant for exponential update
  __PAR(output_freq, int, 1000)                   ! frequency of writing output file
+   int, save :: restart_freq, default_restart_freq=1000; ! frequency of writing restart file (used to be output_freq above) ; note default modifiable (see below)
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
  __PAR(full_sum_freq, int, 75)                   ! frequency of force calculation without density truncation
                                                  ! doing the full calculation allows all atoms to be sorted
@@ -919,8 +920,16 @@ module _N
 !
 #define __VAR	output_freq
 #define __TAG	__VAR
-#define __NAME	frequency for writing output/restart file
+#define __NAME	frequency for writing output
+#define __DOIFOK if (__VAR.le.izero) __WRN(whoami, 'WILL NOT PRODUCE RUNNING OUTPUT.')
+#include "parser/parser_macro2.src"
+!
+#define __VAR	restart_freq
+#define __TAG	__VAR
+#define __NAME	frequency for writing restart file
 #define __DOIFOK if (__VAR.le.izero) __WRN(whoami, 'RESTART FILE WILL BE WRITTEN AT THE END ONLY.')
+! if output_freq is defined, use that for the restart_freq default value :
+ if ( existtag_nocase("output_freq", context ) .and. output_freq .gt. izero ) default_restart_freq=output_freq
 #include "parser/parser_macro2.src"
 #undef __INT
 !
@@ -1205,7 +1214,11 @@ endif
 ! add atoms to list if provided
 !  if (present(atoms)) then
    do l=1, nsurface_atoms
+#ifdef __CLASS
     ierr=atoms%uadd(isurface_atoms(l))
+#else
+    ierr=int_vector_uadd(atoms,isurface_atoms(l))
+#endif
 ! NOTE : it is important to record all atoms to which forces will be applied :
 #if (defined(__RMFT) && defined(__SIMPLE_NET_FORCE_SURFACE)) || defined(__HAMILTONIAN) || defined(__ROTRES)
 !  if (remove_net_torque.and.present(forced_atoms)) ierr=forced_atoms%uadd(isurface_atoms(l))
@@ -1219,7 +1232,11 @@ endif
 #endif
 &    ) &
 #endif
-ierr=forced_atoms%uadd(isurface_atoms(l))
+#ifdef __CLASS
+ ierr=forced_atoms%uadd(isurface_atoms(l))
+#else
+ ierr=int_vector_uadd(forced_atoms,isurface_atoms(l))
+#endif
 #endif
    enddo ! physical surface atoms
 !  endif ! present
@@ -1262,13 +1279,21 @@ ierr=forced_atoms%uadd(isurface_atoms(l))
 ! add atoms to lists if provided
 !  if (present(atoms)) then
    do l=1, nsolvent
+#ifdef __CLASS
     ierr=atoms%uadd(isolvent_atoms(l))
+#else
+    ierr=int_vector_uadd(atoms,isolvent_atoms(l))
+#endif
    enddo
 !  endif ! present
 !
 !  if (present(forced_atoms)) then
    do l=1, nsolvent
+#ifdef __CLASS
     ierr=forced_atoms%uadd(isolvent_atoms(l))
+#else
+    ierr=int_vector_uadd(forced_atoms,isolvent_atoms(l))
+#endif
    enddo
 !  endif ! present
 !
@@ -3563,13 +3588,16 @@ __DBGVAR(solvent_mass_nonbulk,1)
   __OUT('================================')
 !
   __PRINT(_MSGBUF)
-
-! write restart file
-   __MESSAGE(whoami, 'WRITING OUTPUT/RESTART FILE TO ("'//trim(output_file)//'")')
-   call __NM(write_restart_file)
 !
   endif
  endif
+!
+ if (restart_freq.gt.0) then ; if __CHKUPDATE(restart_freq) then
+! write restart file
+   __MESSAGE(whoami, 'WRITING RESTART FILE TO ("'//trim(output_file)//'")') ! note that the _output_ restart is called output_file ; restart_file is for input (above)
+   call __NM(write_restart_file)
+ endif                      ; endif
+!
 !
 #ifdef __DEBUGDUMP
 ! write simulation state to file for force debugging

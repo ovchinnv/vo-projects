@@ -73,6 +73,11 @@ public:
 };
 
 OpenCLCalcDynamoForceKernel::~OpenCLCalcDynamoForceKernel() {
+    if (hasInitialized) {
+        master_done_plugin();
+        free(r);
+        free(fr);
+    }
     if (dynamoForces != NULL)
         delete dynamoForces;
 }
