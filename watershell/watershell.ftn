@@ -1889,7 +1889,7 @@ __DBGVAR(r_com_sa,1)
     call rsort_index('i',nsurface_coord,distance2(:),solute_neighbor_list(:,i),ierr)
 !
     if (qminimum_distance) then
-     solute_neighbor_mind(i)=min(nsurface_coord,2) ! fo mindist only
+     solute_neighbor_mind(i)=min(nsurface_coord,2) ! for mindist only
     elseif (nsurface_coord>0) then
 ! for the erf/density method, we need to find the largest index in the set of atoms supported by filter:
 ! use this search macro:
@@ -4346,6 +4346,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
  float :: rp(3), rw(3), dr(3), dr2, dr2min, drmin(3)
 #ifdef __SORT_LIST
  int :: jj
+ int1 :: qbblswap ! flags whether a bubble sort swap has been made
  float :: dr2old ! squared minimum distance difference from previous iteration
 #if defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
  float :: neighbor_list_length
@@ -4440,7 +4441,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
 #endif
 #ifdef __SORT_LIST
-!$OMP ,dr2old, jj &
+!$OMP ,dr2old, jj, qbblswap &
 #endif
 #ifdef __HAMILTONIAN
 !$OMP , tid, ispt_this_thread, ddist_surf_all_thread &
@@ -4490,6 +4491,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
    do jj=1, nsurface_coord ! inner loop over solute atoms ! to check the entire surface atom list
 #endif
     j=solute_neighbor_list(jj,i) ! note that this is really a (partially) distance-sorted list of surface atoms for each solvent atom
+    qbblswap=0
 #else
    do j=1, nsurface_coord ! inner loop over solute atoms, without regard to their location relative to the solvent atom i
 #endif
@@ -4509,6 +4511,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
     if (dr2 .lt. dr2old) then
      solute_neighbor_list(jj,i)=solute_neighbor_list(jj-1,i)
      solute_neighbor_list(jj-1,i)=j
+     qbblswap=1
     endif
     dr2old=dr2
 #endif
@@ -4524,8 +4527,8 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
 #ifdef __SORT_LIST
 ! put this atom first in the list to increase our chances of quitting early next time
-!      solute_neighbor_list(jj,i)=solute_neighbor_list(1,i)
-!      solute_neighbor_list(1,i)=j
+      solute_neighbor_list(jj-qbblswap,i)=solute_neighbor_list(1,i)
+      solute_neighbor_list(1,i)=j
 #endif
       exit ! atom is considered inside, so no need to loop further
 #ifdef __BULK2_DISTANCE_SCALE
@@ -4539,7 +4542,8 @@ __DBGVAR(bulk_boundary_contour_value,1)
 !      __INCR(__solvent_mass_bulk, mass_solv(i)) ! direct sum ; algorithm not quite correct so commenting but not deleting
 #ifdef __SORT_LIST
 ! put this atom first in the list to increase our chances of quitting early next time
-!      solute_neighbor_list(jj,i)=solute_neighbor_list(1,i)
+! omit because this is done at the end of loop
+!      solute_neighbor_list(jj-qbblswap,i)=solute_neighbor_list(1,i)
 !      solute_neighbor_list(1,i)=j
 #endif
      endif
@@ -4549,8 +4553,8 @@ __DBGVAR(bulk_boundary_contour_value,1)
      qforced=.false.
 #ifdef __SORT_LIST
 ! put this atom first in the list to increase our chances of quitting early next time
-!     solute_neighbor_list(jj,i)=solute_neighbor_list(1,i)
-!     solute_neighbor_list(1,i)=j
+     solute_neighbor_list(jj-qbblswap,i)=solute_neighbor_list(1,i)
+     solute_neighbor_list(1,i)=j
 #endif
      exit ! atom is considered inside, so no need to loop further (because dasystat off, no need to check whether bulk)
     endif
@@ -4563,10 +4567,9 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
 #ifdef __SORT_LIST
 ! put this atom first in the list
-! note that is is possible to do two swaps one here and one above, in the same loop, which is an error, so turn off both, since no sizeable speed bump anyway
-! should not do this when multiple threads are running
-!     solute_neighbor_list(jj,i)=solute_neighbor_list(1,i)
-!     solute_neighbor_list(1,i)=j
+! NOTE: MAKE SURE it is impossible to do two swaps one here and one above, in the same loop, which is an error; can turn off both, since no sizeable speed bump anyway
+     solute_neighbor_list(jj-qbblswap,i)=solute_neighbor_list(1,i)
+     solute_neighbor_list(1,i)=j
 #ifdef __NEIGHBOR_LIST
 ! if the atom with the minimum distance happens to be farther in index space than the stored index, increase the index :
      if (jj>solute_neighbor_mind(i)) solute_neighbor_mind(i)=jj-1 ; ! even this might be too aggressive
@@ -4656,7 +4659,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
 #endif
 #ifdef __SORT_LIST
-!$omp ,dr2old, jj &
+!$omp ,dr2old, jj, qbblswap &
 #if defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
 !$omp , __U(neighbor_list_misses), neighbor_list_length &
 #endif
@@ -4718,6 +4721,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
    do jj=1, nsurface_coord ! inner loop over solute atoms
 !   do jj=nsurface_coord, 1, -1 ! inner loop over solute atoms, starting from the end
     j=solute_neighbor_list(jj,i)
+    qbblswap=0
 #else
    do j=1, nsurface_coord ! inner loop over solute atoms
 #endif
@@ -4737,6 +4741,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
     if (dr2 .lt. dr2old) then
      solute_neighbor_list(jj,i)=solute_neighbor_list(jj-1,i)
      solute_neighbor_list(jj-1,i)=j
+     qbblswap=1
     endif
     dr2old=dr2
 #endif
@@ -4753,7 +4758,8 @@ __DBGVAR(bulk_boundary_contour_value,1)
       qforced=.false. ! also, mark as a non-forced atom
 #ifdef __SORT_LIST
 ! put this atom first in the list to increase our chances of quitting early next time
-!      solute_neighbor_list(jj,i)=solute_neighbor_list(1,i)
+! not necessary because the code block at end of loop will guarantee this
+!      solute_neighbor_list(jj-qbblswap,i)=solute_neighbor_list(1,i)
 !      solute_neighbor_list(1,i)=j
 #endif
 ! atom is considered inside, but proceed to the end of list because we want to sort it
@@ -4767,7 +4773,8 @@ __DBGVAR(bulk_boundary_contour_value,1)
       qforced=.false.
 #ifdef __SORT_LIST
 ! put this atom first in the list to increase our chances of quitting early next time
-!      solute_neighbor_list(jj,i)=solute_neighbor_list(1,i)
+! not necessary because the code block at end of loop will guarantee this
+!      solute_neighbor_list(jj-qbblswap,i)=solute_neighbor_list(1,i)
 !      solute_neighbor_list(1,i)=j
 #endif
      endif ! dr2<dist
@@ -4777,10 +4784,10 @@ __DBGVAR(bulk_boundary_contour_value,1)
      qforced=.false. ! this atom is inside, however, proceed to the end of the surface atom list because we want to sort it
 #ifdef __SORT_LIST
 ! put this atom first in the list to increase our chances of quitting early next time
-! NOTE : these section OMP sections have ad hoc problems, such as with -fcheck=all flags
+! NOTE : these OMP sections have ad hoc problems, such as with -fcheck=all flags
 ! also : do not use critical; this produces a completely different compilation ; very slow !
 !!$omp critical
-! not necessary because the code block below will guarantee this
+! not necessary because the code block at end of loop will guarantee this
 !     solute_neighbor_list(jj,i)=solute_neighbor_list(1,i)
 !     solute_neighbor_list(1,i)=j
 !!$omp end critical
@@ -4797,10 +4804,10 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #ifdef __NEIGHBOR_LIST
      solute_neighbor_mind(i)=jj
 #endif
-! note that it is technically possible to swap twice here and above, which would make two j`s in the same list -- error
+! NOTE : MAKE SURE it is impossible to swap twice here and above, which would make two j`s in the same list -- error
 ! put this atom first in the list
-!     solute_neighbor_list(jj,i)=solute_neighbor_list(1,i)
-!     solute_neighbor_list(1,i)=j
+     solute_neighbor_list(jj-qbblswap,i)=solute_neighbor_list(1,i)
+     solute_neighbor_list(1,i)=j
 #endif
     endif
    enddo ! nsurface_coord
