@@ -277,7 +277,10 @@ void OpenCLCalcDynamoForceKernel::executeOnWorkerThread() {
      } // qdble
     } // atomlist == NULL
     // upload forces to device <buffer>                       <blocking> <offset> <size>                                            <pointer>           <events> <event>
-    queue.enqueueWriteBuffer(dynamoForces->getDeviceBuffer(), CL_FALSE, 0, dynamoForces->getSize()*dynamoForces->getElementSize(), cl.getPinnedBuffer(), NULL, &syncEvent);
+// comment out old version ; queue no longer usable
+//    queue.enqueueWriteBuffer(dynamoForces->getDeviceBuffer(), CL_FALSE, 0, dynamoForces->getSize()*dynamoForces->getElementSize(), cl.getPinnedBuffer(), NULL, &syncEvent);
+// 12.26.21 : VO
+    dynamoForces->upload(cl.getPinnedBuffer(), false);
 }
 
 double OpenCLCalcDynamoForceKernel::addForces(bool includeForces, bool includeEnergy, int groups) {
@@ -285,10 +288,11 @@ double OpenCLCalcDynamoForceKernel::addForces(bool includeForces, bool includeEn
         return 0;
     // Wait until executeOnWorkerThread() is finished.
     cl.getWorkThread().flush();
-    vector<cl::Event> events(1);
-    events[0] = syncEvent;
-    syncEvent = cl::Event();
-    queue.enqueueWaitForEvents(events);
+// comment queue references
+//    vector<cl::Event> events(1);
+//    events[0] = syncEvent;
+//    syncEvent = cl::Event();
+//    queue.enqueueWaitForEvents(events);
     // Add in the forces.
     if (includeForces) {
         addForcesKernel.setArg<cl::Buffer>(0, dynamoForces->getDeviceBuffer());
