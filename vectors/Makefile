@@ -7,10 +7,12 @@ SORT=isort.o rsort.o isort_ind.o isort_indshort.o rsort_ind.o rsort_indshort.o i
 NAME=vectors
 DEPS=output
 
+LOCALDEFS=-D'__CHARMM_ONLY=!'
+LOCALMACROS+=-include source.defs
+LOCALDEPS+=source.defs
+
 include $(ROOT)/Makefile.inc
 
-
-LOCALDEFS=-D'__CHARMM_ONLY=!'
 CHARMM_SOURCES=ivector.src ivector_list.src rvector.src rvector_list.src i8vector.src isort.src rsort.src i8sort.src rsort_ind.src isort_ind.src 
 # i8vector_list.src
 #$(ROOT)/$(NAME).stamp:: $(CHARMM_SOURCES)
@@ -18,14 +20,14 @@ CHARMM_SOURCES=ivector.src ivector_list.src rvector.src rvector_list.src i8vecto
 LINKOBJS=output.o
 #####################################################
 ivector.o:  isort.o ivector.F90
-ivector.F90: vector_template.ftn
-	@$(FPP) $(FPPFLAGS) $(DEFS) -U int -D'__DATANAME=i' -D'__DATATYPE=int' -D'__TYPENAME=int' $(MSG) $< >$@
+ivector.F90: vector_template.ftn $(LOCALDEPS)
+	@$(FPP) $(FPPFLAGS) $(DEFS) $(GLOBALMACROS) $(LOCALMACROS) -U int -D'__DATANAME=i' -D'__DATATYPE=int' -D'__TYPENAME=int' $(MSG) $< >$@
 rvector.o: rsort.o rvector.F90
-rvector.F90: vector_template.ftn
-	@$(FPP) $(FPPFLAGS) $(DEFS) -D'__DATANAME=r' -D'__DATATYPE=float' -D'__TYPENAME=real' $(MSG) $< >$@
+rvector.F90: vector_template.ftn $(LOCALDEPS)
+	@$(FPP) $(FPPFLAGS) $(DEFS) $(GLOBALMACROS) $(LOCALMACROS) -D'__DATANAME=r' -D'__DATATYPE=float' -D'__TYPENAME=real' $(MSG) $< >$@
 i8vector.o:  i8sort.o i8vector.F90
-i8vector.F90: vector_template.ftn
-	@$(FPP) $(FPPFLAGS) $(DEFS) -U int -D'__DATANAME=i8' -D'__DATATYPE=INTEGER*8' -D'__TYPENAME=int8' $(MSG) $< >$@
+i8vector.F90: vector_template.ftn $(LOCALDEPS)
+	@$(FPP) $(FPPFLAGS) $(DEFS) $(GLOBALMACROS) $(LOCALMACROS) -U int -D'__DATANAME=i8' -D'__DATATYPE=INTEGER*8' -D'__TYPENAME=int8' $(MSG) $< >$@
 ####################################################
 ivector_list.o: ivector.o ivector_list.F90
 ivector_list.F90: vector_list_template.ftn
