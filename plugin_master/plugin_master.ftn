@@ -262,11 +262,14 @@ end function _ME
  real(c_double), intent(in), dimension(3,3) :: box_double
  float :: box(3,3)
  __IAM(_ME)
-#ifdef __STRUNA
+#if defined(__STRUNA) || ( defined(__OMPCOPY) && defined(__OMP) )
  int :: i
 #ifdef __ADAPTIVE_KCV
  float :: dbedk
 #endif
+#endif
+#if defined(__OMP) || defined(__OMPCOPY)
+ int :: ind
 #endif
 !
  _ME=1
@@ -287,13 +290,26 @@ end function _ME
 ! NOTE : with deferred initialization (SM code) it is possible for the c-atom lists not to be initialized, so we have to check !
  if (allocated(__NM(atomlist))) then
   fr(:,__NM(forced_atomlist(2:)))=0d0 ! NOTE that I assume forced_atomlist is in the same state as atomlist
-! update coordinates :
+! update plugin coordinates :
   if (qsingle) then
    if (qper) box=box_single
    r(:,__NM(atomlist(2:)))=r_plugin_single(:,__NM(atomlist(2:)))
   else
    if (qper) box=box_double
+#if defined(__OMPCOPY) && defined(__OMP)
+! copying via omp usually makes no difference
+!omp parallel private (i,ind)
+!omp do schedule (dynamic)
+   do i=2, __NM(atomlist(1))+1
+    ind=__NM(atomlist(i));
+    r(:,ind)=r_plugin_double(:,ind)
+   enddo
+!omp end do
+!omp end parallel
+#else
    r(:,__NM(atomlist(2:)))=r_plugin_double(:,__NM(atomlist(2:)))
+#endif
+
   endif
  else ! atomlist not allocated
 #endif
@@ -392,7 +408,19 @@ end function _ME
 #ifdef __INIT_OUTPUT_FORCE_ZERO
   f_plugin_double=0d0
 #endif
+#if defined(__OMPCOPY) && defined(__OMP)
+! here omp usually makes no difference
+!omp parallel private (i,ind)
+!omp do schedule (dynamic)
+ do i=2, __NM(forced_atomlist(1))+1
+  ind=__NM(forced_atomlist(i))
+  f_plugin_double(:,ind)=fr(:,ind)
+ enddo
+!omp end do
+!omp end parallel
+#else
   f_plugin_double(:,__NM(forced_atomlist(2:)))=fr(:,__NM(forced_atomlist(2:)))
+#endif
   e_double=e
  endif
 !

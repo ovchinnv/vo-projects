@@ -976,9 +976,23 @@ endif
                   qneighbor_list=.false. ;\
                  else ;\
                   neighbor_list_factor = seven + ( (__VAR * __VAR) * 2.0d-4); \
-                  if (.not.qneighbor_list) __WRN(whoami, 'NEIGHBOR LIST WILL NOT BE USED BECAUSE "neighbor_list" set to "off"') ;\
+                  if (.not.qneighbor_list) __WRN(whoami, 'NEIGHBOR LIST WILL NOT BE USED BECAUSE "neighbor_list" SET TO "off"') ;\
                  endif
 #include "parser/parser_macro3.src"
+!
+#define __VAR	neighbor_list_factor
+#define __TAG	__VAR
+#define __NAME	scaling between neighbor list truncated length and index of minimum distance
+#define __LEZEROERR
+ ierr=neighbor_list_factor ! save before overwrite for output
+#define __DOIFOK __WRN(whoami, 'OVERRIDING AUTOMATIC VALUE ('//itoa(ierr)//') FOR "'//__STRING(__VAR)//'"')
+#undef __DEFAULT
+ if (qneighbor_list) then
+#include "parser/parser_macro2.src"
+ endif
+#undef __LEZEROERR
+#define __DEFAULT
+!
 !#ifdef __DEBUG
 !       __DBGOUT('FULL_SUM_FREQ IS ',full_sum_freq)
        __DBGOUT('NEIGHBOR_LIST_FACTOR SET TO ',neighbor_list_factor) ! , seven + (full_sum_freq**2 * 2.0d-4)) 
@@ -1752,6 +1766,7 @@ __DBGVAR(r_com_sa,1)
 ! int :: ibeg, iend ! atom indices for looping
  float :: distance_from_solute, distance_from_solute2, pre, d0
  float :: surface_force ! , density_beyond_contour ! useful ?
+!
 #ifdef __ROTRES
  float :: dcom(3), r1(3)
 #endif
@@ -1784,6 +1799,8 @@ __DBGVAR(r_com_sa,1)
 #ifdef __OMP
 #//define __REDUCE(_W) __INCR(_W,__U(_W)) ! thread reduction
 #define __REDUCE(_W) _W=_W+__U(_W) ! thread reduction
+#define __REDUCEADD(_W) __REDUCE(_W)
+#define __REDUCEMAX(_W) _W=MAX(_W,__U(_W)) ! thread reduction
 #define __AREDUCE(_W,_I) _W(_I)=_W(_I)+__U(_W)(_I)
  float :: __U(surface_energy)
  float :: __U(surface_force)
@@ -1800,6 +1817,10 @@ __DBGVAR(r_com_sa,1)
 #endif
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
  int :: ind, istep ! variables for binary search
+#if defined(__SHOW_NEIGHBOR_LIST)
+ int :: neighbor_dmin, neighbor_dmax, neighbor_dsum, neighbor_depth, iter
+#endif
+!
 #if defined(__OMP) & defined(__FORCE_OMP)
  float, allocatable :: distance2_all_threads(:,:)
  int :: tid
@@ -1819,6 +1840,9 @@ __DBGVAR(r_com_sa,1)
  int :: i, ii
  __IAM(__NM(main))
 !================================================================
+!dbg 
+!return
+!
  if (.not. __NM(initialized)) then
   __WRN(whoami, ftoupper(__STRING(_N))//'NOT INITIALIZED. NOTHING DONE.');
   return
@@ -1827,8 +1851,8 @@ __DBGVAR(r_com_sa,1)
  __INC(iteration)
 ! copy solvent coordinates
  r_solv=r(:,isolvent_atoms)
-! sort neighbor list on first iteration
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
+! sort neighbor list on first iteration
  if (qneighbor_list.and.sort_neighbor_list_freq.gt.izero) then
   if (__CHKUPDATE(sort_neighbor_list_freq)) qneighbor_list_sorted=.false.
  endif ! qneighbor_list
@@ -2191,7 +2215,7 @@ endif ! decide whether to compute dr_surf
 #endif
    do i=1, nsolvent
     d0 = dist_solv(i)
-    __DBGOUT('Inst. distance from solute for atom ',i,' is ', d0);
+    __DBGOUT('Inst. distance from solute for atom ',i,' is ', d0)
     __INCR(distance_from_solute, d0)
     __INCR(distance_from_solute2, d0**2)
    enddo
@@ -2323,7 +2347,7 @@ endif ! decide whether to compute dr_surf
 ! NOTE that it makes no sense to run full sum w/o neighbor sorting, which requires nbr. list !
    else
 #endif
-    call __NM(compute_mindist_grad)(.true.) ! always call quit-early version; however, the max. index will be set to nsurface_coord, so traverse full list
+    call __NM(compute_mindist_grad)(.true.) ! always call quit-early version; however, the max. index will be set to nsurface_coord, so forced atoms traverse full list
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
    endif ! full_sum_freq
 #endif
@@ -3419,8 +3443,8 @@ __DBGVAR(density_target,1)
  if (output_freq.gt.0) then
   if __CHKUPDATE(output_freq) then
 ! write a short update of simulation parameters:
-  i=0 ;
-#define __OUT(...)  __INC(i);write(_MSGBUF(i),*) __VA_ARGS__
+  i_=0 ;
+#define __OUT(...)  __INC(i_);write(_MSGBUF(i_),*) __VA_ARGS__
 #define _TAB char(9)//char(9)
   __OUT('==========================================================================================')
   __OUT('Iteration:', iteration)
@@ -3549,6 +3573,30 @@ __DBGVAR(density_target,1)
 #ifdef __FORCE_STATS
   __OUT('================================')
 #endif
+!
+#if defined(__SHOW_NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST) && defined(__SORT_LIST)
+  neighbor_dmin=nsurface_coords; neighbor_dmax=1; neighbor_dsum=0;
+  if (qminimum_distance) then ; ii=1 ; else ; ii=0 ; endif
+#ifdef __OMP
+!$omp parallel do private(neighbor_depth,i) shared(ii,solute_neighbor_mind,neighbor_list_factor) reduction(min:neighbor_dmin) reduction(max:neighbor_dmax) reduction(+:neighbor_dsum)
+#endif
+  do i=1, nsolvent ! note that __NEIGHBOR_LIST_LENGTH_MINDIST has "i" in the expression, which is why we must use i to iterate (sorry)
+   neighbor_depth = ii * ( __NEIGHBOR_LIST_LENGTH_MINDIST ) + (ii-1) * ( __NEIGHBOR_LIST_LENGTH_DENSITY ) ! treat density & mindist in one line
+   if ( neighbor_depth .lt. neighbor_dmin ) then 
+    neighbor_dmin=neighbor_depth
+   else if ( neighbor_depth .gt. neighbor_dmax ) then 
+    neighbor_dmax=neighbor_depth
+   endif
+    neighbor_dsum=neighbor_dsum + neighbor_depth
+  enddo
+#ifdef __OMP
+!$omp end parallel do
+#endif
+!  __OUT('================================')
+  __OUT('Solute neighbor list search depth (min:ave:max): (',neighbor_dmin,':',one*neighbor_dsum/nsolvent,':',neighbor_dmax,')')
+!  __OUT('================================')
+#endif
+!
 #ifdef __BAROSTAT
   if (barostat) then
    __OUT('Target pressure (atm):           ', pressure_target)
@@ -3660,7 +3708,7 @@ __DBGVAR(solvent_mass_nonbulk,1)
  int :: jj
  float :: dr2old ! squared distance difference from previous iteration
 #if defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
- float :: neighbor_list_length
+ int :: neighbor_list_length
  int :: neighbor_list_misses
 #ifdef __OMP
  int :: __U(neighbor_list_misses)
@@ -4315,8 +4363,8 @@ __DBGVAR(bulk_boundary_contour_value,1)
 ! close(666)
 !#endif
 #endif
-! should we output the violations here ?
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+! should we output the violations here ?
  if (neighbor_list_misses>0) then
   if (neighbor_list_misses==1) then
    __WRN(whoami, 'DETECTED '//itoa(neighbor_list_misses)//' POSSIBLE NEIGHBOR LIST MISS. NEIGHBOR LIST FACTOR IS '//ftoa(neighbor_list_factor))
@@ -4348,11 +4396,14 @@ __DBGVAR(bulk_boundary_contour_value,1)
  int :: jj
  int1 :: qbblswap ! flags whether a bubble sort swap has been made
  float :: dr2old ! squared minimum distance difference from previous iteration
+#ifdef __SHIFT_LIST
+ int :: kk
+#endif
 #if defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
- float :: neighbor_list_length
- int :: neighbor_list_misses
+ int :: neighbor_list_length ! this was initially a float -- possibly mistake, though not sure why
+ int :: neighbor_list_misses, neighbor_list_miss_distance
 #ifdef __OMP
- int :: __U(neighbor_list_misses)
+ int :: __U(neighbor_list_misses), __U(neighbor_list_miss_distance)
 #endif
 #endif
 #endif
@@ -4385,6 +4436,8 @@ __DBGVAR(bulk_boundary_contour_value,1)
  bool :: qforced ! whether an atom is a forced atom
  __IAM(__NM(compute_mindist_grad))
 !
+!dbg
+! return
 #ifdef __DDEBUG
 #ifdef __OMP
 !$omp parallel
@@ -4472,8 +4525,14 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
 #endif
 !
+
+!dbg
+#define __DBGLEN 1000
+
 #ifdef __OMP
 !$omp do schedule(runtime)
+!!$omp do schedule(dynamic)
+!!$omp do schedule(static)
 #endif
   do i=1, nsolvent ! outer loop over solvent atoms
    qforced=.true.  ! assume that forces will be applied to this atom, check below
@@ -4527,7 +4586,12 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
 #ifdef __SORT_LIST
 ! put this atom first in the list to increase our chances of quitting early next time
-      solute_neighbor_list(jj-qbblswap,i)=solute_neighbor_list(1,i)
+! 1st : decide how to handle the elements beore the new min : fast--just swap the pair 1/jj, slow-- shift 1:jj-1 ==> 2:jj
+#ifdef __SHIFT_LIST
+      do kk=jj-qbblswap,2,-1 ; solute_neighbor_list(kk,i)=solute_neighbor_list(kk-1,i) ; enddo ! shift
+#else
+      solute_neighbor_list(jj-qbblswap,i)=solute_neighbor_list(1,i) ! swap
+#endif
       solute_neighbor_list(1,i)=j
 #endif
       exit ! atom is considered inside, so no need to loop further
@@ -4543,8 +4607,6 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #ifdef __SORT_LIST
 ! put this atom first in the list to increase our chances of quitting early next time
 ! omit because this is done at the end of loop
-!      solute_neighbor_list(jj-qbblswap,i)=solute_neighbor_list(1,i)
-!      solute_neighbor_list(1,i)=j
 #endif
      endif
     else &
@@ -4552,8 +4614,12 @@ __DBGVAR(bulk_boundary_contour_value,1)
     if (dr2 .lt. surface_distance2) then ! the solvent atom is close enough to a surface atom to be considered inside
      qforced=.false.
 #ifdef __SORT_LIST
-! put this atom first in the list to increase our chances of quitting early next time
-     solute_neighbor_list(jj-qbblswap,i)=solute_neighbor_list(1,i)
+! put this atom first in the list to increase our chances of quitting early next time (see also comments above)
+#ifdef __SHIFT_LIST
+     do kk=jj-qbblswap,2,-1 ; solute_neighbor_list(kk,i)=solute_neighbor_list(kk-1,i) ; enddo ! shift
+#else
+     solute_neighbor_list(jj-qbblswap,i)=solute_neighbor_list(1,i) ! swap
+#endif
      solute_neighbor_list(1,i)=j
 #endif
      exit ! atom is considered inside, so no need to loop further (because dasystat off, no need to check whether bulk)
@@ -4567,12 +4633,15 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
 #ifdef __SORT_LIST
 ! put this atom first in the list
-! NOTE: MAKE SURE it is impossible to do two swaps one here and one above, in the same loop, which is an error; can turn off both, since no sizeable speed bump anyway
-     solute_neighbor_list(jj-qbblswap,i)=solute_neighbor_list(1,i)
+#ifdef __SHIFT_LIST
+     do kk=jj-qbblswap,2,-1 ; solute_neighbor_list(kk,i)=solute_neighbor_list(kk-1,i) ; enddo ! shift
+#else
+     solute_neighbor_list(jj-qbblswap,i)=solute_neighbor_list(1,i) ! swap
+#endif
      solute_neighbor_list(1,i)=j
 #ifdef __NEIGHBOR_LIST
 ! if the atom with the minimum distance happens to be farther in index space than the stored index, increase the index :
-     if (jj>solute_neighbor_mind(i)) solute_neighbor_mind(i)=jj-1 ; ! even this might be too aggressive
+     if (jj>solute_neighbor_mind(i)) solute_neighbor_mind(i)=jj ; ! to search the list further in the future
 #endif
 #endif
     endif
@@ -4622,13 +4691,15 @@ __DBGVAR(bulk_boundary_contour_value,1)
 !
 !$omp end parallel
 #endif
+!====================================================================================
+!====================================================================================
  else ! (not) quit_early
 #if defined(__SORT_LIST) & defined(__NEIGHBOR_LIST)
 #ifdef __DDEBUG
   __DBGOUT('Called ', whoami,'(full loop) with neighbor_list_factor=',neighbor_list_factor)
 #endif
 #ifdef __NEIGHBOR_LIST_CHECK
-  neighbor_list_misses=0
+  neighbor_list_misses=0; neighbor_list_miss_distance=0
 #endif
 #endif
 !=====================================================================================
@@ -4646,7 +4717,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #ifdef __NEIGHBOR_LIST
 !$omp , solute_neighbor_mind &
 #ifdef __NEIGHBOR_LIST_CHECK
-!$omp , neighbor_list_misses &
+!$omp , neighbor_list_misses, neighbor_list_miss_distance &
 #endif
 #endif
 #endif
@@ -4661,7 +4732,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #ifdef __SORT_LIST
 !$omp ,dr2old, jj, qbblswap &
 #if defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
-!$omp , __U(neighbor_list_misses), neighbor_list_length &
+!$omp , __U(neighbor_list_misses), __U(neighbor_list_miss_distance), neighbor_list_length &
 #endif
 #endif
 #ifdef __HAMILTONIAN
@@ -4679,6 +4750,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 !
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
  __U(neighbor_list_misses)=0
+ __U(neighbor_list_miss_distance)=0
 #endif
 #endif
 !
@@ -4771,27 +4843,11 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
      elseif (qforced .and. dr2 .lt. surface_distance2) then ! not bulk but still inside ; if already marked inside (qforced=.false.) then skip !
       qforced=.false.
-#ifdef __SORT_LIST
-! put this atom first in the list to increase our chances of quitting early next time
-! not necessary because the code block at end of loop will guarantee this
-!      solute_neighbor_list(jj-qbblswap,i)=solute_neighbor_list(1,i)
-!      solute_neighbor_list(1,i)=j
-#endif
      endif ! dr2<dist
     else & ! dasystat
 #endif
     if (qforced .and. dr2 .lt. surface_distance2) then ! since we are not exiting, use qforced flag in the conditional
      qforced=.false. ! this atom is inside, however, proceed to the end of the surface atom list because we want to sort it
-#ifdef __SORT_LIST
-! put this atom first in the list to increase our chances of quitting early next time
-! NOTE : these OMP sections have ad hoc problems, such as with -fcheck=all flags
-! also : do not use critical; this produces a completely different compilation ; very slow !
-!!$omp critical
-! not necessary because the code block at end of loop will guarantee this
-!     solute_neighbor_list(jj,i)=solute_neighbor_list(1,i)
-!     solute_neighbor_list(1,i)=j
-!!$omp end critical
-#endif
     endif
     if (dr2 .lt. dr2min) then
      dr2min=dr2
@@ -4799,21 +4855,28 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #ifdef __HAMILTONIAN
      ispt_this_thread(1)=j ! save index of surface atom
 #endif
-! minimum index inside solute_neighbor_list (before swap below)
 #ifdef __SORT_LIST
 #ifdef __NEIGHBOR_LIST
+! minimum index inside solute_neighbor_list (before swap below)
      solute_neighbor_mind(i)=jj
 #endif
-! NOTE : MAKE SURE it is impossible to swap twice here and above, which would make two j`s in the same list -- error
 ! put this atom first in the list
-     solute_neighbor_list(jj-qbblswap,i)=solute_neighbor_list(1,i)
+#ifdef __SHIFT_LIST
+     do kk=jj-qbblswap,2,-1 ; solute_neighbor_list(kk,i)=solute_neighbor_list(kk-1,i) ; enddo ! shift
+#else
+     solute_neighbor_list(jj-qbblswap,i)=solute_neighbor_list(1,i) ! swap
+#endif
      solute_neighbor_list(1,i)=j
 #endif
     endif
    enddo ! nsurface_coord
 ! check for _potential_ neighbor list violations :
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
-   if (qforced .and. solute_neighbor_mind(i) > neighbor_list_length ) __INC(__U(neighbor_list_misses)) ! count only if qforced, ok?
+   if (qforced) then
+    j = max( izero , solute_neighbor_mind(i) - neighbor_list_length ) ; ! reuse j
+    __INCR( __U(neighbor_list_misses) , min(1,j) ) ! count only if qforced
+    __INCR( __U(neighbor_list_miss_distance) , j )
+   endif
 #endif
 #ifdef __DEBUG
 ! write(666,*) i,dr2min, ilarge
@@ -4837,16 +4900,18 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #ifdef __DASYSTAT
  if (dasystat) then
 !$omp atomic
-  __REDUCE(solvent_mass_nonbulk)
+  __REDUCEADD(solvent_mass_nonbulk)
 #ifdef __BULK2_DISTANCE_SCALE
 !$omp atomic
-  __REDUCE(solvent_mass_bulk)
+  __REDUCEADD(solvent_mass_bulk)
 #endif
  endif
 #endif
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
 !$omp atomic
- __REDUCE(neighbor_list_misses)
+ __REDUCEADD(neighbor_list_misses)
+!$omp atomic
+ __REDUCEMAX(neighbor_list_miss_distance)
 #endif
 !
 #ifdef __HAMILTONIAN
@@ -4870,13 +4935,16 @@ __DBGVAR(bulk_boundary_contour_value,1)
 ! write(666,'(1300(I4,"("I4")"))') (solute_neighbor_mind(i), solute_neighbor_list(solute_neighbor_mind(i),i), i=1,nsolvent)
 ! close(666)
 #endif
-! should we output the violations here ?
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+! should we output the violations here ?
  if (neighbor_list_misses>0) then
   if (neighbor_list_misses==1) then
-   __WRN(whoami, 'DETECTED '//itoa(neighbor_list_misses)//' POSSIBLE NEIGHBOR LIST MISS. NEIGHBOR LIST FACTOR IS '//ftoa(neighbor_list_factor))
+   __WRN(whoami, 'DETECTED '//itoa(neighbor_list_misses)//' POSSIBLE NEIGHBOR LIST MISS (INDEX DIFF='//itoa(neighbor_list_miss_distance)//'). NEIGHBOR LIST FACTOR IS '//ftoa(neighbor_list_factor))
+!   __WRN(whoami, 'DETECTED '//itoa(neighbor_list_misses)//' POSSIBLE NEIGHBOR LIST MISS. NEIGHBOR LIST FACTOR IS '//ftoa(neighbor_list_factor))
   else
-   __WRN(whoami, 'DETECTED '//itoa(neighbor_list_misses)//' POSSIBLE NEIGHBOR LIST MISSES. NEIGHBOR LIST FACTOR IS '//ftoa(neighbor_list_factor))
+   __WRN(whoami, 'DETECTED '//itoa(neighbor_list_misses)//' POSSIBLE NEIGHBOR LIST MISSES (MAX INDEX DIFF='//itoa(neighbor_list_miss_distance)//'). NEIGHBOR LIST FACTOR IS '//ftoa(neighbor_list_factor))
+!   __WRN(whoami, 'DETECTED '//itoa(neighbor_list_misses)//' POSSIBLE NEIGHBOR LIST MISS (MAX INDEX DIFF='//ftoa(one*neighbor_list_miss_distance/neighbor_list_misses)//'). NEIGHBOR LIST FACTOR IS '//ftoa(neighbor_list_factor))
+!   __WRN(whoami, 'DETECTED '//itoa(neighbor_list_misses)//' POSSIBLE NEIGHBOR LIST MISSES. NEIGHBOR LIST FACTOR IS '//ftoa(neighbor_list_factor))
   endif
 ! increase neighbor_list_factor
   __INCR(neighbor_list_factor, neighbor_list_factor_grow)
