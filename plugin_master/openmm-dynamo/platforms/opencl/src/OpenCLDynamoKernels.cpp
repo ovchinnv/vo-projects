@@ -283,9 +283,9 @@ void OpenCLCalcDynamoForceKernel::executeOnWorkerThread() {
     } // atomlist == NULL
     // upload forces to device <buffer>                       <blocking> <offset> <size>                                            <pointer>           <events> <event>
 // comment out old version ; queue no longer usable
-//    queue.enqueueWriteBuffer(dynamoForces->getDeviceBuffer(), CL_FALSE, 0, dynamoForces->getSize()*dynamoForces->getElementSize(), cl.getPinnedBuffer(), NULL, &syncEvent);
+    queue.enqueueWriteBuffer(dynamoForces->getDeviceBuffer(), CL_FALSE, 0, dynamoForces->getSize()*dynamoForces->getElementSize(), cl.getPinnedBuffer(), NULL, &syncEvent);
 // 12.26.21 : VO
-    dynamoForces->upload(cl.getPinnedBuffer(), false);
+//    dynamoForces->upload(cl.getPinnedBuffer(), false);
 }
 
 double OpenCLCalcDynamoForceKernel::addForces(bool includeForces, bool includeEnergy, int groups) {
