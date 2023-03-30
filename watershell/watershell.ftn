@@ -4401,6 +4401,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
 #if defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
  int :: neighbor_list_length ! this was initially a float -- possibly mistake, though not sure why
+ int :: solute_pos_inside ! location (index) in the solute neighbor list where the solvent atom was first determined to be inside
  int :: neighbor_list_misses, neighbor_list_miss_distance
 #ifdef __OMP
  int :: __U(neighbor_list_misses), __U(neighbor_list_miss_distance)
@@ -4732,7 +4733,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #ifdef __SORT_LIST
 !$omp ,dr2old, jj, qbblswap &
 #if defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
-!$omp , __U(neighbor_list_misses), __U(neighbor_list_miss_distance), neighbor_list_length &
+!$omp , __U(neighbor_list_misses), __U(neighbor_list_miss_distance), neighbor_list_length, solute_pos_inside &
 #endif
 #endif
 #ifdef __HAMILTONIAN
@@ -4788,10 +4789,10 @@ __DBGVAR(bulk_boundary_contour_value,1)
    dr2old=-1.d0 ; ! set to a small number to guarantee that no swap is done on first iteration
 #if defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
    neighbor_list_length = __NEIGHBOR_LIST_LENGTH_MINDIST
+   solute_pos_inside = -ione
 #endif
 !
    do jj=1, nsurface_coord ! inner loop over solute atoms
-!   do jj=nsurface_coord, 1, -1 ! inner loop over solute atoms, starting from the end
     j=solute_neighbor_list(jj,i)
     qbblswap=0
 #else
@@ -4827,27 +4828,33 @@ __DBGVAR(bulk_boundary_contour_value,1)
       qchkbulk=.false.
 #endif
       qbulk=.false. ! mark atom as non-bulk
-      qforced=.false. ! also, mark as a non-forced atom
-#ifdef __SORT_LIST
-! put this atom first in the list to increase our chances of quitting early next time
-! not necessary because the code block at end of loop will guarantee this
-!      solute_neighbor_list(jj-qbblswap,i)=solute_neighbor_list(1,i)
-!      solute_neighbor_list(1,i)=j
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+      if (qforced) solute_pos_inside=jj ! save index of the solute atom where the atom was determined to be inside
 #endif
+      qforced=.false. ! also, mark as a non-forced atom
 ! atom is considered inside, but proceed to the end of list because we want to sort it
 #ifdef __BULK2_DISTANCE_SCALE
      elseif (qchkbulk .and. dr2 .lt. bulk2_distance2) then
       __INCR(__U(solvent_mass_bulk), mass_solv(i))
       qchkbulk=.false.
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+      if (qforced) solute_pos_inside=jj ! save index of the solute atom where the atom was determined to be inside
+#endif
       qforced=.false.
 #endif
      elseif (qforced .and. dr2 .lt. surface_distance2) then ! not bulk but still inside ; if already marked inside (qforced=.false.) then skip !
       qforced=.false.
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+      solute_pos_inside=jj ! see above
+#endif
      endif ! dr2<dist
     else & ! dasystat
 #endif
     if (qforced .and. dr2 .lt. surface_distance2) then ! since we are not exiting, use qforced flag in the conditional
      qforced=.false. ! this atom is inside, however, proceed to the end of the surface atom list because we want to sort it
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+     solute_pos_inside=jj ! see above
+#endif
     endif
     if (dr2 .lt. dr2min) then
      dr2min=dr2
@@ -4872,7 +4879,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
    enddo ! nsurface_coord
 ! check for _potential_ neighbor list violations :
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
-   if (qforced) then
+   if (qforced .or. solute_pos_inside .gt. neighbor_list_length ) then ! either forced atom, or became unforced due to an index beyond neighbor list depth
     j = max( izero , solute_neighbor_mind(i) - neighbor_list_length ) ; ! reuse j
     __INCR( __U(neighbor_list_misses) , min(1,j) ) ! count only if qforced
     __INCR( __U(neighbor_list_miss_distance) , j )
