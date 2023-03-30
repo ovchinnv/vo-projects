@@ -27,7 +27,7 @@ ifeq ($(word 1, $(subst -, ,$(strip $(FC)))),gfortran)
 ifeq ($(strip $(DEBUG)),1)
 # WARNING: WHEN DEBUGGING DO NOT USE THE LINE BELOW. OPTIMIZATION DESTROYS SYNCHRONIZATION
 #FFLAGS=-O3 -c -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fcheck=all -g
- FFLAGS=-O0 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fcheck=all
+ FFLAGS=-O1 -c -g -frecord-marker=4 -ffixed-line-length-none -ffree-line-length-none -fcheck=all
 # DEFS+=-D__DEBUG
 else
 # NOTE : Ofast math has -fno-protect-parens which causes __erfo7 to fail in some cases
