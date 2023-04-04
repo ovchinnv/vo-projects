@@ -13,7 +13,7 @@
        int :: last ! index of last element
        bool :: initialized=.false. ! has the vector been initialized
 !
-#ifndef __CHARMM
+#if !(defined(__CHARMM)) && defined(__CLASS)
 #if !(defined(__pathf90) || defined(__pathf77) || defined(__pathf95) || defined(__g95))
       contains
        procedure :: init   => __CONCAT(__TNAME,_init)
@@ -33,37 +33,62 @@
       end type __TNAME
 !
       private __CONCAT(__TNAME,_expand)
-      int, parameter, private :: expand_incr=50
+      int, parameter, private :: initial_size=2 ! initial size: keep this small, so that very short lists do not consume too much memory
+      int, parameter, private :: expand_incr=25 ! increase size by this number if too small
 !
       contains
 
-       subroutine __CONCAT(__TNAME,_init( v, expand_incr_ ))
+       subroutine __CONCAT(__TNAME,_init( v, initial_size_ ))
+#ifdef __DEBUG
+       __DEP_OUTPUT
+#endif
        __TYPE (__TNAME) :: v
-       int, optional :: expand_incr_
+       int, optional :: initial_size_
        int :: length
-       if (v%initialized) return
-       if (present(expand_incr_)) then
-        length=max(expand_incr_, expand_incr)
+       if (v%initialized) then
+#ifdef __DEBUG
+ __MESG(__STRING(__CONCAT(__TNAME,_init)),'Vector already initialized. Return.')
+#endif
+! nothing to do -- skip to eos
        else
-        length=expand_incr
-       endif
-       allocate(v%__DATANAME(length))
-       v%__DATANAME=0
-       v%length=length
-       v%last=0
-       v%initialized=.true.
+        if (present(initial_size_)) then
+         length=max(initial_size_, initial_size)
+        else
+         length=initial_size
+        endif
+#ifdef __DEBUG
+ __MESG(__STRING(__CONCAT(__TNAME,_init)),'Allocating vector array of size',length)
+#endif
+        allocate(v%__DATANAME(length))
+        v%__DATANAME=0
+        v%length=length
+        v%last=0
+        v%initialized=.true.
+       endif ! v%initialized
        end subroutine __CONCAT(__TNAME,_init)
 !ccccc
-       subroutine __CONCAT(__TNAME,_reinit( v, expand_incr_ ))
+       subroutine __CONCAT(__TNAME,_reinit( v, reinit_size_ ))
        __TYPE (__TNAME) :: v
-       int, optional :: expand_incr_
+       int, optional :: reinit_size_
        if (v%initialized) call __CONCAT(__TNAME,_done(v))
-       if (present(expand_incr_)) then ; call __CONCAT(__TNAME, _init(v, expand_incr_)) ; else ; call __CONCAT(__TNAME, _init(v)) ; endif
+       if (present(reinit_size_)) then ; call __CONCAT(__TNAME, _init(v, reinit_size_)) ; else ; call __CONCAT(__TNAME, _init(v)) ; endif
        end subroutine __CONCAT(__TNAME,_reinit)
 !ccccc
        subroutine __CONCAT(__TNAME,_done( v ))
+#ifdef __DEBUG
+       __DEP_OUTPUT
+#endif
        __TYPE (__TNAME) :: v
-       if (associated(v%__DATANAME)) deallocate(v%__DATANAME)
+       if (associated(v%__DATANAME)) then 
+#ifdef __DEBUG
+ __MESG(__STRING(__CONCAT(__TNAME,_done)),'Deallocating vector array')
+#endif
+        deallocate(v%__DATANAME)
+#ifdef __DEBUG
+       else
+ __MESG(__STRING(__CONCAT(__TNAME,_done)),'Vector array not associated')
+#endif
+       endif
        v%length=0
        v%last=0
        v%initialized=.false.
@@ -73,7 +98,11 @@
        __TYPE (__TNAME) :: v
        int, optional :: expand_incr_
        int :: newlength
+#ifdef __OLD
        __DATATYPE, dimension(:), allocatable :: p
+#else
+       __DATATYPE, dimension(:), pointer :: p
+#endif
 !
        if (.not.v%initialized) then
         call __CONCAT(__TNAME,_init(v))
@@ -87,9 +116,13 @@
         allocate(p(newlength))       ! new memory
         p(1:v%length)=v%__DATANAME ! copy old data
         deallocate(v%__DATANAME) ! delete old data
+#ifdef __OLD
         allocate(v%__DATANAME(newlength))
         v%__DATANAME = p ! copy data
         deallocate(p)
+#else
+        v%__DATANAME => p ! point to new data
+#endif
         v%length=newlength
        endif
        end subroutine __CONCAT(__TNAME,_expand)
@@ -205,14 +238,14 @@
        __TYPE (__TNAME) :: v, w
        bool :: equal
        __DATATYPE, dimension(:), pointer :: a, b
-       int :: error
+       int :: ierror
        equal = v%last .eq. w%last
        if (equal.and.v%last.gt.0) then
         allocate(a(v%last), b(v%last))
         a=v%__DATANAME(1:v%last) ! make copies
         b=w%__DATANAME(1:v%last)
-        call __CONCAT(__DATANAME,sort('i', v%last, a, error)) ! sort in increasing order
-        call __CONCAT(__DATANAME,sort('i', v%last, b, error))
+        call __CONCAT(__DATANAME,sort('i', v%last, a, ierror)) ! sort in increasing order
+        call __CONCAT(__DATANAME,sort('i', v%last, b, ierror))
         equal=all(a.eq.b)
         deallocate(a,b)
        endif
@@ -222,10 +255,10 @@
        __TYPE (__TNAME) :: v
        character, optional :: dir
        character :: d
-       int :: error
+       int :: ierror
        if (present(dir)) then ; d=dir ; else ; d = 'i' ; endif ! sort in increasing order by default
        if (v%initialized) then
-        if (v%last.gt.1) call __CONCAT(__DATANAME, sort(d, v%last, v%__DATANAME(1:v%last), error))
+        if (v%last.gt.1) call __CONCAT(__DATANAME, sort(d, v%last, v%__DATANAME(1:v%last), ierror))
        endif
        end subroutine __CONCAT(__TNAME, _sort)
 !cccc
