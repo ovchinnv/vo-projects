@@ -48,6 +48,10 @@
 #//define __CHKUPDATE(_WHAT)   ( (mod(iteration, _WHAT) .eq. ione) .or. _WHAT.eq.ione )
 #define __CHKUPDATE(_WHAT)   (mod(iteration, max(_WHAT,1)) .eq. izero)
 
+! OMP external parallel flags
+#if defined(__OMP) && !defined(_OMP_EXTRA)
+#define _OMP_EXTRA
+#endif
 ! for openmm local thread variables
 #ifdef __OMP
 #define _U _
@@ -1840,8 +1844,14 @@ __DBGVAR(r_com_sa,1)
  int :: i, ii
  __IAM(__NM(main))
 !================================================================
-!dbg 
-!return
+#if defined(__OMP) && defined (__OMP_DEBUG)
+!$omp single
+ __DBGOUT('OMP nested level is  ', omp_get_level())
+ __DBGOUT('OMP Max threads      ', omp_get_max_threads())
+ __DBGOUT('OMP Current threads  ', omp_get_num_threads())
+ __DBGOUT('OMP Ancestral thread:', omp_get_ancestor_thread_num(omp_get_level()));
+!$omp end single
+#endif
 !
  if (.not. __NM(initialized)) then
   __WRN(whoami, ftoupper(__STRING(_N))//'NOT INITIALIZED. NOTHING DONE.');
@@ -1863,7 +1873,7 @@ __DBGVAR(r_com_sa,1)
 !
 #if defined(__OMP) & defined(__NBLSORT_OMP)
   __ALLOC(distance2_all_threads(nsurface_coord,0:numthreads-1))
-!$omp parallel private(ierr,tid,i,ii,ind,istep &
+!$omp parallel _OMP_EXTRA private(ierr,tid,i,ii,ind,istep &
 #ifdef __PBC_UNWRAP
 !$omp ,d0 &
 #endif
@@ -1999,7 +2009,7 @@ __DBGVAR(r_com_sa,1)
 #ifdef __PBC_UNWRAP
    if (qper_parser_override) then
 #ifdef __OMP
-!$omp parallel private(ii)
+!$omp parallel _OMP_EXTRA private(ii)
 !$omp do schedule(runtime)
 #endif
     do i=1, nsurface_atoms
@@ -2113,13 +2123,15 @@ endif ! decide whether to compute dr_surf
    ffd2=fr(:,isurface_atoms(:))
 #endif
 #ifdef __OMP
-!$omp parallel do schedule(runtime)
+!$omp parallel _OMP_EXTRA
+!$omp do schedule(runtime)
 #endif
   do i=1, nsurface_atoms
    __DECR( fr(:,isurface_atoms(i)), (matmul(A_rb, r_surf_ref(:,i)) + dcom) )
   enddo
 #ifdef __OMP
-!$omp end parallel do
+!$omp end do
+!$omp end parallel
 #endif
 !
 #ifdef __FD_CHECK
@@ -2419,7 +2431,7 @@ endif ! decide whether to compute dr_surf
 ! NOTE: here OPENMP does not make much difference but keeping for consistency and completeness
  if (qminimum_distance) then
 #ifdef __OMP
-!$omp parallel &
+!$omp parallel _OMP_EXTRA &
 !$omp shared (dist_solv, ddist_solv, surface_distance, surface_force_constant, &
 #ifdef __RMFT
 !$omp remove_net_torque, net_force, net_torque, &
@@ -2711,7 +2723,7 @@ endif
   nsolvent_unsupported=0 ! for counting unsupported atoms in the erf density method
 !================= original density based algorithm ==================
 #ifdef __OMP
-!$omp parallel &
+!$omp parallel _OMP_EXTRA &
 !$omp shared (rho_solv, drho_solv, surface_contour_value, surface_distance, surface_force_constant, nsolvent_unsupported, &
 #ifdef __LOGISTIC_INVERSE
 !$omp logistic_constant, &
@@ -3578,7 +3590,7 @@ __DBGVAR(density_target,1)
   neighbor_dmin=nsurface_coords; neighbor_dmax=1; neighbor_dsum=0;
   if (qminimum_distance) then ; ii=1 ; else ; ii=0 ; endif
 #ifdef __OMP
-!$omp parallel do private(neighbor_depth,i) shared(ii,solute_neighbor_mind,neighbor_list_factor) reduction(min:neighbor_dmin) reduction(max:neighbor_dmax) reduction(+:neighbor_dsum)
+!$omp parallel do private(neighbor_depth,i) shared(ii,solute_neighbor_mind,neighbor_list_factor) reduction(min:neighbor_dmin) reduction(max:neighbor_dmax) reduction(+:neighbor_dsum) _OMP_EXTRA
 #endif
   do i=1, nsolvent ! note that __NEIGHBOR_LIST_LENGTH_MINDIST has "i" in the expression, which is why we must use i to iterate (sorry)
    neighbor_depth = ii * ( __NEIGHBOR_LIST_LENGTH_MINDIST ) + (ii-1) * ( __NEIGHBOR_LIST_LENGTH_DENSITY ) ! treat density & mindist in one line
@@ -3745,17 +3757,16 @@ __DBGVAR(solvent_mass_nonbulk,1)
   float :: erfo7  ! approximation to within O(-7)
   float :: erfo5  ! approximation to within O(-5) [contains an exponential term]
 !
-#ifdef __OMP
-#ifdef __DDEBUG
-!$omp parallel
+#if defined(__OMP) && defined(__OMP_DEBUG)
+!$omp parallel _OMP_EXTRA
 !$omp single
  __DBGOUT('OMP: Available processors: ',omp_get_num_procs());
- __DBGOUT('OMP: Maximum threads:      ',numthreads);
+ __DBGOUT('OMP: Maximum threads:      ',omp_get_max_threads());
  __DBGOUT('OMP: Current threads:      ',omp_get_num_threads());
  __DBGOUT('OMP: This thread:          ',omp_get_thread_num());
+ __DBGOUT('OMP: Ancestral thread:     ',omp_get_ancestor_thread_num(omp_get_level()));
 !$omp end single
 !$omp end parallel
-#endif
 #endif
 !
 ! compute density at each solvent coordinate
@@ -3786,7 +3797,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
  if (qtruncate_loop) then
 #ifdef __OMP
-!$omp parallel &
+!$omp parallel _OMP_EXTRA &
 !$omp shared ( rho_solv, drho_solv, r_solv, r_surf, rad_surf, surf_padding, nsolvent, nsurface_coord, cutoff_surf, oo_surf_stdev &
 #ifdef __DASYSTAT
 !$omp , solvent_mass_nonbulk, mass_solv &
@@ -4085,7 +4096,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
 !==========================================================================================
 #ifdef __OMP
-!$omp parallel &
+!$omp parallel _OMP_EXTRA &
 !$omp shared ( rho_solv, drho_solv, r_solv, r_surf, rad_surf, surf_padding, nsolvent, nsurface_coord, cutoff_surf, oo_surf_stdev &
 #ifdef __DASYSTAT
 !$omp , solvent_mass_nonbulk, mass_solv &
@@ -4439,17 +4450,16 @@ __DBGVAR(bulk_boundary_contour_value,1)
 !
 !dbg
 ! return
-#ifdef __DDEBUG
-#ifdef __OMP
-!$omp parallel
+#if defined(__OMP) && defined(__OMP_DEBUG)
+!$omp parallel _OMP_EXTRA
 !$omp single
  __DBGOUT('OMP: Available processors: ',omp_get_num_procs());
  __DBGOUT('OMP: Maximum threads:      ',numthreads);
  __DBGOUT('OMP: Current threads:      ',omp_get_num_threads());
  __DBGOUT('OMP: This thread:          ',omp_get_thread_num());
+ __DBGOUT('OMP: Ancestral thread:     ',omp_get_ancestor_thread_num(omp_get_level()));
 !$omp end single
 !$omp end parallel
-#endif __OMP
 #endif
 !
 ! simple algorithm to find the closest atom
@@ -4472,7 +4482,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
 #endif
 #ifdef __OMP
-!$omp parallel &
+!$omp parallel _OMP_EXTRA &
 !$omp shared ( dist_solv, ddist_solv, r_solv, nsolvent, nsurface_coord, surface_distance2 &
 #ifdef __DASYSTAT
 !$omp , bulk_distance2, mass_solv, solvent_mass_nonbulk &
@@ -4705,7 +4715,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
 !=====================================================================================
 #ifdef __OMP
-!$omp parallel &
+!$omp parallel _OMP_EXTRA &
 !$omp shared ( dist_solv, ddist_solv, r_solv, nsolvent, nsurface_coord, surface_distance2 &
 #ifdef __DASYSTAT
 !$omp , bulk_distance2, solvent_mass_nonbulk &
@@ -5021,7 +5031,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
  oos=one/surface_contour_value
 !
 #ifdef __OMP
-!$omp parallel &
+!$omp parallel _OMP_EXTRA &
 !$omp shared(sarho_all_threads, sarhof_all_threads) &
 !$omp private(x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, dx2, dy2, dz2, ii, jj, kk, imin, imax, jmin, jmax, kmin, kmax, tid, &
 !$omp i, __U(grad), rhomx, thisrho, igrad, n, support, support2, rsurf, a, b )
@@ -5252,7 +5262,7 @@ __DBGVAR(kmax,2)
  surface_area=zero !initialize
 
 #ifdef __OMP
-!$omp parallel &
+!$omp parallel _OMP_EXTRA &
 !$omp shared(support2, sarho_all_threads) &
 !$omp private(x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, ii, dx2, dy2, dz2, jj, kk, imin, imax, jmin, jmax, kmin, kmax, tid, &
 !$omp i, __U(grad), rhomx, thisrho, igrad, n)
@@ -5458,7 +5468,7 @@ __DBGVAR(kmax,2)
 #endif
 !
 #ifdef __OMP
-!$omp parallel &
+!$omp parallel _OMP_EXTRA &
 !$omp shared(sarhof_all_threads, ivolume, ivolume_nonbulk) &
 !$omp private(x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, dx2, dy2, dz2, ii, jj, kk, imin, imax, jmin, jmax, kmin, kmax, tid, &
 !$omp i, __U(ivolume), __U(ivolume_nonbulk), n, support, support2, rsurf, a, b, im, jm, km)
@@ -5695,7 +5705,7 @@ __DBGVAR(kmax,2)
  ivolume_nonbulk=0
 !
 #ifdef __OMP
-!$omp parallel &
+!$omp parallel _OMP_EXTRA &
 !$omp shared(support2, bulk_support2, sarho_all_threads, inrho_all_threads, ivolume, ivolume_nonbulk, numthreads) &
 !$omp private(x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, dx2, dy2, dz2, ii, jj, kk, imin, imax, jmin, jmax, kmin, kmax, tid, &
 !$omp i, __U(ivolume), __U(ivolume_nonbulk), n, im, jm, km &
