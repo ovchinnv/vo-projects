@@ -48,6 +48,10 @@
 #//define __CHKUPDATE(_WHAT)   ( (mod(iteration, _WHAT) .eq. ione) .or. _WHAT.eq.ione )
 #define __CHKUPDATE(_WHAT)   (mod(iteration, max(_WHAT,1)) .eq. izero)
 
+! OMP external parallel flags
+#if defined(__OMP) && !defined(_OMP_EXTRA)
+#define _OMP_EXTRA
+#endif
 ! for openmm local thread variables
 #ifdef __OMP
 #define _U _
@@ -76,7 +80,7 @@ module _N
 
  use system, only : r, rcomp, fr, radius, natom, system_PDB_initialized, system_PDB_init, system_done, system_getind, &
 #ifdef __DASYSTAT
-!&                   dasystat_masses=>occupancy, & ! use occupancy to store masses used in density control ; this is BAD because occupanct cannot be used !
+!&                   dasystat_masses=>occupancy, & ! use occupancy to store masses used in density control ; this is BAD because occupancy cannot be used !
 &                   dasystat_masses=>bcomp, & ! use backup beta array
 #endif
 &                   system_init_mol_scalar_nocase
@@ -285,7 +289,7 @@ module _N
  float :: oonsurface, oonsolvent, oonsolvent_outside
  float :: current_surface_distance
 #ifdef __RMFT
- float :: r_com(3) =(/zero, zero, zero/); ! center of mass (geometry) for torque computation
+ float :: r_com(3) =(/zero, zero, zero/); ! center of mass (geometry) for torque computation ; NOT USED IN ROTRES
 #ifdef __UNWRAP_PBC
  float :: r_pbc_reference(3)=(/zero, zero, zero/) ! to unwrap water coordinates for torque correction
 #endif
@@ -299,7 +303,7 @@ module _N
 #endif
 !
 #if defined(__RMFT) && defined(__SIMPLE_NET_FORCE_SURFACE) || defined(__ROTRES)
- float :: r_com_inst(3) =(/zero, zero, zero/); ! inst. center of mass (geometry) for torque computation
+ float :: r_com_inst(3) =(/zero, zero, zero/); ! inst. center of mass (ROTRES) or  (RMFT) for torque computation
 #endif
 !
 #ifdef __ROTRES
@@ -307,7 +311,7 @@ module _N
  __PAR(rigid_body_force_constant, float, one)
  float :: rigid_body_rmsd, rigid_body_energy
  float :: A_rb(3,3) ! rotation matrix
- float :: r_com_ref(3) ! center of geometry of the reference coordinates set
+ float :: r_com_ref(3) ! center of MASS of the reference coordinates set (weights added 4/23); formerly COG; NOT USED IN RMFT
  float, pointer :: r_surf_ref(:,:)
  float, pointer :: rb_wgt(:)
 #endif
@@ -1151,7 +1155,6 @@ endif
  if (.not.dmasses_initialized) __WRN(whoami, 'COULD NOT INITIALIZE DASYSTAT MASSES');
  endif ! dasystat
 #endif
-!
 ! initialize coordinate arrays
 #ifdef __DUMSURF
 ! decide whether we are using dummy surface atoms
@@ -1365,7 +1368,33 @@ __DBGVAR(r_surf(:,l),1)
 #ifdef __ROTRES
  if (qrigid_body_restraint) then ! read reference restraint atoms
   r_surf_ref(:,1:nsurface_atoms)=rcomp(:,isurface_atoms)
-  rb_wgt=oonsurface ! uniform orientation weights
+! try to obtain weights for the rigid body restraint code
+#define __GET_RGB_WGT(_TAG) if (existtag_nocase(__STRING(_TAG),contexts(main_context))) then;\
+                            farray=>system_init_mol_scalar_nocase(__STRING(_TAG), contexts(main_context));
+!
+  __GET_RGB_WGT(rigid_body_weights)
+  else __GET_RGB_WGT(rigid_body_weight)
+  else __GET_RGB_WGT(rgb_weights)
+  else __GET_RGB_WGT(rgb_wgt)
+  else __GET_RGB_WGT(rgb_wgts)
+  else __GET_RGB_WGT(rb_wgt)
+  else __GET_RGB_WGT(rb_wgts)
+  endif ! get weights
+!
+  if (associated(farray)) then
+   rb_wgt=farray(isurface_atoms)
+   deallocate(farray)
+   rigid_body_energy=sum(rb_wgt); ! use a temp variable
+   if (abs(rigid_body_energy).gt.__ERRTOL) then ! normalize weights to 1
+    rb_wgt=rb_wgt / rigid_body_energy
+   else
+    __WRN(whoami, 'SUM OF RIGID BODY RESTRAINT WEIGHTS IS TOO CLOSE TO ZERO.  WILL USE UNIFORM WEIGHTS')
+    rb_wgt=oonsurface
+   endif
+  else
+   rb_wgt=oonsurface ! uniform orientation/force weights
+  endif
+!
 ! in the case of restarting with PBC, align r_surf_ref with r_surf (should not be needed)
 #ifdef __PBC_UNWRAP
   dr_surf=r_surf_ref-r_surf
@@ -1376,7 +1405,7 @@ __DBGVAR(r_surf(:,l),1)
   enddo
    __INCR(r_surf, dr_surf)
 #endif
-  r_com_ref=sum(r_surf_ref,2)*oonsurface ! compute center of geometry
+  r_com_ref=matmul(r_surf_ref,rb_wgt) ! compute center of mass
 ! center reference structure on zero :
   do l=1, nsurface_atoms
    __DECR( r_surf_ref(:,l), r_com_ref )
@@ -1431,7 +1460,7 @@ __DBGVAR(r_surf(:,l),1)
 ! compute com if removing torque
  if (remove_net_torque) then 
 #ifdef __TORQUE_COM_SURFACE
-  r_com = oonsurface * sum(r_surf,2)
+  r_com = oonsurface * sum(r_surf,2) ! NOTE THAT THIS IS THE CENTER OF GEOMETRY -- I.E. UNIFORM WEIGHTS
 #ifdef __UNWRAP_PBC
   if (qper_parser_override) r_pbc_reference=r_com
 #endif
@@ -1840,8 +1869,14 @@ __DBGVAR(r_com_sa,1)
  int :: i, ii
  __IAM(__NM(main))
 !================================================================
-!dbg 
-!return
+#if defined(__OMP) && defined (__OMP_DEBUG)
+!$omp single
+ __DBGOUT('OMP nested level is  ', omp_get_level())
+ __DBGOUT('OMP Max threads      ', omp_get_max_threads())
+ __DBGOUT('OMP Current threads  ', omp_get_num_threads())
+ __DBGOUT('OMP Ancestral thread:', omp_get_ancestor_thread_num(omp_get_level()));
+!$omp end single
+#endif
 !
  if (.not. __NM(initialized)) then
   __WRN(whoami, ftoupper(__STRING(_N))//'NOT INITIALIZED. NOTHING DONE.');
@@ -1863,7 +1898,7 @@ __DBGVAR(r_com_sa,1)
 !
 #if defined(__OMP) & defined(__NBLSORT_OMP)
   __ALLOC(distance2_all_threads(nsurface_coord,0:numthreads-1))
-!$omp parallel private(ierr,tid,i,ii,ind,istep &
+!$omp parallel _OMP_EXTRA private(ierr,tid,i,ii,ind,istep &
 #ifdef __PBC_UNWRAP
 !$omp ,d0 &
 #endif
@@ -1999,7 +2034,7 @@ __DBGVAR(r_com_sa,1)
 #ifdef __PBC_UNWRAP
    if (qper_parser_override) then
 #ifdef __OMP
-!$omp parallel private(ii)
+!$omp parallel _OMP_EXTRA private(ii)
 !$omp do schedule(runtime)
 #endif
     do i=1, nsurface_atoms
@@ -2023,26 +2058,20 @@ __DBGVAR(r_com_sa,1)
 #endif
 endif ! decide whether to compute dr_surf
 !
-#if (defined(__RMFT) && defined(__SIMPLE_NET_FORCE_SURFACE)) || defined (__ROTRES)
- if ( .false. &
 #if (defined(__RMFT) && defined(__SIMPLE_NET_FORCE_SURFACE))
-& .or. remove_net_torque &
-#endif
-#ifdef __ROTRES
-& .or. qrigid_body_restraint &
-#endif
-               ) then
-! note that rigid body restraints are not compatible with __DUMSURF ; partly because is unclear why that would be useful, or how to do it
-#if defined(__RMFT) && defined(__SIMPLE_NET_FORCE_SURFACE) && defined (__DUMSURF)
+ if (remove_net_torque) then
+#ifdef __DUMSURF
   if (qdumsurf) then
    r_com_inst=r_com ! since the coordinates are fixed
   else
 #endif
-  r_com_inst = oonsurface * sum(dr_surf + r_surf,2) ; ! need instant com for SIMPLE_NET_FORCE_SURFACE, b/c forces applied to prot. atoms
-#if defined(__RMFT) && defined(__SIMPLE_NET_FORCE_SURFACE) && defined (__DUMSURF)
- endif ! qdumsurf
+   r_com_inst=sum(dr_surf + r_surf,2) * oonsurface; ! need instant com for SIMPLE_NET_FORCE_SURFACE, b/c forces applied to prot. atoms
+#ifdef __DUMSURF
+  endif ! qdumsurf
 #endif
- endif ! remove_net_torque || qrigid_body_restraint
+#endif
+#ifdef __ROTRES
+ if (qrigid_body_restraint) r_com_inst = matmul(dr_surf + r_surf,rb_wgt)
 #endif
 !============================================= update surface coordinates
  if (structure_update_freq.gt.izero) then
@@ -2104,22 +2133,25 @@ endif ! decide whether to compute dr_surf
   __DECR(A_rb(2,2),__CONCAT3(1,__PCODE,0))
   __DECR(A_rb(3,3),__CONCAT3(1,__PCODE,0))
 !
-  __SCALE(A_rb, rigid_body_force_constant*oonsurface) ! pre-scale matrix for speed
-  dcom=(r_com_inst-r_com_ref)*rigid_body_force_constant*oonsurface
+  __SCALE(A_rb, rigid_body_force_constant) ! pre-scale matrix
+  dcom=(r_com_inst-r_com_ref)*rigid_body_force_constant ! pre-scale
 ! compute and apply forces on surface atoms :
+! NOTE: FFD will fail right now because the restraints can be nonuniform !
 #ifdef __FD_CHECK
 ! record current forces in case they are nonzero :
    __ALLOC(ffd2(3,nsurface_atoms))
    ffd2=fr(:,isurface_atoms(:))
 #endif
 #ifdef __OMP
-!$omp parallel do schedule(runtime)
+!$omp parallel _OMP_EXTRA
+!$omp do schedule(runtime)
 #endif
   do i=1, nsurface_atoms
-   __DECR( fr(:,isurface_atoms(i)), (matmul(A_rb, r_surf_ref(:,i)) + dcom) )
+   __DECR( fr(:,isurface_atoms(i)), rb_wgt(i) * ( matmul(A_rb, r_surf_ref(:,i)) + dcom ) )
   enddo
 #ifdef __OMP
-!$omp end parallel do
+!$omp end do
+!$omp end parallel
 #endif
 !
 #ifdef __FD_CHECK
@@ -2129,31 +2161,47 @@ endif ! decide whether to compute dr_surf
    do ii=-1,1,2
     __INCR ( dr_surf(j,:) , r_com_inst(j) ) ! restore COM
     __INCR ( dr_surf(j,i) , ii * h ) ! perturb
-    r_com_inst(j)=sum(dr_surf(j,:))*oonsurface ! recompute com
+    r_com_inst(j)=dot_product(dr_surf(j,:),rb_wgt) ! recompute com
     __DECR ( dr_surf(j,:), r_com_inst(j)) ! subtract new COM
     call RMSBestFit(r_surf_ref, dr_surf, rb_wgt, A_rb, qdimswap_=.true.)
     dcom=(r_com_inst-r_com_ref)
 ! compute energy
     do k=1, nsurface_atoms
-     __INCR  ( ffd(j,i), ii*sum( ( dr_surf(:,k) - r_surf_ref(:,k) + dcom )**2 ))
-     __DECR  ( ffd(j,i), ii*sum( ( dr_surf(:,k) - matmul(A_rb, r_surf_ref(:,k)))**2))
+     __INCR  ( ffd(j,i), rb_wgt(k)*ii*sum( ( dr_surf(:,k) - r_surf_ref(:,k) + dcom )**2  - ( dr_surf(:,k) - matmul(A_rb, r_surf_ref(:,k)))**2))
     enddo ! k
 ! restore coordinate
     __INCR ( dr_surf(j,:) , r_com_inst(j) ) ! restore COM
     __INCR ( dr_surf(j,i) , -ii * h ) ! restore
-    r_com_inst(j)=sum(dr_surf(j,:))*oonsurface ! recompute com
+    r_com_inst(j)=dot_product(dr_surf(j,:),rb_wgt) ! recompute com
     __DECR ( dr_surf(j,:), r_com_inst(j)) ! subtract new COM
    enddo ! ii
   enddo ; enddo ! j, i
-  __SCALE(ffd, - half * rigid_body_force_constant * oonsurface / ( 2*h ) )
+  __SCALE(ffd, - half * rigid_body_force_constant / ( 2*h ) )
 
 #ifdef __DEBUG
  write(600,*) iteration
  write(600,*) ffd(1,:)
- write(600,*) fr(1,isurface_atoms(:))
+ write(600,*) fr(1,isurface_atoms(:))-ffd2(1,:)
+ write(600,*) rb_wgt
  close(600)
 #endif
 
+   d0=sqrt(dot_product( (ffd(1,:)-(fr(1,isurface_atoms(:))-ffd2(1,:)) )**2 , rb_wgt))
+   __WARN(whoami, ' ABSOLUTE RMS X-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
+   d0=d0/sqrt( dot_product (( fr(1,isurface_atoms(:))-ffd2(1,:) )**2, rb_wgt ))
+   __WARN(whoami, ' RELATIVE RMS X-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
+!
+   d0=sqrt(dot_product( ( ffd(2,:)-(fr(2,isurface_atoms(:))-ffd2(2,:)) )**2 , rb_wgt))
+   __WARN(whoami, ' ABSOLUTE RMS Y-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
+   d0=d0/sqrt( dot_product (( fr(2,isurface_atoms(:))-ffd2(2,:) )**2, rb_wgt ))
+   __WARN(whoami, ' RELATIVE RMS Y-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
+!
+   d0=sqrt(dot_product( ( ffd(3,:)-(fr(3,isurface_atoms(:))-ffd2(3,:)) )**2 , rb_wgt))
+   __WARN(whoami, ' ABSOLUTE RMS Z-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
+   d0=d0/sqrt( dot_product (( fr(3,isurface_atoms(:))-ffd2(3,:) )**2,  rb_wgt ))
+   __WARN(whoami, ' RELATIVE RMS Z-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
+!
+#ifndef __OBSOLETE
    d0=sqrt(sum ( ffd(1,:)-(fr(1,isurface_atoms(:))-ffd2(1,:)) )**2 * oonsurface)
    __WARN(whoami, ' ABSOLUTE RMS X-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
    d0=d0/sqrt( sum ( fr(1,isurface_atoms(:))-ffd2(1,:) )**2 * oonsurface )
@@ -2168,7 +2216,9 @@ endif ! decide whether to compute dr_surf
    __WARN(whoami, ' ABSOLUTE RMS Z-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
    d0=d0/sqrt( sum ( fr(3,isurface_atoms(:))-ffd2(3,:) )**2 * oonsurface )
    __WARN(whoami, ' RELATIVE RMS Z-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
+#endif
 !
+
   __DBGOUT('Free surface arrays for FD check')
   __FREE(ffd)
   __FREE(ffd2)
@@ -2181,8 +2231,8 @@ endif ! decide whether to compute dr_surf
   __DECR(A_rb(2,2),__CONCAT3(1,__PCODE,0))
   __DECR(A_rb(3,3),__CONCAT3(1,__PCODE,0))
 !
-  __SCALE(A_rb, rigid_body_force_constant*oonsurface)
-  dcom=(r_com_inst-r_com_ref)*rigid_body_force_constant*oonsurface
+  __SCALE(A_rb, rigid_body_force_constant)
+  dcom=(r_com_inst-r_com_ref)*rigid_body_force_constant
 
 #endif __FD_CHECK
  endif
@@ -2419,7 +2469,7 @@ endif ! decide whether to compute dr_surf
 ! NOTE: here OPENMP does not make much difference but keeping for consistency and completeness
  if (qminimum_distance) then
 #ifdef __OMP
-!$omp parallel &
+!$omp parallel _OMP_EXTRA &
 !$omp shared (dist_solv, ddist_solv, surface_distance, surface_force_constant, &
 #ifdef __RMFT
 !$omp remove_net_torque, net_force, net_torque, &
@@ -2711,7 +2761,7 @@ endif
   nsolvent_unsupported=0 ! for counting unsupported atoms in the erf density method
 !================= original density based algorithm ==================
 #ifdef __OMP
-!$omp parallel &
+!$omp parallel _OMP_EXTRA &
 !$omp shared (rho_solv, drho_solv, surface_contour_value, surface_distance, surface_force_constant, nsolvent_unsupported, &
 #ifdef __LOGISTIC_INVERSE
 !$omp logistic_constant, &
@@ -3523,47 +3573,44 @@ __DBGVAR(density_target,1)
   if (qrigid_body_restraint) then
 #ifdef __OBSOLETE
 ! compute energy here, since this will happen rarely
-! note that the dot product version is not accurate in single prec. produces negative energies, not sure why.
    rigid_body_energy=zero
    if ( abs(rigid_body_force_constant).gt.__ERRTOL) then
     do ii=1, nsurface_atoms
-! line below is inaccurate in single precision, not sure why !
-!     __INCR(rigid_body_energy, dot_product( dr_surf(:,ii), matmul(A_rb,r_surf_ref(:,ii))) )
-     __INCR(rigid_body_energy, sum( dr_surf(:,ii) * matmul(A_rb,r_surf_ref(:,ii))) )
+     __INCR(rigid_body_energy, sum( dr_surf(:,ii) * rb_wgt(ii) *  matmul(A_rb,r_surf_ref(:,ii))) )
     enddo
    __OUT('Rotational restraint energy:        ', rigid_body_energy)
-! translational component is accurate :
-    d0=nsurface_atoms**2 * dot_product(dcom, dcom) / (rigid_body_force_constant * 2 )
+! translational component :
+    d0=dot_product(dcom, dcom) / (rigid_body_force_constant * 2 )
     __OUT('Translational restraint energy:     ', d0)
     __INCR(rigid_body_energy, d0)
    endif
    __OUT('Total rigid-body restraint energy:  ', rigid_body_energy)
-#endif
+#else
    rigid_body_energy=zero
    if ( abs(rigid_body_force_constant).gt.__ERRTOL) then
-    dcom = dcom / rigid_body_force_constant * nsurface_atoms ! remove scaling from COM difference
-    A_rb = A_rb / rigid_body_force_constant * nsurface_atoms + Id3 ! remove scaling from rotation matrix and add back identity
+    dcom = dcom / rigid_body_force_constant ! remove scaling from COM difference
+    A_rb = A_rb / rigid_body_force_constant + Id3 ! remove scaling from rotation matrix and add back identity
     do ii=1, nsurface_atoms
-     __INCR(rigid_body_energy, sum( ( dr_surf(:,ii) - r_surf_ref(:,ii) )**2 ))
-     __DECR(rigid_body_energy, sum( ( dr_surf(:,ii) - matmul(A_rb, r_surf_ref(:,ii)))**2))
+     __INCR(rigid_body_energy, sum( ( dr_surf(:,ii) - r_surf_ref(:,ii) )**2  - ( dr_surf(:,ii) - matmul(A_rb, r_surf_ref(:,ii)))**2) * rb_wgt(ii))
     enddo
-    __SCALE(rigid_body_energy, half*rigid_body_force_constant*oonsurface)
+    __SCALE(rigid_body_energy, half*rigid_body_force_constant)
     __OUT('Rotational restraint energy:        ', rigid_body_energy)
      d0=half*rigid_body_force_constant*dot_product( dcom, dcom )
     __OUT('Translational restraint energy:     ', d0)
     __INCR(rigid_body_energy, d0)
     __OUT('Total rigid-body restraint energy:  ', rigid_body_energy)
    endif
+#endif
 #ifdef __DEBUG
 ! repeat
 ! alternative calculation, close to the unsimplified analytical definition
    rigid_body_energy=zero
    if ( abs(rigid_body_force_constant).gt.__ERRTOL) then
     do ii=1, nsurface_atoms
-     __INCR(rigid_body_energy, sum( ( dr_surf(:,ii) - r_surf_ref(:,ii) + dcom )**2 ))
-     __DECR(rigid_body_energy, sum( ( dr_surf(:,ii) - matmul(A_rb, r_surf_ref(:,ii)))**2))
+     __INCR(rigid_body_energy, sum( ( dr_surf(:,ii) - r_surf_ref(:,ii) + dcom )**2 ) * rb_wgt(ii))
+     __DECR(rigid_body_energy, sum( ( dr_surf(:,ii) - matmul(A_rb, r_surf_ref(:,ii)))**2) * rb_wgt(ii))
     enddo
-    __SCALE(rigid_body_energy, half*rigid_body_force_constant*oonsurface)
+    __SCALE(rigid_body_energy, half*rigid_body_force_constant)
     __OUT('Rigid-body restraint energy (DBG):  ', rigid_body_energy)
    endif
 #endif
@@ -3578,7 +3625,7 @@ __DBGVAR(density_target,1)
   neighbor_dmin=nsurface_coords; neighbor_dmax=1; neighbor_dsum=0;
   if (qminimum_distance) then ; ii=1 ; else ; ii=0 ; endif
 #ifdef __OMP
-!$omp parallel do private(neighbor_depth,i) shared(ii,solute_neighbor_mind,neighbor_list_factor) reduction(min:neighbor_dmin) reduction(max:neighbor_dmax) reduction(+:neighbor_dsum)
+!$omp parallel do private(neighbor_depth,i) shared(ii,solute_neighbor_mind,neighbor_list_factor) reduction(min:neighbor_dmin) reduction(max:neighbor_dmax) reduction(+:neighbor_dsum) _OMP_EXTRA
 #endif
   do i=1, nsolvent ! note that __NEIGHBOR_LIST_LENGTH_MINDIST has "i" in the expression, which is why we must use i to iterate (sorry)
    neighbor_depth = ii * ( __NEIGHBOR_LIST_LENGTH_MINDIST ) + (ii-1) * ( __NEIGHBOR_LIST_LENGTH_DENSITY ) ! treat density & mindist in one line
@@ -3745,17 +3792,16 @@ __DBGVAR(solvent_mass_nonbulk,1)
   float :: erfo7  ! approximation to within O(-7)
   float :: erfo5  ! approximation to within O(-5) [contains an exponential term]
 !
-#ifdef __OMP
-#ifdef __DDEBUG
-!$omp parallel
+#if defined(__OMP) && defined(__OMP_DEBUG)
+!$omp parallel _OMP_EXTRA
 !$omp single
  __DBGOUT('OMP: Available processors: ',omp_get_num_procs());
- __DBGOUT('OMP: Maximum threads:      ',numthreads);
+ __DBGOUT('OMP: Maximum threads:      ',omp_get_max_threads());
  __DBGOUT('OMP: Current threads:      ',omp_get_num_threads());
  __DBGOUT('OMP: This thread:          ',omp_get_thread_num());
+ __DBGOUT('OMP: Ancestral thread:     ',omp_get_ancestor_thread_num(omp_get_level()));
 !$omp end single
 !$omp end parallel
-#endif
 #endif
 !
 ! compute density at each solvent coordinate
@@ -3786,7 +3832,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
  if (qtruncate_loop) then
 #ifdef __OMP
-!$omp parallel &
+!$omp parallel _OMP_EXTRA &
 !$omp shared ( rho_solv, drho_solv, r_solv, r_surf, rad_surf, surf_padding, nsolvent, nsurface_coord, cutoff_surf, oo_surf_stdev &
 #ifdef __DASYSTAT
 !$omp , solvent_mass_nonbulk, mass_solv &
@@ -4085,7 +4131,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
 !==========================================================================================
 #ifdef __OMP
-!$omp parallel &
+!$omp parallel _OMP_EXTRA &
 !$omp shared ( rho_solv, drho_solv, r_solv, r_surf, rad_surf, surf_padding, nsolvent, nsurface_coord, cutoff_surf, oo_surf_stdev &
 #ifdef __DASYSTAT
 !$omp , solvent_mass_nonbulk, mass_solv &
@@ -4401,6 +4447,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
 #if defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
  int :: neighbor_list_length ! this was initially a float -- possibly mistake, though not sure why
+ int :: solute_pos_inside ! location (index) in the solute neighbor list where the solvent atom was first determined to be inside
  int :: neighbor_list_misses, neighbor_list_miss_distance
 #ifdef __OMP
  int :: __U(neighbor_list_misses), __U(neighbor_list_miss_distance)
@@ -4438,17 +4485,16 @@ __DBGVAR(bulk_boundary_contour_value,1)
 !
 !dbg
 ! return
-#ifdef __DDEBUG
-#ifdef __OMP
-!$omp parallel
+#if defined(__OMP) && defined(__OMP_DEBUG)
+!$omp parallel _OMP_EXTRA
 !$omp single
  __DBGOUT('OMP: Available processors: ',omp_get_num_procs());
  __DBGOUT('OMP: Maximum threads:      ',numthreads);
  __DBGOUT('OMP: Current threads:      ',omp_get_num_threads());
  __DBGOUT('OMP: This thread:          ',omp_get_thread_num());
+ __DBGOUT('OMP: Ancestral thread:     ',omp_get_ancestor_thread_num(omp_get_level()));
 !$omp end single
 !$omp end parallel
-#endif __OMP
 #endif
 !
 ! simple algorithm to find the closest atom
@@ -4471,7 +4517,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
 #endif
 #ifdef __OMP
-!$omp parallel &
+!$omp parallel _OMP_EXTRA &
 !$omp shared ( dist_solv, ddist_solv, r_solv, nsolvent, nsurface_coord, surface_distance2 &
 #ifdef __DASYSTAT
 !$omp , bulk_distance2, mass_solv, solvent_mass_nonbulk &
@@ -4704,7 +4750,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
 !=====================================================================================
 #ifdef __OMP
-!$omp parallel &
+!$omp parallel _OMP_EXTRA &
 !$omp shared ( dist_solv, ddist_solv, r_solv, nsolvent, nsurface_coord, surface_distance2 &
 #ifdef __DASYSTAT
 !$omp , bulk_distance2, solvent_mass_nonbulk &
@@ -4732,7 +4778,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #ifdef __SORT_LIST
 !$omp ,dr2old, jj, qbblswap &
 #if defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
-!$omp , __U(neighbor_list_misses), __U(neighbor_list_miss_distance), neighbor_list_length &
+!$omp , __U(neighbor_list_misses), __U(neighbor_list_miss_distance), neighbor_list_length, solute_pos_inside &
 #endif
 #endif
 #ifdef __HAMILTONIAN
@@ -4788,10 +4834,10 @@ __DBGVAR(bulk_boundary_contour_value,1)
    dr2old=-1.d0 ; ! set to a small number to guarantee that no swap is done on first iteration
 #if defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
    neighbor_list_length = __NEIGHBOR_LIST_LENGTH_MINDIST
+   solute_pos_inside = -ione
 #endif
 !
    do jj=1, nsurface_coord ! inner loop over solute atoms
-!   do jj=nsurface_coord, 1, -1 ! inner loop over solute atoms, starting from the end
     j=solute_neighbor_list(jj,i)
     qbblswap=0
 #else
@@ -4827,27 +4873,33 @@ __DBGVAR(bulk_boundary_contour_value,1)
       qchkbulk=.false.
 #endif
       qbulk=.false. ! mark atom as non-bulk
-      qforced=.false. ! also, mark as a non-forced atom
-#ifdef __SORT_LIST
-! put this atom first in the list to increase our chances of quitting early next time
-! not necessary because the code block at end of loop will guarantee this
-!      solute_neighbor_list(jj-qbblswap,i)=solute_neighbor_list(1,i)
-!      solute_neighbor_list(1,i)=j
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+      if (qforced) solute_pos_inside=jj ! save index of the solute atom where the atom was determined to be inside
 #endif
+      qforced=.false. ! also, mark as a non-forced atom
 ! atom is considered inside, but proceed to the end of list because we want to sort it
 #ifdef __BULK2_DISTANCE_SCALE
      elseif (qchkbulk .and. dr2 .lt. bulk2_distance2) then
       __INCR(__U(solvent_mass_bulk), mass_solv(i))
       qchkbulk=.false.
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+      if (qforced) solute_pos_inside=jj ! save index of the solute atom where the atom was determined to be inside
+#endif
       qforced=.false.
 #endif
      elseif (qforced .and. dr2 .lt. surface_distance2) then ! not bulk but still inside ; if already marked inside (qforced=.false.) then skip !
       qforced=.false.
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+      solute_pos_inside=jj ! see above
+#endif
      endif ! dr2<dist
     else & ! dasystat
 #endif
     if (qforced .and. dr2 .lt. surface_distance2) then ! since we are not exiting, use qforced flag in the conditional
      qforced=.false. ! this atom is inside, however, proceed to the end of the surface atom list because we want to sort it
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+     solute_pos_inside=jj ! see above
+#endif
     endif
     if (dr2 .lt. dr2min) then
      dr2min=dr2
@@ -4872,7 +4924,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
    enddo ! nsurface_coord
 ! check for _potential_ neighbor list violations :
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
-   if (qforced) then
+   if (qforced .or. solute_pos_inside .gt. neighbor_list_length ) then ! either forced atom, or became unforced due to an index beyond neighbor list depth
     j = max( izero , solute_neighbor_mind(i) - neighbor_list_length ) ; ! reuse j
     __INCR( __U(neighbor_list_misses) , min(1,j) ) ! count only if qforced
     __INCR( __U(neighbor_list_miss_distance) , j )
@@ -5014,7 +5066,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
  oos=one/surface_contour_value
 !
 #ifdef __OMP
-!$omp parallel &
+!$omp parallel _OMP_EXTRA &
 !$omp shared(sarho_all_threads, sarhof_all_threads) &
 !$omp private(x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, dx2, dy2, dz2, ii, jj, kk, imin, imax, jmin, jmax, kmin, kmax, tid, &
 !$omp i, __U(grad), rhomx, thisrho, igrad, n, support, support2, rsurf, a, b )
@@ -5245,7 +5297,7 @@ __DBGVAR(kmax,2)
  surface_area=zero !initialize
 
 #ifdef __OMP
-!$omp parallel &
+!$omp parallel _OMP_EXTRA &
 !$omp shared(support2, sarho_all_threads) &
 !$omp private(x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, ii, dx2, dy2, dz2, jj, kk, imin, imax, jmin, jmax, kmin, kmax, tid, &
 !$omp i, __U(grad), rhomx, thisrho, igrad, n)
@@ -5451,7 +5503,7 @@ __DBGVAR(kmax,2)
 #endif
 !
 #ifdef __OMP
-!$omp parallel &
+!$omp parallel _OMP_EXTRA &
 !$omp shared(sarhof_all_threads, ivolume, ivolume_nonbulk) &
 !$omp private(x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, dx2, dy2, dz2, ii, jj, kk, imin, imax, jmin, jmax, kmin, kmax, tid, &
 !$omp i, __U(ivolume), __U(ivolume_nonbulk), n, support, support2, rsurf, a, b, im, jm, km)
@@ -5688,7 +5740,7 @@ __DBGVAR(kmax,2)
  ivolume_nonbulk=0
 !
 #ifdef __OMP
-!$omp parallel &
+!$omp parallel _OMP_EXTRA &
 !$omp shared(support2, bulk_support2, sarho_all_threads, inrho_all_threads, ivolume, ivolume_nonbulk, numthreads) &
 !$omp private(x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, dx2, dy2, dz2, ii, jj, kk, imin, imax, jmin, jmax, kmin, kmax, tid, &
 !$omp i, __U(ivolume), __U(ivolume_nonbulk), n, im, jm, km &
