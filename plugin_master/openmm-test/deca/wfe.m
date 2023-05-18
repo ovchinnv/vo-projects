@@ -123,8 +123,7 @@ if (read)
  df=reshape(df(:,1,:), nwin, nbox)' ; % for consistency with prior code
  read=0;
 end;
-%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % compute center derivative
 dfc = 0.5 * ( df(:,1:end-1) + df(:,2:end) );
 fe = [ zeros(nbox,1)  cumsum( dfc.*(ones(nbox,1)*diff(cvs0)), 2) ];
