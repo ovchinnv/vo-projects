@@ -31,6 +31,10 @@ module __NM(plugin)
  __VARS_WATERSHELL
  __VARS_STRUNA
 !
+#if defined(__OMP) && defined(__OMP_SPLIT)
+ float, allocatable :: fr_watershell(:,:)
+#endif
+!
 #if ( defined(__ADAPTIVE_KCV) && defined(__STRUNA))
  int :: cvind = -1, l, adaptive_freq
  int*8 :: ad_iteration
@@ -174,6 +178,9 @@ module __NM(plugin)
  __NM(initialized)=.true.
 !==========================
  __WATERSHELL_INITIALIZE
+#if defined(__OMP) && defined(__OMP_SPLIT)
+ allocate(fr_watershell(size(fr,1),size(fr,2)))
+#endif
 !==========================
  __STRUNA_INITIALIZE
 !==========================
@@ -289,7 +296,25 @@ end function _ME
 #ifndef __DEBUG
 ! NOTE : with deferred initialization (SM code) it is possible for the c-atom lists not to be initialized, so we have to check !
  if (allocated(__NM(atomlist))) then
-  fr(:,__NM(forced_atomlist(2:)))=0d0 ! NOTE that I assume forced_atomlist is in the same state as atomlist
+#if defined(__OMPCOPY) && defined(__OMP)
+! copying via omp usually makes no difference
+!$omp parallel private (i,ind)
+!$omp do _SIMD schedule(runtime)
+  do i=2, __NM(forced_atomlist(1))+1
+   ind=__NM(forced_atomlist(i));
+   fr(:,ind)=0d0
+#if defined(__OMP) && defined(__OMP_SPLIT)
+   fr_watershell(:,ind)=0d0
+#endif
+  enddo
+!$omp end do _SIMD
+!$omp end parallel
+#else
+  fr(:,__NM(forced_atomlist(2:)))=0d0
+#if defined(__OMP) && defined(__OMP_SPLIT)
+  fr_watershell(:,__NM(forced_atomlist(2:)))=0d0
+#endif
+#endif
 ! update plugin coordinates :
   if (qsingle) then
    if (qper) box=box_single
@@ -298,14 +323,14 @@ end function _ME
    if (qper) box=box_double
 #if defined(__OMPCOPY) && defined(__OMP)
 ! copying via omp usually makes no difference
-!omp parallel private (i,ind)
-!omp do schedule (dynamic)
+!$omp parallel private (i,ind)
+!$omp do _SIMD schedule(runtime)
    do i=2, __NM(atomlist(1))+1
     ind=__NM(atomlist(i));
     r(:,ind)=r_plugin_double(:,ind)
    enddo
-!omp end do
-!omp end parallel
+!$omp end do _SIMD
+!$omp end parallel
 #else
    r(:,__NM(atomlist(2:)))=r_plugin_double(:,__NM(atomlist(2:)))
 #endif
@@ -314,6 +339,9 @@ end function _ME
  else ! atomlist not allocated
 #endif
   fr=0d0
+#if defined(__OMP) && defined(__OMP_SPLIT)
+  fr_watershell=0d0
+#endif
   if (qsingle) then
    if (qper) box=box_single ; r=r_plugin_single
   else
@@ -337,7 +365,14 @@ end function _ME
 ! Also, STRUNA might need to initialize on first dynamics step (here); at which point the atom list is redefined ; in that case, need to re-zero the string forces
 ! (this is done inside string macro below) ; master atom list must also be recomputed (also inside macro)
 !======================
+#define num_plugins 2
 #ifdef __STRUNA
+#if defined(__OMP) && defined(__OMP_SPLIT)
+ call omp_set_nested(.true.)
+!$omp parallel num_threads(num_plugins)
+!$omp single
+!$omp task
+#endif
  if (sm_initialized .or. defer_init_until_dyna) then
   if (defer_init_until_dyna) then ! in this version, need to make sure r_plugin is defined
    if (qsingle) then
@@ -381,9 +416,15 @@ end function _ME
  endif ! adaptive_kforce
 #endif
  endif ! sm_initialized .or. defer_init_until_dyna
+#if defined(__OMP) && defined(__OMP_SPLIT)
+!$omp end task
+#endif
 #endif
 !======================
 #ifdef __WATERSHELL
+#if defined(__OMP) && defined(__OMP_SPLIT)
+!$omp task
+#endif
  if (watershell_initialized) then ;
 #ifdef __DDEBUG
  write(0,*) 'calling watershell main :', __NM(forced_atomlist(1)), __NM(atomlist(1))
@@ -397,6 +438,26 @@ end function _ME
  write(888, *) fr(:,__NM(forced_atomlist(2:)))
  close(888)
 #endif
+#if defined(__OMP) && defined(__OMP_SPLIT)
+!$omp end task
+!$omp end single
+!$omp end parallel
+ call omp_set_nested(.false.)
+#if defined(__OMPCOPY) && defined(__OMP)
+! here omp usually makes no difference
+!$omp parallel private (i,ind)
+!$omp do _SIMD schedule(runtime)
+ do i=2, __NM(forced_atomlist(1))+1
+  ind=__NM(forced_atomlist(i))
+  __INCR(fr(:,ind),fr_watershell(:,ind))
+ enddo
+!$omp end do _SIMD
+!$omp end parallel
+#else
+ __INCR(fr(:,__NM(forced_atomlist(2:))),fr_watershell(:,__NM(forced_atomlist(2:))))
+#endif
+#endif
+!
 ! update forces and energy
  if (qsingle) then
 #ifdef __INIT_OUTPUT_FORCE_ZERO
@@ -410,14 +471,14 @@ end function _ME
 #endif
 #if defined(__OMPCOPY) && defined(__OMP)
 ! here omp usually makes no difference
-!omp parallel private (i,ind)
-!omp do schedule (dynamic)
+!$omp parallel private (i,ind)
+!$omp do _SIMD schedule(runtime)
  do i=2, __NM(forced_atomlist(1))+1
   ind=__NM(forced_atomlist(i))
   f_plugin_double(:,ind)=fr(:,ind)
  enddo
-!omp end do
-!omp end parallel
+!$omp end do _SIMD
+!$omp end parallel
 #else
   f_plugin_double(:,__NM(forced_atomlist(2:)))=fr(:,__NM(forced_atomlist(2:)))
 #endif
