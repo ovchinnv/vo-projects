@@ -21,7 +21,7 @@ struna_init.src : force_look
 
 struna_main.src : force_look
 	sed -n '/!#main 0/{:a;n;/!#end main 0/b;p;ba}' $(ROOT)/string/plugin/sm_plugin.F90 >$@
-	sed -n '/!#main 1/{:a;n;/!#end main 1/b;p;ba}' $(ROOT)/string/plugin/sm_plugin.F90 >>$@
+	sed -n '/!#main 1/{:a;n;/!#end main 1/b;p;ba}' $(ROOT)/string/plugin/sm_plugin.F90 |sed 's*return*!return*g' >>$@
 	echo " do i=2,sm_atomlist(1)+1; ierr=int_vector_uadd(atoms,sm_atomlist(i));ierr=int_vector_uadd(forced_atoms,sm_atomlist(i)) ; enddo ; alist=master_compute_atomlist() ">>$@
 	echo "! do i=2,sm_atomlist(1)+1; ierr=atoms%uadd(sm_atomlist(i)) ; ierr=forced_atoms%uadd(sm_atomlist(i)) ; enddo ; alist=master_compute_atomlist() ">>$@
 	sed -n '/!#main 2/{:a;n;/!#end main 2/b;p;ba}' $(ROOT)/string/plugin/sm_plugin.F90 >>$@
