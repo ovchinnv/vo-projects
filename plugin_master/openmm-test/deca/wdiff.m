@@ -252,10 +252,11 @@ for i=1:nrep
 %% another way is to compute D from Tab+Tba (roundtrips) (to fourth order in |b-a| and second order in g: 
  Trt=(mfp(i,1)+mfp(i,2)) ; % round trip time
  Trte=mfpe(i,1)+mfpe(i,2) ; % round trip variance
- eg=exp(g(i)) ; Drt = (eg + 1./eg - 2)/Trt/(g(i)^2) ;
+
+ eg=exp(g(i)) ; Drt = (eg + 1./eg - 2)/(g(i)^2) * fbw(i)^2 / Trt ;
                 eDrt= (Drt/Trt)^2 * Trte ; % standard variance of D
-% Drt = 1./(mfp(i,1)+mfp(i,2)) ; % truncated
- D=Drt ; % it is essentially the same as D
+ Drt = fbw(i)^2/Trt ; % truncated -- generally very close to the above result
+% D=Drt ;
 %
  kBT=kboltz*Temp ; % Temp must be known here
  dlen=1 ; % displacement units inherited from fbw (here, Angstroms)

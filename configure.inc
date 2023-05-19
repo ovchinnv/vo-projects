@@ -2,7 +2,7 @@
 # Configuration file for Dynamo
 # To compile Dynamo plugin, use "make -s plugin_master"
 
-CC=gcc-9
+CC=gcc-8
 FC=gfortran-8
 DEBUG=0
 DOUBLE_PRECISION = 1
