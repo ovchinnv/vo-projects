@@ -1,35 +1,42 @@
 program test
-
  use parser
  use ppoly1
+ use ppoly2
  use output
  use files
 
- int :: fid
- 
- int :: nz, nk, pdeg
+ __IMPNONE
+
+ int :: fid, i, j
+!
+ int :: nz, nk, kpdeg, zpdeg
  int :: nfine
- int :: k(1)
- float, pointer :: z(:), kave(:), coefs(:,:,:)
- float, pointer :: zfine(:), spl(:), splint(:)
+ int :: k(1) ! for minloc
+ float, pointer :: z(:), kave(:), coefs(:,:,:), coefs2d(:,:,:,:)
+ float, pointer :: zfine(:), spl(:), splint(:), spl2d(:,:), spl2dintz(:,:)
  int, pointer :: inds(:)
  float :: d
- float :: ktest(13)=(/( 0.05d0*i,  i=-6,6)/) ! to match matlab
+ float :: ktest(13)=(/( 0.05d0*i,  i=-6,6)/) ! average curvatures, to match matlab calculation
  type(pp1data), pointer :: pp1s(:)
  type(pp1data), pointer :: pp1ints(:) ! integrals
- 
- character(len=100) :: restart_file = 'sbf-rcut12.dat'
+!
+ type(pp2data) :: pp2, pp2int ! 2D test
+!
+ character(len=100) :: splines_file = 'sbf-rcut12spl1dz.dat'
+!
+! 1D test :
+ write(0,*) '1D splines test ============================================  '
 
  fid=-1
- call files_open(fid, restart_file, 'FORMATTED', 'READ')
+ call files_open(fid, splines_file, 'FORMATTED', 'READ')
  read(fid,*) nz
  allocate(z(nz)) ;
  read(fid,*) z
  read(fid,*) nk
  allocate(kave(nk)) ;
  read(fid,*) kave
- read(fid,*) pdeg
- allocate(coefs(pdeg+1,nz-1,nk)) ;
+ read(fid,*) zpdeg
+ allocate(coefs(zpdeg+1,nz-1,nk)) ;
  read(fid,*) coefs
  call files_close(fid)
 
@@ -39,7 +46,7 @@ program test
  write(0,*) 'curvature array size: ' , nk
  write(0,*) 'average curvatures:', kave
 
- write(0,*) 'polynomial interpolant degree: ', degree
+ write(0,*) 'polynomial interpolant degree: ', zpdeg
 ! do not write coeffs
 ! initialize 1 D cubic spline structures :
 
@@ -49,13 +56,13 @@ program test
  allocate(pp1s(nk))
  allocate(pp1ints(nk))
  do i=1,nk
-  call ppoly1_init(pp1s(i), pdeg, nz, z, coefs(:,:,i))
+  call ppoly1_init(pp1s(i), zpdeg, nz, z, coefs(:,:,i),.false.)
 ! manual check :
-  call ppoly1_check(pp1s(i))
+!  call ppoly1_check(pp1s(i))
 ! compute integral :
   pp1ints(i)=ppoly1_integral(pp1s(i))
-! check the integral polynomial :
-  call ppoly1_check(pp1ints(i))
+! to check the integral polynomial manually :
+!  call ppoly1_check(pp1ints(i))
 !  write(0,*) pp1ints(i)%grid
 !  write(0,*) pp1ints(i)%degree
 !  write(0,*) pp1ints(i)%coefs
@@ -88,13 +95,80 @@ program test
   call ppoly1_done(pp1ints(i))
  enddo
  call files_close(fid)
- 
+!
  __FREE(pp1s)
  __FREE(pp1ints)
 
  __FREE(z)
  __FREE(kave)
  __FREE(coefs)
+ __FREE(splint)
+ __FREE(spl)
+ __FREE(inds)
+
+! 2D test :
+ write(0,*) '2D splines test ============================================  '
+
+ splines_file = 'sbf-rcut12spl2dkz.dat'
+! 1D test :
+ write(0,*) '2D splines test ============================================  '
+!
+ fid=-1
+ call files_open(fid, splines_file, 'FORMATTED', 'READ')
+ read(fid,*) nk
+ allocate(kave(nk)) ;
+ read(fid,*) kave
+ write(0,*)
+ read(fid,*) nz
+ allocate(z(nz)) ;
+ read(fid,*) z
+ read(fid,*) kpdeg
+ read(fid,*) zpdeg
+ allocate(coefs2d(kpdeg+1,zpdeg+1,nk-1,nz-1)) ;
+ read(fid,*) coefs2d
+ call files_close(fid)
+
+ write(0,*) 'curvature (k) grid size: ' , nk
+ write(0,*) 'average curvature grid:', kave
+
+ write(0,*) 'distance (z) grid size: ' , nz
+ write(0,*) 'z-grid:', z
+
+ write(0,*) 'polynomial interpolant degree (k,z): ', kpdeg, zpdeg
+! do not write coeffs
+! initialize 2 D cubic spline structures :
+
+ __MESG('test','init 2D spline array')
+ call ppoly2_init(pp2, kpdeg, zpdeg, nk, nz, kave, z, coefs2d(1:kpdeg+1, 1:zpdeg+1, 1:nk-1, 1:nz-1) ,.false.) ! last argument is for continuity checking
+! compute integral in z :
+ pp2int=ppoly2_integral_y(pp2)
+
+ call files_open(fid,'pp2test.dat', 'FORMATTED','WRITE')
+ allocate(spl2d(nfine,size(ktest)),spl2dintz(nfine,size(ktest)))
+ allocate(inds(2))
+ do i=1, size(ktest)
+  do j=1, nfine
+   inds=ppoly2_getind(pp2,ktest(i),zfine(j))
+   spl2d(j,i)=ppoly2_compute_igrid(pp2,ktest(i),zfine(j),inds)
+   spl2dintz(j,i)=ppoly2_compute_igrid(pp2int,ktest(i),zfine(j),inds)
+!   spl2d(j,i)=ppoly2_compute(pp2,ktest(i),zfine(j))
+!   spl2dintz(j,i)=ppoly2_compute(pp2int,ktest(i),zfine(j))
+  enddo
+  write(fid,*) spl2d(:,i)
+  write(fid,*) spl2dintz(:,i)-spl2dintz(nfine,i)
+ enddo
+!  write(fid,*) inds
+!  write(fid,*) splint-splint(nfine) ! integral -- assume that the zero os at infinity
+
+
+ call files_close(fid)
  __FREE(zfine)
+ __FREE(coefs2d)
+ __FREE(inds)
+ __FREE(spl2d)
+ __FREE(spl2dintz)
+ call ppoly2_done(pp2);
+
 end
+
 
