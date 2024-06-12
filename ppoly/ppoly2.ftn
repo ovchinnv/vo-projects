@@ -1,0 +1,242 @@
+#ifdef _N
+#undef _N
+#endif
+#define _N ppoly2
+!
+      module _N
+      use ppoly1
+      __DEP_OUTPUT
+      __DEP_CONST
+      __DEP_PARSER
+      __IMPNONE
+      public
+!
+      type pp2data
+        int :: nxgrid=0, nygrid, xdegree=0, ydegree=0 ! grid sizes & degrees (see ppoly1)
+        float, dimension(:), pointer :: xgrid, ygrid
+        float, dimension(:,:,:,:), pointer :: coefs ! the first two dimensions are the coeffs ; the second two are the grid ; 1~3, 2~4
+        bool :: initialized = .false.
+      end type pp2data
+!
+      contains
+!==================================
+#ifdef _ME
+#undef _ME
+#endif
+#define _ME __NM(compute)
+       function _ME(pp,x,y)
+       type (pp2data), intent(in) :: pp
+       float, intent(in) :: x, y ! abscissa at which to evaluate
+       int :: igrid(2) ! index (interval) of polynomial piece to use
+       int :: icx, icy ! coefficient index
+       float :: dx, dxp, dy, dyp
+       float :: _ME
+       __IAM(__ME)
+       __ASSERT(pp%initialized, .eqv., .true.)
+! bracket x and y :
+       igrid=__NM(getind)(pp,x,y)
+! compute :
+       dx=(x-pp%xgrid(igrid(1)))
+       dy=(y-pp%ygrid(igrid(2)))
+!
+       __NM(compute)=zero
+!
+       dyp=one
+       do icy=pp%ydegree+1,1,-1 ! over all y spline coeffs
+        dxp=one ;
+        do icx=pp%xdegree+1,1,-1 ! over all x spline coeffs
+         __INCR(__NM(compute), dyp * pp%coefs(icx,icy,igrid(1),igrid(2)) * dxp) ! note that could take x dyp to outer loop, but need an extra array for that
+         dxp=dxp*dx;
+        enddo ! icx
+        dyp=dyp*dy;
+       enddo ! icy
+       end __FUN(compute)
+!==================================
+#undef _ME
+#define _ME __NM(compute_igrid)
+       function _ME(pp,x,y,igrid) ! specify intervals to avoid bracketing routine
+       type (pp2data), intent(in) :: pp
+       float, intent(in) :: x, y ! abscissa at which to evaluate
+       int, intent(in) :: igrid(2) ! index (interval) of polynomial piece to use
+       int :: icx, icy ! coefficient index
+       float :: dx, dxp, dy, dyp
+       float :: _ME
+       __IAM(__ME)
+       __ASSERT(pp%initialized, .eqv., .true.)
+       dx=(x-pp%xgrid(igrid(1)))
+       dy=(y-pp%ygrid(igrid(2)))
+       _ME=zero
+!
+       dyp=one
+       do icy=pp%ydegree+1,1,-1 ! over all y spline coeffs
+        dxp=one ;
+        do icx=pp%xdegree+1,1,-1 ! over all x spline coeffs
+         __INCR(_ME, dyp * pp%coefs(icx,icy,igrid(1),igrid(2)) * dxp) ! note that could take x dyp to outer loop, but need an extra array for that
+         dxp=dxp*dx;
+        enddo ! icx
+        dyp=dyp*dy;
+       enddo ! icy
+       end __FUN(compute_igrid)
+!==================================
+       __SUB(init)(pp,xdegree,ydegree,nxgrid,nygrid,xgrid,ygrid,coefs,qcheck_)
+       type(pp2data)::pp
+       __IAM(__NM(init))
+       int, intent(in):: xdegree, ydegree, nxgrid, nygrid
+       float, intent(in) :: xgrid(nxgrid), ygrid(nygrid), coefs(xdegree+1,ydegree+1,nxgrid-1,nygrid-1)
+       __OPAR(qcheck,bool)
+       __PRESENT(qcheck,.true.)
+       if (pp%initialized) then
+        __WRN(whoami,'polynomial already initialized. Nothing done.')
+       else
+        allocate(pp%xgrid(nxgrid),pp%ygrid(nygrid),pp%coefs(xdegree+1,ydegree+1,nxgrid-1,nygrid-1))
+        pp%xgrid=xgrid ; pp%ygrid=ygrid;
+        pp%coefs=coefs
+        pp%xdegree=xdegree ; pp%ydegree=ydegree
+        pp%nxgrid=nxgrid ; pp%nygrid=nygrid
+        pp%initialized=.true.
+! check poly / info :
+        if (qcheck) call __NM(check)(pp) ! no warning/error here if does not pass
+       endif
+!
+       end __SUB(init)
+!==================================
+       __SUB(done)(pp)
+       type (pp2data) :: pp
+       __FREE(pp%xgrid)
+       __FREE(pp%ygrid)
+       __FREE(pp%coefs)
+       pp%xdegree=0 ; pp%ydegree=0
+       pp%nxgrid=0 ; pp%nygrid=0
+       pp%initialized=.false.
+       end __SUB(done)
+!==================================
+#undef _ME
+#define _ME __NM(getxind)
+       function _ME(pp,x)
+       type (pp2data), intent(in) :: pp
+       int :: _ME, i
+       float, intent(in) :: x
+       __IAM(_ME)
+       __ASSERT(pp%initialized, .eqv., .true.)
+       _ME=pp%nxgrid-1 ! assume last interval
+       do i=2,pp%nxgrid
+        if ( pp%xgrid(i) .ge. x ) then
+         _ME=i-1
+         exit
+        endif
+       enddo
+       end function _ME
+!==================================
+#undef _ME
+#define _ME __NM(getyind)
+       function _ME(pp,y)
+       type (pp2data), intent(in) :: pp
+       int :: _ME, i
+       float, intent(in) :: y
+       __IAM(_ME)
+       __ASSERT(pp%initialized, .eqv., .true.)
+       _ME=pp%nygrid-1 ! assume last interval
+       do i=2,pp%nygrid
+        if ( pp%ygrid(i) .ge. y ) then
+         _ME=i-1
+         exit
+        endif
+       enddo
+       end function _ME
+!==================================
+#undef _ME
+#define _ME __NM(getind)
+       function _ME(pp,x,y)
+       type (pp2data), intent(in) :: pp
+       int :: _ME(2), i
+       float, intent(in) :: x, y
+       __IAM(_ME)
+       __ASSERT(pp%initialized, .eqv., .true.)
+       _ME(1)=pp%nxgrid-1 ! assume last interval
+       do i=2,pp%nxgrid
+        if ( pp%xgrid(i) .ge. x ) then
+         _ME(1)=i-1
+         exit
+        endif
+       enddo
+       _ME(2)=pp%nygrid-1 ! assume last interval
+       do i=2,pp%nygrid
+        if ( pp%ygrid(i) .ge. y ) then
+         _ME(2)=i-1
+         exit
+        endif
+       enddo
+       end function _ME
+!==================================
+       __SUB(check)(pp2)
+       type(pp2data), intent(in) :: pp2
+       type(pp1data) :: pp1
+!(1) check that the grid is increasing
+       __IAM(__NM(check))
+       int :: idrv, i, j
+       float, pointer :: coefs(:,:), dgrid(:) ! note that these are 1D coefficients
+       float :: d,v
+       __ASSERT(pp2%initialized,.eqv.,.true.)
+       if ( any(pp2%xgrid(2:pp2%nxgrid) .le. pp2%xgrid(1:pp2%nxgrid-1)) .and. any(pp2%xgrid(2:pp2%nxgrid) .ge. pp2%xgrid(1:pp2%nxgrid-1)) ) then
+         __WRN(whoami,'polynomial x-grid is non-monotonic')
+       endif
+!
+       if ( any(pp2%ygrid(2:pp2%nygrid) .le. pp2%ygrid(1:pp2%nygrid-1)) .and. any(pp2%ygrid(2:pp2%nygrid) .ge. pp2%ygrid(1:pp2%nygrid-1)) ) then
+         __WRN(whoami,'polynomial y-grid is non-monotonic')
+       endif
+! check continuity
+! do this iteratively using 1D spline type
+! (1) x-dimension
+      call ppoly1_init(pp1,pp2%xdegree, pp2%nxgrid, pp2%xgrid, pp2%coefs(:,1,:,1))
+      do i=1,pp2%ydegree+1
+       do j=1,pp2%nygrid-1
+        pp1%coefs = pp2%coefs(:,i,:,j)
+        __MESG(whoami, 'Checking spline for coefficient #'//itoa(i)//' at y-point '//itoa(j))
+        call ppoly1_check(pp1)
+       enddo
+      enddo
+! (2) now the y-dimension :
+      call ppoly1_done(pp1)
+      call ppoly1_init(pp1,pp2%ydegree, pp2%nygrid, pp2%ygrid, pp2%coefs(1,:,1,:))
+      do i=1,pp2%xdegree+1
+       do j=1,pp2%nxgrid-1
+        pp1%coefs = pp2%coefs(i,:,j,:)
+        __MESG(whoami, 'Checking spline for coefficient #'//itoa(i)//' at x-point '//itoa(j))
+        call ppoly1_check(pp1)
+       enddo
+      enddo
+!
+       call ppoly1_done(pp1)
+       end __SUB(check)
+!==================================
+#undef _ME
+#define _ME __NM(integral_y)
+       function _ME(pp2)
+       type(pp2data), intent(in) :: pp2
+       type(pp2data) :: _ME
+       type(pp1data) :: pp1, pp1int
+       float, pointer :: intcoefs(:,:,:,:)
+       int :: i,j
+       __IAM(_ME)
+       __ASSERT(pp2%initialized, .eqv., .true.)
+! initialize :
+       allocate(intcoefs(pp2%xdegree+1,pp2%ydegree+2,pp2%nxgrid-1,pp2%nygrid-1))
+       intcoefs=zero
+!
+       call ppoly1_init(pp1,pp2%ydegree, pp2%nygrid, pp2%ygrid, pp2%coefs(1,:,1,:),.false.) ! no continuity checking here
+! integrate one location at a time :
+       do i=1,pp2%xdegree+1
+        do j=1,pp2%nxgrid-1
+         pp1%coefs=pp2%coefs(i,:,j,:)
+         pp1int = ppoly1_integral(pp1)
+         intcoefs(i,:,j,:) = pp1int%coefs
+        enddo
+       enddo
+!
+       call ppoly2_init(_ME,pp2%xdegree,pp2%ydegree+1,pp2%nxgrid,pp2%nygrid,pp2%xgrid,pp2%ygrid,intcoefs,.false.)
+       call ppoly1_done(pp1)
+       call ppoly1_done(pp1int)
+       __FREE(intcoefs)
+       end function _ME
+      end module _N
+!
