@@ -1,2 +1,2 @@
-#// version of watershell code
+#// choose the version to use
 version=2
