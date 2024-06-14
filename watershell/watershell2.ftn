@@ -10,15 +10,18 @@
 #endif
 ! to "regularize" variation of applied forces with the contour value,
 ! use a rough approximation to the inverse of the filter CDF;
+! NB:the approximation is the exact inverse with _SIMPLERHO
 ! to avoid divide overflow, define minimum density
-#// NOTE : because the sigmoid is centered on zero, arguments > 0 map to > 0.5, which puts them inside the shell
-#define  __RHO_MAX half
-! twothirds ! not changing this for reproducibility
+! I initially set this to 0.5, perhaps because the logistic inverse was inaccurate
+! However, with that option gone, do not see any reason not to approach -> 1 :
+#//define  __RHO_MAX half
+#define  __RHO_MAX 0.99d0
 #define  __RHOSAFE(_X) (min(__RHO_MAX, __RHO(_X)))
 #//-////////////////////// DISTANCE FUNCTION FROM DENSITY :
 #// error function inverse
 #define __RHO(_X) half*(one + __erf((_X)*osq2*oo_surf_stdev))
 #define __Q(_R) ierfo7(two*(_R)-one)
+#// note that the inverse produces a negative distance, per our convention
 #define __QSAFE(_R) ierfo7(two * min(__RHO_MAX, max(_R,__RHO_MIN)) - one)
 #define __RHO_INVERSE(_R) sqrt2*surf_stdev*__Q(_R)
 #// if already computed erf inverse _Q
@@ -137,7 +140,7 @@ module _N
  __PAR(structure_update_freq, int, ione)         ! frequency of updating coordinates from which the surface is generated
  __PAR(structure_update_memory, float, 0.999d0)  ! memory constant for exponential update
  __PAR(output_freq, int, 1000)                   ! frequency of writing output file
-   int, save :: restart_freq, default_restart_freq=1000; ! frequency of writing restart file (used to be output_freq above) ; note default modifiable (see below)
+   int, save :: restart_freq, default_restart_freq=1000 ! frequency of writing restart file (used to be output_freq above) ; note default modifiable (see below)
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
  __PAR(full_sum_freq, int, 75)                   ! frequency of force calculation without density truncation
                                                  ! doing the full calculation allows all atoms to be sorted
@@ -227,9 +230,9 @@ module _N
 #endif
 &                  rho_solv(:), & ! density value at solvent coordinate
 &                  drho_solv(:,:),& ! density gradient at solvent coordinate (inward surface normal)
-&                  dist_solv(:), &! minimum distance to solute
-&                  ddist_solv(:,:) ! distance gradient at solvent coordinate (inward surface normal)
- bool, pointer :: qforced_solv(:) ! flags that indicate whether a force is to be applied on the atom
+&                  dist_solv(:), &! distance to solvent boundary
+&                  acurv_solv(:) ! average surface curvature corresponding to solvent coordinate
+ bool, pointer :: qoutside_solv(:) ! flags that indicate whether the solvent atom is outside of boundary
 #ifdef __SORT_LIST
  shortint, pointer :: solute_neighbor_list(:,:) ! for each solvent atom, the solute atoms are sorted by proximity
 #ifdef __NEIGHBOR_LIST
@@ -380,7 +383,7 @@ module _N
   __MESSAGE(whoami, trim(ftoupper(__STRING(_N)))//' CONFIGURATION OPTIONS NOT PROVIDED. WILL NOT INITIALIZE.');
    return
  else
-  __MESSAGE(whoami, ' ================= WILL INITIALIZE WATERSHELL VERSION 2 ================= ');
+  __MESSAGE(whoami, '================= WILL INITIALIZE WATERSHELL VERSION 2 =================');
 #ifdef __SIMPLERHO
   __MESSAGE(whoami, 'USING SIMPLIFIED ERF DENSITY FUNCTION')
 #endif
@@ -1174,10 +1177,10 @@ endif
 #ifdef __DASYSTAT
   __ALLOC(mass_solv(nsolvent))
 #endif
-  __ALLOC(qforced_solv(nsolvent))
-  dist_solv=>rho_solv
+  __ALLOC(qoutside_solv(nsolvent))
+  __ALLOC(dist_solv(nsolvent))
+  __ALLOC(acurv_solv(nsolvent))
   __ALLOC(drho_solv(3,nsolvent))
-  ddist_solv=>drho_solv
 #ifdef __SORT_LIST
   __ALLOC(solute_neighbor_list(nsurface_coord,nsolvent))
 ! initialize neighbor list with solute indices from 1 to nsurface_coord for each solute atom:
@@ -1489,6 +1492,7 @@ __DBGVAR(r_com_sa,1)
  _W 'surface_padding=',surf_padding, ' # scalar padding added to each atom radius'
  _W 'surface_distance=',surface_distance, ' # distance of solvent surface from solute'
  _W 'surface_force_constant=',surface_force_constant, ' # surface force constant'
+ _W 'curvature_force_constant=',curvature_force_constant, ' # curvature force constant'
 !
 #if defined(__SORT_LIST) & defined(__NEIGHBOR_LIST)
  if (qneighbor_list) then
@@ -1547,12 +1551,12 @@ __DBGVAR(r_com_sa,1)
  __FREE(rb_wgt)
 #endif
  __FREE(r_solv)
- __FREE(qforced_solv)
+ __FREE(qoutside_solv)
  __FREE(rad_surf)
  __FREE(rho_solv)
- nullify(dist_solv)
  __FREE(drho_solv)
- nullify(ddist_solv)
+ __FREE(dist_solv)
+ __FREE(acurv_solv)
  __FREE(isurface_atoms)
  __FREE(isolvent_atoms)
 #ifdef __SORT_LIST
@@ -1994,6 +1998,7 @@ endif ! decide whether to compute dr_surf
   __DBGOUT('Will compute approximate surface distance')
 ! first, set surface_contour value to an upper bound to make sure that
 ! no atoms can be marked as "inside" atoms; this ensures that the density routine will compute densities without truncation
+! 6/13/24 : no longer quitting early b/c of attractive sbf part
   surface_contour_value=nsurface_coord
 #ifdef __DASYSTAT
   if (dasystat) then
@@ -2004,7 +2009,7 @@ endif ! decide whether to compute dr_surf
 #endif
   endif ! dasystat
 #endif
-  call __NM(compute_density_grad)(.false.) ! false to traverse entire solvent atom list
+  call __NM(compute_density_grad)(.false.) ! false to force traverse entire solute atom list
 #ifdef __DASYSTAT
   if (dasystat) bulk_boundary_contour_value=d0 ! restore
 #endif
@@ -2070,14 +2075,14 @@ endif ! decide whether to compute dr_surf
   endif ! dasystat
 #endif
 !
-! at this point, qforced_solv is wrong : it will be true everywhere, because surface distance was undefined (=0) in the calc. loop
-! recompute qforced_solv :
+! at this point, qoutside_solv is wrong : it will be true everywhere, because surface distance was undefined (=0) in the calc. loop
+! recompute qoutside_solv :
 #ifdef __HAMILTONIAN
 ! no easy solution but to recompute the gradients, now that surface contour value is known
-! note that forces will be applied to surface atomsas well, which is why they need to be correct
+! note that forces will be applied to surface atoms as well, which is why they need to be correct
   call __NM(compute_density_grad(.false.))
 #else
-  qforced_solv=rho_solv.lt.surface_contour_value ! vector operation
+  qoutside_solv=rho_solv.lt.surface_contour_value
 #endif
 !====== NOTE : if we requested to run without neighbor lists then we need to reset solute_neighbor_mind to max
 !====== otherwise, the early exit version of force routine could miss crucial atoms (the mind list is _not_ updated b/c qnlist=0)
@@ -2089,9 +2094,13 @@ endif ! decide whether to compute dr_surf
  else ! compute approximate reference surface distance from coordinates
 ! NOTE :  this is the most time consuming part of the force calculation
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
-   if (full_sum_freq.gt.izero) then
+   if (full_sum_freq.gt.izero) then ! if full_sum_freq<=0, will always run the short(truncate) loop -- see below
     call __NM(compute_density_grad)((.not.qneighbor_list) .or. (.not.__CHKUPDATE(full_sum_freq))) 
-! truncate if running density value exceeds reference
+! the full version will [flag=FALSE]  be called if :
+! (1) qneighbor_list is TRUE AND iteration is a multiple of full_sum_freq
+! the short version is called if :
+! (1) running w/o nlist (in this case the truncated list is actually full-length)
+! (2) we are between full_sum recompute intervals
    else
 #endif
     call __NM(compute_density_grad)(.true.)
@@ -2195,7 +2204,7 @@ endif ! decide whether to compute dr_surf
 !$omp do schedule(runtime)
 #endif
  do i=1, nsolvent
-  if ( qforced_solv(i) ) then
+  if ( qoutside_solv(i) ) then
    __INC(__U(nsolvent_outside))
 #ifdef __DASYSTAT
    if(dasystat) __INCR(__U(solvent_mass_outside), mass_solv(i))
@@ -2221,7 +2230,7 @@ endif ! decide whether to compute dr_surf
 ! What happens if we do not know surface distance going into the grad routine ? In that case, the computed prefactor will be wrong !
 #endif
 #if (_DBGLEV>1)
- __DBGOUT('solv. atom#:', i, 'density:', rho_solv(i), 'distance:', __RHO_INVERSE2(d0), 'forced?:', qforced_solv(i)
+ __DBGOUT('solv. atom#:', i, 'density:', rho_solv(i), 'distance:', __RHO_INVERSE2(d0), 'forced?:', qoutside_solv(i)
 #ifndef __HAMILTONIAN
  , 'pre:', pre
 #endif
@@ -2706,7 +2715,7 @@ __DBGVAR(density_target,1)
 ! cannot use vector operation since a function is involved
   current_surface_distance=zero
   do ii=1, nsolvent
-    if (qforced_solv(ii)) then
+    if (qoutside_solv(ii)) then
      __INCR(current_surface_distance , __RHO_INVSAFE(rho_solv(ii)))
     endif
   enddo
@@ -2924,9 +2933,9 @@ __DBGVAR(solvent_mass_nonbulk,1)
 #endif
 !
  bool :: qtruncate_loop ! whether we can stop looping over solute atoms once the density reaches a threshold value
-! ^ this allows the neighbor lists to be sorted ; if __SORT_LIST is undefined then there is no effect
-!   the density calculation is still truncated once the solvent atom is determined to be inside the shell
-!   to avoid the truncation, you must define an upper bound to the surface contour, which is nsurface_coord
+! ^ this makes sense only if the neighbor lists are sorted ; if _SORT_LIST is undefined then there is no effect
+!   NB:the density calculation is still truncated once the solvent atom is determined to be inside the shell
+!   to avoid the truncation, you must define an upper bound to the surface contour, e.g. I use nsurface_coord
  int :: i, j
  float :: rp(3), rw(3), dr(3), dr2, b, expb, ooc
 #ifndef __SIMPLERHO
@@ -2968,7 +2977,7 @@ __DBGVAR(solvent_mass_nonbulk,1)
 #endif
  bool :: qbulk, qchkbulk
 #endif
- bool :: qforced
+ bool :: qoutside
  __IAM(__NM(compute_density_grad))
 !
 ! different erf implementations/approximations
@@ -3031,7 +3040,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
 #endif
 !$omp ) &
-!$omp private ( rw, i, j, rp, rsurf, rmaxsurf, dr, dr2, ooc, b, expb, qforced &
+!$omp private ( rw, i, j, rp, rsurf, rmaxsurf, dr, dr2, ooc, b, expb, qoutside &
 #ifndef __SIMPLERHO
 !$omp , a, expa &
 #endif
@@ -3090,7 +3099,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
    __U(nspt)=0 ! set number of surface support atoms for this solvent atom to zero
 #endif
 !
-   qforced=.true.
+   qoutside=.true.
 #ifdef __BULK2_DISTANCE_SCALE
    if (dasystat) qchkbulk=.true. ! flag to check whether atom is inside outer bulk shell
 #endif
@@ -3109,20 +3118,13 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #else
    do j=1, nsurface_coord ! inner loop over solute atoms
 #endif
-!#define _nonce  rho_solv(i)=0.0001d0;
-!    if (qtruncate_sum.and.rho.gt.surface_contour_value) &     ! density threshold exceeded ; will not apply force to this atom
-!    exit
-!     cycle ! could actually be faster than exit (vectorization?)
-! determine if atoms are too far away :
-! _nonce cycle ! aa get 110
+! determine if the atoms are too far apart :
     rp=r_surf(:,j)
 !
-! _nonce cycle ! aa get 111
     rsurf    = ( rad_surf(j) + surf_padding )
-    rmaxsurf = ( cutoff_surf + rsurf  ) ! note that this can be precomputed
+    rmaxsurf = ( cutoff_surf + rsurf  )
 !
-!_nonce  cycle ! aa get 105
-    dr = rp-rw ;
+    dr = rp-rw ! protein coordinate - water coordinate
 #ifdef __UNWRAP_PBC
     if (qper_parser_override) then
      __DIST_PBC(dr(1),ucell%a)
@@ -3130,19 +3132,15 @@ __DBGVAR(bulk_boundary_contour_value,1)
      __DIST_PBC(dr(3),ucell%c)
     endif
 #endif
-! _nonce  cycle ! aa get 105
-!__DBGOUT('i ', i, ' RW: ', rw)
-!__DBGOUT('j ', j, ' RP: ', rp)
-!__DBGOUT(' DR: ', dr, rmaxsurf)
 !    if (any(abs(dr) .gt. rmaxsurf)) cycle ! not necessary, might actually slow the code
     dr2=sum(dr**2);
 #ifdef __SORT_LIST
-! bubble sort between this and previous atom base on distance
+! bubble sort between this and previous atom based on distance
 ! one issue here is that rmaxsurf depends on the atom radius ;
 ! i.e. perhaps sorting should take that into account ?
 ! specifically, should we compare :
 !
-! ( dr - rmax ) < ( drold - rmaxold) ? swap : continue
+! ( dr - rmaxsurf ) < ( drold - rmaxsurfold) ? swap : continue
 !
 ! Note that, in the above, the sign matters
 ! The point is that atoms with a larger radius could contribute more to the density
@@ -3157,8 +3155,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
     dr2old=dr2
 #endif
 !
-    if (dr2 .gt. rmaxsurf**2) cycle
-! _nonce cycle ! aa get 54
+    if (dr2 .gt. rmaxsurf**2) cycle ! skip this atom because it is too far away
 ! proceed with calculation
     rsurf=rsurf * oo_surf_stdev ! NOTE: redefining rsurf to get rid of variable rsurfn (rsurf <== rsurfn)
     dr2 = sqrt(dr2) * oo_surf_stdev
@@ -3182,13 +3179,13 @@ __DBGVAR(bulk_boundary_contour_value,1)
     __erfo7i(a,erfa)
     __INCR(rho_solv(i), half * ( erfa - erfb ) + osq2pi * ooc * ( expa - expb )   )
 #else
-    __INCR(rho_solv(i), half * ( one - erfb ) )
+    __INCR(rho_solv(i), half * ( one  - erfb ) )
 #endif
 #else
 #ifndef __SIMPLERHO
     __INCR(rho_solv(i), half * ( __erf(a) - __erf(b) ) + osq2pi * ooc * ( expa - expb )   )
 #else
-    __INCR(rho_solv(i), half * ( one - __erf(b) ) )
+    __INCR(rho_solv(i), half * ( one      - __erf(b) ) )
 #endif
 #endif
 #if (_DBGLEV>1)
@@ -3203,60 +3200,37 @@ __DBGVAR(bulk_boundary_contour_value,1)
       __INCR(__U(solvent_mass_bulk), mass_solv(i)) ! also add to 'outer' bulk mass
 !      qchkbulk=.false. ! not used after this
 #endif
-      qforced=.false.
-      exit ! density threshold exceeded ; will not apply force to this atom
+      qoutside=.false. ! density threshold exceeded ; but will still apply (attractive) force per sbf
 #ifdef __BULK2_DISTANCE_SCALE
      elseif(qchkbulk .and.&
 &      (rho_solv(i).gt.bulk2_boundary_contour_value)) then ! atom is inside outer bulk boundary
        __INCR(__U(solvent_mass_bulk), mass_solv(i))
-       qforced=.false.
+       qoutside=.false.
        qchkbulk=.false. ! mark as bulk to avoid mass addition since in subsequent iterations
 #endif
-     elseif(qforced) then
-      if (rho_solv(i).gt.surface_contour_value) then ! not bulk, but still inside ; if already marked (qforced=t, skip)
-       qforced=.false. ! however, do not quit because we still do not know whether we are inside bulk
-      else
+     elseif(qoutside) then
+      if (rho_solv(i).gt.surface_contour_value) qoutside=.false.
+     endif
+    endif ! dasystat
+#endif
+!
 #ifndef __SIMPLERHO
-! otherwise, compute gradient contribution : (note that I am flipping the direction of dr (in the notes it is r0-r)
+! compute gradient contribution : (note the flipped direction of dr=rp-rw (in the notes it is r0-r=rw-rp))
 ! MATLAB : dGdX_fix =  - 1/sqrt(2*pi) * ( (expa + expb) * radpad/s +       (expa - expb)./c)./(c*s).^2 .*dX ;% correct analytical expression
-       __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurf + (expa - expb) * ooc) ) ! CORRECTED 10/18
+    __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurf + (expa - expb) * ooc) )
 #else
-       __SCALE(dr, osq2pi * ooc * oo_surf_stdev**2 * expb ) ! 6/11/24
+    __SCALE(dr, osq2pi * ooc * oo_surf_stdev**2 * expb )
 #endif
 ! add gradient contribution
-       __INCR(drho_solv(:,i),dr)
+    __INCR(drho_solv(:,i),dr)
 !
 #ifdef __HAMILTONIAN
 ! propagate force onto surface atoms
-     __INC(__U(nspt)) ! number of atoms in support
-     ispt_this_thread(__U(nspt)) = j ! index of support atom
-     drho_surf_this_thread(:,j) = dr ! density gradient (i.e. to compute force exerted on support atom)
+    __INC(__U(nspt)) ! number of atoms in support
+    ispt_this_thread(__U(nspt)) = j ! index of support atom
+    drho_surf_this_thread(:,j) = dr ! density gradient (i.e. to compute force exerted on support atom)
 #endif
 !
-      endif ! rho > surface contour value
-     endif ! rho > bulk contour value
-    else & ! dasystat
-#endif
-    if(rho_solv(i).gt.surface_contour_value) then
-     qforced=.false.
-     exit ! density threshold exceeded ; will not apply force to this atom
-    else
-! otherwise, compute gradient contribution : (note that I am flipping the direction of dr (in the notes it is r0-r)
-#ifndef __SIMPLERHO
-     __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurf + (expa - expb) * ooc) ) ! CORRECTED 10/18
-#else
-     __SCALE(dr, osq2pi * ooc * oo_surf_stdev**2 * expb ) ! 6/11/24
-#endif
-! add gradient contribution
-     __INCR(drho_solv(:,i),dr)
-!
-#ifdef __HAMILTONIAN
-! propagate force onto surface atoms
-     __INC(__U(nspt)) ! number of atoms in support
-     ispt_this_thread(__U(nspt)) = j ! index of support atom
-     drho_surf_this_thread(:,j) = dr ! density gradient (i.e. to compute force exerted on support atom)
-#endif
-    endif
 #if defined(__SORT_LIST) && defined( __NEIGHBOR_LIST)
 ! if we are here, that means that the jj index contributes to the calculation ; check it if it is inside the index support ; if not, increase index support
     if (jj>solute_neighbor_mind(i)) solute_neighbor_mind(i)=jj
@@ -3265,25 +3239,19 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #if (_DBGLEV>1)
     __DBGOUT('FORCECOMP : solv. atom#:', i, 'density:', rho_solv(i))
 #endif
-   qforced_solv(i)=qforced ! note that this is not quite enough, because it is possible that the solvent atom is outside of all supports;
-!  so that while the default setting -- qforced=T -- persists, there are actually _no_ forces and rho(i)=zero ; therefore, we could do
-!  qforced_solv(i)=qforced.and.rho_solv(i).gt.zero
-!  however, in that case we are throwing away the information that a solvent atom has moved outside of support ; better to address this in the main loop, I think
-!  Also, it is clear that the atom _should_ be forced (we just do not know which way to push it since we are outside of the support) ; thus we are closer to the
-!  actual physical situation, leaving as is
+   qoutside_solv(i)=qoutside ! store which atoms are beyond boundary (not sure we need this information)
 #ifdef __HAMILTONIAN
 ! Need to propagate Hamiltonian forces to surface atoms ; therefore, compute force prefactor and apply to gradients here
 ! Also, do not recompute the prefactor in the main loop for solvent atoms (see main routine)
-   if (qforced) then
-    b=__QSAFE(rho_solv(i))
-    b = surface_force_constant * surf_stdev * sq2pi * exp (b**2) * ( __RHO_INVERSE2(b) - surface_distance )
-    __SCALE(drho_solv(:,i),b)
-    __SCALE(b, (one - structure_update_memory) )
-    do j=1,__U(nspt)
-     __INCR(drho_surf_all_thread(:,ispt_this_thread(j)), b * drho_surf_this_thread(:,ispt_this_thread(j)))
-    enddo
+! NEED TO REPLACE THE BELOW W/SBF !
+   b=__QSAFE(rho_solv(i))
+   b = surface_force_constant * surf_stdev * sq2pi * exp (b**2) * ( __RHO_INVERSE2(b) - surface_distance )
+   __SCALE(drho_solv(:,i),b)
+   __SCALE(b, (one - structure_update_memory) )
+   do j=1,__U(nspt)
+    __INCR(drho_surf_all_thread(:,ispt_this_thread(j)), b * drho_surf_this_thread(:,ispt_this_thread(j)))
+   enddo
 !write(0,*) i, b, __U(nspt), ispt_this_thread(1:__U(nspt))
-   endif ! qforced
 #endif
   enddo ! nsolvent
 !#undef zero
@@ -3351,7 +3319,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
 #endif
 !$omp ) &
-!$omp private ( rw, i, j, rp, rsurf, rmaxsurf, dr, dr2, ooc, b, expb, qforced &
+!$omp private ( rw, i, j, rp, rsurf, rmaxsurf, dr, dr2, ooc, b, expb, qoutside &
 #ifndef __SIMPLERHO
 !$omp , a, expa &
 #endif
@@ -3409,14 +3377,14 @@ __DBGVAR(bulk_boundary_contour_value,1)
    __U(nspt)=0 ! set number of surface support atoms for this solvent atom to zero
 #endif
 !
-   qforced=.true.
+   qoutside=.true.
 #ifdef __DASYSTAT
-    if (dasystat) then 
-     qbulk=.true.
+   if (dasystat) then 
+    qbulk=.true.
 #ifdef __BULK2_DISTANCE_SCALE
-     qchkbulk=.true.
+    qchkbulk=.true.
 #endif
-    endif
+   endif
 #endif
    rho_solv(i)=zero
    drho_solv(:,i)=zero
@@ -3460,112 +3428,68 @@ __DBGVAR(bulk_boundary_contour_value,1)
 !   of how far we have to go to compute all the interactions within the cutoff ; so we store this number
 #endif
 !
-#ifdef __DASYSTAT
-    if (dasystat) then
-     if (qbulk) then
-      rsurf=rsurf * oo_surf_stdev
-      dr2 = sqrt(dr2) * oo_surf_stdev
+    rsurf=rsurf * oo_surf_stdev
+    dr2 = sqrt(dr2) * oo_surf_stdev
 #ifndef __SIMPLERHO
-      a = osq2 * (dr2 + rsurf)
-      expa = __gauss(a)
+    a = osq2 * (dr2 + rsurf)
+    expa = __gauss(a)
 #endif
-      b = osq2 * (dr2 - rsurf)
-      expb = __gauss(b)
-      ooc = one / dr2
+    b = osq2 * (dr2 - rsurf)
+    expb = __gauss(b)
+    ooc = one / dr2
 ! repeated from above, since it is important :
 ! note that, if dr ~ small, ( expa - expb ) / c is singular, though the limit (and asymptote) exists
 ! however, in the calculations here, that would imply atoms being very close together, which we consider impossible, so ignore this case
 !
+!calc gradient
+#ifndef __SIMPLERHO
+    __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurf + (expa - expb) * ooc) )
+#else
+    __SCALE(dr, osq2pi * ooc * oo_surf_stdev**2 * expb )
+#endif
+! add gradient contribution
+    __INCR(drho_solv(:,i),dr)
 ! update density
 #ifdef __ERFHYBRID
-      __erfo7i(b,erfb)
+    __erfo7i(b,erfb)
 #ifndef __SIMPLERHO
-      __erfo7i(a,erfa)
-      __INCR(rho_solv(i), half * ( erfa - erfb ) + osq2pi * ooc * ( expa - expb )   )
+    __erfo7i(a,erfa)
+    __INCR(rho_solv(i), half * ( erfa - erfb ) + osq2pi * ooc * ( expa - expb )   )
 #else
-      __INCR(rho_solv(i), half * ( one - erfb ) )
+    __INCR(rho_solv(i), half * ( one  - erfb ) )
 #endif
 #else
 #ifndef __SIMPLERHO
-      __INCR(rho_solv(i), half * ( __erf(a) - __erf(b) ) + osq2pi * ooc * ( expa - expb )   )
+    __INCR(rho_solv(i), half * ( __erf(a) - __erf(b) ) + osq2pi * ooc * ( expa - expb )   )
 #else
-      __INCR(rho_solv(i), half * ( one - __erf(b) ) )
+    __INCR(rho_solv(i), half * ( one      - __erf(b) ) )
 #endif
 #endif
-      if (rho_solv(i).gt.bulk_boundary_contour_value) then
+!
+#ifdef __DASYSTAT
+    if (dasystat) then
+      if (qbulk .and. (rho_solv(i).gt.bulk_boundary_contour_value)) then
        __INCR(__U(solvent_mass_nonbulk), mass_solv(i))
 #ifdef __BULK2_DISTANCE_SCALE
+! bulk2 is the boundary closer to the surface, if defined ; get difference by subtraction at the end
        __INCR(__U(solvent_mass_bulk), mass_solv(i))
        qchkbulk=.false. ! no need to check vs outer bulk value
 #endif
        qbulk=.false. ! no need to compute erf further, but will iterate to the end to sort list
-       qforced=.false.
+       qoutside=.false.
 #ifdef __BULK2_DISTANCE_SCALE
       elseif(qchkbulk .and. (rho_solv(i).gt.bulk2_boundary_contour_value)) then
        __INCR(__U(solvent_mass_bulk), mass_solv(i))
        qchkbulk=.false.
-       qforced=.false.
+       qoutside=.false.
 #endif
-      elseif(qforced) then ! in the bulk, and possibly outside main shell
-       if (rho_solv(i).gt.surface_contour_value) then
-        qforced=.false.
-       else
-#ifndef __SIMPLERHO
-        __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurf + (expa - expb) * ooc) ) ! CORRECTED 10/18
+      elseif(qoutside) then ! in the bulk, and possibly outside main shell
+       if (rho_solv(i).gt.surface_contour_value) qoutside=.false.
+      endif ! qbulk
+    endif ! dasystat
 #else
-        __SCALE(dr, osq2pi * ooc * oo_surf_stdev**2 * expb ) ! 6/11/24
+    if (rho_solv(i).gt.surface_contour_value) qoutside=.false.
 #endif
-! add gradient contribution
-        __INCR(drho_solv(:,i),dr)
-!
-#ifdef __HAMILTONIAN
-! propagate force onto surface atoms
-        __INC(__U(nspt)) ! number of atoms in support
-        ispt_this_thread(__U(nspt)) = j ! index of support atom
-        drho_surf_this_thread(:,j) = dr ! density gradient (i.e. to compute force exerted on support atom)
-#endif
-!
-       endif ! rho > surface value
-      endif ! rho > bulk value
-     endif ! qbulk
-    else & ! dasystat
-#endif
-    if (qforced) then
-     rsurf = rsurf * oo_surf_stdev
-     dr2 = sqrt(dr2) * oo_surf_stdev
-#ifndef __SIMPLERHO
-     a = osq2 * (dr2 + rsurf)
-     expa = __gauss(a)
-#endif
-     b = osq2 * (dr2 - rsurf)
-     expb = __gauss(b)
-     ooc = one / dr2
-! update density
-#ifdef __ERFHYBRID
-     __erfo7i(b,erfb)
-#ifndef __SIMPLERHO
-     __erfo7i(a,erfa)
-     __INCR(rho_solv(i), half * ( erfa - erfb ) + osq2pi * ooc * ( expa - expb )   )
-#else
-     __INCR(rho_solv(i), half * ( one - erfb ) )
-#endif
-#else
-#ifndef __SIMPLERHO
-     __INCR(rho_solv(i), half * ( __erf(a) - __erf(b) ) + osq2pi * ooc * ( expa - expb )   )
-#else
-     __INCR(rho_solv(i), half * ( one - __erf(b) ) )
-#endif
-#endif
-     if (rho_solv(i).gt.surface_contour_value) then
-      qforced=.false.
-     else
-#ifndef __SIMPLERHO
-      __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurf + (expa - expb) * ooc) ) ! CORRECTED 10/18
-#else
-      __SCALE(dr, osq2pi * ooc * oo_surf_stdev**2 * expb ) ! 6/11/24
-#endif
-! add gradient contribution
-      __INCR(drho_solv(:,i),dr)
 !
 #ifdef __HAMILTONIAN
 ! propagate force onto surface atoms
@@ -3574,19 +3498,16 @@ __DBGVAR(bulk_boundary_contour_value,1)
       drho_surf_this_thread(:,j) = dr ! density gradient (i.e. to compute force exerted on support atom)
 #endif
 !
-     endif ! rho>contour value
-    endif ! qforced
-! _nonce
    enddo ! nsurface_coord
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
 ! check for _potential_ neighbor list violations :
-   if (qforced .and. solute_neighbor_mind(i) > neighbor_list_length ) __INC(__U(neighbor_list_misses)) ! count only if qforced, ok?
+   if (qoutside .and. solute_neighbor_mind(i) > neighbor_list_length ) __INC(__U(neighbor_list_misses)) ! count only if qoutside, ok?
 #endif
-   qforced_solv(i)=qforced
+   qoutside_solv(i)=qoutside
 #ifdef __HAMILTONIAN
 ! Need to propagate Hamiltonian forces to surface atoms ; therefore, compute force prefactor and apply to gradients here
 ! Also, do not recompute the prefactor in the main loop for solvent atoms (see main routine)
-   if (qforced) then
+   if (qoutside) then
     b=__QSAFE(rho_solv(i))
     b = surface_force_constant * surf_stdev * sq2pi * exp (b**2) * ( __RHO_INVERSE2(b) - surface_distance )
     __SCALE(drho_solv(:,i),b)
@@ -3594,7 +3515,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
     do j=1,__U(nspt)
      __INCR(drho_surf_all_thread(:,ispt_this_thread(j)), b * drho_surf_this_thread(:,ispt_this_thread(j)) )
     enddo
-   endif ! qforced
+   endif ! qoutside
 #endif
 !
   enddo ! nsolvent
@@ -3612,21 +3533,21 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
 !$omp atomic
- __REDUCE(neighbor_list_misses) ! maybe faster via atomic, since most of the time there will be no misses
+  __REDUCE(neighbor_list_misses) ! maybe faster via atomic, since most of the time there will be no misses
 #endif
 !
 #ifdef __HAMILTONIAN
 #ifdef __H_THREAD_REDUCE
 ! reduce Hamiltonian forces on surface atoms (0th thread has final data)
 ! adapted from volume/surface compute
- i=1
- do while (i.lt.numthreads)
+  i=1
+  do while (i.lt.numthreads)
 !$omp barrier ! make sure all threads have completed previous operation
-  if (mod(tid,2*i)==0 .and. (tid+i).lt.numthreads) then
-   __INCR(drho_surf_all_thread, drho_surf(:,:,2*(tid+i)+1)) ! maybe better to reindex to tid+i, as in the volume/surface code ?
-  endif
-  __SCALE(i,2)
- enddo
+   if (mod(tid,2*i)==0 .and. (tid+i).lt.numthreads) then
+    __INCR(drho_surf_all_thread, drho_surf(:,:,2*(tid+i)+1)) ! maybe better to reindex to tid+i, as in the volume/surface code ?
+   endif
+   __SCALE(i,2)
+  enddo
 #endif
 #endif
 !$omp end parallel
@@ -3639,18 +3560,18 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
 ! should we output the violations here ?
- if (neighbor_list_misses>0) then
-  if (neighbor_list_misses==1) then
-   __WRN(whoami, 'DETECTED '//itoa(neighbor_list_misses)//' POSSIBLE NEIGHBOR LIST MISS. NEIGHBOR LIST FACTOR IS '//ftoa(neighbor_list_factor))
-  else
-   __WRN(whoami, 'DETECTED '//itoa(neighbor_list_misses)//' POSSIBLE NEIGHBOR LIST MISSES. NEIGHBOR LIST FACTOR IS '//ftoa(neighbor_list_factor))
-  endif
+  if (neighbor_list_misses>0) then
+   if (neighbor_list_misses==1) then
+    __WRN(whoami, 'DETECTED '//itoa(neighbor_list_misses)//' POSSIBLE NEIGHBOR LIST MISS. NEIGHBOR LIST FACTOR IS '//ftoa(neighbor_list_factor))
+   else
+    __WRN(whoami, 'DETECTED '//itoa(neighbor_list_misses)//' POSSIBLE NEIGHBOR LIST MISSES. NEIGHBOR LIST FACTOR IS '//ftoa(neighbor_list_factor))
+   endif
 ! increase neighbor_list_factor
-  __INCR(neighbor_list_factor, neighbor_list_factor_grow)
- else
-  __INCR(neighbor_list_factor, neighbor_list_factor_shrink)
+   __INCR(neighbor_list_factor, neighbor_list_factor_grow)
+  else
+   __INCR(neighbor_list_factor, neighbor_list_factor_shrink)
 ! decrease neighbor_list_factor
- endif
+  endif
 #endif
 !
  endif ! truncate sum
