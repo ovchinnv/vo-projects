@@ -3,7 +3,7 @@ ROOT=..
 HEADS=watershell.h
 OBJS= watershell.o watershell_plugin.o ugrid.o watershell2.o # watershell2.o needs to be last because it redefines _N
 
-DEPS=files dynamol continua output parser constants erf lu unitcell bestfit
+DEPS=files dynamol continua output parser constants erf lu unitcell bestfit ppoly
 
 LIB=libwatershell.so # libwatershell.a
 LIBS+=$(LIB)
