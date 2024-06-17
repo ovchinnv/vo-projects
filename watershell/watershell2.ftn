@@ -88,6 +88,9 @@ module _N
 #ifdef __OMP
  use omp_lib
 #endif
+! use erf_ext
+ use ppoly1
+ use ppoly2
  __IMPNONE
  private
 
@@ -2983,13 +2986,12 @@ __DBGVAR(solvent_mass_nonbulk,1)
  float :: __U(solvent_mass_bulk)
 #endif
 #endif
- bool :: qbulk, qchkbulk
+ bool :: qbulk, qbulk2
 #endif
  bool :: qoutside
  __IAM(__NM(compute_density_grad))
 !
 ! different erf implementations/approximations
-  float :: erfsun ! external erf function; code by Sun Microsystems
   float :: erfo7  ! approximation to within O(-7)
   float :: erfo5  ! approximation to within O(-5) [contains an exponential term]
 !
@@ -3067,7 +3069,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #ifdef __DASYSTAT
 !$omp , __U(solvent_mass_nonbulk), qbulk &
 #ifdef __BULK2_DISTANCE_SCALE
-!$omp , __U(solvent_mass_bulk), qchkbulk &
+!$omp , __U(solvent_mass_bulk), qbulk2 &
 #endif
 #endif
 #ifdef __SORT_LIST
@@ -3123,7 +3125,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
    if (dasystat) then 
     qbulk=.true.
 #ifdef __BULK2_DISTANCE_SCALE
-    qchkbulk=.true.
+    qbulk2=.true.
 #endif
    endif
 #endif
@@ -3180,14 +3182,14 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
 !
     rsurf=rsurf * oo_surf_stdev
-    dr2 = sqrt(dr2) * oo_surf_stdev
+    dr2 = sqrt(dr2) * oo_surf_stdev !  = r/s
 #ifndef __SIMPLERHO
     a = osq2 * (dr2 + rsurf)
     expa = __gauss(a)
 #endif
     b = osq2 * (dr2 - rsurf)
-    expb = __gauss(b)
-    ooc = one / dr2
+    expb = __gauss(b)               ! = e^( - 0.5 * ( (dr - a)/s )^2
+    ooc = one / dr2                 ! = s/r
 ! repeated from above, since it is important :
 ! note that, if dr ~ small, ( expa - expb ) / c is singular, though the limit (and asymptote) exists
 ! however, in the calculations here, that would imply atoms being very close together, which we consider impossible, so ignore this case
@@ -3226,10 +3228,10 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #ifdef __BULK2_DISTANCE_SCALE
 ! bulk2 is the boundary closer to the surface, if defined ; get difference by subtraction at the end
       __INCR(__U(solvent_mass_bulk), mass_solv(i))
-      qchkbulk=.false. ! no need to check vs outer bulk value
-     elseif(qchkbulk .and. (rho_solv(i).gt.bulk2_boundary_contour_value)) then
+      qbulk2=.false. ! no need to check vs outer bulk value
+     elseif(qbulk2 .and. (rho_solv(i).gt.bulk2_boundary_contour_value)) then
       __INCR(__U(solvent_mass_bulk), mass_solv(i))
-      qchkbulk=.false.
+      qbulk2=.false.
       qoutside=.false.
 #endif
      elseif(qoutside .and. (rho_solv(i).gt.surface_contour_value)) then
@@ -3360,7 +3362,6 @@ __DBGVAR(bulk_boundary_contour_value,1)
 !
 ! make use of existing definitions in compute_density_grad routine above
 ! different erf implementations/approximations
- float :: erfsun ! external erf function; code by Sun Microsystems
 ! if openmp is used, cannot call the function erfo7, so hack to call inlined macro here
 #ifndef __OMP
  float :: erfo7  ! approximation to within O(-7)
@@ -3618,7 +3619,6 @@ __DBGVAR(kmax,2)
 !
 ! make use of existing definitions in compute_desity_grad routine above
 ! different erf implementations/approximations
- float :: erfsun ! external erf function; code by Sun Microsystems
 ! if openmp is used, cannot call the function erfo7, so hack to call inlined macro here
 #ifndef __OMP
  float :: erfo7  ! approximation to within O(-7)
