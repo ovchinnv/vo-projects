@@ -233,7 +233,8 @@ module _N
 #endif
 &                  rho_solv(:), & ! density value at solvent coordinate
 &                  drho_solv(:,:),& ! density gradient at solvent coordinate (inward surface normal)
-&                  dist_solv(:), &! distance to solvent boundary
+&                  d2rho_solv(:,:),& ! density hessian at solvent coordinate (xx,xy,xz,yy,yz,zz)
+!&                  dist_solv(:), &! distance to solvent boundary
 &                  acurv_solv(:) ! average surface curvature corresponding to solvent coordinate
  bool, pointer :: qoutside_solv(:) ! flags that indicate whether the solvent atom is outside of boundary
 #ifdef __SORT_LIST
@@ -1189,9 +1190,10 @@ endif
   __ALLOC(mass_solv(nsolvent))
 #endif
   __ALLOC(qoutside_solv(nsolvent))
-  __ALLOC(dist_solv(nsolvent))
+!  __ALLOC(dist_solv(nsolvent))
   __ALLOC(acurv_solv(nsolvent))
   __ALLOC(drho_solv(3,nsolvent))
+  __ALLOC(d2rho_solv(6,nsolvent))
 #ifdef __SORT_LIST
   __ALLOC(solute_neighbor_list(nsurface_coord,nsolvent))
 ! initialize neighbor list with solute indices from 1 to nsurface_coord for each solute atom:
@@ -1566,7 +1568,8 @@ __DBGVAR(r_com_sa,1)
  __FREE(rad_surf)
  __FREE(rho_solv)
  __FREE(drho_solv)
- __FREE(dist_solv)
+ __FREE(d2rho_solv)
+! __FREE(dist_solv)
  __FREE(acurv_solv)
  __FREE(isurface_atoms)
  __FREE(isolvent_atoms)
@@ -2020,7 +2023,8 @@ endif ! decide whether to compute dr_surf
 #endif
   endif ! dasystat
 #endif
-  call __NM(compute_density_grad)(.false.) ! false to force traverse entire solute atom list
+!  call __NM(compute_density)(QTRUNCATE_LOOP=.false., QCOMPUTE_GRAD=.false., QCOMPUTE_HESS=.false. ) ! false to force traverse entire solute atom list ; do not need grads
+  call __NM(compute_density)(.false.,.false.,.false.)
 #ifdef __DASYSTAT
   if (dasystat) bulk_boundary_contour_value=d0 ! restore
 #endif
@@ -2091,12 +2095,13 @@ endif ! decide whether to compute dr_surf
 #ifdef __HAMILTONIAN
 ! no easy solution but to recompute the gradients, now that surface contour value is known
 ! note that forces will be applied to surface atoms as well, which is why they need to be correct
-  call __NM(compute_density_grad(.false.))
+!  call __NM(compute_density)(QTRUNCATE_LOOP=.false., QCOMPUTE_GRAD=.true., QCOMPUTE_HESS=.false.) ! long loop, compute grads
+  call __NM(compute_density)(.false.,.true.,.false.)
 #else
   qoutside_solv=rho_solv.lt.surface_contour_value
 #endif
 !====== NOTE : if we requested to run without neighbor lists then we need to reset solute_neighbor_mind to max
-!====== otherwise, the early exit version of force routine could miss crucial atoms (the mind list is _not_ updated b/c qnlist=0)
+!====== otherwise, the early exit (qtruncate_loop=T) version of force routine could miss crucial atoms (the mind list is _not_ updated b/c qnlist=0)
 !====== this is because solute_neighbor_mind is recomputed in a full loop, so it will be smaller than nsurf
 #if defined(__NEIGHBOR_LIST) & defined(__SORT_LIST)
   if (.not. qneighbor_list) solute_neighbor_mind=nsurface_coord
@@ -2106,7 +2111,9 @@ endif ! decide whether to compute dr_surf
 ! NOTE :  this is the most time consuming part of the force calculation
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
    if (full_sum_freq.gt.izero) then ! if full_sum_freq<=0, will always run the short(truncate) loop -- see below
-    call __NM(compute_density_grad)((.not.qneighbor_list) .or. (.not.__CHKUPDATE(full_sum_freq))) 
+!    call __NM(compute_density)(QTRUNCATE_LOOP=((.not.qneighbor_list) .or. (.not.__CHKUPDATE(full_sum_freq))), QCOMPUTE_GRAD=.true., QCOMPUTE_HESS=.false.)
+!    call __NM(compute_density)(((.not.qneighbor_list) .or. (.not.__CHKUPDATE(full_sum_freq))),.true.,.false.)
+    call __NM(compute_density)(((.not.qneighbor_list) .or. (.not.__CHKUPDATE(full_sum_freq))),.true.,.true.)
 ! the full version will [flag=FALSE]  be called if :
 ! (1) qneighbor_list is TRUE AND iteration is a multiple of full_sum_freq
 ! the short version is called if :
@@ -2114,7 +2121,9 @@ endif ! decide whether to compute dr_surf
 ! (2) we are between full_sum recompute intervals
    else
 #endif
-    call __NM(compute_density_grad)(.true.)
+!    call __NM(compute_density)(QTRUNCATE_LOOP=.true., QCOMPUTE_GRAD=.true., QCOMPUTE_HESS=.false.)
+!    call __NM(compute_density)(.true.,.true.,.false.)
+    call __NM(compute_density)(.true.,.true.,.true.)
 !
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
    endif
@@ -2160,18 +2169,18 @@ endif ! decide whether to compute dr_surf
 ! simple minimum distance algorithm
 ! NOTE: here OPENMP does not make much difference but keeping for consistency and completeness
  nsolvent_unsupported=0 ! for counting unsupported atoms in the erf density method
-!================= original density based algorithm ==================
+!================= compute forces, now that density-related properties are known
 #ifdef __OMP
 !$omp parallel _OMP_EXTRA &
-!$omp shared (rho_solv, drho_solv, surface_contour_value, surface_distance, surface_force_constant, nsolvent_unsupported, &
+!$omp shared (rho_solv, drho_solv, d2rho_solv, surface_contour_value, surface_distance, surface_force_constant, nsolvent_unsupported, &
 #ifdef __DASYSTAT
 !$omp solvent_mass_outside, solvent_mass, &
 #endif
 #ifdef __HAMILTONIAN
 !$omp drho_surf, &
 #endif
-!$omp nsolvent_outside, surface_force, surface_energy, isolvent_atoms, fr) & !!! , density_beyond_contour) &
-!$omp private (i, d0, pre, __U(nsolvent_outside), __U(surface_energy), __U(surface_force) & !!! , __U(density_beyond_contour)) &
+!$omp nsolvent_outside, surface_force, surface_energy, isolvent_atoms, fr) &
+!$omp private (i, d0, pre, __U(nsolvent_outside), __U(surface_energy), __U(surface_force) &
 #if defined(__HAMILTONIAN) && !defined(__H_THREAD_REDUCE)
 !$omp , ii &
 #endif
@@ -2330,9 +2339,11 @@ endif
    do ii=-1,1,2
     __INCR ( r_solv(j,i) , ii * h ) ! perturb
 #if defined(NEIGHBOR_LIST) && defined(SORT_LIST)
-    call __NM(compute_density_grad)(.not.qneighbor_list)
+!    call __NM(compute_density)(QTRUNCATE_LOOP=.not.qneighbor_list, QCOMPUTE_GRAD=.false., QCOMPUTE_HESS=.false.)
+    call __NM(compute_density)(.not.qneighbor_list,.false.,.false.)
 #else
-    call __NM(compute_density_grad)(.true.)
+!    call __NM(compute_density)(QTRUNCATE_LOOP=.true.,QCOMPUTE_GRAD=.false.,QCOMPUTE_HESS=.false.) ! no grads, just values, since this is FD
+    call __NM(compute_density)(.true.,.false.,.false.) ! no grads, just values, since this is FD
 #endif
 ! incorporate into FD
     __INCR ( ffd(j,i), ii * min(zero, (__RHO_INVERSE(rho_solv(i))-surface_distance))**2 ) ! recall that distance is negative, or inside shell
@@ -2931,6 +2942,10 @@ __DBGVAR(solvent_mass_nonbulk,1)
  write(i,*) drho_solv
  call files_close(i)
 !
+ call files_open(i, 'd2rho_solv.dat', 'FORMATTED','WRITE')
+ write(i,*) d2rho_solv
+ call files_close(i)
+!
  call files_open(i, 'misc.dat', 'FORMATTED','WRITE')
  write(i,*) surf_stdev, surf_padding, surface_distance, surface_contour_value, surface_energy, surface_force_constant, cutoff_surf
  call files_close(i)
@@ -2938,17 +2953,19 @@ __DBGVAR(solvent_mass_nonbulk,1)
 !
  end __SUB(main)
 !================================================================
- __SUB(compute_density_grad)(qtruncate_loop)
+ __SUB(compute_density)(qtruncate_loop, qcompute_grad, qcompute_hess)
 #ifdef __OMP
  use omp_lib
 #endif
 !
- bool :: qtruncate_loop ! whether we can stop looping over solute atoms once the density reaches a threshold value
+ bool, intent(in) :: qtruncate_loop ! whether to loop over part of the (partially) sorted neighbor list, or the entire list
+ bool, intent(in) :: qcompute_grad  ! grads ?
+ bool, intent(in) :: qcompute_hess  ! hessian ?
 ! ^ this makes sense only if the neighbor lists are sorted ; if _SORT_LIST is undefined then there is no effect
 !   NB:the density calculation is still truncated once the solvent atom is determined to be inside the shell
 !   to avoid the truncation, you must define an upper bound to the surface contour, e.g. I use nsurface_coord
  int :: i, j
- float :: rp(3), rw(3), dr(3), dr2, b, expb, ooc
+ float :: rp(3), rw(3), dr(3), dr2(6), drn, drn2, b, expb, ooc
 #ifndef __SIMPLERHO
  float :: a, expa
 #endif
@@ -2989,7 +3006,7 @@ __DBGVAR(solvent_mass_nonbulk,1)
  bool :: qbulk, qbulk2
 #endif
  bool :: qoutside
- __IAM(__NM(compute_density_grad))
+ __IAM(__NM(compute_density))
 !
 ! different erf implementations/approximations
   float :: erfo7  ! approximation to within O(-7)
@@ -3045,7 +3062,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 !==========================================================================================
 #ifdef __OMP
 !$omp parallel _OMP_EXTRA &
-!$omp shared ( rho_solv, drho_solv, r_solv, r_surf, rad_surf, surf_padding, nsolvent, nsurface_coord, cutoff_surf, oo_surf_stdev &
+!$omp shared ( rho_solv, drho_solv, d2rho_solv, r_solv, r_surf, rad_surf, surf_padding, nsolvent, nsurface_coord, cutoff_surf, oo_surf_stdev &
 #ifdef __DASYSTAT
 !$omp , solvent_mass_nonbulk, mass_solv &
 #ifdef __BULK2_DISTANCE_SCALE
@@ -3062,7 +3079,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
 #endif
 !$omp ) &
-!$omp private ( rw, i, j, rp, rsurf, rmaxsurf, dr, dr2, ooc, b, expb, qoutside &
+!$omp private ( rw, i, j, rp, rsurf, rmaxsurf, dr, dr2, drn, drn2, ooc, b, expb, qoutside &
 #ifndef __SIMPLERHO
 !$omp , a, expa &
 #endif
@@ -3130,7 +3147,8 @@ __DBGVAR(bulk_boundary_contour_value,1)
    endif
 #endif
    rho_solv(i)=zero
-   drho_solv(:,i)=zero
+   if (qcompute_grad) drho_solv(:,i)=zero
+   if (qcompute_hess) d2rho_solv(:,i)=zero
    rw=r_solv(:,i);
 #ifdef __SORT_LIST
    dr2old=-1.d0  ! set to a small number to guarantee that no swap is done on first iteration
@@ -3163,16 +3181,16 @@ __DBGVAR(bulk_boundary_contour_value,1)
      __DIST_PBC(dr(3),ucell%c)
     endif
 #endif
-    dr2=sum(dr**2);
+    drn2=sum(dr**2);
 #ifdef __SORT_LIST
 !   bubble sort between this and previous atom based on distance
-    if (dr2 .lt. dr2old) then ! bubble sort
+    if (drn2 .lt. dr2old) then ! bubble sort
      solute_neighbor_list(jj,i)=solute_neighbor_list(jj-1,i)
      solute_neighbor_list(jj-1,i)=j
     endif
-    dr2old=dr2
+    dr2old=drn2
 #endif
-    if (dr2 .gt. rmaxsurf**2) cycle ! solute atom outside cutoff for this solvent atom -- skip it
+    if (drn2 .gt. rmaxsurf**2) cycle ! solute atom outside cutoff for this solvent atom -- skip it
 !   atom is within the cutoff; record its index before computing density contribution
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
     if (.not.qtruncate_loop) solute_neighbor_mind(i)=jj
@@ -3182,26 +3200,15 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
 !
     rsurf=rsurf * oo_surf_stdev
-    dr2 = sqrt(dr2) * oo_surf_stdev !  = r/s
+    drn = sqrt(drn2) * oo_surf_stdev !  = r/s
+    b = osq2 * (drn - rsurf)        !  = (dr-a)/(sqrt(2)s)
 #ifndef __SIMPLERHO
-    a = osq2 * (dr2 + rsurf)
+    a = osq2 * (drn + rsurf)
     expa = __gauss(a)
-#endif
-    b = osq2 * (dr2 - rsurf)
     expb = __gauss(b)               ! = e^( - 0.5 * ( (dr - a)/s )^2
-    ooc = one / dr2                 ! = s/r
-! repeated from above, since it is important :
-! note that, if dr ~ small, ( expa - expb ) / c is singular, though the limit (and asymptote) exists
-! however, in the calculations here, that would imply atoms being very close together, which we consider impossible, so ignore this case
-!
-!calc gradient
-#ifndef __SIMPLERHO
-    __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurf + (expa - expb) * ooc) )
-#else
-    __SCALE(dr, osq2pi * ooc * oo_surf_stdev**2 * expb )
+    ooc = one / drn                 ! = s/r
 #endif
-! add gradient contribution
-    __INCR(drho_solv(:,i),dr)
+!
 ! update density
 #ifdef __ERFHYBRID
     __erfo7i(b,erfb)
@@ -3219,6 +3226,52 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
 #endif
 !
+!calc gradient & hessian, if requested
+!
+! needed for rho (simple) : b
+! needed for rho (full)   : a,b,expa,expb,ooc (everything...)
+! needed for gradient (simplerho) : expb, b, ooc
+! needed for gradient (fullrho)   : expa, a, expb, b, ooc
+! needed for hessian (simple)     : expb, b, ooc
+! needed for hessian (full)       :
+
+    if(qcompute_grad.or.qcompute_hess) then
+#ifndef __SIMPLERHO
+     __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurf + (expa - expb) * ooc) )
+! note that, if dr ~ small, ( expa - expb ) / c is singular, though the limit (and asymptote) exists
+! however, in the calculations here, that would imply atoms being very close together, which we consider impossible, so ignore this case
+#else
+     expb = __gauss(b)               ! = e^( - 0.5 * ( (dr - a)/s )^2
+     ooc = one / drn                 ! = s/r
+     b=ooc * oo_surf_stdev**2 ! reuse
+     if (qcompute_hess) then
+      dr2(1)=dr(1)**2
+      dr2(2)=dr(1)*dr(2)
+      dr2(3)=dr(1)*dr(3)
+      dr2(4)=dr(2)**2
+      dr2(5)=dr(2)*dr(3)
+      dr2(6)=dr(3)**2
+! reuse these vars ; it's a nuisance to have many because of OMP
+!      dr2 = ( ooc * oo_surf_stdev**2 * b * sqrt2  + ooc**2 * oo_surf_stdev**2 ) * dr2 ;
+! NOTE : 1/r = (s / r ) / s  = ooc * oo_surf_stdve
+!      dr2 = ooc * oo_surf_stdev**2 * ( b * sqrt2  + ooc ) * dr2 ; ! vecop ; invalid if b is reused (changed) above
+!      __SCALE(dr2 , ooc * oo_surf_stdev**2 * ( (drn-rsurf) + ooc ) * dr2 )
+      __SCALE(dr2 , b * ( drn - rsurf + ooc ) * dr2 )
+      __DECR(dr2(1),one) ! subtract identity
+      __DECR(dr2(4),one)
+      __DECR(dr2(6),one)
+!      __SCALE(dr2, osq2pi * ooc * oo_surf_stdev**2 * expb )
+      __SCALE(dr2, b * expb ) ! missing osq2pi, but that is a constant that could go outside the loop 
+      __INCR(d2rho_solv(:,i),dr2)
+     endif ! qcompute_hess
+     if (qcompute_grad) then
+!     __SCALE(dr, osq2pi * ooc * oo_surf_stdev**2 * expb )
+      __SCALE(dr, osq2pi * b * expb )
+      __INCR(drho_solv(:,i),dr)
+     endif ! qcompute_grad
+#endif
+    endif ! need gradient or hessian
+! add gradient contribution
 #ifdef __DASYSTAT
     if (dasystat) then
      if (qbulk .and. (rho_solv(i).gt.bulk_boundary_contour_value)) then
@@ -3251,9 +3304,12 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
 !
    enddo ! nsurface_coord
+   if (qcompute_hess) then
+    __SCALE(d2rho_solv(:,i),osq2pi)
+   endif
+!=========================== loop for solvent atom i over solute support (surface coordinates) ====
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
 ! check for _potential_ neighbor list violations :
-!   if (.not. qtruncate_loop .and. qoutside .and. solute_neighbor_mind(i) > neighbor_list_length ) __INC(__U(neighbor_list_misses)) ! count only if qoutside, ok?
    if (.not. qtruncate_loop .and. solute_neighbor_mind(i) > neighbor_list_length ) __INC(__U(neighbor_list_misses))
 #endif
    qoutside_solv(i)=qoutside
@@ -3333,7 +3389,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
   endif ! qtruncate_loop
 #endif
 !
- end __SUB(compute_density_grad)
+ end __SUB(compute_density)
 !================================================================
 #ifdef __BAROSTAT
 #undef _S
@@ -3360,7 +3416,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
  float __U(grad)
  __IAM(__NM(_S))
 !
-! make use of existing definitions in compute_density_grad routine above
+! make use of existing definitions in compute_density routine above
 ! different erf implementations/approximations
 ! if openmp is used, cannot call the function erfo7, so hack to call inlined macro here
 #ifndef __OMP
