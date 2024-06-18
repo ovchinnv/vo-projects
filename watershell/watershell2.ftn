@@ -234,7 +234,7 @@ module _N
 &                  rho_solv(:), & ! density value at solvent coordinate
 &                  drho_solv(:,:),& ! density gradient at solvent coordinate (inward surface normal)
 &                  d2rho_solv(:,:),& ! density hessian at solvent coordinate (xx,xy,xz,yy,yz,zz)
-!&                  dist_solv(:), &! distance to solvent boundary
+&                  dsurf_solv(:), &! distance to solvent boundary
 &                  acurv_solv(:) ! average surface curvature corresponding to solvent coordinate
  bool, pointer :: qoutside_solv(:) ! flags that indicate whether the solvent atom is outside of boundary
 #ifdef __SORT_LIST
@@ -1190,7 +1190,7 @@ endif
   __ALLOC(mass_solv(nsolvent))
 #endif
   __ALLOC(qoutside_solv(nsolvent))
-!  __ALLOC(dist_solv(nsolvent))
+  __ALLOC(dsurf_solv(nsolvent))
   __ALLOC(acurv_solv(nsolvent))
   __ALLOC(drho_solv(3,nsolvent))
   __ALLOC(d2rho_solv(6,nsolvent))
@@ -1569,7 +1569,7 @@ __DBGVAR(r_com_sa,1)
  __FREE(rho_solv)
  __FREE(drho_solv)
  __FREE(d2rho_solv)
-! __FREE(dist_solv)
+ __FREE(dsurf_solv)
  __FREE(acurv_solv)
  __FREE(isurface_atoms)
  __FREE(isolvent_atoms)
@@ -1623,7 +1623,7 @@ __DBGVAR(r_com_sa,1)
  type (cell), optional :: mdcell
 ! int :: ibeg, iend ! atom indices for looping
  float :: distance_from_solute, distance_from_solute2, pre, d0
- float :: surface_force ! , density_beyond_contour ! useful ?
+ float :: surface_force
 !
 #ifdef __ROTRES
  float :: dcom(3), r1(3)
@@ -1640,7 +1640,6 @@ __DBGVAR(r_com_sa,1)
 #define __AREDUCE(_W,_I) _W(_I)=_W(_I)+__U(_W)(_I)
  float :: __U(surface_energy)
  float :: __U(surface_force)
-! float :: __U(density_beyond_contour) ! useful ?
  int :: __U(nsolvent_outside)
 #ifdef __DASYSTAT
  float :: __U(solvent_mass_outside)
@@ -2152,7 +2151,6 @@ endif ! decide whether to compute dr_surf
 #endif
 #endif
 !========================== compute forces :
-! density_beyond_contour=zero ! useful ?
  surface_energy=zero
  surface_force=zero
  nsolvent_outside=izero
@@ -2172,7 +2170,7 @@ endif ! decide whether to compute dr_surf
 !================= compute forces, now that density-related properties are known
 #ifdef __OMP
 !$omp parallel _OMP_EXTRA &
-!$omp shared (rho_solv, drho_solv, d2rho_solv, surface_contour_value, surface_distance, surface_force_constant, nsolvent_unsupported, &
+!$omp shared (rho_solv, drho_solv, d2rho_solv, dsurf_solv, acurv_solv, surface_contour_value, surface_distance, surface_force_constant, nsolvent_unsupported, &
 #ifdef __DASYSTAT
 !$omp solvent_mass_outside, solvent_mass, &
 #endif
@@ -2189,7 +2187,6 @@ endif ! decide whether to compute dr_surf
 #endif
 !$omp )
 !
-! __U(density_beyond_contour)=zero ! not clear whether useful
  __U(surface_energy)=zero
  __U(surface_force)=zero
  __U(nsolvent_outside)=izero
@@ -2241,56 +2238,69 @@ endif ! decide whether to compute dr_surf
 #endif
     cycle
    endif
-!   __INCR(__U(density_beyond_contour), rho_solv(i)) ! not clear whether useful
+  endif ! outside the surface contour boundary
 !
 #ifndef __HAMILTONIAN
-   d0=__Q(rho_solv(i))
-   pre = ( __RHO_INVERSE2 ( d0 ) - surface_distance ) ;
+  dsurf_solv(i) = ( __RHO_INVERSE ( rho_solv(i) ) - surface_distance ) ! distance to boundary using the approximate inverse 
+! note that the above is the lowest order approximation
 ! otherwise, already computed prefactor and absorbed into gradients
 ! What happens if we do not know surface distance going into the grad routine ? In that case, the computed prefactor will be wrong !
 #endif
 #if (_DBGLEV>1)
- __DBGOUT('solv. atom#:', i, 'density:', rho_solv(i), 'distance:', __RHO_INVERSE2(d0), 'forced?:', qoutside_solv(i)
+  __DBGOUT('solv. atom#:', i, 'density:', rho_solv(i), 'distance to bdry:', dsurf_solv(i), 'outside?:', qoutside_solv(i)
 #ifndef __HAMILTONIAN
- , 'pre:', pre
+  , 'pre:', pre
 #endif
  )
 #endif
-!
-!
 #ifndef __HAMILTONIAN
-    d0 = surf_stdev * sq2pi * exp (d0**2)
-    d0 = - surface_force_constant * pre * d0
-    __INCR(fr(1,isolvent_atoms(i)), d0 * drho_solv(1,i))
-    __INCR(fr(2,isolvent_atoms(i)), d0 * drho_solv(2,i))
-    __INCR(fr(3,isolvent_atoms(i)), d0 * drho_solv(3,i))
+! gradient norm :
+  d0=sum(drho_solv(:,i)**2)
+  if (d0.le.__ERRTOL) then ; d0=zero ; else ; d0=one/sqrt(d0); endif
+! normalize gradient :
+  __SCALE(drho_solv(:,i),d0)
+! compute average curvature at sovent coordinate from gradient and hessian
+! unnormalized grad formula:
+!  acurv_solv(i) = half * d0  * ( d2rho_solv(1,i) + d2rho_solv(4,i) + d2rho_solv(6,i) \
+!              - d0**2 * ( d2rho_solv(1,i)*drho_solv(1,i)**2 + d2rho_solv(4,i)*drho_solv(2,i)**2 + d2rho_solv(6,i)*drho_solv(3,i)**2 \
+!            + ( drho_solv(1,i)*(d2rho_solv(2,i)*drho_solv(2,i) + d2rho_solv(3,i)*drho_solv(3,i)) + d2rho_solv(5,i)*drho_solv(2,i)*drho_solv(3,i) )*2 ) )
+! normalized grad formula:
+  acurv_solv(i) = half * d0  * ( d2rho_solv(1,i)*(one-drho_solv(1,i)**2) + d2rho_solv(4,i)*(one-drho_solv(2,i)**2) + d2rho_solv(6,i)*(one-drho_solv(3,i)**2) \
+            - ( drho_solv(1,i)*( d2rho_solv(2,i)*drho_solv(2,i) + d2rho_solv(3,i)*drho_solv(3,i)) + d2rho_solv(5,i)*drho_solv(2,i)*drho_solv(3,i) )*2 )
+! now can compute the boundary force from spline data
+! NB: this is the lowest order of approximation for the distance to boundary and curvature
+! a very slightly better curvature value is obtained by adding a function of the distance to boundary :
+  acurv_solv(i) = acurv_solv(i) / ( one + abs(acurv_solv(i)) * dsurf_solv(i) ) ! in this model the curvature correction is independent of curvature sign
+
+! add forces to force arrays ; the normalized gradient gives direction
+  __INCR(fr(1,isolvent_atoms(i)), pre * drho_solv(1,i))
+  __INCR(fr(2,isolvent_atoms(i)), pre * drho_solv(2,i))
+  __INCR(fr(3,isolvent_atoms(i)), pre * drho_solv(3,i))
 #ifdef __BAROSTAT
-    d0=d0*norm3(drho_solv(:,i))
+  d0=d0*norm3(drho_solv(:,i))
 #endif
 #else
 ! derivative already includes force prefactor
-    __DECR(fr(1,isolvent_atoms(i)), drho_solv(1,i))
-    __DECR(fr(2,isolvent_atoms(i)), drho_solv(2,i))
-    __DECR(fr(3,isolvent_atoms(i)), drho_solv(3,i))
+  __DECR(fr(1,isolvent_atoms(i)), drho_solv(1,i))
+  __DECR(fr(2,isolvent_atoms(i)), drho_solv(2,i))
+  __DECR(fr(3,isolvent_atoms(i)), drho_solv(3,i))
 #ifdef __BAROSTAT
-    d0=norm3(drho_solv(:,i))
+  d0=norm3(drho_solv(:,i))
 #endif
 #endif
 !
 ! sum "energy"
+! this requires evaluating additional splines, so should be done only when required
 ! NOT clear whether the surface_energy is physically meaningful
 ! surface force is used for pressure calculations (but only if barostat is on !)
 #ifdef __BAROSTAT
-   __INCR(__U(surface_force), d0) ! actual force magnitude
+  __INCR(__U(surface_force), d0) ! actual force magnitude
 #endif
 #ifndef __HAMILTONIAN
-   __INCR(__U(surface_energy), pre**2) ! x k/2, below
+  __INCR(__U(surface_energy), pre**2) ! x k/2, below
 #else
-   __INCR(__U(surface_energy), (__RHO_INVERSE(rho_solv(i)) - surface_distance)**2) ! x k/2, below
+  __INCR(__U(surface_energy), (__RHO_INVERSE(rho_solv(i)) - surface_distance)**2) ! x k/2, below
 #endif
-  else ! for atoms that are not forced
-!   fr(:,isolvent_atoms(i))=zero ! make sure this gets done somewhere
-  endif ! density check
  enddo ! nsolvent
 #ifdef __OMP
 !$omp end do
@@ -2304,7 +2314,6 @@ if (barostat) then
   __REDUCE(surface_force)
 endif
 #endif
-!  __REDUCE(density_beyond_contour) ! not clear if useful
 #ifdef __DASYSTAT
 if (dasystat) then
 !$omp atomic
