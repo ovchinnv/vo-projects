@@ -89,8 +89,8 @@ module _N
  use omp_lib
 #endif
 ! use erf_ext
- use ppoly1
- use ppoly2
+! use ppoly1
+! use ppoly2
  __IMPNONE
  private
 
@@ -105,6 +105,7 @@ module _N
  public r
  public fr
  public surface_energy
+ public curvature_energy
 
  bool, public :: __NM(initialized)=.false.
  bool, private:: radii_initialized=.false.
@@ -129,7 +130,7 @@ module _N
 !
  float :: cutoff_surf, oo_surf_stdev
  float :: surface_contour_value ! value of density which defines the surface ; negative means to compute from structure
- float :: surface_energy ! moved here to be acessible from outside
+ float :: surface_energy, curvature_energy
 #ifdef __DASYSTAT
  float :: bulk_boundary_contour_value ! value of density which defines bulk boundary (will be greater than surface_contour_value)
 #ifdef __BULK2_DISTANCE_SCALE
@@ -1613,6 +1614,7 @@ __DBGVAR(r_com_sa,1)
 & , RMSBestFit &
 #endif
 & , norm3
+ use watershell_sbf_spline
 !
  float, intent(in) :: r(:,:)   ! coordinate array
  float, intent(out) :: fr(:,:) ! force array
@@ -1623,7 +1625,8 @@ __DBGVAR(r_com_sa,1)
  type (cell), optional :: mdcell
 ! int :: ibeg, iend ! atom indices for looping
  float :: distance_from_solute, distance_from_solute2, pre, d0
- float :: surface_force
+ float :: surface_force, curvature_force
+ float :: sbfe(4) ! array that holds instantaneous force and energy on a single solvent particle
 !
 #ifdef __ROTRES
  float :: dcom(3), r1(3)
@@ -1638,8 +1641,8 @@ __DBGVAR(r_com_sa,1)
 #define __REDUCEADD(_W) __REDUCE(_W)
 #define __REDUCEMAX(_W) _W=MAX(_W,__U(_W)) ! thread reduction
 #define __AREDUCE(_W,_I) _W(_I)=_W(_I)+__U(_W)(_I)
- float :: __U(surface_energy)
- float :: __U(surface_force)
+ float :: __U(surface_energy), __U(curvature_energy)
+ float :: __U(surface_force), __U(curvature_force)
  int :: __U(nsolvent_outside)
 #ifdef __DASYSTAT
  float :: __U(solvent_mass_outside)
@@ -2001,7 +2004,7 @@ endif ! decide whether to compute dr_surf
 !============================================= compute contour value/distance and gradient at solvent coordinates
 #endif // __ROTRES
 !
- surface_energy=zero
+! surface_energy=zero ! not needed ?
  distance_from_solute=zero
  distance_from_solute2=zero ! for computing second moment
 !
@@ -2153,6 +2156,8 @@ endif ! decide whether to compute dr_surf
 !========================== compute forces :
  surface_energy=zero
  surface_force=zero
+ curvature_energy=zero
+ curvature_force=zero
  nsolvent_outside=izero
 #ifdef __DASYSTAT
  solvent_mass_outside=zero
@@ -2170,15 +2175,15 @@ endif ! decide whether to compute dr_surf
 !================= compute forces, now that density-related properties are known
 #ifdef __OMP
 !$omp parallel _OMP_EXTRA &
-!$omp shared (rho_solv, drho_solv, d2rho_solv, dsurf_solv, acurv_solv, surface_contour_value, surface_distance, surface_force_constant, nsolvent_unsupported, &
+!$omp shared (rho_solv,drho_solv,d2rho_solv,dsurf_solv,acurv_solv,surface_contour_value,surface_distance,surface_force_constant,curvature_force_constant,nsolvent_unsupported,&
 #ifdef __DASYSTAT
 !$omp solvent_mass_outside, solvent_mass, &
 #endif
 #ifdef __HAMILTONIAN
 !$omp drho_surf, &
 #endif
-!$omp nsolvent_outside, surface_force, surface_energy, isolvent_atoms, fr) &
-!$omp private (i, d0, pre, __U(nsolvent_outside), __U(surface_energy), __U(surface_force) &
+!$omp nsolvent_outside, surface_force, surface_energy, curvature_force, curvature_energy, isolvent_atoms, fr) &
+!$omp private (i, d0, pre, sbfe, __U(nsolvent_outside), __U(surface_energy), __U(surface_force), __U(curvature_energy), __U(curvature_force) &
 #if defined(__HAMILTONIAN) && !defined(__H_THREAD_REDUCE)
 !$omp , ii &
 #endif
@@ -2189,6 +2194,8 @@ endif ! decide whether to compute dr_surf
 !
  __U(surface_energy)=zero
  __U(surface_force)=zero
+ __U(curvature_energy)=zero
+ __U(curvature_force)=zero
  __U(nsolvent_outside)=izero
 #ifdef __DASYSTAT
  __U(solvent_mass_outside)=zero
@@ -2271,6 +2278,9 @@ endif ! decide whether to compute dr_surf
 ! NB: this is the lowest order of approximation for the distance to boundary and curvature
 ! a very slightly better curvature value is obtained by adding a function of the distance to boundary :
   acurv_solv(i) = acurv_solv(i) / ( one + abs(acurv_solv(i)) * dsurf_solv(i) ) ! in this model the curvature correction is independent of curvature sign
+!
+  sbfe = watershell_sbf_spline_compute(acurv_solv(i), dsurf_solv(i), .false.) ! compute forces and (optionally) energies
+  pre = surface_force_constant * sbfe(1) + curvature_force_constant * sbfe(2)
 
 ! add forces to force arrays ; the normalized gradient gives direction
   __INCR(fr(1,isolvent_atoms(i)), pre * drho_solv(1,i))

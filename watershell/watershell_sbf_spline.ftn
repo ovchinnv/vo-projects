@@ -1,0 +1,127 @@
+#undef _N
+#define _N watershell_sbf_spline
+
+module _N
+ use ppoly1
+ use ppoly2
+ __DEP_CONST
+ __DEP_FILES
+ __IMPNONE
+! this is a wrapper around splines to compute 
+
+ type(pp1data) :: pp1, pp1int ! 1st order spline in the distance to boundary and integral
+ type(pp2data) :: pp2, pp2intd ! 2nd order spline in average curvature & distance, and distance integral
+ float :: pp1int_offset ! 0-curvature energy offset
+ type (pp1data) :: pp2intd_offsets
+ float :: maxd ! distance beyond which the force and potential energy is zero
+ bool :: __NM(initialized)=.false.
+!
+ character(len=100), parameter :: spline_input_datafile = 'sbf-rcut12spl2dkz.dat'
+
+ contains
+!=============================================
+ __SUB(init)(datafile_)
+ __IAM(__SUB(init))
+ __OPAR(datafile,character(len=100))
+ int :: fid=-1
+ int :: nk, nz, kpdeg, zpdeg
+ float, pointer :: z(:), kave(:), coefs(:,:,:,:) ! distance to boundary, average curvature, spline coeffs
+
+ __PRESENT(datafile,spline_input_datafile)
+
+ call files_open(fid, datafile, 'FORMATTED', 'READ')
+ read(fid,*) nk
+ allocate(kave(nk)) ;
+ read(fid,*) kave ! average curvature
+ read(fid,*) nz
+ allocate(z(nz)) ;
+ read(fid,*) z
+ read(fid,*) kpdeg
+ read(fid,*) zpdeg
+ allocate(coefs(kpdeg+1,zpdeg+1,nk-1,nz-1)) ;
+ read(fid,*) coefs
+ call files_close(fid)
+
+#ifdef __DEBUG
+ __MESG(whoami,'Curvature (k) grid size: ', nk)
+ __MESG(whoami, 'average curvature grid:', kave)
+ __MESG(whoami,'distance (z) grid size: ', nz)
+ __MESG(whoami,'z-grid:', z)
+ __MESG(whoami,'polynomial interpolant degree (k,z): ', kpdeg, zpdeg)
+#endif
+! do not write coeffs
+! initialize2 D bi-cubic spline structures :
+ if (present(datafile_)) then
+  __MESG(whoami,'Initializing 2D (curvature,distance) force spline array from file '//trim(datafile))
+ else
+  __MESG(whoami,'Initializing 2D (curvature,distance) force spline array')
+ endif
+ call ppoly2_init(pp2, kpdeg, zpdeg, nk, nz, kave, z, coefs(1:kpdeg+1, 1:zpdeg+1, 1:nk-1, 1:nz-1) ,.false.) ! last argument is for continuity checking
+! compute integral in z :
+#ifdef __DEBUG
+ __MESG(whoami,'Integrating 2D spline in d-dimension')
+#endif
+ pp2intd=ppoly2_integral_y(pp2)
+! compute 1D spline corresponding to 0 curvature :
+#ifdef __DEBUG
+ __MESG(whoami,'Computing 1D spline for 0-curvature')
+#endif
+ pp1=ppoly2_compute_x(pp2,zero)
+! compute the distance integral of the 1D spline :
+#ifdef __DEBUG
+ __MESG(whoami,'Integrating 1D spline for 0-curvature')
+#endif
+ pp1int=ppoly1_integral(pp1)
+! compute offsets for energy
+ maxd = z(nz)
+ pp1int_offset=ppoly1_compute(pp1int,maxd) ! this is a number
+ pp2intd_offsets=ppoly2_compute_y(pp2intd,maxd) ! this is a 1D spline
+!
+ __FREE(coefs)
+ __FREE(z)
+ __FREE(kave)
+ __NM(initialized)=.true.
+ end __SUB(init)
+!===========================
+ __SUB(done)
+ __IAM(__SUB(done))
+ __MESG(whoami,'Destroying 2D (curvature,distance) spline array')
+ call ppoly1_done(pp1)
+ call ppoly1_done(pp1int)
+ call ppoly2_done(pp2)
+ call ppoly2_done(pp2intd)
+ call ppoly1_done(pp2intd_offsets)
+ __NM(initialized)=.false.
+ end __SUB(done)
+!===========================
+#ifdef _ME
+#undef _ME
+#endif
+#define _ME __NM(compute)
+ function __NM(compute)(k,d,qpe)
+ bool, intent(in) :: qpe ! whether to compute potential energies in addition to forces
+ float, intent(in) :: k, d
+ float :: _ME(4)
+ int :: igrid(2)
+!
+ __IAM(_ME)
+ __ASSERT(__NM(initialized),.eqv.,.true.)
+!
+ if (d.gt.maxd) then 
+  _ME = (/0d0, 0d0, 0d0, 0d0/)
+ else
+! note : positive force means pushing molecule toward the boundary
+  igrid=ppoly2_getind(pp2,k,d)
+  _ME(1)=ppoly1_compute_igrid(pp1,d,igrid(2)) ! 0-k force
+  _ME(2)=ppoly2_compute_igrid(pp2,k,d,igrid) - _ME(1) ! remaining force
+  if (qpe) then ! also compute integral splines
+   _ME(3)=ppoly1_compute_igrid(pp1int,d,igrid(2)) - pp1int_offset ! 0-k potential
+   _ME(4)=ppoly2_compute_igrid(pp2,k,d,igrid) - ppoly1_compute_igrid(pp2intd_offsets,k,igrid(1)) - _ME(3) ! remaining potential
+  else
+   _ME(3)=0d0 ; _ME(4)=0d0
+  endif
+ endif
+!
+ end __FUN(compute)
+
+end module
