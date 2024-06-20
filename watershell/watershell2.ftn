@@ -15,7 +15,7 @@
 ! I initially set this to 0.5, perhaps because the logistic inverse was inaccurate
 ! However, with that option gone, do not see any reason not to approach -> 1 :
 #//define  __RHO_MAX half
-#define  __RHO_MAX 0.99d0
+#define  __RHO_MAX (0.999999d0)
 #define  __RHOSAFE(_X) (min(__RHO_MAX, __RHO(_X)))
 #//-////////////////////// DISTANCE FUNCTION FROM DENSITY :
 #// error function inverse
@@ -91,6 +91,7 @@ module _N
 ! use erf_ext
 ! use ppoly1
 ! use ppoly2
+ use watershell_sbf_spline
  __IMPNONE
  private
 
@@ -151,12 +152,12 @@ module _N
  __PAR(sort_neighbor_list_freq, int, 10000)      ! frequency of completely sorting the neighbor list
 #endif
  __PAR(restart_file, character(len=vartaglen), 'NONE') ! restart file name
- __PAR(structure_file, character(len=vartaglen),'NONE') ! coordinate file (e.g. PDB) with system information, such as atomic radii
+ __PAR(structure_file, character(len=vartaglen), 'NONE') ! coordinate file (e.g. PDB) with system information, such as atomic radii
  __PAR(structure_filetype, character(len=vartaglen), 'PDB')
+ __PAR(spline_input_file, character(len=vartaglen),'sbf-rcut12spl2dkz.dat')
  __PAR(output_file, character(len=vartaglen), 'watershell.restart.txt') ! output file name
  __PAR(surface_force_constant, float, one)     ! surface restraint force constant (curvature-independent contribution to SBF)
  __PAR(curvature_force_constant, float, one)    ! surface restraint force constant (curvature contribution to SBF)
-! __PAR(target_surface_energy, float, 5d0) ! target average energy of surface potential / par area ( units of pressure or normal stress )
 !
 #ifdef __BAROSTAT
 ! === v barostat parameters v ====
@@ -429,6 +430,7 @@ module _N
  &  quiet_=.false.)
   call files_close(fid)
 ! now comes a trick : change context name temporarily to process the restart file using the same calls
+! however, note that parser_macro3 checks all contexts; it is the other macros (e.g. 2, which only checks the current 'context')
   context=contexts(restart_context)
 !
  endif ! have restart file
@@ -534,22 +536,32 @@ module _N
 #define __WARNIFMISSING
 #endif
 !
-#ifdef __DASYSTAT
 #undef __WARNIFMISSING
+#ifdef __DASYSTAT
 ! number of samples in dasystat (we may not need it because the barostat is specified in the input file)
 #define __VAR	density_num_samples
 #define __TAG	__VAR
 #define __NAME	current number of instantaneous density samples
 #include "parser/parser_macro2.src"
-#define __WARNIFMISSING
 #endif
 !
+#undef __INT
+!=========== spline data file
+#define __CHAR
+#define __VAR	spline_input_file
+#define __TAG	__VAR
+#define __NAME	input file for surface boundary force
+#define __DEFAULT
+#define __DOIFOK __MESSAGE(whoami, 'WILL INITIALIZE SOLUTE BOUNDARY FORCE COEFFICIENTS FROM FILE "'//trim(spline_input_file)//'"')
+#define __DOALWAYS call watershell_sbf_spline_init(spline_input_file)
+#include "parser/parser_macro3.src"
+#undef __CHAR
 ! ====== done with (possible) restart file data
  context=contexts(main_context) ! reset context if changed
 !
+#define __WARNIFMISSING
 #ifdef __BAROSTAT
 ! barostat flag :
-#undef __INT
 #define __BOOL
 #define __VAR	barostat
 #define __TAG	__VAR
@@ -989,12 +1001,6 @@ endif
 #undef __WARNIFMISSING
 #undef __MINUSERR
 #define __LEZEROERR
-!
-!#define __VAR target_surface_energy
-!#define __TAG __VAR
-!#define __NAME target surface energy per area
-!#define __DOIFOK if (abs(__VAR).le.__ERRTOL) __WRN(whoami, 'TARGET SURFACE ENERGY IS ALMOST ZERO.')
-!#include "parser/parser_macro2.src"
 !
 #ifdef __ROTRES
 #define __BOOL
@@ -1490,7 +1496,7 @@ __DBGVAR(r_com_sa,1)
  call files_open(ifile, output_file, 'FORMATTED','WRITE')
 !
 #define _W write(ifile,*)
- _W '#WATERSHELL RESTART FILE'
+ _W '#WATERSHELL VERSION 2 RESTART FILE'
  _W __STRING(__RESTARTCTX)//' {'
  _W 'iteration=',iteration
 ! _W 'surface_contour_value=',surface_contour_value, ' # value for which density isosurface is computed'
@@ -1507,6 +1513,9 @@ __DBGVAR(r_com_sa,1)
  _W 'surface_distance=',surface_distance, ' # distance of solvent surface from solute'
  _W 'surface_force_constant=',surface_force_constant, ' # surface force constant'
  _W 'curvature_force_constant=',curvature_force_constant, ' # curvature force constant'
+! write spline file, if different from default:
+ if ( trim(spline_input_file).ne.trim(default_spline_input_file) ) &
+& _W 'spline_input_file=',spline_input_file
 !
 #if defined(__SORT_LIST) & defined(__NEIGHBOR_LIST)
  if (qneighbor_list) then
@@ -1556,6 +1565,7 @@ __DBGVAR(r_com_sa,1)
   call __NM(write_restart_file)()
  endif
 !
+ call watershell_sbf_spline_done()
  call system_done()
 ! call parser_done() ! moving this do watershell_plugin_done(), otherwise other code cannot use parser after this line
  __FREE(r_surf)
@@ -1614,7 +1624,6 @@ __DBGVAR(r_com_sa,1)
 & , RMSBestFit &
 #endif
 & , norm3
- use watershell_sbf_spline
 !
  float, intent(in) :: r(:,:)   ! coordinate array
  float, intent(out) :: fr(:,:) ! force array
@@ -1671,6 +1680,7 @@ __DBGVAR(r_com_sa,1)
 #endif
 
  int :: i, ii
+ bool :: qsbe
  __IAM(__NM(main))
 !================================================================
 #if defined(__OMP) && defined (__OMP_DEBUG)
@@ -1919,6 +1929,7 @@ endif ! decide whether to compute dr_surf
 !$omp end parallel
 #endif
 !
+!====================== NOTE THAT THE FD TEST BELOW IS ONLY FOR THE RIGID-BODY RESTRAINT ====
 #ifdef __FD_CHECK
   __ALLOC(ffd(3,nsurface_atoms))
   do i=1, nsurface_atoms ; do j=1, 3
@@ -2000,6 +2011,7 @@ endif ! decide whether to compute dr_surf
   dcom=(r_com_inst-r_com_ref)*rigid_body_force_constant
 
 #endif __FD_CHECK
+! ^ ================ FD CHECK OF RIGID BODY RESTRAINT ======
  endif
 !============================================= compute contour value/distance and gradient at solvent coordinates
 #endif // __ROTRES
@@ -2154,6 +2166,8 @@ endif ! decide whether to compute dr_surf
 #endif
 #endif
 !========================== compute forces :
+ if (output_freq.gt.izero) then ; qsbe=__CHKUPDATE(output_freq) ; else ; qsbe=.false. ; endif
+!
  surface_energy=zero
  surface_force=zero
  curvature_energy=zero
@@ -2175,7 +2189,8 @@ endif ! decide whether to compute dr_surf
 !================= compute forces, now that density-related properties are known
 #ifdef __OMP
 !$omp parallel _OMP_EXTRA &
-!$omp shared (rho_solv,drho_solv,d2rho_solv,dsurf_solv,acurv_solv,surface_contour_value,surface_distance,surface_force_constant,curvature_force_constant,nsolvent_unsupported,&
+!$omp shared (rho_solv,drho_solv,d2rho_solv,dsurf_solv,acurv_solv,surface_contour_value,surface_distance,surface_force_constant,curvature_force_constant,&
+!$omp nsolvent_unsupported,qsbe,&
 #ifdef __DASYSTAT
 !$omp solvent_mass_outside, solvent_mass, &
 #endif
@@ -2192,9 +2207,11 @@ endif ! decide whether to compute dr_surf
 #endif
 !$omp )
 !
- __U(surface_energy)=zero
  __U(surface_force)=zero
- __U(curvature_energy)=zero
+ if (qsbe) then
+  __U(surface_energy)=zero
+  __U(curvature_energy)=zero
+ endif
  __U(curvature_force)=zero
  __U(nsolvent_outside)=izero
 #ifdef __DASYSTAT
@@ -2248,9 +2265,9 @@ endif ! decide whether to compute dr_surf
   endif ! outside the surface contour boundary
 !
 #ifndef __HAMILTONIAN
-  dsurf_solv(i) = ( __RHO_INVERSE ( rho_solv(i) ) - surface_distance ) ! distance to boundary using the approximate inverse 
+  dsurf_solv(i) = ( __RHO_INVSAFE ( rho_solv(i) ) - surface_distance ) ! distance to boundary using the approximate inverse (+/- for inside/outside bdry)
 ! note that the above is the lowest order approximation
-! otherwise, already computed prefactor and absorbed into gradients
+! otherwise, need custom code for wshell2
 ! What happens if we do not know surface distance going into the grad routine ? In that case, the computed prefactor will be wrong !
 #endif
 #if (_DBGLEV>1)
@@ -2264,8 +2281,7 @@ endif ! decide whether to compute dr_surf
 ! gradient norm :
   d0=sum(drho_solv(:,i)**2)
   if (d0.le.__ERRTOL) then ; d0=zero ; else ; d0=one/sqrt(d0); endif
-! normalize gradient :
-  __SCALE(drho_solv(:,i),d0)
+  __SCALE(drho_solv(:,i),d0) ! normalize gradient
 ! compute average curvature at sovent coordinate from gradient and hessian
 ! unnormalized grad formula:
 !  acurv_solv(i) = half * d0  * ( d2rho_solv(1,i) + d2rho_solv(4,i) + d2rho_solv(6,i) \
@@ -2277,12 +2293,20 @@ endif ! decide whether to compute dr_surf
 ! now can compute the boundary force from spline data
 ! NB: this is the lowest order of approximation for the distance to boundary and curvature
 ! a very slightly better curvature value is obtained by adding a function of the distance to boundary :
-  acurv_solv(i) = acurv_solv(i) / ( one + abs(acurv_solv(i)) * dsurf_solv(i) ) ! in this model the curvature correction is independent of curvature sign
+! any improvement over the below requires another instance of the _compute routine
+!aa  acurv_solv(i) = acurv_solv(i) / ( one + abs(acurv_solv(i)) * dsurf_solv(i) ) ! in this model the curvature correction is independent of curvature sign
 !
-  sbfe = watershell_sbf_spline_compute(acurv_solv(i), dsurf_solv(i), .false.) ! compute forces and (optionally) energies
-  pre = surface_force_constant * sbfe(1) + curvature_force_constant * sbfe(2)
-
+!  sbfe = watershell_sbf_spline_compute(acurv_solv(i), dsurf_solv(i), output_freq.gt.0 .and. __CHKUPDATE(output_freq) ) ! compute forces and (optionally) energies
+  sbfe = watershell_sbf_spline_compute(acurv_solv(i), dsurf_solv(i), qsbe)
+! note : the flag above can be computed outside ; also we may want to compute more often if we need energy averages
+! sbfe(1,2,3,4) contain surface_force, curvature_force, surface_energy, curvature_energy, respectively
+  __SCALE( sbfe(1), surface_force_constant )
+  __SCALE( sbfe(2), curvature_force_constant )
+!
+  pre = - ( sbfe(1) + sbfe(2) )
+!  pre = - sbfe(1)
 ! add forces to force arrays ; the normalized gradient gives direction
+! note that the gradient is inwardly directed, and the force has the "correct" sign (+/-) for inside/in, so need (-) above
   __INCR(fr(1,isolvent_atoms(i)), pre * drho_solv(1,i))
   __INCR(fr(2,isolvent_atoms(i)), pre * drho_solv(2,i))
   __INCR(fr(3,isolvent_atoms(i)), pre * drho_solv(3,i))
@@ -2290,6 +2314,7 @@ endif ! decide whether to compute dr_surf
   d0=d0*norm3(drho_solv(:,i))
 #endif
 #else
+!#HAMILTONIAN
 ! derivative already includes force prefactor
   __DECR(fr(1,isolvent_atoms(i)), drho_solv(1,i))
   __DECR(fr(2,isolvent_atoms(i)), drho_solv(2,i))
@@ -2302,26 +2327,36 @@ endif ! decide whether to compute dr_surf
 ! sum "energy"
 ! this requires evaluating additional splines, so should be done only when required
 ! NOT clear whether the surface_energy is physically meaningful
-! surface force is used for pressure calculations (but only if barostat is on !)
+! surface force is used only if barostat is on !
 #ifdef __BAROSTAT
-  __INCR(__U(surface_force), d0) ! actual force magnitude
+  __INCR(__U(surface_force), sbfe(1) )   ! k0 force exerted on the surface
+  __INCR(__U(curvature_force), sbfe(2) ) ! remaining force exerted on the surface
 #endif
+  if (qsbe) then
 #ifndef __HAMILTONIAN
-  __INCR(__U(surface_energy), pre**2) ! x k/2, below
+   __INCR(__U(surface_energy), sbfe(3)) ! surface_force_constant below
+   __INCR(__U(curvature_energy), sbfe(4)) ! curvature_force_constant below
 #else
-  __INCR(__U(surface_energy), (__RHO_INVERSE(rho_solv(i)) - surface_distance)**2) ! x k/2, below
+  __INCR(__U(surface_energy), (__RHO_INVSAFE(rho_solv(i)) - surface_distance)**2) ! x k/2, below
 #endif
+  endif
  enddo ! nsolvent
 #ifdef __OMP
 !$omp end do
 !$omp atomic
   __REDUCE(nsolvent_outside)
+  if (qsbe) then
 !$omp atomic
-  __REDUCE(surface_energy)
+   __REDUCE(surface_energy)
+!$omp atomic
+   __REDUCE(curvature_energy)
+  endif
 #ifdef __BAROSTAT
 if (barostat) then
 !$omp atomic
   __REDUCE(surface_force)
+!$omp atomic
+  __REDUCE(curvature_force)
 endif
 #endif
 #ifdef __DASYSTAT
@@ -2434,10 +2469,13 @@ endif
   oonsolvent_outside=zero ;
  endif
 !
- __SCALE(surface_energy, half*surface_force_constant)
-!
- if (present(energy)) then
-  __INCR(energy,surface_energy)
+ if (qsbe) then
+ __SCALE(surface_energy, surface_force_constant)
+ __SCALE(curvature_energy, curvature_force_constant)
+! note that this will not be available at every iteration ! However, typically, output freqs between the main sim & plugin should match
+  if (present(energy)) then
+   __INCR(energy,surface_energy+curvature_energy)
+  endif
  endif
 !
 #ifdef __BAROSTAT
@@ -2763,7 +2801,9 @@ __DBGVAR(density_target,1)
    __SCALE(current_surface_distance, oonsolvent_outside)
 !
   __OUT('Current avg. distance to protein:', current_surface_distance)
+  __ASSERT(qsbe,.eqv.,.true.)
   __OUT('Surface energy:                  ', surface_energy)
+  __OUT('Curvature energy:                ', curvature_energy)
   __OUT('# Solute atoms used for density: ', nsurface_atoms)
 #ifdef __DUMSURF
   if (qdumsurf) __OUT('# Fixed dummy atoms used for density: ', nsurface_coord)
@@ -2882,8 +2922,9 @@ __DBGVAR(density_target,1)
    __OUT('Simulation pressure (short):     ', pressure_ave)
    __OUT('Average pressure (long):         ', pressure_long_ave)
    __OUT('Instantaneous pressure (atm):    ', pressure)
-   __OUT('Total force on solvent shell :   ', surface_force)
-   __OUT('Surface area of solvent shell :  ', surface_area)
+   __OUT('Surface force on solvent shell:  ', surface_force)
+   __OUT('Curvature force on solvent shell:', curvature_force)
+   __OUT('Surface area of solvent shell:   ', surface_area)
   endif
 #endif
 #ifdef __DASYSTAT
@@ -2963,6 +3004,15 @@ __DBGVAR(solvent_mass_nonbulk,1)
 !
  call files_open(i, 'd2rho_solv.dat', 'FORMATTED','WRITE')
  write(i,*) d2rho_solv
+ call files_close(i)
+!
+ call files_open(i, 'dsurf_solv.dat', 'FORMATTED','WRITE')
+ write(i,*) dsurf_solv
+! write(i,*) __RHO_INVSAFE(rho_solv(1)), rho_solv(1), rho_solv(1)*2-1
+ call files_close(i)
+!
+ call files_open(i, 'acurv_solv.dat', 'FORMATTED','WRITE')
+ write(i,*) acurv_solv
  call files_close(i)
 !
  call files_open(i, 'misc.dat', 'FORMATTED','WRITE')
@@ -3192,7 +3242,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
     rp=r_surf(:,j)
     rsurf    = ( rad_surf(j) + surf_padding )
     rmaxsurf = ( cutoff_surf  + rsurf  )
-    dr = rp-rw ;
+    dr = rp-rw ; ! vector from rw to rp (i.e., usually inwardly-directed)
 #ifdef __UNWRAP_PBC
     if (qper_parser_override) then
      __DIST_PBC(dr(1),ucell%a)
@@ -3286,7 +3336,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
      if (qcompute_grad) then
 !     __SCALE(dr, osq2pi * ooc * oo_surf_stdev**2 * expb )
       __SCALE(dr, osq2pi * b * expb )
-      __INCR(drho_solv(:,i),dr)
+      __INCR(drho_solv(:,i),dr) ! usually inwardly-directed (see dr above)
      endif ! qcompute_grad
 #endif
     endif ! need gradient or hessian
