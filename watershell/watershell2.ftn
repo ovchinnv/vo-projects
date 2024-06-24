@@ -385,7 +385,9 @@ module _N
  else
   __MESSAGE(whoami, '================= WILL INITIALIZE WATERSHELL VERSION 2 =================');
 #ifdef __SIMPLERHO
-  __MESSAGE(whoami, 'USING SIMPLIFIED ERF DENSITY FUNCTION')
+  __MESSAGE(whoami, 'USING SIMPLE ERF DENSITY FUNCTION')
+#elif defined(__MEDIUMRHO)
+  __MESSAGE(whoami, 'USING SIMPLE DOUBLE ERF DENSITY FUNCTION')
 #endif
  endif
 !
@@ -3260,15 +3262,17 @@ __DBGVAR(obulk_boundary_contour_value,1)
 !   because the list is supposed to be sorted (in actuality it is not because the sort is approximate) this is a measure
 !   of how far we have to go to compute all the interactions within the cutoff ; so we store this number
 #endif
-!
+! copute quantities required for density, but not necessarily for gradient or hessian :
     rsurf=rsurf * oo_surf_stdev
     drn = sqrt(drn2) * oo_surf_stdev !  = r/s
     b = osq2 * (drn - rsurf)        !  = (dr-a)/(sqrt(2)s)
 #ifndef __SIMPLERHO
     a = osq2 * (drn + rsurf)
+#ifndef __MEDIUMRHO
     expa = __gauss(a)
     expb = __gauss(b)               ! = e^( - 0.5 * ( (dr - a)/s )^2
     ooc = one / drn                 ! = s/r
+#endif
 #endif
 !
 ! update density
@@ -3276,13 +3280,21 @@ __DBGVAR(obulk_boundary_contour_value,1)
     __erfo7i(b,erfb)
 #ifndef __SIMPLERHO
     __erfo7i(a,erfa)
-    __INCR(rho_solv(i), half * ( erfa - erfb ) + osq2pi * ooc * ( expa - expb )   )
+#ifndef __MEDIUMRHO
+    __INCR(rho_solv(i), half * ( erfa - erfb ) + osq2pi * ooc * ( expa - expb ) )
+#else
+    __INCR(rho_solv(i), half * ( erfa - erfb ) )
+#endif
 #else
     __INCR(rho_solv(i), half * ( one  - erfb ) )
 #endif
 #else
 #ifndef __SIMPLERHO
-    __INCR(rho_solv(i), half * ( __erf(a) - __erf(b) ) + osq2pi * ooc * ( expa - expb )   )
+#ifndef __MEDIUMRHO
+    __INCR(rho_solv(i), half * ( __erf(a) - __erf(b) ) + osq2pi * ooc * ( expa - expb ) )
+#else
+    __INCR(rho_solv(i), half * ( __erf(a) - __erf(b) ) )
+#endif
 #else
     __INCR(rho_solv(i), half * ( one      - __erf(b) ) )
 #endif
@@ -3293,12 +3305,14 @@ __DBGVAR(obulk_boundary_contour_value,1)
 ! needed for rho (simple) : b
 ! needed for rho (full)   : a,b,expa,expb,ooc (everything...)
 ! needed for gradient (simplerho) : expb, b, ooc
+! needed for gradient (mediumrho) : expa, a, expb, b, ooc
 ! needed for gradient (fullrho)   : expa, a, expb, b, ooc
 ! needed for hessian (simple)     : expb, b, ooc
+! needed for hessian (medium)     : expa, a, expb, b, ooc
 ! needed for hessian (full)       :
 
     if(qcompute_grad.or.qcompute_hess) then
-#ifndef __SIMPLERHO
+#if !(defined(__SIMPLERHO)||defined(__MEDIUMRHO))
      if (qcompute_grad) then
       __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurf + (expa - expb) * ooc) )
 ! add gradient contribution
@@ -3308,6 +3322,9 @@ __DBGVAR(obulk_boundary_contour_value,1)
 ! note that, if dr ~ small, ( expa - expb ) / c is singular, though the limit (and asymptote) exists
 ! however, in the calculations here, that would imply atoms being very close together, which we consider impossible, so ignore this case
 #else
+#ifdef __MEDIUMRHO
+     expa = __gauss(a)
+#endif
      expb = __gauss(b)               ! = e^( - 0.5 * ( (dr - a)/s )^2
      ooc = one / drn                 ! = s/r
      b=ooc * oo_surf_stdev**2 ! reuse = 1/(sr)
@@ -3318,22 +3335,36 @@ __DBGVAR(obulk_boundary_contour_value,1)
       dr2(4)=dr(2)**2
       dr2(5)=dr(2)*dr(3)
       dr2(6)=dr(3)**2
-! reuse these vars ; it's a nuisance to have many because of OMP
+! reuse vars ; it's a nuisance to have many because of OMP
+#ifdef __MEDIUMRHO
+!        b * (  ( drn - rsurf + ooc ) * expb - (drn + rsurf + ooc) * expa )! or
+!        b * (  (drn + ooc) * (expb - expa) - rsurf * ( expb + expa ) )
+      a = b * (expb - expa) ! reuse a
+      __SCALE(dr2, b * (  (drn + ooc) * a - b * rsurf * ( expb + expa ) ) )
+      __DECR(dr2(1),a) ! subtract identity times (expb - expa)*b
+      __DECR(dr2(4),a)
+      __DECR(dr2(6),a)
+#else
 !      dr2 = ( ooc * oo_surf_stdev**2 * b * sqrt2  + ooc**2 * oo_surf_stdev**2 ) * dr2 ;
 ! NOTE : 1/r = (s / r ) / s  = ooc * oo_surf_stdev
 !      dr2 = ooc * oo_surf_stdev**2 * ( b * sqrt2  + ooc ) * dr2 ; ! vecop ; invalid if b is reused (changed) above
 !      __SCALE(dr2 , ooc * oo_surf_stdev**2 * ( (drn-rsurf) + ooc ) )
-      __SCALE(dr2 , b * ( drn - rsurf + ooc ) ) ! dr2 * (1/r^2 + (r-a)/s * 1/(sr)
+      __SCALE(dr2, b * ( drn - rsurf + ooc ) ) ! dr2 * ( (r-a)/s + 1/r^2 ) * 1/(sr)
       __DECR(dr2(1),one) ! subtract identity
       __DECR(dr2(4),one)
       __DECR(dr2(6),one)
 !      __SCALE(dr2, osq2pi * ooc * oo_surf_stdev**2 * expb )
       __SCALE(dr2, b * expb ) ! missing osq2pi, but that is a constant that could go outside the loop 
+#endif
       __INCR(d2rho_solv(:,i),dr2)
      endif ! qcompute_hess
      if (qcompute_grad) then
 !     __SCALE(dr, osq2pi * ooc * oo_surf_stdev**2 * expb )
+#ifdef __MEDIUMRHO
+      __SCALE(dr, osq2pi * a ) ! note that b was redefined to reuse above
+#else
       __SCALE(dr, osq2pi * b * expb )
+#endif
 ! add gradient contribution
       __INCR(drho_solv(:,i),dr) ! usually inwardly-directed (see dr above)
      endif ! qcompute_grad
@@ -3626,7 +3657,11 @@ __DBGVAR(kmax,2)
 #define erfb __erf(b)
 #endif
 ! NOTE that we will have a singularity for small dx ; treat this case here
-#ifndef __SIMPLERHO
+#ifdef __SIMPLERHO
+       __INCR(rho(im,jm,km), half * ( one - erfb ) )
+#elif defined(__MEDIUMRHO)
+       __INCR(rho(im,jm,km), half * ( erfa - erfb ) )
+#else
 #ifdef __ERF_REGULARIZE
       if ( dx2 .gt. 1e-5 ) then
 #endif
@@ -3636,8 +3671,6 @@ __DBGVAR(kmax,2)
        __INCR(rho(im,jm,km), half * ( erfa - erfb ) - osq2pi * support * (two + third * ( support * dx2 )**2 ) * exp ( - half * ( support**2 + dx2**2) ) )
       endif
 #endif
-#else
-       __INCR(rho(im,jm,km), half * ( one - erfb ) )
 #endif
      endif ! rho<surface_contour value
     enddo !ii
@@ -3892,7 +3925,11 @@ __DBGVAR(kmax,2)
 #define erfb __erf(b)
 #endif
 ! NOTE that we will have a singularity for small dx ; treat this case here
-#ifndef __SIMPLERHO
+#ifdef __SIMPLERHO
+       __INCR(rho(im,jm,km), half * ( one - erfb ) )
+#elif defined(__MEDIUMRHO)
+       __INCR(rho(im,jm,km), half * ( erfa - erfb ) )
+#else
 #ifdef __ERF_REGULARIZE
       if ( dx2 .gt. 1e-5 ) then ! standard expression! Taylor expansion for exponentials
 #endif
@@ -3902,8 +3939,6 @@ __DBGVAR(kmax,2)
        __INCR(rho(im,jm,km), half * ( erfa - erfb ) - osq2pi * exp ( - half * ( support**2 + dx2**2) ) * support * (two + third * ( support * dx2 )**2 )  )
       endif
 #endif
-#else
-       __INCR(rho(im,jm,km), half * ( one - erfb ) )
 #endif
      endif ! rho<ibulk_boundary_contour value
     enddo !ii
