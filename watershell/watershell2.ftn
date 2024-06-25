@@ -193,7 +193,7 @@ module _N
 #if defined(__BAROSTAT) || defined(__DASYSTAT)
 ! distance update :
  __PAR(distance_update_freq, int, 10)          ! frequency of updating distance value
- __PAR(distance_update_step, float, 0.001d0)   ! constant for update
+ __PAR(distance_update_step, float, 0.0005d0) ! constant for update
 ! surface area computation parameters (hopefully, adjusting from defaults should be unnecessary)
  __PAR(surface_area_grid_spacing, float, one)
  float :: oo_surface_area_grid_spacing
@@ -388,6 +388,8 @@ module _N
   __MESSAGE(whoami, 'USING SIMPLE ERF DENSITY FUNCTION')
 #elif defined(__MEDIUMRHO)
   __MESSAGE(whoami, 'USING SIMPLE DOUBLE ERF DENSITY FUNCTION')
+#else
+  __MESSAGE(whoami, 'USING ORIGINAL FULL DENSITY FUNCTION')
 #endif
  endif
 !
@@ -3218,21 +3220,21 @@ __DBGVAR(obulk_boundary_contour_value,1)
    dr2old=-1.d0  ! set to a small number to guarantee that no swap is done on first iteration
 !
 #ifdef __NEIGHBOR_LIST
-   if (qtruncate_loop) then 
+   if (qtruncate_loop) then
     nsurface_coord_maxind = __NEIGHBOR_LIST_LENGTH_DENSITY
    else
-    nsurface_coord_maxind = nsurface_coord
+    nsurface_coord_maxind = nsurface_coord ! full loop
 #ifdef __NEIGHBOR_LIST_CHECK
     neighbor_list_length = __NEIGHBOR_LIST_LENGTH_DENSITY
 #endif
    endif
 #else
-   nsurface_coord_maxind = nsurface_coord
+   nsurface_coord_maxind = nsurface_coord ! inner loop over solute atoms (list sorted, but distance checking not limited to neighbors)
 #endif
-   do jj=1, nsurface_coord_maxind ! inner loop over solute atoms
+   do jj=1, nsurface_coord_maxind
     j=solute_neighbor_list(jj,i)
 #else
-   do j=1, nsurface_coord ! inner loop over solute atoms
+   do j=1, nsurface_coord ! inner loop over solute atoms (list not sorted)
 #endif
     rp=r_surf(:,j)
     rsurf    = ( rad_surf(j) + surf_padding )
@@ -3259,10 +3261,11 @@ __DBGVAR(obulk_boundary_contour_value,1)
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
     if (.not.qtruncate_loop) solute_neighbor_mind(i)=jj
 !   since jj is increasing, solute_neighbor_mindist(i) will store the largest index for any atom within the cutoff (otherwise we cycle above)
-!   because the list is supposed to be sorted (in actuality it is not because the sort is approximate) this is a measure
-!   of how far we have to go to compute all the interactions within the cutoff ; so we store this number
+!   this is a measure of how far we have to go to compute all the interactions within the cutoff ; so we store this number
+!   we only apply it for qtruncate_loop=.false. i.e. full loop over atoms ; otherwise, the result is probably too approximate (almost surely there will
+!   be atoms that diffuse forward and backward in the list, which are beyond the _NEIGHBOR_LIST_LENGTH_DENSITY cutoff
 #endif
-! copute quantities required for density, but not necessarily for gradient or hessian :
+!   compute quantities required for density, but not necessarily for gradient or hessian :
     rsurf=rsurf * oo_surf_stdev
     drn = sqrt(drn2) * oo_surf_stdev !  = r/s
     b = osq2 * (drn - rsurf)        !  = (dr-a)/(sqrt(2)s)
@@ -3337,7 +3340,7 @@ __DBGVAR(obulk_boundary_contour_value,1)
       dr2(6)=dr(3)**2
 ! reuse vars ; it's a nuisance to have many because of OMP
 #ifdef __MEDIUMRHO
-!        b * (  ( drn - rsurf + ooc ) * expb - (drn + rsurf + ooc) * expa )! or
+!        b * (  ( drn - rsurf + ooc ) * expb - (drn + rsurf + ooc) * expa ) =
 !        b * (  (drn + ooc) * (expb - expa) - rsurf * ( expb + expa ) )
       a = b * (expb - expa) ! reuse a
       __SCALE(dr2, b * (  (drn + ooc) * a - b * rsurf * ( expb + expa ) ) )
@@ -3361,7 +3364,7 @@ __DBGVAR(obulk_boundary_contour_value,1)
      if (qcompute_grad) then
 !     __SCALE(dr, osq2pi * ooc * oo_surf_stdev**2 * expb )
 #ifdef __MEDIUMRHO
-      __SCALE(dr, osq2pi * a ) ! note that b was redefined to reuse above
+      __SCALE(dr, osq2pi * a ) ! note that b was redefined for reuse above
 #else
       __SCALE(dr, osq2pi * b * expb )
 #endif
