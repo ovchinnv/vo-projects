@@ -3330,17 +3330,39 @@ __DBGVAR(obulk_boundary_contour_value,1)
 ! needed for hessian (simple)     : expb, b, ooc
 ! needed for hessian (medium)     : expa, a, expb, b, ooc
 ! needed for hessian (full)       :
-
+!
+! 7/2/24 : for now, the full and simpler rho models are coded (almost) separately, but may unify in the future
     if(qcompute_grad.or.qcompute_hess) then
 #if !(defined(__SIMPLERHO)||defined(__MEDIUMRHO))
+! note that, if dr ~ small, ( expa - expb ) / c is singular, though the limit (and asymptote) exists
+! however, in the calculations here, that would imply atoms being very close together, which we consider impossible, so ignore this case
+     a=expa+expb
+     b=expa-expb
+     expa = (ooc*oo_surf_stdev)**2 ! 1/r^2
+! note the sign difference vs notes (dr = rp-rw here, and the derivative is wrt rw, so need - for grad)
+     expb = expa * ( a * rsurf + b * ooc ) ! drho/d|r| / |r|)
+!     b=ooc * oo_surf_stdev**2 ! reuse = 1/(sr)
      if (qcompute_grad) then
-      __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurf + (expa - expb) * ooc) )
+!      __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( a * rsurf + b * ooc) )
+!      __SCALE(dr, (ooc*oo_surf_stdev)**2 * ( a * rsurf + b * ooc) )
+       __SCALE(dr, expb)
 ! add gradient contribution
       __INCR(drho_solv(:,i),dr)
      endif
-! Hessian to be implemented
-! note that, if dr ~ small, ( expa - expb ) / c is singular, though the limit (and asymptote) exists
-! however, in the calculations here, that would imply atoms being very close together, which we consider impossible, so ignore this case
+     if (qcompute_hess) then
+      dr2(1)=dr(1)**2
+      dr2(2)=dr(1)*dr(2)
+      dr2(3)=dr(1)*dr(3)
+      dr2(4)=dr(2)**2
+      dr2(5)=dr(2)*dr(3)
+      dr2(6)=dr(3)**2
+!      __SCALE(dr2, oo_surf_stdev**2 * expa * ( a*rsurf*(one+three*ooc**2) + b*ooc*(one+rsurf**2+three*ooc**2) ) )
+      __SCALE(dr2, oo_surf_stdev**2 * expa * ( (a*rsurf+b*ooc)*(one+three*ooc**2) + b*ooc*rsurf**2) )
+      __DECR(dr2(1),expb) ! identity times drho/d|r| / |r|)
+      __DECR(dr2(4),expb)
+      __DECR(dr2(6),expb)
+      __INCR(d2rho_solv(:,i),dr2)
+     endif ! hessian
 #else
 #ifdef __MEDIUMRHO
      expa = __gauss(a)
@@ -3381,9 +3403,11 @@ __DBGVAR(obulk_boundary_contour_value,1)
      if (qcompute_grad) then
 !     __SCALE(dr, osq2pi * ooc * oo_surf_stdev**2 * expb )
 #ifdef __MEDIUMRHO
-      __SCALE(dr, osq2pi * a ) ! note that b was redefined for reuse above
+!      __SCALE(dr, osq2pi * a ) ! note that b was redefined for reuse above
+      __SCALE(dr, a ) ! note that b was redefined for reuse above
 #else
-      __SCALE(dr, osq2pi * b * expb )
+!      __SCALE(dr, osq2pi * b * expb )
+      __SCALE(dr, b * expb )
 #endif
 ! add gradient contribution
       __INCR(drho_solv(:,i),dr) ! usually inwardly-directed (see dr above)
@@ -3420,8 +3444,13 @@ __DBGVAR(obulk_boundary_contour_value,1)
 #endif
 !
    enddo ! nsurface_coord
+! scale hessian
    if (qcompute_hess) then
     __SCALE(d2rho_solv(:,i),osq2pi)
+   endif
+! scale gradient :
+   if (qcompute_grad) then
+    __SCALE(drho_solv(:,i),osq2pi)
    endif
 !=========================== loop for solvent atom i over solute support (surface coordinates) ====
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
