@@ -437,7 +437,7 @@ module _N
 !
  endif ! have restart file
 !
-#if defined(__SORT_LIST) & defined(__NEIGHBOR_LIST)
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
 #define __BOOL
 #define __TAG neighbor_list
 #define __VAR __CONCAT(q,__TAG)
@@ -1543,7 +1543,7 @@ __DBGVAR(r_com_sa,1)
  if ( trim(spline_input_file).ne.trim(default_spline_input_file) ) &
 & _W 'spline_input_file=',trim(spline_input_file)
 !
-#if defined(__SORT_LIST) & defined(__NEIGHBOR_LIST)
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
  if (qneighbor_list) then
   _W 'neighbor_list=on # use a neighbor list for solvent forces'
  else
@@ -1711,7 +1711,7 @@ __DBGVAR(r_com_sa,1)
 #endif
 
  int :: i, ii
- bool :: qsbe
+ bool :: qsbe ! whether to compute energy from the splines
  __IAM(__NM(main))
 !================================================================
 #if defined(__OMP) && defined (__OMP_DEBUG)
@@ -1955,7 +1955,7 @@ endif ! decide whether to compute dr_surf
   __SCALE(A_rb, rigid_body_force_constant) ! pre-scale matrix
   dcom=(r_com_inst-r_com_ref)*rigid_body_force_constant ! pre-scale
 ! compute and apply forces on surface atoms :
-! NOTE: FFD will fail right now because the restraints can be nonuniform !
+! NOTE: FD will fail right now because the restraints can be nonuniform !
 #ifdef __FD_CHECK
 ! record current forces in case they are nonzero :
    __ALLOC(ffd2(3,nsurface_atoms))
@@ -2005,7 +2005,7 @@ endif ! decide whether to compute dr_surf
  write(600,*) rb_wgt
  close(600)
 #endif
-
+! note that below the second subtraction is to isolate the rotres forces !
    d0=sqrt(dot_product( (ffd(1,:)-(fr(1,isurface_atoms(:))-ffd2(1,:)) )**2 , rb_wgt))
    __WARN(whoami, ' ABSOLUTE RMS X-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
    d0=d0/sqrt( dot_product (( fr(1,isurface_atoms(:))-ffd2(1,:) )**2, rb_wgt ))
@@ -2149,7 +2149,7 @@ endif ! decide whether to compute dr_surf
 !====== NOTE : if we requested to run without neighbor lists then we need to reset solute_neighbor_mind to max
 !====== otherwise, the early exit (qtruncate_loop=T) version of force routine could miss crucial atoms (the mind list is _not_ updated b/c qnlist=0)
 !====== this is because solute_neighbor_mind is recomputed in a full loop, so it will be smaller than nsurf
-#if defined(__NEIGHBOR_LIST) & defined(__SORT_LIST)
+#if defined(__NEIGHBOR_LIST) && defined(__SORT_LIST)
   if (.not. qneighbor_list) solute_neighbor_mind=nsurface_coord
 #endif
 !=========================================================================
@@ -2196,7 +2196,7 @@ endif ! decide whether to compute dr_surf
  endif
 #endif
 !========================== compute forces :
- if (output_freq.gt.izero) then ; qsbe=__CHKUPDATE(output_freq) ; else ; qsbe=.false. ; endif
+ if (output_freq.gt.izero) then ; qsbe=__CHKUPDATE(output_freq) ; else ; qsbe=.false. ; endif ! E needed for output, not otherwise
 !
  surface_energy=zero
  surface_force=zero
@@ -2207,14 +2207,15 @@ endif ! decide whether to compute dr_surf
  solvent_mass_outside=zero
 #endif
 !
-! if running a FD check, first save current forces, in case they are nonzero
+! if running a FD check, first save (-)current forces, in case they are nonzero (this subtracts the forces we are _NOT_ interested in)
 #ifdef __FD_CHECK
  __DBGOUT('Allocate solvent arrays for FD check')
  __ALLOC(ffd2(3,nsolvent))
  ffd2=-fr(:,isolvent_atoms(:))
 #endif
-! simple minimum distance algorithm
+! NOTE: minimum distance (mindist) algorithm has been removed in version 2 ; density-based only
 ! NOTE: here OPENMP does not make much difference but keeping for consistency and completeness
+! NOTE: Hamiltonian dynamics (in which forces are propagated onto the surface atoms) are _NOT_ yet implemented for wsh2 (7/24)
  nsolvent_unsupported=0 ! for counting unsupported atoms in the erf density method
 !================= compute forces, now that density-related properties are known
 #ifdef __OMP
@@ -2271,9 +2272,10 @@ endif ! decide whether to compute dr_surf
   endif
   endif
 #endif
-
+!^HAMILTONIAN
 !$omp do schedule(runtime)
 #endif
+!^OMP
  do i=1, nsolvent
   if ( qoutside_solv(i) ) then
    __INC(__U(nsolvent_outside))
@@ -2295,19 +2297,6 @@ endif ! decide whether to compute dr_surf
   endif ! outside the surface contour boundary
 !
 #ifndef __HAMILTONIAN
-  dsurf_solv(i) = ( __RHO_INVSAFE ( rho_solv(i) ) - surface_distance ) ! distance to boundary using the approximate inverse (+/- for inside/outside bdry)
-! note that the above is the lowest order approximation
-! otherwise, need custom code for wshell2
-! What happens if we do not know surface distance going into the grad routine ? In that case, the computed prefactor will be wrong !
-#endif
-#if (_DBGLEV>1)
-  __DBGOUT('solv. atom#:', i, 'density:', rho_solv(i), 'distance to bdry:', dsurf_solv(i), 'outside?:', qoutside_solv(i)
-#ifndef __HAMILTONIAN
-  , 'pre:', pre
-#endif
- )
-#endif
-#ifndef __HAMILTONIAN
 ! gradient norm :
   d0=sum(drho_solv(:,i)**2)
   if (d0.le.__ERRTOL) then ; d0=zero ; else ; d0=one/sqrt(d0); endif
@@ -2323,7 +2312,18 @@ endif ! decide whether to compute dr_surf
 ! now can compute the boundary force from spline data
 ! NB: this is the lowest order of approximation for the distance to boundary and curvature
 ! a very slightly better curvature value is obtained by adding a function of the distance to boundary :
-! any improvement over the below requires another instance of the _compute routine
+! any improvement over the below requires another instance of the _compute routine, which is computationally expensive
+!
+!  d0=__Q(rho_solv(i)) ! unsafe inverse, but at least rho > 0, per above
+  d0=__QSAFE(rho_solv(i))
+!  dsurf_solv(i) = ( __RHO_INVSAFE ( rho_solv(i) ) - surface_distance ) ! distance to boundary using the approximate inverse (+/- for inside/outside bdry)
+  dsurf_solv(i) = ( __RHO_INVERSE2 ( d0 ) - surface_distance )
+! note that the above is the lowest order approximation for distance to bdry (more accurate ones, e.g. NR, are much slower)
+! note also, that we are technically missing (in the derivative of potential sense) the derivative of the inverse wrt rho (same as wsh1)
+#if (_DBGLEV>1)
+  __DBGOUT('solv. atom#:', i, 'density:', rho_solv(i), 'distance to bdry:', dsurf_solv(i), 'outside?:', qoutside_solv(i))
+#endif
+!
   if (dsurf_solv(i).gt.0) &
   acurv_solv(i) = acurv_solv(i) / ( one + abs(acurv_solv(i)) * dsurf_solv(i) ) ! in this model the curvature correction is independent of curvature sign
 ! for molecules outside the boundary, dsurf < 0, and therefore the curvature increases ; in principle, it is technically possible to go to zero in the denominator,
@@ -2337,7 +2337,11 @@ endif ! decide whether to compute dr_surf
   __SCALE( sbfe(2), curvature_force_constant )
 !
   pre = - ( sbfe(1) + sbfe(2) )
-!  pre = - sbfe(1)
+#ifdef __DRHOINV
+! whether to add this part of derivative (it is specific to using the simplest distance model)
+! experimental ...
+  pre = pre * surf_stdev * sq2pi * exp(d0**2)
+#endif
 ! add forces to force arrays ; the normalized gradient gives direction
 ! note that the gradient is inwardly directed, and the force has the "correct" sign (+/-) for inside/in, so need (-) above
   __INCR(fr(1,isolvent_atoms(i)), pre * drho_solv(1,i))
@@ -2347,7 +2351,7 @@ endif ! decide whether to compute dr_surf
   d0=d0*norm3(drho_solv(:,i))
 #endif
 #else
-!#HAMILTONIAN
+!#HAMILTONIAN defined v
 ! derivative already includes force prefactor
   __DECR(fr(1,isolvent_atoms(i)), drho_solv(1,i))
   __DECR(fr(2,isolvent_atoms(i)), drho_solv(2,i))
@@ -2358,7 +2362,7 @@ endif ! decide whether to compute dr_surf
 #endif
 !
 ! sum "energy"
-! this requires evaluating additional splines, so should be done only when required
+! this requires evaluating additional splines (indicated above by qsbe flag), so should be done only when required
 ! NOT clear whether the surface_energy is physically meaningful
 ! surface force is used only if barostat is on !
 #ifdef __BAROSTAT
@@ -2370,6 +2374,7 @@ endif ! decide whether to compute dr_surf
    __INCR(__U(surface_energy), sbfe(3)) ! surface_force_constant below
    __INCR(__U(curvature_energy), sbfe(4)) ! curvature_force_constant below
 #else
+! NOTE : not implemented for wsh2 yet:
   __INCR(__U(surface_energy), (__RHO_INVSAFE(rho_solv(i)) - surface_distance)**2) ! x k/2, below
 #endif
   endif
@@ -2406,7 +2411,7 @@ endif
 !$omp do schedule(runtime)
 #endif
  do i=1,nsolvent
-  __INCR(ffd2(:,i), fr(:,isolvent_atoms(i))) ! ffd2 was set to -fr earlier
+  __INCR(ffd2(:,i), fr(:,isolvent_atoms(i))) ! ffd2 was set to -fr earlier, so in ffd2 we have _ONLY_ the boundary forces
  enddo
 #ifdef __OMP
 !$omp end do
@@ -2422,23 +2427,61 @@ endif
  __ALLOC(ffd(3,nsolvent))
   do i=1, nsolvent ; do j=1, 3
    ffd(j,i)=zero ! initialize
-   d0=r_solv(j,i) ! save coordinate
+   pre=r_solv(j,i) ! save coordinate
    do ii=-1,1,2
     __INCR ( r_solv(j,i) , ii * h ) ! perturb
-#if defined(NEIGHBOR_LIST) && defined(SORT_LIST)
-!    call __NM(compute_density)(QTRUNCATE_LOOP=.not.qneighbor_list, QCOMPUTE_GRAD=.false., QCOMPUTE_HESS=.false.)
-    call __NM(compute_density)(.not.qneighbor_list,.false.,.false.)
+! recompute density and curvature at the perturbed coordinate
+! no need for forces, but still need curvature from hessian & gradient, unless we neglect curvature variation
+#ifdef __FD_WITH_CURV
+#if defined(__NEIGHBOR_LIST) && defined(__SORT_LIST)
+    call __NM(compute_density)(QTRUNCATE_LOOP=.not.qneighbor_list, QCOMPUTE_GRAD=.true., QCOMPUTE_HESS=.true.)
+!    call __NM(compute_density)(.not.qneighbor_list,.true.,.false.)
 #else
-!    call __NM(compute_density)(QTRUNCATE_LOOP=.true.,QCOMPUTE_GRAD=.false.,QCOMPUTE_HESS=.false.) ! no grads, just values, since this is FD
-    call __NM(compute_density)(.true.,.false.,QCOMPUTE_HESS=.true.) ! no grads, just values, since this is FD ; still need curv
+    call __NM(compute_density)(QTRUNCATE_LOOP=.true.,QCOMPUTE_GRAD=.true.,QCOMPUTE_HESS=.true.)
+!    call __NM(compute_density)(.true.,.true.,.true.)
 #endif
+#else
+#if defined(__NEIGHBOR_LIST) && defined(__SORT_LIST)
+    call __NM(compute_density)(QTRUNCATE_LOOP=.not.qneighbor_list, QCOMPUTE_GRAD=.false., QCOMPUTE_HESS=.false.)
+!    call __NM(compute_density)(.not.qneighbor_list,.true.,.false.)
+#else
+    call __NM(compute_density)(QTRUNCATE_LOOP=.true.,QCOMPUTE_GRAD=.false.,QCOMPUTE_HESS=.false.)
+!    call __NM(compute_density)(.true.,.true.,.true.)
+#endif
+#endif
+!    dsurf_solv(i) = ( __RHO_INVSAFE ( rho_solv(i) ) - surface_distance ) ! distance to boundary
+    d0=__QSAFE(rho_solv(i))
+    dsurf_solv(i) = ( __RHO_INVERSE2 ( d0 ) - surface_distance )
+! gradient norm :
+#if __FD_WITH_CURV
+    d0=sum(drho_solv(:,i)**2)
+    if (d0.le.__ERRTOL) then ; d0=zero ; else ; d0=one/sqrt(d0); endif
+    __SCALE(drho_solv(:,i),d0) ! normalize gradient
+! compute average curvature at solvent coordinate from gradient and hessian
+! note that recomputing the curvature implicitly means that we are including force changes wrt curvature as the solvent
+! particle moves around ; this is the more correct approach than our analytical implementation, in which there is no curvature
+! derivative ; i.e. we expand the surface to 2nd order, and assume that transverse variations are negligible
+! technically, we are (1) violating Hamiltonian dynamics, or (2) projecting out (removing) non-normal forces
+! the FD formula that corresponds to the analytical 2nd order surface model has to exclude the curvature variation, i.e. use the 
+! values already computed for the analytical forces
+    acurv_solv(i) = half * d0  * ( d2rho_solv(1,i)*(one-drho_solv(1,i)**2) + d2rho_solv(4,i)*(one-drho_solv(2,i)**2) + d2rho_solv(6,i)*(one-drho_solv(3,i)**2) \
+            - ( drho_solv(1,i)*( d2rho_solv(2,i)*drho_solv(2,i) + d2rho_solv(3,i)*drho_solv(3,i)) + d2rho_solv(5,i)*drho_solv(2,i)*drho_solv(3,i) )*2 )
+    if (dsurf_solv(i).gt.0) &
+     acurv_solv(i) = acurv_solv(i) / ( one + abs(acurv_solv(i)) * dsurf_solv(i) ) ! in this model the curvature correction is independent of curvature sign
+#endif
+! boundary energy from spline data
+    sbfe = watershell_sbf_spline_compute(acurv_solv(i), dsurf_solv(i), .true.)
+! note : the flag above can be computed outside ; also we may want to compute more often if we need energy averages
+! sbfe(1,2,3,4) contain surface_force, curvature_force, surface_energy, curvature_energy, respectively
+    __SCALE( sbfe(3), surface_force_constant )
+    __SCALE( sbfe(4), curvature_force_constant )
 ! incorporate into FD
-    __INCR ( ffd(j,i), ii * min(zero, (__RHO_INVERSE(rho_solv(i))-surface_distance))**2 ) ! recall that distance is negative, or inside shell
+    __INCR ( ffd(j,i), ii * ( sbfe(3) + sbfe(4) ) )
 ! restore coordinate
-    r_solv(j,i)=d0
+    r_solv(j,i)=pre
    enddo ! ii
   enddo ; enddo ! j, i
-  __SCALE(ffd, - half * surface_force_constant / ( 2*h ) ) ! negative for force direction
+  __SCALE(ffd, - half / h ) ! forces are negative gradients
 
 #ifdef __DEBUG
  write(800,*) iteration
@@ -2447,24 +2490,23 @@ endif
  close(800)
 #endif
 
-   d0=sqrt(sum ( ffd(1,:)-ffd2(1,:) )**2 / nsolvent_outside)
+   d0=sqrt(sum ( ffd(1,:)-ffd2(1,:) )**2 / nsolvent)
    __WARN(whoami, ' ABSOLUTE RMS X-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
-   d0=d0/sqrt( sum ( ffd2(1,:) )**2 / nsolvent_outside )
+   d0=d0/sqrt( sum ( ffd2(1,:) )**2 / nsolvent )
    __WARN(whoami, ' RELATIVE RMS X-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
 !
-   d0=sqrt(sum ( ffd(2,:)-ffd2(2,:) )**2 / nsolvent_outside)
+   d0=sqrt(sum ( ffd(2,:)-ffd2(2,:) )**2 / nsolvent)
    __WARN(whoami, ' ABSOLUTE RMS Y-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
-   d0=d0/sqrt( sum ( ffd2(2,:) )**2 / nsolvent_outside )
+   d0=d0/sqrt( sum ( ffd2(2,:) )**2 / nsolvent )
    __WARN(whoami, ' RELATIVE RMS Y-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
 !
-   d0=sqrt(sum ( ffd(3,:)-ffd2(3,:) )**2 / nsolvent_outside)
+   d0=sqrt(sum ( ffd(3,:)-ffd2(3,:) )**2 / nsolvent)
    __WARN(whoami, ' ABSOLUTE RMS Z-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
-   d0=d0/sqrt( sum ( ffd2(3,:) )**2 / nsolvent_outside )
+   d0=d0/sqrt( sum ( ffd2(3,:) )**2 / nsolvent )
    __WARN(whoami, ' RELATIVE RMS Z-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
 !
   __FREE(ffd)
   __FREE(ffd2)
-! at this point the distance and derivatives are computed with one coordinate off ; is there any need to recompute them correctly ? They do not seem to be used below.
 #endif //__FD_CHECK
 !
 !
@@ -3343,7 +3385,7 @@ __DBGVAR(obulk_boundary_contour_value,1)
 !
 ! 7/2/24 : for now, the full and simpler rho models are coded (almost) separately, but may unify in the future
     if(qcompute_grad.or.qcompute_hess) then
-#if !(defined(__SIMPLERHO)||defined(__MEDIUMRHO))
+#if !(defined(__SIMPLERHO) || defined(__MEDIUMRHO))
 ! note that, if dr ~ small, ( expa - expb ) / c is singular, though the limit (and asymptote) exists
 ! however, in the calculations here, that would imply atoms being very close together, which we consider impossible, so ignore this case
      a=expa+expb
@@ -3516,7 +3558,7 @@ __DBGVAR(obulk_boundary_contour_value,1)
 #endif
 !$omp end parallel
 #endif
-#if defined(__NEIGHBOR_LIST) & defined(__SORT_LIST)
+#if defined(__NEIGHBOR_LIST) && defined(__SORT_LIST)
 !#ifdef __DDEBUG
 !  if (.not. qtruncate_loop)
 !   write(666,'(7000(I4,"("I4")"))') (solute_neighbor_mind(i), solute_neighbor_list(solute_neighbor_mind(i),i), i=1,nsolvent)
