@@ -2299,16 +2299,20 @@ endif ! decide whether to compute dr_surf
 #ifndef __HAMILTONIAN
 ! gradient norm :
   d0=sum(drho_solv(:,i)**2)
-  if (d0.le.__ERRTOL) then ; d0=zero ; else ; d0=one/sqrt(d0); endif
-  __SCALE(drho_solv(:,i),d0) ! normalize gradient
+  if (pre.le.__ERRTOL) then ; d0=zero ; else ; d0=one/sqrt(d0) ; endif
+!
+#ifdef __DRHOINV
 ! compute average curvature at sovent coordinate from gradient and hessian
-! unnormalized grad formula:
-!  acurv_solv(i) = half * d0  * ( d2rho_solv(1,i) + d2rho_solv(4,i) + d2rho_solv(6,i) \
-!              - d0**2 * ( d2rho_solv(1,i)*drho_solv(1,i)**2 + d2rho_solv(4,i)*drho_solv(2,i)**2 + d2rho_solv(6,i)*drho_solv(3,i)**2 \
-!            + ( drho_solv(1,i)*(d2rho_solv(2,i)*drho_solv(2,i) + d2rho_solv(3,i)*drho_solv(3,i)) + d2rho_solv(5,i)*drho_solv(2,i)*drho_solv(3,i) )*2 ) )
+! unnormalized/unscaled grad formula:
+  acurv_solv(i) = half * d0  * ( d2rho_solv(1,i) + d2rho_solv(4,i) + d2rho_solv(6,i) \
+              - d0**2 * ( d2rho_solv(1,i)*drho_solv(1,i)**2 + d2rho_solv(4,i)*drho_solv(2,i)**2 + d2rho_solv(6,i)*drho_solv(3,i)**2 \
+            + ( drho_solv(1,i)*(d2rho_solv(2,i)*drho_solv(2,i) + d2rho_solv(3,i)*drho_solv(3,i)) + d2rho_solv(5,i)*drho_solv(2,i)*drho_solv(3,i) )*2 ) )
+#else
+  __SCALE(drho_solv(:,i),d0) ! normalize gradient (note that we use the normalized grad as the surface unit normal for forces)
 ! normalized grad formula:
   acurv_solv(i) = half * d0  * ( d2rho_solv(1,i)*(one-drho_solv(1,i)**2) + d2rho_solv(4,i)*(one-drho_solv(2,i)**2) + d2rho_solv(6,i)*(one-drho_solv(3,i)**2) \
             - ( drho_solv(1,i)*( d2rho_solv(2,i)*drho_solv(2,i) + d2rho_solv(3,i)*drho_solv(3,i)) + d2rho_solv(5,i)*drho_solv(2,i)*drho_solv(3,i) )*2 )
+#endif
 ! now can compute the boundary force from spline data
 ! NB: this is the lowest order of approximation for the distance to boundary and curvature
 ! a very slightly better curvature value is obtained by adding a function of the distance to boundary :
@@ -2317,7 +2321,7 @@ endif ! decide whether to compute dr_surf
 !  d0=__Q(rho_solv(i)) ! unsafe inverse, but at least rho > 0, per above
   d0=__QSAFE(rho_solv(i))
 !  dsurf_solv(i) = ( __RHO_INVSAFE ( rho_solv(i) ) - surface_distance ) ! distance to boundary using the approximate inverse (+/- for inside/outside bdry)
-  dsurf_solv(i) = ( __RHO_INVERSE2 ( d0 ) - surface_distance )
+  dsurf_solv(i) = ( __RHO_INVERSE2 ( d0 ) - surface_distance ) ! need this for correction below
 ! note that the above is the lowest order approximation for distance to bdry (more accurate ones, e.g. NR, are much slower)
 ! note also, that we are technically missing (in the derivative of potential sense) the derivative of the inverse wrt rho (same as wsh1)
 #if (_DBGLEV>1)
@@ -2337,6 +2341,10 @@ endif ! decide whether to compute dr_surf
   __SCALE( sbfe(2), curvature_force_constant )
 !
   pre = - ( sbfe(1) + sbfe(2) )
+#ifdef __DRHOINV
+! include derivative of distance function (simplest model only)
+  __SCALE(pre, surf_stdev * sq2pi * exp (d0**2))
+#endif
 ! add forces to force arrays ; the normalized gradient gives direction
 ! note that the gradient is inwardly directed, and the force has the "correct" sign (+/-) for inside/in, so need (-) above
   __INCR(fr(1,isolvent_atoms(i)), pre * drho_solv(1,i))
