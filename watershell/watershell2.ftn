@@ -3100,6 +3100,7 @@ __DBGVAR(solvent_mass_ibulk,1)
  end __SUB(main)
 !================================================================
  __SUB(compute_density)(qtruncate_loop, qcompute_grad, qcompute_hess)
+#define __NEWGRADHESS
 #ifdef __OMP
  use omp_lib
 #endif
@@ -3113,7 +3114,10 @@ __DBGVAR(solvent_mass_ibulk,1)
  int :: i, j
  float :: rp(3), rw(3), dr(3), dr2(6), drn, drn2, b, expb, ooc
 #ifndef __SIMPLERHO
- float :: a, expa
+ float :: a, expa, em, ep
+#endif
+#ifdef __NEWGRADHESS
+ float :: rhop, rhopp, oor
 #endif
 #ifdef __SORT_LIST
  int :: jj, nsurface_coord_maxind
@@ -3222,10 +3226,13 @@ __DBGVAR(obulk_boundary_contour_value,1)
 !$omp , x_, isgn_, erfb &
 #endif
 #ifndef __SIMPLERHO
-!$omp , a, expa &
+!$omp , a, expa, em, ep &
 #ifdef __ERFHYBRID
 !$omp , erfa &
 #endif
+#endif
+#ifdef __NEWGRADHESS
+!$omp , rhop, rhopp, oor &
 #endif
 #ifdef __DASYSTAT
 !$omp , __U(solvent_mass_ibulk), qibulk &
@@ -3378,7 +3385,7 @@ __DBGVAR(obulk_boundary_contour_value,1)
 !calc gradient & hessian, if requested
 !
 ! needed for rho (simple) : b
-! needed for rho (full)   : a,b,expa,expb,ooc (everything...)
+! needed for rho (full)   : a,b,expa,expb,ooc=s/r (everything...)
 ! needed for gradient (simplerho) : expb, b, ooc
 ! needed for gradient (mediumrho) : expa, a, expb, b, ooc
 ! needed for gradient (fullrho)   : expa, a, expb, b, ooc
@@ -3386,8 +3393,67 @@ __DBGVAR(obulk_boundary_contour_value,1)
 ! needed for hessian (medium)     : expa, a, expb, b, ooc
 ! needed for hessian (full)       :
 !
-! 7/2/24 : for now, the full and simpler rho models are coded (almost) separately, but may unify in the future
+! 8/9/24 : rewrite gradient calculation for clarity
     if(qcompute_grad.or.qcompute_hess) then
+#ifdef __NEWGRADHESS
+! defines for reuse (NB very dangerous b/c easy to make mistake) :
+! commented out in favor of adding new variables
+#//define em b
+#//define rhop expb
+#//define rhopp drn
+! note that multiplication by "oo_surf_stdev * osq2pi" can be moved out of all loops
+#if (defined(__SIMPLERHO))
+! rhop :  rho prime -- derivative wrt dr (separation distance) ; rhopp rho prime-prime, second derivative
+! factor out "oo_surf_stdev * osq2pi" henceforth
+     ooc=one/drn
+     expb=__gauss(b)
+     rhop  = - expb      ! prime
+#elif (defined(__MEDIUMRHO))
+#//define ep a
+     ooc=one/drn
+     expa=__gauss(a)
+     expb=__gauss(b)
+     em = expa-expb
+     rhop  = em ! prime
+#else
+#//define ep a
+     em = expa-expb
+     ep = expa+expb
+!     rhop = - oo_surf_stdev * osq2pi * ( ooc**2 * em + rsurf * ooc * ep ) ! rsurf x ooc  = a/r in notes
+     rhop = - ( ooc * ( ooc * em + rsurf * ep ) ) ! prime
+#endif
+#//define oor b
+     oor = ooc * oo_surf_stdev
+     if (qcompute_grad) then
+      __SCALE(dr, rhop * oor )
+      __DECR(drho_solv(:,i),dr) ! negative because dr = r_protein - r_water
+     endif
+     if (qcompute_hess) then
+      dr2(1)=dr(1)**2
+      dr2(2)=dr(1)*dr(2)
+      dr2(3)=dr(1)*dr(3)
+      dr2(4)=dr(2)**2
+      dr2(5)=dr(2)*dr(3)
+      dr2(6)=dr(3)**2
+#if defined(__SIMPLERHO)
+     rhopp = -oo_surf_stdev * (drn-rsurf) * rhop ! prime-prime
+!     rhopp =  oo_surf_stdev**2 * osq2pi * (drn-rsurf) * expb
+#elif defined (__MEDIUMRHO)
+     ep = expa+expb
+     rhopp =  - oo_surf_stdev * ( drn * em + rsurf * ep ) ! prime-prime
+#else
+     rhopp = oo_surf_stdev * ( ooc * (one + 2 * ooc**2 + rsurf**2) * em  +  rsurf * (ooc**2 + one) * ep ) ! prime-prime
+#endif
+      __SCALE(dr2,oor*(rhopp-rhop*oor))
+      __INCR(dr2(1),rhop)
+      __INCR(dr2(4),rhop)
+      __INCR(dr2(6),rhop)
+      __SCALE(dr2,oor)
+      __INCR(d2rho_solv(:,i),dr2)
+     endif
+#else
+!=================== OLDER CODE BELOW ===================================
+! 7/2/24 : the full and simpler rho models are coded (almost) separately
 #if !(defined(__SIMPLERHO) || defined(__MEDIUMRHO))
 ! note that, if dr ~ small, ( expa - expb ) / c is singular, though the limit (and asymptote) exists
 ! however, in the calculations here, that would imply atoms being very close together, which we consider impossible, so ignore this case
@@ -3468,7 +3534,9 @@ __DBGVAR(obulk_boundary_contour_value,1)
       __INCR(drho_solv(:,i),dr) ! usually inwardly-directed (see dr above)
      endif ! qcompute_grad
 #endif
+#endif __NEWGRADHESS
     endif ! need gradient or hessian
+!
 #ifdef __DASYSTAT
     if (dasystat) then
      if (qibulk .and. (rho_solv(i).gt.ibulk_boundary_contour_value)) then ! inside inner bulk
@@ -3499,7 +3567,16 @@ __DBGVAR(obulk_boundary_contour_value,1)
 #endif
 !
    enddo ! nsurface_coord
+#ifdef __NEWGRADHESS
 ! scale hessian
+   if (qcompute_hess) then
+    __SCALE(d2rho_solv(:,i),osq2pi*oo_surf_stdev)
+   endif
+! scale gradient :
+   if (qcompute_grad) then
+    __SCALE(drho_solv(:,i),osq2pi*oo_surf_stdev)
+   endif
+#else
    if (qcompute_hess) then
     __SCALE(d2rho_solv(:,i),osq2pi)
    endif
@@ -3507,6 +3584,7 @@ __DBGVAR(obulk_boundary_contour_value,1)
    if (qcompute_grad) then
     __SCALE(drho_solv(:,i),osq2pi)
    endif
+#endif
 !=========================== loop for solvent atom i over solute support (surface coordinates) ====
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
 ! check for _potential_ neighbor list violations :
