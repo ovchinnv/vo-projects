@@ -1,0 +1,187 @@
+#ifdef _N
+#undef _N
+#endif
+#define _N ppoly1
+!
+      module _N
+      __DEP_OUTPUT
+      __DEP_CONST
+      __DEP_PARSER
+      __IMPNONE
+      public
+!
+      type pp1data
+        int :: ngrid=0, degree=0 ! degree is the highest power, e.g. 3 for cubic splines
+        float, dimension(:), pointer :: grid
+        float, dimension(:,:), pointer :: coefs ! the second dimension is the grid, the first, the coefficients (1:degree)
+        bool :: initialized = .false.
+      end type pp1data
+!
+      contains
+!==================================
+       __SUB(init)(pp,degree,ngrid,grid,coefs,qcheck_)
+       type(pp1data)::pp
+       __IAM(__NM(init))
+       int, intent(in):: degree, ngrid
+       float, intent(in) :: grid(ngrid), coefs(degree+1,ngrid-1)
+       __OPAR(qcheck,bool)
+       __PRESENT(qcheck,.true.)
+       if (pp%initialized) then
+        __WRN(whoami,'polynomial already initialized. Nothing done.')
+       else
+        allocate(pp%grid(ngrid),pp%coefs(degree+1,ngrid-1))
+        pp%grid=grid
+        pp%coefs=coefs
+        pp%degree=degree
+        pp%ngrid=ngrid
+        pp%initialized=.true.
+! check poly / info :
+        if (qcheck) call __NM(check)(pp) ! no warning/error here if does not pass
+       endif
+!
+       end __SUB(init)
+!==================================
+       __SUB(done)(pp)
+       type (pp1data) :: pp
+       __FREE(pp%grid)
+       __FREE(pp%coefs)
+       pp%degree=0
+       pp%ngrid=0
+       pp%initialized=.false.
+       end __SUB(done)
+!==================================
+       __SUB(check)(pp)
+       type(pp1data), intent(in) :: pp
+!(1) check that the grid is increasing
+       __IAM(__NM(check))
+       int :: idrv, i, j
+       float, pointer :: coefs(:,:), dgrid(:)
+       float :: d,v
+       __ASSERT(pp%initialized,.eqv.,.true.)
+       if ( any(pp%grid(2:pp%ngrid) .le. pp%grid(1:pp%ngrid-1)) .and. any(pp%grid(2:pp%ngrid) .ge. pp%grid(1:pp%ngrid-1)) ) then
+         __WRN(whoami,'polynomial grid is non-monotonic')
+       endif
+! check continuity
+       idrv=0 ! derivative level
+       allocate(coefs( pp%degree+1, pp%ngrid-1), dgrid(pp%ngrid-1))
+       coefs=pp%coefs;
+       dgrid = pp%grid(2:pp%ngrid) - pp%grid(1:pp%ngrid-1) ! grid intervals
+       do idrv=0, pp%degree-1
+        do i=1,pp%ngrid-2
+         d=one; v=zero;
+         do j=pp%degree+1, 1, -1
+          __INCR(v, coefs(j,i)*d)
+          __SCALE(d,dgrid(i+1))
+         enddo ! j poly coeffs
+         d = abs(v - coefs(pp%degree+1,i+1)) ! error
+         if ( d .gt. __ERRTOL * 10000) then
+          __WRN(whoami, 'discontinuity ('//ftoa(d)//') of order '//itoa(idrv)//' at index '//itoa(i))
+! write(0,*) d, v, coefs(pp%degree+1,i+1) ! dbg
+         endif ! check match
+        enddo ! over i grid points
+!       differentiate by shifting and scaling coefficients:
+        do j=pp%degree+1,2,-1
+         coefs(j,:) = coefs(j-1,:) * (pp%degree-j+2)
+        enddo
+        coefs(1,:)=zero ! sufficient to take all coeffs to zero after multiple differentiations
+       enddo
+       __FREE(coefs)
+       end __SUB(check)
+!==================================
+       __FUN(compute)(pp,x)
+       type (pp1data), intent(in) :: pp
+       float, intent(in) :: x ! abscissa at which to evaluate
+       int :: igrid ! index (interval) of polynomial piece to use
+       int :: ic ! coefficient index
+       float :: dx, dxp
+       float :: __NM(compute)
+       __IAM(__NM(compute))
+       __ASSERT(pp%initialized, .eqv., .true.)
+! bracket x :
+       igrid=__NM(getind)(pp,x)
+! compute :
+       dx=(x-pp%grid(igrid))
+       dxp=one
+       __NM(compute)=zero
+       do ic=pp%degree+1,1,-1
+        __INCR(__NM(compute), pp%coefs(ic,igrid) * dxp )
+        dxp=dxp*dx;
+       enddo
+       end __FUN(compute)
+!==================================
+       __FUN(compute_igrid)(pp,x,igrid) ! here, specify igrid manually (e.g. if we already know it or want to break default behavior)
+       type (pp1data), intent(in) :: pp
+       float, intent(in) :: x ! abscissa at which to evaluate
+       int, intent(in) :: igrid ! index (interval) of polynomial piece to use
+       int :: ic ! coefficient index
+       float :: dx, dxp
+       float :: __NM(compute_igrid)
+       __IAM(__compute_igrid)
+       __ASSERT(pp%initialized, .eqv., .true.)
+       __ASSERT( igrid.gt.0.and.igrid.lt.pp%ngrid , .eqv. , .true. )
+! compute :
+       dx=(x-pp%grid(igrid))
+       dxp=one
+       __NM(compute_igrid)=zero
+       do ic=pp%degree+1,1,-1
+        __INCR(__NM(compute_igrid), pp%coefs(ic,igrid) * dxp )
+        dxp=dxp*dx;
+       enddo
+       end __FUN(compute_igrid)
+!==================================
+       __FUN(getind)(pp,x)
+       type (pp1data), intent(in) :: pp
+       int :: __NM(getind), i
+       float, intent(in) :: x
+       __IAM(__NM(getind))
+       __ASSERT(pp%initialized, .eqv., .true.)
+       __NM(getind)=pp%ngrid-1 ! assume last interval
+       do i=2,pp%ngrid
+        if ( pp%grid(i) .ge. x ) then
+         __NM(getind)=i-1
+         exit
+        endif
+       enddo
+       end __FUN(getind)
+!==================================
+       __FUN(integral)(pp)
+       type (pp1data), intent(in) :: pp
+       type (pp1data) :: __NM(integral)
+       float, pointer :: coefs(:,:)
+       int :: i,j
+       float :: v, d, dgrid
+       __IAM(__N(integral))
+       __ASSERT(pp%initialized, .eqv., .true.)
+! we will integrate the polynomial analytically, increasing the order by 1, and compute new order 0 constants by value matching
+       __NM(integral)%degree = pp%degree+1
+       allocate(__NM(integral)%grid(pp%ngrid), coefs(pp%degree+2,pp%ngrid-1))
+       __NM(integral)%ngrid=pp%ngrid
+       __NM(integral)%grid=pp%grid
+       do i=1,pp%degree+1 ! all but constant coeff
+        coefs(i,:) = pp%coefs(i,:) / (pp%degree-i+2)
+       enddo
+       coefs(pp%degree+2,:)=zero ! initialize constants
+       do i=2, pp%ngrid-1
+        d=one; dgrid=pp%grid(i) - pp%grid(i-1)
+        do j=pp%degree+2, 1, -1
+         __INCR(coefs(pp%degree+2,i) , coefs(j,i-1)*d )
+         __SCALE(d,dgrid)
+        enddo ! j poly coeffs
+       enddo
+!
+       __NM(integral)%coefs=>coefs
+       __NM(integral)%initialized=.true.
+       nullify(coefs)
+! original matlab code
+!% compute integral by integrating the splines :
+!  ppi=pp ; % initialize
+!  ppi.order=pp.order+1 ; % increase order ;
+!  ppi.coefs=bsxfun(@times,pp.coefs(:,1:pp.order),1./[pp.order:-1:1] ); % integrate each polynomial ;
+!  ppi.coefs(:,ppi.order)=0 ; % now the poly will compute as zero at all break points
+!  for i=2:ppi.pieces
+!   ppi.coefs(i,ppi.order) =(ppi.breaks(i)-ppi.breaks(i-1)).^[ppi.order-1:-1:0]  * ppi.coefs(i-1,:)';
+!  end
+       end __FUN(integral)
+!
+      end module _N
+!

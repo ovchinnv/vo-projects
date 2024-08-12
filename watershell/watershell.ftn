@@ -98,6 +98,7 @@ module _N
 #ifdef __OMP
  use omp_lib
 #endif
+ use erf_ext
  __IMPNONE
  private
 
@@ -386,6 +387,7 @@ module _N
  end interface rsort_index
 #endif
 !
+ float :: erfsun
 #include "erf/erf.H"
 
 != subroutines
@@ -1019,11 +1021,22 @@ endif
 #define __WARNIFMISSING
 #endif
 #define __VAR structure_update_memory
-#define __TAG __VAR
 #define __NAME memory constant for reference structure update
 #define __DOIFOK if (__VAR.lt.zero) then ; __WRN(whoami, 'SURFACE UPDATE IS OFF.') ; \
  elseif (__VAR .gt. one ) then ; __WRN(whoami, ftoupper(__STRING(__NAME))//' SHOULD _NOT_ BE GREATER THAN ONE !') ; endif
+! below is a simple hack to support "structure_update_memo" ;  can add other alternatives
+#define __TAG structure_update_memo
+if (existtag_nocase(__STRING(__TAG) , context )) then
 #include "parser/parser_macro2.src"
+else
+! need to redefine all the params, since they are cleared by the macro
+#define __VAR structure_update_memory
+#define __NAME memory constant for reference structure update
+#define __DOIFOK if (__VAR.lt.zero) then ; __WRN(whoami, 'SURFACE UPDATE IS OFF.') ; \
+ elseif (__VAR .gt. one ) then ; __WRN(whoami, ftoupper(__STRING(__NAME))//' SHOULD _NOT_ BE GREATER THAN ONE !') ; endif
+#define __TAG __VAR
+#include "parser/parser_macro2.src"
+endif
 !
 #undef __WARNIFMISSING
 #undef __MINUSERR
@@ -1582,7 +1595,7 @@ __DBGVAR(r_surf(:,l),1)
 ! note : a problem here is that surface_distance might be undefined (or zero) to be computed on first iteration
 ! this should be moved entirely to the main routine, after surface_distance is known
 ! also : note that the radii are zero for mindist method, since there is not a straightforward method to incorporate them without overhead
-! the whole point of the mindist methiod is to make it "dirt cheap" compared to the "state-of-the-art" erf density
+! the whole point of the mindist method is to make it "dirt cheap" compared to the "state-of-the-art" erf density
    r_surf_minmax(1,1) = minval(r_surf(1,:)-rad_surf) - r_com_sa(1) - ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
    r_surf_minmax(2,1) = maxval(r_surf(1,:)+rad_surf) - r_com_sa(1) + ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
 !
@@ -1850,7 +1863,7 @@ __DBGVAR(r_com_sa,1)
  int :: neighbor_dmin, neighbor_dmax, neighbor_dsum, neighbor_depth, iter
 #endif
 !
-#if defined(__OMP) & defined(__NBLSORT_OMP)
+#if defined(__OMP) && defined(__NBLSORT_OMP)
  float, allocatable :: distance2_all_threads(:,:)
  int :: tid
 #else
@@ -1896,7 +1909,7 @@ __DBGVAR(r_com_sa,1)
 !
  if (.not. qminimum_distance) pre=(maxval(rad_surf) + surf_padding + cutoff_surf)**2
 !
-#if defined(__OMP) & defined(__NBLSORT_OMP)
+#if defined(__OMP) && defined(__NBLSORT_OMP)
   __ALLOC(distance2_all_threads(nsurface_coord,0:numthreads-1))
 !$omp parallel _OMP_EXTRA private(ierr,tid,i,ii,ind,istep &
 #ifdef __PBC_UNWRAP
@@ -1913,7 +1926,7 @@ __DBGVAR(r_com_sa,1)
   if(qper_parser_override) then
 #endif
 !
-#if defined(__OMP) & defined(__NBLSORT_OMP)
+#if defined(__OMP) && defined(__NBLSORT_OMP)
 !$omp do schedule(runtime)
 #endif
    do i=1, nsolvent
@@ -1974,12 +1987,12 @@ __DBGVAR(r_com_sa,1)
 ! __DBGVAR(distance2(1:10),2)
 ! __DBGVAR(solute_neighbor_mind(i),2)
    enddo ! nsolvent
-#if defined(__OMP) & defined(__NBLSORT_OMP)
+#if defined(__OMP) && defined(__NBLSORT_OMP)
 !$omp end do
 #endif
 #ifdef __PBC_UNWRAP
   else ! qper_parser_override
-#if defined(__OMP) & defined(__NBLSORT_OMP)
+#if defined(__OMP) && defined(__NBLSORT_OMP)
 !$omp do schedule(runtime)
 #endif
    do i=1, nsolvent
@@ -2003,12 +2016,12 @@ __DBGVAR(r_com_sa,1)
      solute_neighbor_mind(i)=ind
     endif
    enddo ! nsolvent
-#if defined(__OMP) & defined(__NBLSORT_OMP)
+#if defined(__OMP) && defined(__NBLSORT_OMP)
 !$omp end do
 #endif
   endif ! qper_parser_override
 #endif
-#if defined(__OMP) & defined(__NBLSORT_OMP)
+#if defined(__OMP) && defined(__NBLSORT_OMP)
 !$omp end parallel
   __DEALL(distance2_all_threads)
 #undef distance2
@@ -2861,7 +2874,7 @@ endif
 #else
    d0=__Q(rho_solv(i))
 #endif
-   pre = ( __RHO_INVERSE2 ( d0 ) - surface_distance ) ;
+   pre = ( __RHO_INVERSE2 ( d0 ) - surface_distance ) ! (+/- for inside/outside the bdry; however, we are only forcing if outside, so, -)
 ! otherwise, already computed prefactor and absorbed into gradients
 ! What happens if we do not know surface distance going into the grad routine ? In that case, the computed prefactor will be wrong !
 #endif
@@ -2908,7 +2921,7 @@ endif
 #else
     d0 = surf_stdev * sq2pi * exp (d0**2) ! note that exp(d0^2) could be infinite ; unclear whether this will be a problem, since the gradients will be (almost) zero
 #endif
-    iforce = - surface_force_constant * pre * d0 * drho_solv(:,i) ! (-) because surface_distance is negative ; grad points toward protein
+    iforce = - surface_force_constant * pre * d0 * drho_solv(:,i) ! (-) because surface_distance is negative(pre<0) ; grad points toward protein ;
 !   fr(:,isolvent_atoms(i)) = - surface_force_constant * pre * d0 * drho_solv(:,i) ! (-) because surface_distance is negative ; grad points toward protein
 #endif
     __INCR(fr(1,isolvent_atoms(i)),iforce(1))
@@ -3108,7 +3121,7 @@ endif
   endif
 !
 ! NOTE: check below to make sure consistent for erf/density ; yes it is;
-! NOTE: just notes, nocode
+! NOTE: just notes, no code
 #ifdef __LOGISTIC_INVERSE
 ! we are using the boundary potential : k/2 x [ L^-1 (rho) - d0 ] ^ 2 ;
 ! d0 is the quasi-distance to boundary
@@ -3628,7 +3641,7 @@ __DBGVAR(density_target,1)
 !$omp parallel do private(neighbor_depth,i) shared(ii,solute_neighbor_mind,neighbor_list_factor) reduction(min:neighbor_dmin) reduction(max:neighbor_dmax) reduction(+:neighbor_dsum) _OMP_EXTRA
 #endif
   do i=1, nsolvent ! note that __NEIGHBOR_LIST_LENGTH_MINDIST has "i" in the expression, which is why we must use i to iterate (sorry)
-   neighbor_depth = ii * ( __NEIGHBOR_LIST_LENGTH_MINDIST ) + (ii-1) * ( __NEIGHBOR_LIST_LENGTH_DENSITY ) ! treat density & mindist in one line
+   neighbor_depth = ii * ( __NEIGHBOR_LIST_LENGTH_MINDIST ) + (1-ii) * ( __NEIGHBOR_LIST_LENGTH_DENSITY ) ! treat density & mindist in one line
    if ( neighbor_depth .lt. neighbor_dmin ) then 
     neighbor_dmin=neighbor_depth
    else if ( neighbor_depth .gt. neighbor_dmax ) then 
@@ -3746,8 +3759,8 @@ __DBGVAR(solvent_mass_nonbulk,1)
 #endif
 !
  bool :: qtruncate_loop ! whether we can stop looping over solute atoms once the density reaches a threshold value
-! ^ this allows the neighbor lists to be sorted only ; if __SORT_LIST is undefined then there is not effect
-!   the density calculation is still truncated once the atom is determined to be inside
+! ^ this allows the neighbor lists to be sorted ; if __SORT_LIST is undefined then there is no effect
+!   the density calculation is still truncated once the solvent atom is determined to be inside the solvent shell
 !   to avoid the truncation, you must define an upper bound to the surface contour, which is nsurface_coord
  int :: i, j
  float :: rp(3), rw(3), dr(3), dr2, a, b, expa, expb, ooc
@@ -3848,6 +3861,9 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
 !$omp ) &
 !$omp private ( rw, i, j, rp, rsurf, rmaxsurf, dr, dr2, ooc, a, b, expa, expb, qforced &
+#ifdef __ERFHYBRID
+!$omp , x_, isgn_, erfa, erfb &
+#endif
 #ifdef __DASYSTAT
 !$omp , __U(solvent_mass_nonbulk) &
 #ifdef __BULK2_DISTANCE_SCALE
@@ -3950,7 +3966,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
 !    if (any(abs(dr) .gt. rmaxsurf)) cycle ! not necessary, might actually slow the code
     dr2=sum(dr**2);
 #ifdef __SORT_LIST
-! bubble sort between this and previous atom base on distance
+! bubble sort between this and previous atom based on distance
 ! one issue here is that rmaxsurf depends on the atom radius ;
 ! i.e. perhaps sorting should take that into account ?
 ! specifically, should we compare :
@@ -4150,6 +4166,9 @@ __DBGVAR(bulk_boundary_contour_value,1)
 #endif
 !$omp ) &
 !$omp private ( rw, i, j, rp, rsurf, rmaxsurf, dr, dr2, ooc, a, b, expa, expb, qforced &
+#ifdef __ERFHYBRID
+!$omp , x_, isgn_, erfa, erfb &
+#endif
 #ifdef __DASYSTAT
 !$omp , __U(solvent_mass_nonbulk), qbulk &
 #ifdef __BULK2_DISTANCE_SCALE
@@ -4206,12 +4225,12 @@ __DBGVAR(bulk_boundary_contour_value,1)
 !
    qforced=.true.
 #ifdef __DASYSTAT
-    if (dasystat) then 
-     qbulk=.true.
+   if (dasystat) then 
+    qbulk=.true.
 #ifdef __BULK2_DISTANCE_SCALE
-     qchkbulk=.true.
+    qchkbulk=.true.
 #endif
-    endif
+   endif
 #endif
    rho_solv(i)=zero
    drho_solv(:,i)=zero
@@ -4266,7 +4285,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
       expa = __gauss(a)
       expb = __gauss(b)
 ! repeated from above, since it is important :
-! note that, if dr ~ small, ( expa - expb ) / c is singular, thought the limit (and asymptote) exists
+! note that, if dr ~ small, ( expa - expb ) / c is singular, though the limit (and asymptote) exists
 ! however, in the calculations here, that would imply atoms being very close together, which we consider impossible, so ignore this case
 !
 ! update density
@@ -5032,7 +5051,7 @@ __DBGVAR(bulk_boundary_contour_value,1)
  float __U(grad)
  __IAM(__NM(_S))
 !
-! make use of existing definitions in compute_desity_grad routine above
+! make use of existing definitions in compute_density_grad routine above
 ! different erf implementations/approximations
  float :: erfsun ! external erf function; code by Sun Microsystems
 ! if openmp is used, cannot call the function erfo7, so hack to call inlined macro here
@@ -5445,6 +5464,9 @@ __DBGVAR(kmax,2)
  float x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, dx2, dy2, dz2, x0, y0, z0
 ! real*4 ::  x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, dx2, dy2, dz2, x0, y0, z0
 ! float :: support, support2, rsurf, a, b, oos, oobs
+#ifdef __ERFHYBRID
+ real*4 :: isgn_, x_, erfa, erfb
+#endif
  real*4 :: support, support2, rsurf, a, b, oos, oobs
 #ifdef __PERTURB_GRID
  float :: drand(3)
@@ -5506,6 +5528,9 @@ __DBGVAR(kmax,2)
 !$omp parallel _OMP_EXTRA &
 !$omp shared(sarhof_all_threads, ivolume, ivolume_nonbulk) &
 !$omp private(x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, dx2, dy2, dz2, ii, jj, kk, imin, imax, jmin, jmax, kmin, kmax, tid, &
+#ifdef __ERFHYBRID
+!$omp x_, isgn_, erfa, erfb, &
+#endif
 !$omp i, __U(ivolume), __U(ivolume_nonbulk), n, support, support2, rsurf, a, b, im, jm, km)
  tid=omp_get_thread_num() ! thread index
 ! numthreads=omp_get_num_threads()
@@ -5594,8 +5619,11 @@ __DBGVAR(kmax,2)
       a = osq2 * (dx2 + support)
       b = osq2 * (dx2 - support)
 #ifdef __ERFHYBRID
+#undef __PCODE
+#define __PCODE e
       __erfo7i(a,erfa)
       __erfo7i(b,erfb)
+#undef __PCODE
 #else
 #ifdef __erf
 #undef __erf
@@ -5607,12 +5635,12 @@ __DBGVAR(kmax,2)
 #endif
 ! NOTE that we will have a singularity for small dx ; treat this case here
 #ifdef __ERF_REGULARIZE
-      if ( dx2 .lt. 1e-5 ) then ! Taylor expansion for exponentials
+      if ( dx2 .gt. 1e-5 ) then ! standard expression! Taylor expansion for exponentials
 #endif
-       __INCR(rho(im,jm,km), half * ( erfa - erfb ) - osq2pi * exp ( - half * ( support**2 + dx2**2) ) * support * (two + third * ( support * dx2 )**2 )  )
-#ifdef __ERF_REGULARIZE
-      else ! standard expression
        __INCR(rho(im,jm,km), half * ( erfa - erfb ) + osq2pi * ( __gauss1(a) - __gauss1(b) ) / dx2 )
+#ifdef __ERF_REGULARIZE
+      else ! Taylor expansion for exponentials
+       __INCR(rho(im,jm,km), half * ( erfa - erfb ) - osq2pi * exp ( - half * ( support**2 + dx2**2) ) * support * (two + third * ( support * dx2 )**2 )  )
       endif
 #endif
      endif ! rho<bulk_boundary_contour value

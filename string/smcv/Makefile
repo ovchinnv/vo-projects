@@ -7,7 +7,7 @@ DEPS=output vectors bestfit constants multicom random lu multidiag parser dynamo
 
 COMMON=..
 
-LOCALMACROS=-include source.defs -include $(COMMON)/source.defs
+LOCALMACROS=-include $(COMMON)/source.defs -include source.defs
 LOCALMACROS+=-include $(ROOT)/dmol.defs
 LOCALDEPS=source.defs $(ROOT)/mpitype.def $(COMMON)/source.defs
 LOCALDEPS+=$(ROOT)/dmol.defs cv_frames_calc.def

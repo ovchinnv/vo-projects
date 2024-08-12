@@ -174,6 +174,7 @@ LIBS+=-L $(ROOT)/lib
 LIBS+=$(EXTRA_LIBS)
 OBJDIR=$(ROOT)/obj
 LOBJS=$(addprefix $(OBJDIR)/,$(LINKOBJS))
+TOBJS=$(addprefix $(OBJDIR)/,$(TESTOBJS))
 DEPS+=$(addprefix $(NAME)/,$(SUBDIRS))
 
 SOURCES=$(OBJS:%.o=%.F90)

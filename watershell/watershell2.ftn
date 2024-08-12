@@ -1,0 +1,4211 @@
+! error function definition
+#// note that the number below should not be used with the erf approximation, which is at most accurate to within O(-7)
+#define  __RHO_MIN ERRTOL()
+#ifndef __erf
+#define __erfs __erfo7s
+#define __erf __erfo7
+#// single precision small number :
+#undef __RHO_MIN
+#define  __RHO_MIN FERRTOL()
+#endif
+! to "regularize" variation of applied forces with the contour value,
+! use a rough approximation to the inverse of the filter CDF;
+! NB:the approximation is the exact inverse with _SIMPLERHO
+! to avoid divide overflow, define minimum density
+! I initially set this to 0.5, perhaps because the logistic inverse was inaccurate
+! However, with that option gone, do not see any reason not to approach -> 1 :
+#//define  __RHO_MAX half
+#ifdef __SINGLE
+#define  __RHO_MAX 0.9999e0
+#else
+#define  __RHO_MAX 0.999999d0
+#endif
+#define  __RHOSAFE(_X) (min(__RHO_MAX, __RHO(_X)))
+#//-////////////////////// DISTANCE FUNCTION FROM DENSITY :
+#// error function inverse
+#define __RHO(_X) half*(one + __erf((_X)*osq2*oo_surf_stdev))
+#define __Q(_R) ierfo7(two*(_R)-one)
+#// note that the inverse produces a negative distance, per our convention
+#define __QSAFE(_R) ierfo7(two * min(__RHO_MAX, max(_R,__RHO_MIN)) - one)
+#define __RHO_INVERSE(_R) sqrt2*surf_stdev*__Q(_R)
+#// if already computed erf inverse _Q
+#define __RHO_INVERSE2(_Q) sqrt2*surf_stdev*_Q
+#define __RHO_INVSAFE(_R) sqrt2*surf_stdev*__QSAFE(_R)
+
+
+#// with __RHO_MIN specified, we also have the largest possible shell that can be defined ; note the (-) sign convention
+#// this value should be considered when evolving the shell distance
+#define  __MINSURFDIST __RHO_INVERSE(__RHO_MIN)
+!
+#define __CTX __WATERSHELL2CTX
+#define __RESTARTCTX __CONCAT(__WATERSHELL2CTX,_RESTART)
+#//define __CHKUPDATE(_WHAT)   ( (mod(iteration, _WHAT) .eq. ione) .or. _WHAT.eq.ione )
+#define __CHKUPDATE(_WHAT)   (mod(iteration, max(_WHAT,1)) .eq. izero)
+
+! OMP external parallel flags
+#if defined(__OMP) && !defined(_OMP_EXTRA)
+#define _OMP_EXTRA
+#endif
+! for openmm local thread variables
+#ifdef __OMP
+#define _U _
+#else
+#define _U
+#endif
+#define __U(_WHAT) __CONCAT(_WHAT,_U)
+
+#if defined(__SORT_LIST ) && defined(__NEIGHBOR_LIST)
+! neighbor list length
+#// to check a subset of surface atom list
+#define __NEIGHBOR_LIST_LENGTH_DENSITY max(1,min(nsurface_coord, INT (half * solute_neighbor_mind(i) * neighbor_list_factor) ))
+#endif
+
+#ifdef __UNWRAP_PBC
+#// note that I assume that _PER is positive, no checks are done
+#define __PBCDIST(_DIST,_PER) _DIST=modulo(_DIST, _PER);if((_DIST)*2 .gt. (_PER)) __DECR(_DIST,_PER)
+#define __PBC_DIST(_DIST,_PER) __PBCDIST(_DIST,_PER)
+#define __DISTPBC(_DIST,_PER) __PBCDIST(_DIST,_PER)
+#define __DIST_PBC(_DIST,_PER) __PBCDIST(_DIST,_PER)
+#endif
+
+#undef _N
+#define _N watershell2
+module _N
+
+ use system, only : r, rcomp, fr, radius, natom, system_PDB_initialized, system_PDB_init, system_done, system_getind, &
+#ifdef __DASYSTAT
+!&                   dasystat_masses=>occupancy, & ! use occupancy to store masses used in density control ; this is BAD because occupancy cannot be used !
+&                   dasystat_masses=>bcomp, & ! use backup beta array
+#endif
+&                   system_init_mol_scalar_nocase
+ __DEP_OUTPUT
+ __DEP_PARSER
+ __DEP_CONST
+ __DEP_FILES
+ __DEP_MPI
+#ifdef __PERTURB_GRID
+ __DEP_RANDOM
+#define random_channel 50
+#endif
+ use ugrid
+ use unitcell
+#ifdef __OMP
+ use omp_lib
+#endif
+! use erf_ext
+! use ppoly1
+! use ppoly2
+ use watershell_sbf_spline
+ __IMPNONE
+ private
+
+ public __NM(initialize)
+ public __NM(main)
+ public __NM(done)
+!
+! hack to make variables from system visible from plugin
+ public natom
+ public iteration
+ public structure_update_freq
+ public r
+ public fr
+ public surface_energy
+ public curvature_energy
+
+ bool, public :: __NM(initialized)=.false.
+ bool, private:: radii_initialized=.false.
+#ifdef __DASYSTAT
+ bool, private:: dmasses_initialized=.false. ! for dasystat ; not necessarily atomic, i.e. possibly molecular masses !
+#endif
+ bool, private :: qper_parser_override=.false. ! to turn off (override) periodicity in parser
+!
+! surface computation parameters :
+! __PAR(surface_contour_value, float, -one) ! value of density isosurface which is defines the surface ; negative means to compute from structure
+ __PAR(surface_distance, float, zero) ! in the original density method, obtained by `inverting` density (as an approximation)
+#ifdef __DASYSTAT
+ __PAR(ibulk_boundary_distance, float, zero) ! distance to the bulk solvent boundary (should obviously be smaller than the shell surface distance)
+ __PAR(obulk_boundary_distance, float, zero) ! distance to the outer bulk solvent boundary
+ __PAR(qbulk_boundary_recompute, bool, .true.) ! whether to allow recomputing the bulk boundary if it becomes too close or too far relative to surface_dist
+#endif
+ __PAR(cutoff_surf_stdev,float,6d0)! smoothing cutoff normalized by standard deviation of gaussian (surface) ; bad idea to set < 6
+ __PAR(surf_padding,float,3d0)       ! ( units of radius ) padding values to radii which might account for e.g. solvent layer(s)
+ __PAR(surf_stdev,float,2d0)         ! standard deviation of smoothing filter
+!
+ float :: cutoff_surf, oo_surf_stdev
+ float :: surface_contour_value ! value of density which defines the surface ; negative means to compute from structure
+ float :: surface_energy, curvature_energy
+#ifdef __DASYSTAT
+ float :: ibulk_boundary_contour_value ! value of density at inner bulk boundary (must be greater than surface_contour_value)
+ float :: obulk_boundary_contour_value ! value of density at outer bulk boundary
+#endif
+!
+ __PAR(iteration,INTEGER*8,izero)   ! iteration
+!
+! surface evolution and output parameters
+ __PAR(structure_update_freq, int, ione)         ! frequency of updating coordinates from which the surface is generated
+ __PAR(structure_update_memory, float, 0.999d0)  ! memory constant for exponential update
+ __PAR(output_freq, int, 1000)                   ! frequency of writing output file
+   int, save :: restart_freq, default_restart_freq=1000 ! frequency of writing restart file (used to be output_freq above) ; note default modifiable (see below)
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
+ __PAR(full_sum_freq, int, 75)                   ! frequency of force calculation without density truncation
+                                                 ! doing the full calculation allows all atoms to be sorted
+ __PAR(sort_neighbor_list_freq, int, 10000)      ! frequency of completely sorting the neighbor list
+#endif
+ __PAR(restart_file, character(len=vartaglen), 'NONE') ! restart file name
+ __PAR(structure_file, character(len=vartaglen), 'NONE') ! coordinate file (e.g. PDB) with system information, such as atomic radii
+ __PAR(structure_filetype, character(len=vartaglen), 'PDB')
+ __PAR(spline_input_file, character(len=vartaglen),'sbf-rcut12spl2dkz.dat')
+ __PAR(output_file, character(len=vartaglen), 'watershell.restart.txt') ! output file name
+ __PAR(surface_force_constant, float, one)     ! surface restraint force constant (curvature-independent contribution to SBF)
+ __PAR(curvature_force_constant, float, one)    ! surface restraint force constant (curvature contribution to SBF)
+!
+#ifdef __BAROSTAT
+! === v barostat parameters v ====
+ __PAR(barostat, bool, .false.) ! optional, but if barostat=off then pressure control turned off
+ __PAR(pressure_target, float, one) ! units of atm
+ float :: oopressure_target
+ float, parameter :: akma_per_pa = avogadro * 1d-30 * joule
+ float, parameter :: pa_per_akma = 1d0/akma_per_pa 
+ float, parameter :: atm_per_akma = atm_per_pa * pa_per_akma ! conversion from akma to atom (~ 14)
+ float, parameter :: akma_per_atm = 1d0/atm_per_akma
+ __PAR(pressure_num_long_samples, int, 0)    ! number of inst. pressure samples that make up long-time average
+ __PAR(pressure_max_long_samples, int, 10000) ! max number of inst. samples to keep in long-time average
+ __PAR(pressure_num_samples, int, 0)    ! number of inst. pressure samples that make up long-time average
+ __PAR(pressure_max_samples, int, 1000) ! max number of inst. samples to keep in average
+ __PAR(pressure_update_freq, int, 10)   ! how often pressure is updated from force and area
+#endif
+! === ^ barostat parameters ^ ====
+#ifdef __DASYSTAT
+! === v dasystat parameters v ====
+ __PAR(dasystat, bool, .false.) ! optional, but if dasystat=off then density control turned off
+ __PAR(density_target, float, 0.997d0) ! units of g/ml for pure water
+! __PAR(density_target, float, 1.002d0) ! units of g/ml for pure water ; increase to maintain better shape, at the expense of high pressure
+ float, parameter :: g_per_amu = 1d0/avogadro
+ float, parameter :: ml_per_angstrom3 = 1d-24
+ float, parameter :: gml_per_akma = g_per_amu / ml_per_angstrom3 ! density conversion factor ; note that it is dimensional
+ __PAR(density_num_samples, int, 0)    ! number of inst. density samples that make up average
+ __PAR(density_max_samples, int, 100)  ! max number of inst. samples to keep in average
+ __PAR(density_update_freq, int, 100)  ! how often density is updated from volume and mass
+#ifdef __OMP
+ int1, allocatable, dimension(:,:,:,:), target :: inrho_all_threads ! density array for computing inner (nonbulk) solvent volume
+#else
+ int1, allocatable, dimension(:,:,:), target :: inrho
+#endif
+! === ^ dasystat parameters ^ ====
+#endif
+! variables common to barostat and dasystat
+#if defined(__BAROSTAT) || defined(__DASYSTAT)
+! distance update :
+ __PAR(distance_update_freq, int, 10)          ! frequency of updating distance value
+ __PAR(distance_update_step, float, 0.0005d0) ! constant for update
+! surface area computation parameters (hopefully, adjusting from defaults should be unnecessary)
+ __PAR(surface_area_grid_spacing, float, one)
+ float :: oo_surface_area_grid_spacing
+ __PAR(surface_area_grid_buffer, float, three)
+ __PAR(surface_area_compute_freq, int, 1) ! surface area (or volume) gets recomputed every pressure_freq times this (also used for volume)
+ __PAR(surface_area_grid_check_freq, int, 1) ! if no pbc, sa grid gets checked/updated this times sa_compute_freq x pressure_freq
+ __PAR(surface_area_grid_recompute_change, float, three) ! domain size increase/decrease required to trigger grid recomputation
+ float :: r_com_sa(3)=(/zero, zero, zero/) ! center of protein for gridding in SA computation
+ float :: r_surf_minmax(2,3)=reshape((/zero, zero, zero, zero, zero, zero/),(/2,3/))
+ bool :: r_surf_changed=.true. ! for convenience, use flag that keeps track of whether surface atoms have been updated
+ bool :: surf_dist_changed=.true. ! simlarly, use flag that keeps track of whether surface distance has changed
+ type (grid) :: sagrid
+#ifdef __OMP
+ int1, allocatable, dimension(:,:,:,:), target :: sarho_all_threads ! density array for surface are computation
+ real*4, allocatable, dimension(:,:,:,:), target :: sarhof_all_threads   ! density array for surface are computation
+#else
+ int1, allocatable, dimension(:,:,:), target :: sarho
+ real*4, allocatable, dimension(:,:,:), target :: sarhof
+#endif
+#endif
+!
+!
+!  atom selections
+ __PAR(surface_atom_selection, character(len=vartaglen), 'ANAME=CA')  ! protein CA trace
+ __PAR(solvent_atom_selection, character(len=vartaglen), 'ANAME=OH2') ! TIP3 oxygen atoms
+ int, pointer, public :: isurface_atoms(:)=>NULL()
+ int, pointer, public :: isolvent_atoms(:)=>NULL()
+!
+ float, pointer :: r_surf(:,:), & ! reference atom coordinates
+&                  rad_surf(:), & ! reference atom radii
+&                  r_solv(:,:), & ! solvent atom coordinates
+&                  dr_surf(:,:), & ! displacement from current r_surf to instantaneous cordinates (useful for PBC unwrapping)
+#ifdef __DASYSTAT
+&                  mass_solv(:), & ! solvent atom/molecular mass
+#endif
+&                  rho_solv(:), & ! density value at solvent coordinate
+&                  drho_solv(:,:),& ! density gradient at solvent coordinate (inward surface normal)
+&                  d2rho_solv(:,:),& ! density hessian at solvent coordinate (xx,xy,xz,yy,yz,zz)
+&                  dsurf_solv(:), &! distance to solvent boundary
+&                  acurv_solv(:) ! average surface curvature corresponding to solvent coordinate
+ bool, pointer :: qoutside_solv(:) ! flags that indicate whether the solvent atom is outside of boundary
+#ifdef __SORT_LIST
+ shortint, pointer :: solute_neighbor_list(:,:) ! for each solvent atom, the solute atoms are sorted by proximity
+#ifdef __NEIGHBOR_LIST
+ __PAR(qneighbor_list, bool, .true.) ! whether to use a neighbor list to shorten loops over surface atoms
+ float :: neighbor_list_factor ! coefficient used to relate sorting frequency and limit index to loop length
+ int, pointer :: solute_neighbor_mind(:) ! for each solvent atom, index of closest solute atom in the mindist algorithm ; also used in erf method
+ bool :: qneighbor_list_sorted ! flag to ensure initial sorting of neighbor list
+!
+ float, parameter :: neighbor_list_factor_grow = 0.1d0
+ float, parameter :: neighbor_list_factor_shrink = - neighbor_list_factor_grow / 500d0
+!                                        ! also, the largest index of an atom within the cutoff distance for original algorithm
+! note : perhaps should implement a real test of the neighbor list algorithm, e.g. scanning the entire array and comparing with the
+! short array result
+#endif
+#endif
+!
+ int, public :: nsurface_coord=-1, nsurface_atoms=-1, nsolvent=-1 ! 1/19 introducing surface atoms and coords to allow for atomless (dummy) coordinates
+#define nsurface_coordinates nsurface_coord
+#define nsurface_coords nsurface_coord
+!
+ int :: nsolvent_outside
+ int :: nsolvent_unsupported ! solvent atoms that fall outside of the density support in the erf/density algorithm
+#ifdef __ADAPTIVE_SUPPORT
+ float, parameter :: solvent_support_factor_grow = 0.01d0
+ float, parameter :: solvent_support_factor_shrink = - solvent_support_factor_grow / 500d0 ! not sure that it is a good idea to decrease it, perhaps not below original value ?
+ float :: surf_padding_input ! save surface padding provided on input
+! float, parameter :: surface_padding_max = ten
+#endif
+#ifdef __DASYSTAT
+ float :: solvent_mass         ! total mass of solvent atoms (constant throughout simulation)
+ float :: solvent_mass_outside ! mass of solvent atoms that are outside the shell surface
+ float :: solvent_mass_obulk   ! mass of solvent inside outer bulk shell
+ float :: solvent_mass_ibulk   ! mass of solvent inside inner bulk shell
+#endif
+ float :: oonsurface, oonsolvent, oonsolvent_outside
+ float :: current_surface_distance
+#ifdef __ROTRES
+ float :: r_com_inst(3) =(/zero, zero, zero/); ! inst. center of mass (__ROTRES)
+#endif
+!
+#ifdef __ROTRES
+ __PAR(qrigid_body_restraint, bool, .false.)
+ __PAR(rigid_body_force_constant, float, one)
+ float :: rigid_body_rmsd, rigid_body_energy
+ float :: A_rb(3,3) ! rotation matrix
+ float :: r_com_ref(3) ! center of MASS of the reference coordinates set (weights added 4/23); formerly COG; NOT USED IN RMFT
+ float, pointer :: r_surf_ref(:,:)
+ float, pointer :: rb_wgt(:)
+#endif
+#ifdef __FD_CHECK
+ float, pointer :: ffd(:,:)
+ float, pointer :: ffd2(:,:) ! this array is used to isolate shell forces from other contributions
+ float, parameter :: h = 0.001d0 ! too low for single precision
+! float, parameter :: h = 0.01d0 ! ok for single precision
+! float, parameter :: h = 0.05d0
+#endif
+!
+! pressure variables
+#if defined(__BAROSTAT) || defined(__DASYSTAT)
+ float :: surface_area=-1d0
+#ifdef __BAROSTAT
+ float :: pressure, pressure_ave, pressure_long_ave ! will store in atm
+#endif
+#ifdef __DASYSTAT
+ float :: volume_bulk=-1d0
+ float :: density, density_ave ! mg/mL
+#endif
+#endif
+!
+#if defined(__BAROSTAT) || defined(__DASYSTAT) || defined(__UNWRAP_PBC)
+ type (cell) :: ucell
+#endif
+!
+ int :: fid
+ bool :: qrestart=.false. ! whether we are restarting from a restart file
+#ifdef __DUMSURF
+ bool :: qdumsurf=.false. ! whether the surface atoms are fixed 'dummies'
+#endif
+!
+ float, private, parameter :: osq2=one/sqrt2
+ float, private, parameter :: sq2pi=sqrt(twopi), osq2pi=one/sq2pi
+!
+! for Hamiltonian dynamics
+#ifdef __HAMILTONIAN
+ int :: __U(nspt)
+ int, allocatable, target :: ispt(:,:) ! support array , i.e. those atoms which contribute to the density at a particular solvent atom
+ float, allocatable, target :: drho_surf(:,:,:) ! array that stores forces on surcace atoms 
+#define ddist_surf drho_surf
+#endif
+!
+#ifdef __OMP
+ int :: numthreads
+#endif
+!
+#ifdef __FORCE_STATS
+ float :: total_solute_force(3), total_solvent_force(3), max_solute_force, max_solvent_force, rms_solute_force, rms_solvent_force
+#endif
+
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
+ interface rsort_index
+      SUBROUTINE RSORT_IND( ID, N, D, IND, INFO )
+      CHARACTER :: ID
+      int :: INFO
+      int, intent(in) :: N
+      float :: D( * )
+      int, intent(out) :: IND( N ) ! will be overwritten
+      end subroutine rsort_ind
+!
+      SUBROUTINE RSORT_INDSHORT( ID, N, D, IND, INFO )
+      CHARACTER :: ID
+      int :: INFO
+      int, intent(in) :: N
+      float :: D( * )
+      int*2, intent(out) :: IND( N )
+      end subroutine rsort_indshort
+
+ end interface rsort_index
+#endif
+!
+#include "erf/erf.H"
+
+!= subroutines
+ contains
+!========
+ __SUB(initialize) (atoms, forced_atoms, qper, mdcell)
+ __DEP_VECTORS
+ type (int_vector) :: atoms, forced_atoms
+ bool, intent(in) :: qper
+ type (cell), intent(in), optional :: mdcell
+
+ character(len=vartaglen) :: keyword, context, contexts(2) ! all_context currently holds the input context and the restart file context
+ int :: ictx ! ugly variables for context searching in macro : (ictx: context # ; qctx, whether tag present in context)
+ bool :: qctx
+ int, parameter :: main_context=2, restart_context=1 ! the order serves to provide desired override behavior ; DO NO CHANGE UNLESS YOU KNOW WHAT YOU ARE DOING
+ int :: l, ierr
+ character(len=maxlinelen) :: line
+ float, pointer :: farray(:) => NULL()
+ __IAM(__NM(initialize))
+!
+ contexts(main_context)=__STRING(__CTX)
+ contexts(restart_context)=__STRING(__RESTARTCTX)
+!
+ context=contexts(main_context)
+! first, check if we have the watershell context present
+ if (parser_find_context(__STRING(__CTX)).le.0) then
+  __MESSAGE(whoami, trim(ftoupper(__STRING(_N)))//' CONFIGURATION OPTIONS NOT PROVIDED. WILL NOT INITIALIZE.');
+   return
+ else
+  __MESSAGE(whoami, '================= WILL INITIALIZE WATERSHELL VERSION 2 =================');
+#ifdef __SIMPLERHO
+  __MESSAGE(whoami, 'USING SIMPLE ERF DENSITY FUNCTION')
+#elif defined(__MEDIUMRHO)
+  __MESSAGE(whoami, 'USING SIMPLE DOUBLE ERF DENSITY FUNCTION')
+#else
+  __MESSAGE(whoami, 'USING ORIGINAL FULL DENSITY FUNCTION')
+#endif
+ endif
+!
+! next, check for restart file
+! if present, read it and skip initialization options
+! read restart file
+#define __DEFAULT
+#define __CHAR
+#define __VAR	restart_file
+#define __TAG	__VAR
+#define __NAME	restart file
+#include "parser/parser_macro2.src"
+!
+ qrestart = ( existtag_nocase(__STRING(restart_file), context))
+! formerly known under a "watershell_restart"
+ if (.not.qrestart) then
+#define __VAR	restart_file
+#define __TAG	watershell_restart
+#define __NAME	restart file
+#include "parser/parser_macro2.src"
+#undef __CHAR
+ qrestart = ( existtag_nocase(__STRING(watershell_restart), context))
+ endif
+!
+ if (qrestart) qrestart = trim(ftoupper(restart_file)).ne.'NONE'
+!
+ if (qrestart) then
+  __MESSAGE(whoami,'WILL READ SURFACE DEFINITION PARAMETERS FROM RESTART FILE.')
+! read and parse restart file
+  fid=-1
+  call files_open(fid, restart_file, 'FORMATTED', 'READ')
+  call parse_file(fid, &
+#ifdef __PARALLEL
+ &  MPI_COMM_NULL, &
+#endif
+ &  quiet_=.false.)
+  call files_close(fid)
+! now comes a trick : change context name temporarily to process the restart file using the same calls
+! however, note that parser_macro3 checks all contexts; it is the other macros (e.g. 2, which only checks the current 'context')
+  context=contexts(restart_context)
+!
+ endif ! have restart file
+!
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
+#define __BOOL
+#define __TAG neighbor_list
+#define __VAR __CONCAT(q,__TAG)
+#define __NAME flag to use a neighbor list for solvent forces (default=yes)
+#define __DOALWAYS if (__VAR) then ;\
+                    __MESSAGE(whoami, 'WILL USE A NEIGHBOR LIST FOR SOLVENT FORCES.');\
+                   else ; \
+                    __MESSAGE(whoami, 'WILL NOT USE A NEIGHBOR LIST FOR SOLVENT FORCES.');\
+                   endif
+#include "parser/parser_macro3.src"
+#undef __BOOL
+#endif
+!
+#define __WARNIFMISSING
+#//define __MINUSERR
+! density padding
+#define __VAR	surf_padding
+#define __TAG	surface_padding
+#define __NAME	Density padding
+#include "parser/parser_macro3.src"
+#ifdef __ADAPTIVE_SUPPORT
+ surf_padding_input=surf_padding ! save original padding value if padding could be adjusted adaptively
+#endif
+!
+#//undef __MINUSERR
+!
+#define __VAR surface_force_constant
+#define __TAG __VAR
+#define __NAME force constant for surface boundary potential
+#define __DOIFOK if (abs(__VAR).le.__ERRTOL) __WRN(whoami, 'SURFACE BOUNDARY FORCE IS OFF.')
+! check all contexts:
+#include "parser/parser_macro3.src"
+!
+#define __VAR curvature_force_constant
+#define __TAG __VAR
+#define __NAME force constant for surface curvature potential
+#define __DOIFOK if (abs(__VAR).le.__ERRTOL) __WRN(whoami, 'SURFACE CURVATURE FORCE IS OFF.')
+! check all contexts:
+#include "parser/parser_macro3.src"
+!
+#define __LEZEROERR
+! cutoff for density
+#define __VAR	cutoff_surf_stdev
+#define __TAG __VAR
+#define __NAME	Cutoff for density smoothing
+! check all contexts, in case we want to increase support w/o modding restart file
+#include "parser/parser_macro3.src"
+
+! GAUSSIAN standard deviations for smoothing
+#define __VAR	surf_stdev
+#define __TAG __VAR
+#define __NAME	Standard deviation of Gaussian filter for density smoothing
+#include "parser/parser_macro2.src"
+! MAKE sure to define variables below as soon as surf_stdev and cutoff_surf_stdev are known so that density calculations are valid hence
+ oo_surf_stdev=one/surf_stdev
+ cutoff_surf  =cutoff_surf_stdev*surf_stdev
+!
+#undef __LEZEROERR
+!
+! value for distance of the surface from protein (approximate for density method)
+#define __VAR	surface_distance
+#define __TAG __VAR
+#define __NAME	Distance of solvent surface from protein
+#define __DOALWAYS if (abs(__VAR).le.__ERRTOL) then ; \
+                  __MESSAGE(whoami, 'LOCATION OF SOLVENT SURFACE WILL BE SET FROM SOLVENT COORDINATES.') ; \
+                 else ;\
+                  __VAR=-(abs(__VAR)) ; \
+                  surface_contour_value=__RHOSAFE(__VAR) ;\
+                 endif ! make sure to set to a negative value
+!
+#include "parser/parser_macro2.src"
+#define __MINUSERR
+#ifdef __DEBUG
+ __DBGOUT('surface_contour_value :', surface_contour_value);
+#endif
+!
+! other parameters
+#define __INT
+#define __VAR	iteration
+#define __TAG	__VAR
+#define __NAME	starting iteration
+#include "parser/parser_macro2.src"
+!
+#ifdef __BAROSTAT
+! number of samples in barostat (we may not need it because the barostat is specified in the input file)
+#define __VAR	pressure_num_samples
+#define __TAG	__VAR
+#define __NAME	current number of instantaneous pressure samples
+#include "parser/parser_macro2.src"
+!
+! number of long samples
+!
+#undef __WARNIFMISSING
+#define __VAR	pressure_num_long_samples
+#define __TAG	__VAR
+#define __NAME	current number of instantaneous pressure samples in long-time average
+#include "parser/parser_macro2.src"
+#define __WARNIFMISSING
+#endif
+!
+#undef __WARNIFMISSING
+#ifdef __DASYSTAT
+! number of samples in dasystat (we may not need it because the barostat is specified in the input file)
+#define __VAR	density_num_samples
+#define __TAG	__VAR
+#define __NAME	current number of instantaneous density samples
+#include "parser/parser_macro2.src"
+#endif
+!
+#undef __INT
+!=========== spline data file
+#define __CHAR
+#define __VAR	spline_input_file
+#define __TAG	__VAR
+#define __NAME	input file for surface boundary force
+#define __DEFAULT
+#define __DOIFOK __MESSAGE(whoami, 'WILL INITIALIZE SOLUTE BOUNDARY FORCE COEFFICIENTS FROM FILE "'//trim(spline_input_file)//'"')
+#include "parser/parser_macro3.src"
+#undef __CHAR
+ call watershell_sbf_spline_init(spline_input_file)
+! ====== done with (possible) restart file data
+ context=contexts(main_context) ! reset context if changed
+!
+#define __WARNIFMISSING
+#ifdef __BAROSTAT
+! barostat flag :
+#define __BOOL
+#define __VAR	barostat
+#define __TAG	__VAR
+#define __NAME	flag to turn barostat on/off
+#define __DOIFOK if (.not.__VAR) __MESSAGE(whoami, 'BAROSTAT IS OFF. (WILL IGNORE BAROSTAT-RELATED SETTINGS).')
+#include "parser/parser_macro2.src"
+#undef __BOOL
+#endif
+!
+#ifdef __DASYSTAT
+! dasystat flag :
+#undef __INT
+#define __BOOL
+#define __VAR	dasystat
+#define __TAG	__VAR
+#define __NAME	flag to turn dasystat on/off
+#ifdef __BAROSTAT
+#define __DOALWAYS if (__VAR.and.barostat) then ;\
+                    __WRN(whoami, 'CANNOT USE BOTH A BAROSTAT AND A DASYSTAT. ABORT.') ;\
+                    barostat=.false. ;\
+                    dasystat=.false. ;\
+                    return ;\
+                   elseif (.not.__VAR) then ;\
+                     __MESSAGE(whoami, 'DASYSTAT IS OFF. (WILL IGNORE DASYSTAT-RELATED SETTINGS).') ; \
+                   endif
+#else
+#define __DOIFOK if (.not.__VAR) then ; __MESSAGE(whoami, 'DASYSTAT IS OFF. (WILL IGNORE DASYSTAT-RELATED SETTINGS).') ; endif
+#endif
+#include "parser/parser_macro2.src"
+#undef __BOOL
+#endif
+
+#define __INT
+#if defined(__BAROSTAT) || defined(__DASYSTAT) || defined(__UNWRAP_PBC)
+!
+ if ( &
+#ifdef __BAROSTAT
+ & barostat .or. &
+#endif
+#ifdef __DASYSTAT
+ & dasystat .or. &
+#endif
+#ifdef __UNWRAP_PBC
+ & .true. .or. &
+#endif
+ & .false.)  then
+!
+! check for periodicity override from parser :
+  __GET_OPT_PAR_B(pbc, qper_parser_override, qper, __STRING(__WATERSHELL2CTX)); ! if not present use qper that is passed in
+  if (qper_parser_override) then
+   if (present(mdcell)) then
+    ucell=mdcell
+   else
+    __WARN(whoami, 'PBC OVERRIDE IN USE BUT UNIT CELL NOT PROVIDED. WILL NOT USE PBC.')
+    qper_parser_override=.false.
+   endif ! present mdcell
+  endif
+ endif ! barostat or dasystat
+#endif
+!
+! barostat only :
+!===================================================================================================
+#ifdef __BAROSTAT
+ if (barostat) then
+!
+#define __VAR	pressure_update_freq
+#define __TAG	__VAR
+#define __NAME	frequency of computing instantaneous shell pressure
+#define __DOIFOK if (__VAR.eq.izero) then; \
+                  __MESSAGE(whoami, 'PRESSURE UPDATE IS OFF. TURNING BAROSTAT OFF.'); \
+                  barostat=.false. ; \
+                 endif ! it does not make any sense to run barostat without a pressure calculation !
+#include "parser/parser_macro2.src"
+ endif ! barostat
+!
+ if (barostat) then ! repeat if because barostat may have been turned off
+#define __VAR	surface_area_compute_freq
+#define __TAG	__VAR
+#define __NAME	frequency of computing instantaneous shell surface area
+#define __DOIFOK if (__VAR.eq.izero) then; \
+                  __MESSAGE(whoami, 'SURFACE AREA COMPUTATION IS OFF. TURNING BAROSTAT OFF.'); \
+                  barostat=.false. ; \
+                 endif ! it does not make any sense to run barostat without a surface area calculation !
+#include "parser/parser_macro2.src"
+ endif ! barostat
+!
+ if (barostat) then
+#define __VAR	surface_area_grid_check_freq
+#define __TAG	__VAR
+#define __NAME	frequency of checking grid limits for computing shell surface area
+#define __DOIFOK if (qper_parser_override) then ;\
+                  __WRN(whoami, '"'//__STRING(__TAG)//'" HAS NO EFFECT WHEN PBC ARE USED.');\
+                 elseif (__VAR.eq.izero) then; \
+                  __WRN(whoami, 'WILL NOT UPDATE SURFACE AREA GRID DURING DYNAMICS (THIS IS PROBABLY NOT A GREAT IDEA).'); \
+                 endif
+!
+#include "parser/parser_macro2.src"
+#define __LEZEROERR
+#define __VAR	pressure_max_samples
+#define __TAG	pressure_relax_time
+#define __NAME	barostat relaxation time (in simulation steps)
+#include "parser/parser_macro2.src"
+!
+#undef __WARNIFMISSING
+#define __VAR	pressure_max_long_samples
+#define __TAG	__VAR
+#define __NAME	maximum number of samples in long-time pressure average
+#include "parser/parser_macro2.src"
+#define __WARNIFMISSING
+!
+#// default is float
+#undef __INT 
+!
+#define __VAR	surface_area_grid_recompute_change
+#define __TAG	__VAR
+#define __NAME	domain size difference required to trigger reinitialization of surface area grid
+#define __DOIFOK if (qper_parser_override) then ;\
+                  __WRN(whoami, '"'//__STRING(__TAG)//'" HAS NO EFFECT WHEN PBC ARE USED.');\
+                 endif
+#include "parser/parser_macro2.src"
+!
+#undef __LEZEROERR
+#define __VAR	pressure_target
+#define __TAG	__VAR
+#define __NAME	target pressure in atm
+#define __DOALWAYS oopressure_target=one/max(__ERRTOL,(__VAR))
+#include "parser/parser_macro2.src"
+!
+! surface area computation parameters (hopefully, adjusting from defaults should be unnecessary)
+#define __LEZEROERR
+#define __VAR	surface_area_grid_spacing
+#define __TAG	__VAR
+#define __NAME	grid spacing for surface area computation
+#define __DOALWAYS oo_surface_area_grid_spacing=one/surface_area_grid_spacing
+#include "parser/parser_macro2.src"
+!
+! NOTE : should consider the possibility of periodicity
+#define __VAR	surface_area_grid_buffer
+#define __TAG	__VAR
+#define __NAME	grid buffer for surface area computation
+#define __DOIFOK if (qper_parser_override) then ;\
+                  __WRN(whoami, '"'//__STRING(__TAG)//'" HAS NO EFFECT WHEN PBC ARE USED.');\
+                 elseif (__VAR.lt. __CONCAT(default_,__VAR) ) then ; \
+                      __WRN(whoami, 'SETTING A LOW VALUE FOR SURFACE AREA GRID BUFFER MAY CAUSE INACCURACIES.');\
+                 endif
+#include "parser/parser_macro2.src"
+!
+ endif
+#define __INT
+#endif
+!
+! dasystat only (similar to barostat, and using same variables with different tags):
+!===================================================================================================
+#undef __LEZEROERR
+#ifdef __DASYSTAT
+ if (dasystat) then
+!
+#define __VAR	density_update_freq
+#define __TAG	__VAR
+#define __NAME	frequency of computing solvent density
+#define __DOIFOK if (__VAR.eq.izero) then; \
+                  __MESSAGE(whoami, 'DENSITY UPDATE IS OFF. TURNING DASYSTAT OFF.'); \
+                  dasystat=.false. ; \
+                 endif ! it does not make any sense to run dasystat without a density calculation !
+#include "parser/parser_macro2.src"
+ endif ! dasystat
+!
+ if (dasystat) then ! repeat if because dasystat may have been turned off
+#define __VAR	surface_area_compute_freq
+#define __TAG	volume_compute_freq
+#define __NAME	frequency of computing solvent density
+#define __DOIFOK if (__VAR.eq.izero) then; \
+                  __MESSAGE(whoami, 'VOLUME COMPUTATION IS OFF. TURNING DASYSTAT OFF.'); \
+                  dasystat=.false. ; \
+                 endif ! it does not make any sense to run dasystat without a volume calculation !
+#include "parser/parser_macro2.src"
+ endif ! dasystat
+!
+ if (dasystat) then
+#define __VAR	surface_area_grid_check_freq
+#define __TAG	volume_grid_check_freq
+#define __NAME	frequency of checking grid limits for computing solvent density
+#define __DOIFOK if (qper_parser_override) then ;\
+                  __WRN(whoami, 'PARAMETER "'//__STRING(__TAG)//'" HAS NO EFFECT WHEN PBC ARE USED.');\
+                 elseif (__VAR.eq.izero) then; \
+                  __WRN(whoami, 'WILL NOT UPDATE VOLUME GRID DURING DYNAMICS (THIS IS PROBABLY NOT A GREAT IDEA).'); \
+                 endif
+!
+#include "parser/parser_macro2.src"
+#define __LEZEROERR
+#define __VAR	density_max_samples
+#define __TAG	density_relax_time
+#define __NAME	dasystat relaxation time (in simulation steps)
+#include "parser/parser_macro2.src"
+!
+#undef __INT
+!
+#define __VAR	surface_area_grid_recompute_change
+#define __TAG	volume_grid_recompute_change
+#define __NAME	domain size difference required to trigger reinitialization of volume grid
+#define __DOIFOK if (qper_parser_override) then ;\
+                  __WRN(whoami, 'PARAMETER "'//__STRING(__TAG)//'" HAS NO EFFECT WHEN PBC ARE USED.');\
+                 endif
+#include "parser/parser_macro2.src"
+#undef __LEZEROERR
+!
+#define __VAR	density_target
+#define __TAG	__VAR
+#define __NAME	target density in g/mL
+#include "parser/parser_macro2.src"
+!
+! surface area computation parameters (hopefully, adjusting from defaults should be unnecessary)
+#define __LEZEROERR
+#define __VAR	surface_area_grid_spacing
+#define __TAG	volume_grid_spacing
+#define __NAME	grid spacing for volume computation
+#define __DOALWAYS oo_surface_area_grid_spacing=one/surface_area_grid_spacing
+#include "parser/parser_macro2.src"
+!
+! NOTE : should consider the possibility of periodicity
+#define __VAR	surface_area_grid_buffer
+#define __TAG	volume_grid_buffer
+#define __NAME	grid buffer for volume computation
+#define __DOIFOK if (qper_parser_override) then ;\
+                  __WRN(whoami, 'PARAMETER "'//__STRING(__TAG)//'" HAS NO EFFECT WHEN PBC ARE USED.');\
+                 elseif (__VAR.lt. __CONCAT(default_,__VAR) ) then ; \
+                      __WRN(whoami, 'SETTING A LOW VALUE FOR VOLUME GRID BUFFER MAY CAUSE INACCURACIES.');\
+                 endif
+#include "parser/parser_macro2.src"
+!
+! value for distance to bulk boundary from protein (approximate for density method)
+#undef __LEZEROERR
+#undef __MINUSERR
+#define __VAR	obulk_boundary_distance
+#define __TAG 	outer_bulk_boundary_distance
+#define __NAME	Distance from protein to outer bulk boundary
+#define __DOALWAYS if (abs(__VAR).le.__ERRTOL) then ; \
+                    if (abs(surface_distance).gt.__ERRTOL) then;\
+                     __VAR = -( abs(surface_distance) - __OUTER_BULK_BOUNDARY_OFFSET);\
+                     obulk_boundary_contour_value=__RHOSAFE(__VAR);\
+                     __MESSAGE(whoami, 'SETTING LOCATION OF OUTER BULK BOUNDARY FROM SURFACE BOUNDARY TO '//ftoa(__VAR)) ; \
+                    else;\
+                     __MESSAGE(whoami, 'LOCATION OF OUTER BULK BOUNDARY WILL BE SET FROM SURFACE BOUNDARY.') ; \
+                    endif;\
+                   elseif((abs(__VAR).gt.abs(surface_distance)).and.(abs(surface_distance).gt.__ERRTOL)) then ;\
+                    __WRN(whoami, 'OUTER BULK BOUNDARY MUST BE INSIDE SHELL SURFACE. ABORT');\
+                    __ASSERT(abs(__VAR),<,abs(surface_distance)); \
+                   else ;\
+                    __VAR=-(abs(__VAR)) ; \
+                    obulk_boundary_contour_value=__RHOSAFE(__VAR) ;\
+                   endif ! note the negative sign convention
+! NB: it is possible that bulk value is set but not the surface value ! Need to be aware of this when computing the surface val. below
+! check in all contexts :
+#include "parser/parser_macro3.src"
+!
+#define __VAR	ibulk_boundary_distance
+#define __TAG 	inner_bulk_boundary_distance
+#define __NAME	Distance from protein to inner bulk boundary
+#define __DOALWAYS if (abs(__VAR).le.__ERRTOL) then ; \
+                    if (abs(surface_distance).gt.__ERRTOL) then;\
+                     __VAR = -( abs(surface_distance) - __INNER_BULK_BOUNDARY_OFFSET);\
+                     ibulk_boundary_contour_value=__RHOSAFE(__VAR);\
+                     __MESSAGE(whoami, 'SETTING LOCATION OF INNER BULK BOUNDARY FROM SURFACE BOUNDARY TO '//ftoa(__VAR)) ; \
+                    else;\
+                     __MESSAGE(whoami, 'LOCATION OF INNER BULK BOUNDARY WILL BE SET FROM SURFACE BOUNDARY.') ; \
+                    endif;\
+                   elseif((abs(__VAR).gt.abs(obulk_boundary_distance)).and.(abs(obulk_boundary_distance).gt.__ERRTOL)) then ;\
+                    __WRN(whoami, 'BULK BOUNDARY MUST BE INSIDE SHELL SURFACE. ABORT');\
+                    __ASSERT(abs(__VAR),<,abs(obulk_boundary_distance)); \
+                   else ;\
+                    __VAR=-(abs(__VAR)) ; \
+                    ibulk_boundary_contour_value=__RHOSAFE(__VAR) ;\
+                   endif
+#include "parser/parser_macro3.src"
+!
+#define __BOOL
+#define __VAR qbulk_boundary_recompute
+#define __TAG bulk_boundary_recompute
+#define __NAME flag to allow automatic adjustment of bulk boundary
+#undef __WARNIFMISSING
+#include "parser/parser_macro3.src"
+#define __WARNIFMISSING
+#undef __BOOL
+
+! check distances here
+#ifdef __DEBUG
+ write(666,*) 'outer_bulk_distance', obulk_boundary_distance
+ write(666,*) 'rho_obulk', __RHO(obulk_boundary_distance)
+ write(666,*) 'rho_obulk_safe', __RHOSAFE(obulk_boundary_distance)
+!
+ write(666,*) 'inner_bulk_distance', ibulk_boundary_distance
+ write(666,*) 'rho_ibulk', __RHO(ibulk_boundary_distance)
+ write(666,*) 'rho_ibulk_safe', __RHOSAFE(ibulk_boundary_distance)
+!
+ write(666,*) 'surface_distance', surface_distance
+ write(666,*) 'rho_surf', __RHO(surface_distance), surface_contour_value
+ write(666,*) 'rho_surf_safe', __RHOSAFE(surface_distance)
+ close(666)
+#endif
+
+#define __MINUSERR
+ endif
+#endif
+! dasystat only ^ ===========================================================================================
+!
+#if defined(__BAROSTAT) || defined(__DASYSTAT)
+! distance update
+ if ( &
+#ifdef __BAROSTAT
+ & barostat .or. &
+#endif
+#ifdef __DASYSTAT
+ & dasystat .or. &
+#endif
+ & .false.)  then
+!
+#undef __INT
+#undef __LEZEROERR
+#define __VAR distance_update_step
+#define __TAG __VAR
+#define __NAME constant for updating target distance from surface
+#define __DOIFOK if (__VAR.le.zero) then ; __WRN(whoami, 'UPDATE OF SURFACE CONTOUR REFERENCE VALUE IS OFF.') ; endif
+#include "parser/parser_macro2.src"
+!
+#define __INT
+!
+#define __VAR	distance_update_freq
+#define __TAG	__VAR
+#define __NAME	frequency of updating target distance from surface
+#define __DOIFOK if (__VAR.eq.izero) __MESSAGE(whoami, 'UPDATE OF SURFACE DISTANCE VALUE IS OFF.')
+#include "parser/parser_macro2.src"
+!
+  surf_dist_changed=.true.
+ endif ! barostat or dasystat
+#endif
+!
+#define __VAR	structure_update_freq
+#define __TAG	__VAR
+#define __NAME	frequency of updating reference structure
+#define __DOIFOK if (__VAR.eq.izero) __MESSAGE(whoami, 'SURFACE UPDATE IS OFF.')
+#include "parser/parser_macro2.src"
+!
+#define __VAR	output_freq
+#define __TAG	__VAR
+#define __NAME	frequency for writing output
+#define __DOIFOK if (__VAR.le.izero) __WRN(whoami, 'WILL NOT PRODUCE RUNNING OUTPUT.')
+#include "parser/parser_macro2.src"
+!
+#define __VAR	restart_freq
+#define __TAG	__VAR
+#define __NAME	frequency for writing restart file
+#define __DOIFOK if (__VAR.le.izero) __WRN(whoami, 'RESTART FILE WILL BE WRITTEN AT THE END ONLY.')
+! if output_freq is defined, use that for the restart_freq default value :
+ if ( existtag_nocase("output_freq", context ) .and. output_freq .gt. izero ) default_restart_freq=output_freq
+#include "parser/parser_macro2.src"
+#undef __INT
+!
+! read atom selections
+! atoms to define surface
+#define __CHAR
+#define __WARNIFMISSING
+#define __VAR	surface_atom_selection
+#define __TAG	surface_atoms
+#define __NAME	surface atoms
+#include "parser/parser_macro2.src"
+! (solvent) atoms to which surface forces are applied
+#define __VAR	solvent_atom_selection
+#define __TAG	solvent_atoms
+#define __NAME	solvent atoms
+#include "parser/parser_macro2.src"
+!
+! output file
+#undef __WARNIFMISSING
+#define __VAR	output_file
+#define __TAG	__VAR
+#define __NAME	watershell output file
+#include "parser/parser_macro2.src"
+! formerly known under watershell_output ; check for this tag, also
+if (.not.existtag_nocase('output_file', context)) then
+#define __WARNIFMISSING
+#define __TAG	watershell_output
+#define __VAR	output_file
+#define __NAME	watershell output file
+#include "parser/parser_macro2.src"
+#undef __CHAR
+endif
+
+!
+#undef __WARNIFMISSING
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
+#define __INT
+#define __VAR	full_sum_freq
+#define __TAG	__VAR
+#define __NAME	frequency of force calculation without truncation of solvent neighbor list
+#define __DOALWAYS if (__VAR.le.zero) then ;\
+                  __WRN(whoami, 'SOLVENT ATOM NEIGHBOR LISTS CANNOT BE USED WITH "'//__STRING(__VAR)//'"=0.') ;\
+                  neighbor_list_factor=one ;\
+                  qneighbor_list=.false. ;\
+                 else ;\
+                  neighbor_list_factor = seven + ( __VAR * ( __VAR * 2.0d-4 ) ); \
+                  if (.not.qneighbor_list) then ; __WRN(whoami, 'NEIGHBOR LIST WILL NOT BE USED BECAUSE "neighbor_list" SET TO "off"') ; \
+                  else ; __MESG(whoami, 'COMPUTED NEIGHBOR LIST FACTOR OF '//ftoa(neighbor_list_factor)) ; \
+                  endif ; \
+                 endif
+! in the above, take care not to overflow int mutiplication in _var * _var
+#include "parser/parser_macro3.src"
+!
+#define __VAR	neighbor_list_factor
+#define __TAG	__VAR
+#define __NAME	scaling between neighbor list truncated length and index of minimum distance
+#define __LEZEROERR
+ ierr=neighbor_list_factor ! save before overwrite for output
+#define __DOIFOK __WRN(whoami, 'OVERRIDING PREVIOUS VALUE ('//itoa(ierr)//') FOR "'//__STRING(__VAR)//'"')
+#undef __DEFAULT
+ if (qneighbor_list) then
+#include "parser/parser_macro2.src"
+ endif
+#undef __LEZEROERR
+#define __DEFAULT
+!
+!#ifdef __DEBUG
+!       __DBGOUT('FULL_SUM_FREQ IS ',full_sum_freq)
+       __DBGOUT('NEIGHBOR_LIST_FACTOR SET TO ',neighbor_list_factor) ! , seven + (full_sum_freq**2 * 2.0d-4)) 
+!#endif
+__ASSERT(neighbor_list_factor,>=,zero)
+!
+#define __VAR	sort_neighbor_list_freq
+#define __TAG	__VAR
+#define __NAME	frequency of sorting solvent atom neighbor lists
+#define __DOIFOK if (__VAR.eq.zero) then ;\
+                  __WRN(whoami, 'WILL NOT SORT SOLVENT ATOM NEIGHBOR LISTS') ;\
+                 endif
+ if (qneighbor_list) then
+#include "parser/parser_macro2.src"
+ endif
+#undef __INT
+#endif
+!
+!
+#ifndef __WARNIFMISSING
+#define __WARNIFMISSING
+#endif
+#define __VAR structure_update_memory
+#define __NAME memory constant for reference structure update
+#define __DOIFOK if (__VAR.lt.zero) then ; __WRN(whoami, 'SURFACE UPDATE IS OFF.') ; \
+ elseif (__VAR .gt. one ) then ; __WRN(whoami, ftoupper(__STRING(__NAME))//' SHOULD _NOT_ BE GREATER THAN ONE !') ; endif
+! below is a simple hack to support "structure_update_memo" ;  can add other alternatives
+#define __TAG structure_update_memo
+if (existtag_nocase(__STRING(__TAG) , context )) then
+#include "parser/parser_macro2.src"
+else
+! need to redefine all the params, since they are cleared by the macro
+#define __VAR structure_update_memory
+#define __TAG __VAR
+#define __NAME memory constant for reference structure update
+#define __DOIFOK if (__VAR.lt.zero) then ; __WRN(whoami, 'SURFACE UPDATE IS OFF.') ; \
+ elseif (__VAR .gt. one ) then ; __WRN(whoami, ftoupper(__STRING(__NAME))//' SHOULD _NOT_ BE GREATER THAN ONE !') ; endif
+#include "parser/parser_macro2.src"
+endif
+!
+#undef __WARNIFMISSING
+#undef __MINUSERR
+#define __LEZEROERR
+!
+#ifdef __ROTRES
+#define __BOOL
+#define __TAG rigid_body_restraint
+#define __VAR __CONCAT(q,__TAG)
+#define __NAME flag to restrict rigid-body motions of surface atoms
+#include "parser/parser_macro2.src"
+#undef __BOOL
+!
+ if (qrigid_body_restraint) then
+#define __WARNIFMISSING
+#define __DEFAULT
+#define __TAG rigid_body_force_constant
+#define __VAR __TAG
+#define __NAME force constant for rigid-body restraint
+#include "parser/parser_macro2.src"
+ endif
+!
+#endif
+!
+! done processing input file parameters
+!
+! read structure file
+! (unless already read elsewhere ; at this point the data structures from dynamol are shared)
+ if (.not. system_PDB_initialized) then
+!=========== structure file
+#define __CHAR
+#define __VAR	structure_file
+#define __TAG	__VAR
+#define __NAME	structure file
+#include "parser/parser_macro2.src"
+!
+#define __VAR structure_filetype
+#define __TAG __VAR
+#define __NAME structure file format
+#define __DEFAULT
+#define __CHAR
+#include "parser/parser_macro2.src"
+#undef __DEFAULT
+#undef __CHAR
+!===========
+  __MESSAGE(ftoupper(whoami), 'READING STRUCTURE FROM FILE "'//trim(structure_file)//'" OF TYPE "'//trim(structure_filetype)//'".');
+  call system_PDB_init(structure_file, structure_filetype);
+  if (.not. fatal_warning()) system_PDB_initialized=.true.
+! save coordinates in rcomp, just in case we need them later , e.g. for rigid-body restraint reference
+  if (associated(rcomp) .and. associated(r)) rcomp=r
+ endif
+!=========== end structure file
+! initialize radii using a system function
+#define __GET_RAD(_TAG)  if (existtag_nocase(__STRING(_TAG),context)) then;\
+                            farray=>system_init_mol_scalar_nocase(__STRING(_TAG), context);\
+                            if (associated(farray)) then;\
+                             radius=farray;\
+                             deallocate(farray);\
+                             radii_initialized=.true.; \
+                            endif
+
+  __GET_RAD(radii)
+  else __GET_RAD(radius) ! other tags here
+ else
+ endif
+!
+ if (.not.(radii_initialized)) __WRN(whoami, 'COULD NOT INITIALIZE ATOMIC RADII');
+! same for dasystat
+#ifdef __DASYSTAT
+!
+#define __GET_MASS(_TAG)  if (existtag_nocase(__STRING(_TAG),context)) then;\
+                            farray=>system_init_mol_scalar_nocase(__STRING(_TAG), context);\
+                            if (associated(farray)) then;\
+                             dasystat_masses=farray;\
+                             deallocate(farray);\
+                             dmasses_initialized=.true.; \
+                            endif;
+
+ if(dasystat) then
+ __GET_MASS(masses)
+ else __GET_MASS(mass)
+ else __GET_MASS(dmasses)
+ else __GET_MASS(dmass)
+ else __GET_MASS(dasystat_masses)
+ else __GET_MASS(dasystat_mass)
+ endif ! get mass
+ if (.not.dmasses_initialized) __WRN(whoami, 'COULD NOT INITIALIZE DASYSTAT MASSES');
+ endif ! dasystat
+#endif
+! initialize coordinate arrays
+#ifdef __DUMSURF
+! decide whether we are using dummy surface atoms
+ call toupper(surface_atom_selection)
+ select case(surface_atom_selection)
+  case('DUMMY','DUMB', 'DUM', 'DUMMIES','FIXED','POINT', 'POINTS');
+   qdumsurf=.true.
+   if (structure_update_freq.gt.0) then
+    __WRN(whoami, 'STRUCTURE UPDATE WILL BE DISABLED SINCE FIXED DUMMY ATOMS ARE USED.');
+    structure_update_freq=0
+   endif
+  case default;
+   qdumsurf=.false.
+ end select
+!
+ if (qdumsurf) then
+  allocate(isurface_atoms(0)) ! zero-sized array to be able to recycle most of the (non-dummy) code as is
+! obtain number of dummy atoms from parser
+#define __GET_NDUM(_TAG)  if (existtag_nocase(__STRING(_TAG),context)) then;\
+                           nsurface_coord=atoi(getval_nocase(__STRING(_TAG), context)) ;
+  __GET_NDUM(NDUMMY)
+  else  __GET_NDUM(NDUMB)
+  else  __GET_NDUM(NDUM)
+  else  __GET_NDUM(NDUMMIES)
+  else  __GET_NDUM(NFIXED)
+  else  __GET_NDUM(NPOINT)
+  else  __GET_NDUM(NPOINTS)
+  else  __GET_NDUM(NSURF)
+  else  __GET_NDUM(NSURFACE)
+  else  __GET_NDUM(NSURFACE_ATOMS)
+  else  __GET_NDUM(NUMDUMB)
+  else  __GET_NDUM(NUMDUM)
+  else  __GET_NDUM(NUMDUMMIES)
+  else  __GET_NDUM(NUMFIXED)
+  else  __GET_NDUM(NUMPOINT)
+  else  __GET_NDUM(NUMPOINTS)
+  else  __GET_NDUM(NUMSURF)
+  else  __GET_NDUM(NUMSURFACE)
+  else  __GET_NDUM(NUMSURFACE_ATOMS)
+  endif
+  __ASSERT(nsurface_coord,.gt.,0)
+ else
+#endif __DUMSURF
+ isurface_atoms=>system_getind(surface_atom_selection)
+#ifdef __DUMSURF
+ endif ! qdumsurf
+
+ __DBGVAR(qdumsurf,1)
+ __DBGVAR(nsurface_coord,1)
+
+#endif
+
+ if (associated(isurface_atoms)) then
+  nsurface_atoms=size(isurface_atoms) ; ! note that per above, isurface_atoms is always allocated but might be a 0-size array
+#ifdef __DUMSURF
+  if (.not.qdumsurf) &
+#endif
+  nsurface_coord=nsurface_atoms ! if the surface coordianates are physical atoms, their number equals the number of atoms
+!
+  oonsurface=one/nsurface_coord ! recall that nsurface_coord is either the number of surface dummies, or the number of surface atoms
+!
+  __ALLOC(r_surf(3,nsurface_coord))
+  __ALLOC(dr_surf(3,nsurface_coord))
+#ifdef __ROTRES
+  if (qrigid_body_restraint) then
+   __ALLOC(r_surf_ref(3,nsurface_coord))
+   __ALLOC(rb_wgt(nsurface_coord))
+  else
+   nullify(r_surf_ref, rb_wgt)
+  endif
+#endif
+  __ALLOC(rad_surf(nsurface_coord))
+
+! add atoms to list if provided
+!  if (present(atoms)) then
+   do l=1, nsurface_atoms
+#ifdef __CLASS
+    ierr=atoms%uadd(isurface_atoms(l))
+#else
+    ierr=int_vector_uadd(atoms,isurface_atoms(l))
+#endif
+! NOTE : it is important to record all atoms to which forces will be applied :
+#if defined(__HAMILTONIAN) || defined(__ROTRES)
+!  if (remove_net_torque.and.present(forced_atoms)) ierr=forced_atoms%uadd(isurface_atoms(l))
+#ifndef __HAMILTONIAN
+#if defined(__ROTRES)
+  if (qrigid_body_restraint) &
+#endif
+#endif
+#ifdef __CLASS
+ ierr=forced_atoms%uadd(isurface_atoms(l))
+#else
+ ierr=int_vector_uadd(forced_atoms,isurface_atoms(l))
+#endif
+#endif
+   enddo ! physical surface atoms
+!  endif ! present
+!
+ else
+  __WRN(whoami, 'COULD NOT ALLOCATE MEMORY FOR SURFACE ATOM INDICES.')
+ endif
+! repeat for solvent atoms
+ isolvent_atoms=>system_getind(solvent_atom_selection)
+ if (associated(isolvent_atoms)) then
+  nsolvent=size(isolvent_atoms) ; oonsolvent=one/nsolvent ;
+  __ALLOC(r_solv(3,nsolvent))
+  __ALLOC(rho_solv(nsolvent))
+#ifdef __DASYSTAT
+  __ALLOC(mass_solv(nsolvent))
+#endif
+  __ALLOC(qoutside_solv(nsolvent))
+  __ALLOC(dsurf_solv(nsolvent))
+  __ALLOC(acurv_solv(nsolvent))
+  __ALLOC(drho_solv(3,nsolvent))
+  __ALLOC(d2rho_solv(6,nsolvent))
+#ifdef __SORT_LIST
+  __ALLOC(solute_neighbor_list(nsurface_coord,nsolvent))
+! initialize neighbor list with solute indices from 1 to nsurface_coord for each solute atom:
+#ifdef __DEBUG
+  __DBGOUT('INITIALIZING SOLUTE NEIGHBOR LIST');
+#endif
+  do l=1,nsurface_coord
+   solute_neighbor_list(l,:)=l
+  enddo
+! because we are possibly using short ints to store neighbor list indices, we should make sure that the largest index is representable:
+  l=solute_neighbor_list(nsurface_coord,1)
+  __ASSERT(l, .eq., nsurface_coord)
+!
+#ifdef __NEIGHBOR_LIST
+  qneighbor_list_sorted=.not.qneighbor_list ! if not using qlist, set to true to avoid sorting
+  __ALLOC(solute_neighbor_mind(nsolvent))
+  solute_neighbor_mind=nsurface_coord ! initialize to last position in the solute neighbor list array
+#endif
+#endif
+! add atoms to lists if provided
+   do l=1, nsolvent
+#ifdef __CLASS
+    ierr=atoms%uadd(isolvent_atoms(l))
+#else
+    ierr=int_vector_uadd(atoms,isolvent_atoms(l))
+#endif
+   enddo
+!
+   do l=1, nsolvent
+#ifdef __CLASS
+    ierr=forced_atoms%uadd(isolvent_atoms(l))
+#else
+    ierr=int_vector_uadd(forced_atoms,isolvent_atoms(l))
+#endif
+   enddo
+!
+ else
+  __WRN(whoami, 'COULD NOT ALLOCATE MEMORY FOR SOLVENT ATOM INDICES.')
+ endif
+!
+#ifdef __OMP
+ numthreads=omp_get_max_threads()
+ __MESSAGE(whoami, 'WILL USE '//itoa(numthreads)//' OPENMP THREADS')
+#endif
+!
+#ifdef __HAMILTONIAN
+#ifdef __OMP
+ __ALLOC(ispt(nsurface_coord,0:numthreads-1)) ! note that nsurface_coord could be referring to dummy atoms (i.e. those to which forces cannot be applied)
+ __ALLOC(drho_surf(3,nsurface_coord,0:2*numthreads-1)) ! 2*numthreads sets ; for each thread, the first is the support for a particular solvent atom; second is the sum over solv. atoms
+#else
+ __ALLOC(ispt(nsurface_coord,0:0))
+ __ALLOC(drho_surf(3,nsurface_coord,0:1))
+#endif
+#endif
+!
+ if  (qrestart &
+#ifdef __DUMSURF
+ .or. qdumsurf &
+#endif
+& ) then
+#ifdef __DUMSURF
+ if (qdumsurf) then
+  context=contexts(main_context)
+ else
+#endif
+ context=contexts(restart_context)
+#ifdef __DUMSURF
+ endif
+#endif
+! read surface atom coordinates from restart file (context __RESTARTCTX)
+  do l=1, nsurface_coord
+   line=getval_nocase('rsurf_'//trim(itoa(l)),context)
+   if (len_trim(line).gt.0) then
+    read(line,*,iostat=ierr) r_surf(:,l)
+__DBGVAR(r_surf(:,l),1)
+    if (ierr.ne.0) then
+     __WRN(whoami, 'ERROR READING COORDINATE FROM LINE "'//trim(line)//'"')
+     cycle
+    endif
+   else
+    __WRN(whoami, 'ERROR READING COORDINATE FROM LINE "'//trim(line)//'"')
+   endif ! line ok
+  enddo ! over surface atom coordinates
+ else ! qrestart
+! take surface atom coordinates from structure (PDB) file
+  r_surf(:,1:nsurface_atoms)=r(:,isurface_atoms)
+ endif ! qrestart
+#ifdef __ROTRES
+ if (qrigid_body_restraint) then ! read reference restraint atoms
+  r_surf_ref(:,1:nsurface_atoms)=rcomp(:,isurface_atoms)
+! try to obtain weights for the rigid body restraint code
+#define __GET_RGB_WGT(_TAG) if (existtag_nocase(__STRING(_TAG),contexts(main_context))) then;\
+                            farray=>system_init_mol_scalar_nocase(__STRING(_TAG), contexts(main_context));
+!
+  __GET_RGB_WGT(rigid_body_weights)
+  else __GET_RGB_WGT(rigid_body_weight)
+  else __GET_RGB_WGT(rgb_weights)
+  else __GET_RGB_WGT(rgb_wgt)
+  else __GET_RGB_WGT(rgb_wgts)
+  else __GET_RGB_WGT(rb_wgt)
+  else __GET_RGB_WGT(rb_wgts)
+  endif ! get weights
+!
+  if (associated(farray)) then
+   rb_wgt=farray(isurface_atoms)
+   deallocate(farray)
+   rigid_body_energy=sum(rb_wgt); ! use a temp variable
+   if (abs(rigid_body_energy).gt.__ERRTOL) then ! normalize weights to 1
+    rb_wgt=rb_wgt / rigid_body_energy
+   else
+    __WRN(whoami, 'SUM OF RIGID BODY RESTRAINT WEIGHTS IS TOO CLOSE TO ZERO.  WILL USE UNIFORM WEIGHTS')
+    rb_wgt=oonsurface
+   endif
+  else
+   rb_wgt=oonsurface ! uniform orientation/force weights
+  endif
+!
+! in the case of restarting with PBC, align r_surf_ref with r_surf (should not be needed)
+#ifdef __PBC_UNWRAP
+  dr_surf=r_surf_ref-r_surf
+  do l=1, nsurface_atoms
+   __PBCDIST(dr_surf(1,l),ucell%a)
+   __PBCDIST(dr_surf(2,l),ucell%b)
+   __PBCDIST(dr_surf(3,l),ucell%c)
+  enddo
+   __INCR(r_surf, dr_surf)
+#endif
+  r_com_ref=matmul(r_surf_ref,rb_wgt) ! compute center of mass
+! center reference structure on zero :
+  do l=1, nsurface_atoms
+   __DECR( r_surf_ref(:,l), r_com_ref )
+  enddo
+ endif
+#endif
+!
+!
+#ifdef __DUMSURF
+ if (qdumsurf) then
+! obtain radii for dummy atoms from parser (other options useful ?) ; adapted from above
+  rad_surf=zero ! initialize to zero ; missing entries below will remain zero
+  do l=1, nsurface_coord
+! no explicit checking for missing radii in the parser here
+   rad_surf(l)=atof(getval_nocase('radsurf_'//trim(itoa(l)),contexts(main_context)))
+  enddo ! over surface atom coordinates
+ else ! qdumsurf
+#endif
+  rad_surf(1:nsurface_atoms)=radius(isurface_atoms)
+#ifdef __DUMSURF
+ endif
+#endif
+! check that the radius is positive
+ do l=1, nsurface_coord
+   __ASSERTWARN( rad_surf(l) + surf_padding, > , zero )
+ enddo
+#ifdef __DASYSTAT
+ mass_solv=dasystat_masses(isolvent_atoms)
+ solvent_mass=sum(mass_solv)
+#endif
+!
+#if defined(__BAROSTAT) || defined(__DASYSTAT)
+ if (&
+#ifdef __BAROSTAT
+&     barostat .or. &
+#endif
+#ifdef __DASYSTAT
+&     dasystat .or. &
+#endif
+&     .false. ) then 
+  r_surf_changed=.true. ! we only need this variable for barostat/dasystat
+! note that the above flag is set to compute the SA/VOL initially, so we keep it even with fixed (dummy) coords
+ endif
+#endif
+!
+#if defined(__BAROSTAT) || defined(__DASYSTAT)
+#ifdef __BAROSTAT
+! if using barostat, read current running pressure
+ if (barostat) then
+  if (qrestart) then
+! (1) read pressure value
+   line=getval_nocase('pressure',__STRING(__RESTARTCTX))
+   if (len_trim(line).gt.0) then
+    read(line,*,iostat=ierr) pressure_ave
+    if (ierr.ne.0) then
+     __WRN(whoami, 'ERROR READING PRESSURE FROM LINE "'//trim(line)//'"')
+    endif
+   else
+    __WRN(whoami, 'ERROR READING PRESSURE FROM LINE "'//trim(line)//'"')
+   endif ! line ok
+! now, long-time average
+   line=getval_nocase('average_pressure',__STRING(__RESTARTCTX))
+   if (len_trim(line).gt.0) then
+    read(line,*,iostat=ierr) pressure_long_ave
+    if (ierr.ne.0) then
+     __WRN(whoami, 'ERROR READING AVERAGE PRESSURE FROM LINE "'//trim(line)//'"')
+    endif
+   else ! restart file does not have lta pressure, so set it to zero
+    pressure_long_ave=zero
+    pressure_num_long_samples=izero
+   endif ! line ok
+  else ! qrestart
+   pressure_ave=zero; ! value used for initialization
+   pressure_long_ave=zero
+  endif ! qrestart
+ endif ! barostat
+#endif
+!
+#ifdef __DASYSTAT
+! read current running density
+ if (dasystat) then
+  if (qrestart) then
+! (1) read density value
+   line=getval_nocase('density',__STRING(__RESTARTCTX))
+   if (len_trim(line).gt.0) then
+    read(line,*,iostat=ierr) density_ave
+    if (ierr.ne.0) then
+     __WRN(whoami, 'ERROR READING DENSITY FROM LINE "'//trim(line)//'"')
+    endif
+   else
+    __WRN(whoami, 'ERROR READING DENSITY FROM LINE "'//trim(line)//'"')
+   endif ! line ok
+  else ! qrestart
+   density_ave=-one; ! this value used for initialization is not physical
+  endif ! qrestart
+ endif ! dasystat
+#endif
+!
+! set com for SA/VOL gridding
+ if (&
+#ifdef __BAROSTAT
+&     barostat .or. &
+#endif
+#ifdef __DASYSTAT
+&     dasystat .or. &
+#endif
+&     .false. ) then
+  r_com_sa=oonsurface * sum(r_surf,2)
+! initialize grid-based SA computation
+  if (qper_parser_override) then ! for periodic BC, use cell info
+   call ucell%print()
+   r_surf_minmax(1,:) = - half * (/ucell%a, ucell%b, ucell%c/) ! grid minima
+   r_surf_minmax(2,:) = + half * (/ucell%a, ucell%b, ucell%c/) ! grid maxima
+  else
+! note : a problem here is that surface_distance might be undefined (or zero) to be computed on first iteration
+! this should be moved entirely to the main routine, after surface_distance is known
+   r_surf_minmax(1,1) = minval(r_surf(1,:)-rad_surf) - r_com_sa(1) - ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+   r_surf_minmax(2,1) = maxval(r_surf(1,:)+rad_surf) - r_com_sa(1) + ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+!
+   r_surf_minmax(1,2) = minval(r_surf(2,:)-rad_surf) - r_com_sa(2) - ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+   r_surf_minmax(2,2) = maxval(r_surf(2,:)+rad_surf) - r_com_sa(2) + ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+!
+   r_surf_minmax(1,3) = minval(r_surf(3,:)-rad_surf) - r_com_sa(3) - ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+   r_surf_minmax(2,3) = maxval(r_surf(3,:)+rad_surf) - r_com_sa(3) + ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+  endif
+!
+__DBGVAR(surface_distance,1)
+__DBGVAR(surface_area_grid_buffer,1)
+__DBGVAR(r_surf_minmax,1)
+__DBGVAR(minval(r_surf,2),1)
+__DBGVAR(maxval(r_surf,2),1)
+__DBGVAR(r_com_sa,1)
+!
+  call ugrid_initialize(sagrid, 3, r_surf_minmax, (/surface_area_grid_spacing/), adjust_spacings_=qper_parser_override) ! when using PBC, adjust spacing, not length
+!
+#ifdef __OMP
+   allocate(sarhof_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:numthreads-1))
+#else
+   allocate(sarhof(sagrid%n(1),sagrid%n(2),sagrid%n(3)))
+#endif
+! initialize random number generator for small random grid displacements
+#ifdef __PERTURB_GRID
+  if (.not.random_initialized) call random_init()
+#endif
+! NOTE: not computing surface area or volume here, because the shell distances may not yet be defined
+ endif ! barostat or dasystat
+#endif
+!
+ if (.not.fatal_warning() .and. radii_initialized &
+#ifdef __DASYSTAT
+ .and.(dmasses_initialized .or. .not. dasystat) &
+#endif
+& ) then 
+ __NM(initialized)=.true.
+ __MESSAGE(whoami, 'INITIALIZED WATERSHELL VERSION 2.')
+ endif
+!
+ end __SUB(initialize)
+!======================================
+ __SUB(write_restart_file) ()
+! adapted from tempering
+ __IAM(__NM(WRITE_RESTART_FILE))
+ int :: ifile, i
+ ifile=-1 ! make sure files_open determines the handle automatically
+ call files_open(ifile, output_file, 'FORMATTED','WRITE')
+!
+#define _W write(ifile,*)
+ _W '#WATERSHELL VERSION 2 RESTART FILE'
+ _W __STRING(__RESTARTCTX)//' {'
+ _W 'iteration=',iteration
+! _W 'surface_contour_value=',surface_contour_value, ' # value for which density isosurface is computed'
+ _W 'surf_stdev=',surf_stdev, ' # standard deviation of Gaussian filter'
+#ifdef __ADAPTIVE_SUPPORT
+#ifdef __ADAPTIVE_CUTOFF
+! write recomputed from current cutoff
+ _W 'cutoff_surf_stdev=',cutoff_surf * oo_surf_stdev, ' # distance from center beyond which it is set to zero (units of standard deviation)'
+#endif
+#else
+ _W 'cutoff_surf_stdev=',cutoff_surf_stdev, ' # distance from center beyond which it is set to zero (units of standard deviation)'
+#endif
+ _W 'surface_padding=',surf_padding, ' # scalar padding added to each atom radius'
+ _W 'surface_distance=',surface_distance, ' # distance of solvent surface from solute'
+ _W 'surface_force_constant=',surface_force_constant, ' # surface force constant'
+ _W 'curvature_force_constant=',curvature_force_constant, ' # curvature force constant'
+! write spline file, if different from default:
+ if ( trim(spline_input_file).ne.trim(default_spline_input_file) ) &
+& _W 'spline_input_file=',trim(spline_input_file)
+!
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
+ if (qneighbor_list) then
+  _W 'neighbor_list=on # use a neighbor list for solvent forces'
+ else
+  _W 'neighbor_list=off # do not use a neighbor list for solvent forces'
+ endif
+#endif
+!
+#ifdef __BAROSTAT
+ if (barostat) then
+ _W 'pressure=',pressure_ave, '# (units of atm)'
+ _W 'pressure_num_samples=',pressure_num_samples
+ _W 'average_pressure=',pressure_long_ave, '# (units of atm)'
+ _W 'pressure_num_long_samples=',pressure_num_long_samples
+ endif
+#endif
+#ifdef __DASYSTAT
+ if (dasystat) then
+ _W 'density=',density_ave, '# (units of g/mL)'
+ _W 'density_num_samples=',density_num_samples
+ _W 'outer_bulk_boundary_distance=',obulk_boundary_distance, ' # distance from solute to outer bulk boundary'
+ _W 'inner_bulk_boundary_distance=',ibulk_boundary_distance, ' # distance from solute to inner bulk boundary'
+ if (qbulk_boundary_recompute .neqv. default_qbulk_boundary_recompute) then
+  if (qbulk_boundary_recompute) then
+   _W 'bulk_boundary_recompute=on # adjust bulk boundary automatically'
+  else
+   _W 'bulk_boundary_recompute=off # do not adjust bulk boundary automatically'
+  endif
+ endif
+ endif
+#endif
+! write the current reference atoms :
+ _W '# rsurf_i : reference coordinate triple for atom #i used to define surface'
+ do i=1, nsurface_coord
+  _W 'rsurf_'//trim(itoa(i)),'=(',r_surf(:,i),')'
+ enddo ! surface atoms
+ _W '}'
+! close file
+ call files_close(ifile)
+!
+ end __SUB(write_restart_file)
+!================================================================
+ __SUB(done)
+ __IAM(__NM(done))
+ if (__NM(initialized)) then
+  __MESSAGE(whoami, 'WRITING RESTART FILE.')
+  call __NM(write_restart_file)()
+ endif
+!
+ call watershell_sbf_spline_done()
+ call system_done()
+! call parser_done() ! moving this do watershell_plugin_done(), otherwise other code cannot use parser after this line
+ __FREE(r_surf)
+ __FREE(dr_surf)
+#ifdef __ROTRES
+ __FREE(r_surf_ref)
+ __FREE(rb_wgt)
+#endif
+ __FREE(r_solv)
+ __FREE(qoutside_solv)
+ __FREE(rad_surf)
+ __FREE(rho_solv)
+ __FREE(drho_solv)
+ __FREE(d2rho_solv)
+ __FREE(dsurf_solv)
+ __FREE(acurv_solv)
+ __FREE(isurface_atoms)
+ __FREE(isolvent_atoms)
+#ifdef __SORT_LIST
+ __FREE(solute_neighbor_list)
+#ifdef __NEIGHBOR_LIST
+ __FREE(solute_neighbor_mind)
+#endif
+#endif
+#if defined(__BAROSTAT) || defined(__DASYSTAT)
+#ifdef __OMP
+ __DEALL(sarho_all_threads)
+ __DEALL(sarhof_all_threads)
+#ifdef __DASYSTAT
+ __DEALL(inrho_all_threads)
+#endif
+#else
+ __DEALL(sarho)
+ __DEALL(sarhof)
+#ifdef __DASYSTAT
+ __DEALL(inrho)
+#endif
+#endif
+ call ugrid_done(sagrid)
+#endif
+!
+#ifdef __HAMILTONIAN
+ __DEALL(ispt)
+ __DEALL(drho_surf)
+#endif
+ __NM(initialized)=.false. ; radii_initialized=.false.
+#ifdef __DASYSTAT
+ dmasses_initialized=.false.
+#endif
+!
+ end __SUB(done)
+!================================================================
+ __SUB(main)(r,fr,energy,qper_,mdcell) ! NOTE : qper/ucell is not supposed to change; keeping here for sanity check
+ use bestfit, only :  matinv3sym &
+#ifdef __ROTRES
+& , RMSBestFit &
+#endif
+& , norm3
+!
+ float, intent(in) :: r(:,:)   ! coordinate array
+ float, intent(out) :: fr(:,:) ! force array
+ float, intent(out), optional :: energy
+!
+ __OPAR(qper,bool)
+!
+ type (cell), optional :: mdcell
+! int :: ibeg, iend ! atom indices for looping
+ float :: distance_from_solute, distance_from_solute2, pre, d0
+ float :: surface_force, curvature_force
+ float :: sbfe(4) ! array that holds instantaneous force and energy on a single solvent particle
+!
+#ifdef __ROTRES
+ float :: dcom(3), r1(3)
+#endif
+#ifdef __FORCE_STATS
+ float :: iforce(3)
+#endif
+!
+#ifdef __OMP
+#//define __REDUCE(_W) __INCR(_W,__U(_W)) ! thread reduction
+#define __REDUCE(_W) _W=_W+__U(_W) ! thread reduction
+#define __REDUCEADD(_W) __REDUCE(_W)
+#define __REDUCEMAX(_W) _W=MAX(_W,__U(_W)) ! thread reduction
+#define __AREDUCE(_W,_I) _W(_I)=_W(_I)+__U(_W)(_I)
+ float :: __U(surface_energy), __U(curvature_energy)
+ float :: __U(surface_force), __U(curvature_force)
+ int :: __U(nsolvent_outside)
+#ifdef __DASYSTAT
+ float :: __U(solvent_mass_outside)
+#endif
+#endif
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
+ int :: ind, istep ! variables for binary search
+#if defined(__SHOW_NEIGHBOR_LIST)
+ int :: neighbor_dmin, neighbor_dmax, neighbor_dsum, neighbor_depth, iter
+#endif
+!
+#if defined(__OMP) && defined(__NBLSORT_OMP)
+ float, allocatable :: distance2_all_threads(:,:)
+ int :: tid
+#else
+ float, allocatable :: distance2(:)
+#endif
+ int :: ierr
+#endif
+
+#ifdef __FD_CHECK
+ int :: j
+#ifdef __ROTRES
+ int :: k
+#endif
+#endif
+
+#ifdef __NLDBG
+ int :: jj
+#endif
+
+ int :: i, ii
+ bool :: qsbe ! whether to compute energy from the splines
+ __IAM(__NM(main))
+!================================================================
+#if defined(__OMP) && defined (__OMP_DEBUG)
+!$omp single
+ __DBGOUT('OMP nested level is  ', omp_get_level())
+ __DBGOUT('OMP Max threads      ', omp_get_max_threads())
+ __DBGOUT('OMP Current threads  ', omp_get_num_threads())
+ __DBGOUT('OMP Ancestral thread:', omp_get_ancestor_thread_num(omp_get_level()));
+!$omp end single
+#endif
+!
+ if (.not. __NM(initialized)) then
+  __WRN(whoami, ftoupper(__STRING(_N))//'NOT INITIALIZED. NOTHING DONE.');
+  return
+ endif
+!
+ __INC(iteration)
+! copy solvent coordinates
+ r_solv=r(:,isolvent_atoms)
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
+! sort neighbor list on first iteration
+ if (qneighbor_list.and.sort_neighbor_list_freq.gt.izero) then
+  if (__CHKUPDATE(sort_neighbor_list_freq)) qneighbor_list_sorted=.false.
+ endif ! qneighbor_list
+!
+ if (.not. qneighbor_list_sorted) then
+!
+ pre=(maxval(rad_surf) + surf_padding + cutoff_surf)**2
+!
+#if defined(__OMP) && defined(__NBLSORT_OMP)
+  __ALLOC(distance2_all_threads(nsurface_coord,0:numthreads-1))
+!$omp parallel _OMP_EXTRA private(ierr,tid,i,ii,ind,istep &
+#ifdef __PBC_UNWRAP
+!$omp ,d0 &
+#endif
+!$omp )
+  tid=omp_get_thread_num()
+#define distance2(_ii) distance2_all_threads(_ii,tid)
+#else
+  __ALLOC(distance2(nsurface_coord))
+#endif
+
+#ifdef __PBC_UNWRAP
+  if(qper_parser_override) then
+#endif
+!
+#ifdef __NLDBG
+    jj=-1
+    call files_open(jj, 'neighbors.dat', 'FORMATTED','WRITE')
+#endif
+#if defined(__OMP) && defined(__NBLSORT_OMP)
+!$omp do schedule(runtime)
+#endif
+   do i=1, nsolvent
+    do ii=1, nsurface_coord
+#ifdef __PBC_UNWRAP
+     distance2(ii)=zero
+! x
+     d0=r_surf(1,ii)-r_solv(1,i)
+     __DIST_PBC(d0,ucell%a)
+     __INCR(distance2(ii),d0*d0)
+! y
+     d0=r_surf(2,ii)-r_solv(2,i)
+     __DIST_PBC(d0,ucell%b)
+     __INCR(distance2(ii),d0*d0)
+! z
+     d0=r_surf(3,ii)-r_solv(3,i)
+     __DIST_PBC(d0,ucell%c)
+     __INCR(distance2(ii),d0*d0)
+#else
+!     distance2(ii) = sum ( (r_surf(:,ii)-r_solv(:,i))**2 )
+! slightly faster :
+     distance2(ii)=zero
+     d0=r_surf(1,ii)-r_solv(1,i)
+     __INCR(distance2(ii),d0*d0)
+     d0=r_surf(2,ii)-r_solv(2,i)
+     __INCR(distance2(ii),d0*d0)
+     d0=r_surf(3,ii)-r_solv(3,i)
+     __INCR(distance2(ii),d0*d0)
+#endif
+    enddo ! nsurface_coord
+!  sort neighbor list:
+    call rsort_index('i',nsurface_coord,distance2(:),solute_neighbor_list(:,i),ierr)
+#ifdef __NLDBG
+    write(jj,*) solute_neighbor_list(:,i)
+    write(jj,*) sqrt(distance2(:))
+#endif
+!
+    if (nsurface_coord>0) then
+! for the erf/density method, we need to find the largest index in the set of atoms supported by filter:
+! use this search macro:
+#define __MXLOC(_A,_a,_len,_ind,_istep) \
+ _ind=(1+_len)/2;\
+ _istep=(1+_ind)/2;\
+ do;\
+  if (_A(_ind)>(_a)) then;\
+   _ind=max(1,_ind-_istep); \
+  else; \
+   _ind=min((_len),_ind+_istep); \
+  endif;\
+  if (_istep<2) exit;\
+  _istep=(_istep+1)/2;\
+ enddo;\
+ if ( _A(_ind)>(_a) .and. _ind>1) _ind=_ind-1
+!
+     __MXLOC( distance2, pre, nsurface_coord, ind, istep )
+!
+     solute_neighbor_mind(i)=ind
+    endif
+! __DBGVAR(pre,2)
+! __DBGVAR(distance2(1:10),2)
+! __DBGVAR(solute_neighbor_mind(i),2)
+   enddo ! nsolvent
+#ifdef __NLDBG
+    write(jj,*) solute_neighbor_mind
+    write(jj,*) sqrt(pre) ! search distance cutoff
+    call files_close(jj)
+#endif
+#if defined(__OMP) && defined(__NBLSORT_OMP)
+!$omp end do
+#endif
+#ifdef __PBC_UNWRAP
+  else ! qper_parser_override
+#if defined(__OMP) && defined(__NBLSORT_OMP)
+!$omp do schedule(runtime)
+#endif
+   do i=1, nsolvent
+    do ii=1, nsurface_coord
+!     distance2(ii) = sum ( (r_surf(:,ii)-r_solv(:,i))**2 )
+! slightly faster :
+     distance2(ii)=zero
+     d0=r_surf(1,ii)-r_solv(1,i)
+     __INCR(distance2(ii),d0*d0)
+     d0=r_surf(2,ii)-r_solv(2,i)
+     __INCR(distance2(ii),d0*d0)
+     d0=r_surf(3,ii)-r_solv(3,i)
+     __INCR(distance2(ii),d0*d0)
+    enddo ! nsurface
+!  sort neighbor list:
+    call rsort_index('i',nsurface_coord,distance2(:),solute_neighbor_list(:,i),ierr)
+    if (nsurface_coord>0) then
+     __MXLOC( distance2, pre, nsurface_coord, ind, istep )
+     solute_neighbor_mind(i)=ind
+    endif
+   enddo ! nsolvent
+#if defined(__OMP) && defined(__NBLSORT_OMP)
+!$omp end do
+#endif
+  endif ! qper_parser_override
+#endif
+#if defined(__OMP) && defined(__NBLSORT_OMP)
+!$omp end parallel
+  __DEALL(distance2_all_threads)
+#undef distance2
+#else
+  __DEALL(distance2)
+#endif
+  qneighbor_list_sorted=.true.
+ endif ! sorted
+#endif
+!
+! compute displacement from inst. surface atom coordinates to current surface coordinates ; for convenience in subsequent calcs
+! note that it is needed only in certain circumstances (compilations and runtime conditions), so we test for that below :
+
+ if ( ((structure_update_freq.gt.izero) .and. __CHKUPDATE(structure_update_freq)) &
+#ifdef __ROTRES
+&  .or. qrigid_body_restraint &
+#endif
+&    ) then
+!
+#ifdef __PBC_UNWRAP
+   if (qper_parser_override) then
+#ifdef __OMP
+!$omp parallel _OMP_EXTRA private(ii)
+!$omp do schedule(runtime)
+#endif
+    do i=1, nsurface_atoms
+     ii=isurface_atoms(i)
+     dr_surf(1,i)=r(1,ii)-r_surf(1,i); __PBCDIST(dr_surf(1,i),ucell%a) !x
+     dr_surf(2,i)=r(2,ii)-r_surf(2,i); __PBCDIST(dr_surf(2,i),ucell%b) !y
+     dr_surf(3,i)=r(3,ii)-r_surf(3,i); __PBCDIST(dr_surf(3,i),ucell%c) !z
+    enddo
+#ifdef __OMP
+!$omp end do
+!$omp end parallel
+#endif
+   else
+#endif
+#ifdef __DUMSURF
+    if (nsurface_atoms.gt.0) &
+#endif
+     dr_surf = r(:,isurface_atoms) - r_surf
+#ifdef __PBC_UNWRAP
+   endif ! qper override
+#endif
+endif ! decide whether to compute dr_surf
+!
+#ifdef __ROTRES
+ if (qrigid_body_restraint) r_com_inst = matmul(dr_surf + r_surf,rb_wgt)
+#endif
+!============================================= update surface coordinates
+ if (structure_update_freq.gt.izero) then
+  if __CHKUPDATE(structure_update_freq) then
+   d0=(one-structure_update_memory)
+#ifdef __DUMSURF
+   if (nsurface_atoms.gt.0) &
+#endif
+    __INCR(r_surf, d0 * dr_surf)
+!
+#if defined(__BAROSTAT) || defined (__DASYSTAT)
+   if (&
+#ifdef __BAROSTAT
+&       barostat .or. &
+#endif
+#ifdef __DASYSTAT
+&       dasystat .or. &
+#endif
+&       .false. ) then 
+  r_surf_changed=.true. ! we only need this variable for barostat/dasystat
+ endif
+#endif
+!
+  endif ! structure_update
+ endif ! structure_update
+!
+#ifdef __ROTRES
+!============================================= apply rigid body restraint forces
+ if (qrigid_body_restraint) then
+! obtain absolute inst. coordinates, shifted to zero COM
+  do i=1, nsurface_atoms
+   __INCR( dr_surf(1,i), r_surf(1,i) - r_com_inst(1) )
+   __INCR( dr_surf(2,i), r_surf(2,i) - r_com_inst(2) )
+   __INCR( dr_surf(3,i), r_surf(3,i) - r_com_inst(3) )
+  enddo
+  call RMSBestFit(r_surf_ref, dr_surf, rb_wgt, A_rb, qdimswap_=.true.)
+! subtract Identity from A:
+  __DECR(A_rb(1,1),__CONCAT3(1,__PCODE,0))
+  __DECR(A_rb(2,2),__CONCAT3(1,__PCODE,0))
+  __DECR(A_rb(3,3),__CONCAT3(1,__PCODE,0))
+!
+  __SCALE(A_rb, rigid_body_force_constant) ! pre-scale matrix
+  dcom=(r_com_inst-r_com_ref)*rigid_body_force_constant ! pre-scale
+! compute and apply forces on surface atoms :
+! NOTE: FD will fail right now because the restraints can be nonuniform !
+#ifdef __FD_CHECK
+! record current forces in case they are nonzero :
+   __ALLOC(ffd2(3,nsurface_atoms))
+   ffd2=fr(:,isurface_atoms(:))
+#endif
+#ifdef __OMP
+!$omp parallel _OMP_EXTRA
+!$omp do schedule(runtime)
+#endif
+  do i=1, nsurface_atoms
+   __DECR( fr(:,isurface_atoms(i)), rb_wgt(i) * ( matmul(A_rb, r_surf_ref(:,i)) + dcom ) )
+  enddo
+#ifdef __OMP
+!$omp end do
+!$omp end parallel
+#endif
+!
+!====================== NOTE THAT THE FD TEST BELOW IS ONLY FOR THE RIGID-BODY RESTRAINT ====
+#ifdef __FD_CHECK
+  __ALLOC(ffd(3,nsurface_atoms))
+  do i=1, nsurface_atoms ; do j=1, 3
+   ffd(j,i)=zero
+   do ii=-1,1,2
+    __INCR ( dr_surf(j,:) , r_com_inst(j) ) ! restore COM
+    __INCR ( dr_surf(j,i) , ii * h ) ! perturb
+    r_com_inst(j)=dot_product(dr_surf(j,:),rb_wgt) ! recompute com
+    __DECR ( dr_surf(j,:), r_com_inst(j)) ! subtract new COM
+    call RMSBestFit(r_surf_ref, dr_surf, rb_wgt, A_rb, qdimswap_=.true.)
+    dcom=(r_com_inst-r_com_ref)
+! compute energy
+    do k=1, nsurface_atoms
+     __INCR  ( ffd(j,i), rb_wgt(k)*ii*sum( ( dr_surf(:,k) - r_surf_ref(:,k) + dcom )**2  - ( dr_surf(:,k) - matmul(A_rb, r_surf_ref(:,k)))**2))
+    enddo ! k
+! restore coordinate
+    __INCR ( dr_surf(j,:) , r_com_inst(j) ) ! restore COM
+    __INCR ( dr_surf(j,i) , -ii * h ) ! restore
+    r_com_inst(j)=dot_product(dr_surf(j,:),rb_wgt) ! recompute com
+    __DECR ( dr_surf(j,:), r_com_inst(j)) ! subtract new COM
+   enddo ! ii
+  enddo ; enddo ! j, i
+  __SCALE(ffd, - half * rigid_body_force_constant / ( 2*h ) )
+
+#ifdef __DEBUG
+ write(600,*) iteration
+ write(600,*) ffd(1,:)
+ write(600,*) fr(1,isurface_atoms(:))-ffd2(1,:)
+ write(600,*) rb_wgt
+ close(600)
+#endif
+! note that below the second subtraction is to isolate the rotres forces !
+   d0=sqrt(dot_product( (ffd(1,:)-(fr(1,isurface_atoms(:))-ffd2(1,:)) )**2 , rb_wgt))
+   __WARN(whoami, ' ABSOLUTE RMS X-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
+   d0=d0/sqrt( dot_product (( fr(1,isurface_atoms(:))-ffd2(1,:) )**2, rb_wgt ))
+   __WARN(whoami, ' RELATIVE RMS X-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
+!
+   d0=sqrt(dot_product( ( ffd(2,:)-(fr(2,isurface_atoms(:))-ffd2(2,:)) )**2 , rb_wgt))
+   __WARN(whoami, ' ABSOLUTE RMS Y-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
+   d0=d0/sqrt( dot_product (( fr(2,isurface_atoms(:))-ffd2(2,:) )**2, rb_wgt ))
+   __WARN(whoami, ' RELATIVE RMS Y-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
+!
+   d0=sqrt(dot_product( ( ffd(3,:)-(fr(3,isurface_atoms(:))-ffd2(3,:)) )**2 , rb_wgt))
+   __WARN(whoami, ' ABSOLUTE RMS Z-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
+   d0=d0/sqrt( dot_product (( fr(3,isurface_atoms(:))-ffd2(3,:) )**2,  rb_wgt ))
+   __WARN(whoami, ' RELATIVE RMS Z-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
+!
+#ifndef __OBSOLETE
+   d0=sqrt(sum ( ffd(1,:)-(fr(1,isurface_atoms(:))-ffd2(1,:)) )**2 * oonsurface)
+   __WARN(whoami, ' ABSOLUTE RMS X-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
+   d0=d0/sqrt( sum ( fr(1,isurface_atoms(:))-ffd2(1,:) )**2 * oonsurface )
+   __WARN(whoami, ' RELATIVE RMS X-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
+!
+   d0=sqrt(sum ( ffd(2,:)-(fr(2,isurface_atoms(:))-ffd2(2,:)) )**2 * oonsurface)
+   __WARN(whoami, ' ABSOLUTE RMS Y-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
+   d0=d0/sqrt( sum ( fr(2,isurface_atoms(:))-ffd2(2,:) )**2 * oonsurface )
+   __WARN(whoami, ' RELATIVE RMS Y-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
+!
+   d0=sqrt(sum ( ffd(3,:)-(fr(3,isurface_atoms(:))-ffd2(3,:)) )**2 * oonsurface)
+   __WARN(whoami, ' ABSOLUTE RMS Z-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
+   d0=d0/sqrt( sum ( fr(3,isurface_atoms(:))-ffd2(3,:) )**2 * oonsurface )
+   __WARN(whoami, ' RELATIVE RMS Z-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
+#endif
+!
+
+  __DBGOUT('Free surface arrays for FD check')
+  __FREE(ffd)
+  __FREE(ffd2)
+  __DBGOUT('Recompute correct rigid restraint forces')
+! recompute A and dcom correctly for energy calc in the output section
+!
+  call RMSBestFit(r_surf_ref, dr_surf, rb_wgt, A_rb, qdimswap_=.true.)
+! subtract Identity from A:
+  __DECR(A_rb(1,1),__CONCAT3(1,__PCODE,0))
+  __DECR(A_rb(2,2),__CONCAT3(1,__PCODE,0))
+  __DECR(A_rb(3,3),__CONCAT3(1,__PCODE,0))
+!
+  __SCALE(A_rb, rigid_body_force_constant)
+  dcom=(r_com_inst-r_com_ref)*rigid_body_force_constant
+
+#endif __FD_CHECK
+! ^ ================ FD CHECK OF RIGID BODY RESTRAINT ======
+ endif
+!============================================= compute contour value/distance and gradient at solvent coordinates
+#endif // __ROTRES
+!
+! surface_energy=zero ! not needed ?
+ distance_from_solute=zero
+ distance_from_solute2=zero ! for computing second moment
+!
+!========================== compute contour value if needed
+! if surface distance value is zero, estimate a reasonable value from current coordinates
+ if ( abs(surface_distance) .lt. __ERRTOL) then
+  __DBGOUT('Will compute approximate surface distance')
+!  call __NM(compute_density)(QTRUNCATE_LOOP=.false., QCOMPUTE_GRAD=.false., QCOMPUTE_HESS=.false. ) ! false to force traverse entire solute atom list ; do not need grads
+  call __NM(compute_density)(.false.,.false.,.false.)
+  do i=1, nsolvent
+! convert to distance
+    if ( rho_solv(i) .le. zero ) then ! warn that we are outside of the support
+     __WRN(whoami, 'SOLVENT ATOM '//itoa(isolvent_atoms(i))//' OUTSIDE OF SOLUTE SUPPORT. RESTART WITH A LARGER FILTER CUTOFF OR PADDING.')
+    endif
+    d0 = __RHO_INVSAFE(rho_solv(i))
+    __DBGOUT('Inst. density/distance from solute for atom ',i,' are ',rho_solv(i),'/',d0);
+    __INCR(distance_from_solute, d0)
+    __INCR(distance_from_solute2, d0**2)
+  enddo
+  pre=1.25d0
+! set contour value to average value + (a) x stdev ; a set empirically
+  __SCALE(distance_from_solute,oonsolvent);
+  __DBGOUT('Average distance from solute ', distance_from_solute)
+  __SCALE(distance_from_solute2,oonsolvent);
+  __DBGOUT('Distance from solute stdDev ', sqrt ( distance_from_solute2 - distance_from_solute**2))
+  surface_distance = distance_from_solute - & ! average (recall that distance_from_solute < 0, so this adds to the length)
+&                    pre * sqrt( max(zero,distance_from_solute2 - distance_from_solute**2) ) ! analytically positive, but, just in case, protect from roundoff
+! 12.18 : unclear how to best determine the optimal value :
+! in the original method above, I used a simple average ; however, when the surface force constants are large
+! the initial shell is too 'tight' and leads to instabilities;
+!
+  surface_contour_value = __RHOSAFE(surface_distance) ! for mindist, determine this for information, even though not relevant to algorithm
+  __DBGOUT( 'COMPUTED SD, SCV: ', surface_distance, surface_contour_value)
+  __MESSAGE(whoami, 'COMPUTED SURFACE DISTANCE AT '//ftoa(surface_distance)//' A FROM PROTEIN. CONTOUR VALUE IS '//ftoa(surface_contour_value))
+!
+#ifdef __DASYSTAT
+!
+! also check for distance to bulk boundary; note that, since the bulk
+! boundary distance is held fixed, it is possible that surface will shrink
+! to be very close to the bulk boundary,  in which case we would need to
+! recompute the bulk boundary distance to avoid instabilities (or
+! ill-definedness, if the BBD happens to be OUTSIDE !)
+! 4/19 : also recompute if the BBD is too far from the SD ; (e.g. so that simulations that converge on the same SD also converge on similar BBDs)
+!
+  if (dasystat) then
+   if ( abs(obulk_boundary_distance).lt.__ERRTOL ) then ! zero value signals auto-compute
+    __MESSAGE(whoami, 'COMPUTING INITIAL LOCATION OF OUTER BULK BOUNDARY FROM SURFACE BOUNDARY:')
+!
+   elseif(abs(obulk_boundary_distance).ge.abs(surface_distance)) then
+    __WRN(whoami, 'OUTER BULK BOUNDARY MUST BE INSIDE SHELL SURFACE. ABORT');
+    __ASSERT(abs(obulk_boundary_distance),<,abs(surface_distance));
+    goto 999
+!
+   elseif( qbulk_boundary_recompute .and. ((abs(surface_distance) - abs(obulk_boundary_distance)) .lt. &
+&    (__BULK_BOUNDARY_RECOMPUTE_LIMIT) * ( __OUTER_BULK_BOUNDARY_OFFSET ) ) ) then ! recompute
+    __MESSAGE(whoami, 'OUTER BULK BOUNDARY IS TOO CLOSE TO SURFACE BOUNDARY. WILL RECOMPUTE:')
+!
+   elseif( qbulk_boundary_recompute .and. ((abs(surface_distance) - abs(obulk_boundary_distance)) .gt. &
+&    (two - __BULK_BOUNDARY_RECOMPUTE_LIMIT) * ( __OUTER_BULK_BOUNDARY_OFFSET) ) ) then ! recompute bulk_bdry
+    __MESSAGE(whoami, 'OUTER BULK BOUNDARY ('//ftoa(obulk_boundary_distance)//') IS TOO FAR FROM SURFACE BOUNDARY ('//ftoa(surface_distance)//'). WILL RECOMPUTE:')
+   else !
+    goto 999
+   endif
+! 6/24/24 initial location compute :
+   d0=one
+   obulk_boundary_distance = -(abs(surface_distance) - __OUTER_BULK_BOUNDARY_OFFSET ) * d0 + (one-d0)*obulk_boundary_distance
+   ibulk_boundary_distance = -(abs(surface_distance) - __INNER_BULK_BOUNDARY_OFFSET ) * d0 + (one-d0)*ibulk_boundary_distance
+   obulk_boundary_contour_value = __RHOSAFE(obulk_boundary_distance)
+   ibulk_boundary_contour_value = __RHOSAFE(ibulk_boundary_distance)
+   __MESSAGE(whoami, 'LOCATION OF OUTER BULK BOUNDARY SET TO '//ftoa(obulk_boundary_distance)//' A FROM PROTEIN. CONTOUR VALUE IS '//ftoa(obulk_boundary_contour_value))
+   __MESSAGE(whoami, 'LOCATION OF INNER BULK BOUNDARY SET TO '//ftoa(ibulk_boundary_distance)//' A FROM PROTEIN. CONTOUR VALUE IS '//ftoa(ibulk_boundary_contour_value))
+ 999  continue
+  endif ! dasystat
+#endif
+!
+! at this point, qoutside_solv is wrong : it will be true everywhere, because surface distance was undefined (=0) in the calc. loop
+! recompute qoutside_solv :
+#ifdef __HAMILTONIAN
+! no easy solution but to recompute the gradients, now that surface contour value is known
+! note that forces will be applied to surface atoms as well, which is why they need to be correct
+!  call __NM(compute_density)(QTRUNCATE_LOOP=.false., QCOMPUTE_GRAD=.true., QCOMPUTE_HESS=.false.) ! long loop, compute grads
+  call __NM(compute_density)(.false.,.true.,.false.)
+#else
+  qoutside_solv=rho_solv.lt.surface_contour_value
+#endif
+!====== NOTE : if we requested to run without neighbor lists then we need to reset solute_neighbor_mind to max
+!====== otherwise, the early exit (qtruncate_loop=T) version of force routine could miss crucial atoms (the mind list is _not_ updated b/c qnlist=0)
+!====== this is because solute_neighbor_mind is recomputed in a full loop, so it will be smaller than nsurf
+#if defined(__NEIGHBOR_LIST) && defined(__SORT_LIST)
+  if (.not. qneighbor_list) solute_neighbor_mind=nsurface_coord
+#endif
+!=========================================================================
+ else ! compute approximate reference surface distance from coordinates
+! NOTE :  this is the most time consuming part of the force calculation
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
+   if (full_sum_freq.gt.izero) then ! if full_sum_freq<=0, will always run the short(truncate) loop -- see below
+!    call __NM(compute_density)(QTRUNCATE_LOOP=((.not.qneighbor_list) .or. (.not.__CHKUPDATE(full_sum_freq))), QCOMPUTE_GRAD=.true., QCOMPUTE_HESS=.false.)
+!    call __NM(compute_density)(((.not.qneighbor_list) .or. (.not.__CHKUPDATE(full_sum_freq))),.true.,.false.)
+    call __NM(compute_density)(((.not.qneighbor_list) .or. (.not.__CHKUPDATE(full_sum_freq))),.true.,.true.)
+! the full version will [flag=FALSE]  be called if :
+! (1) qneighbor_list is TRUE AND iteration is a multiple of full_sum_freq
+! the short version is called if :
+! (1) running w/o nlist (in this case the truncated list is actually full-length)
+! (2) we are between full_sum recompute intervals
+   else
+#endif
+!    call __NM(compute_density)(QTRUNCATE_LOOP=.true., QCOMPUTE_GRAD=.true., QCOMPUTE_HESS=.false.)
+!    call __NM(compute_density)(.true.,.true.,.false.)
+    call __NM(compute_density)(.true.,.true.,.true.)
+!
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
+   endif
+#endif
+! set surf changed flag
+#if defined(__BAROSTAT) || defined (__DASYSTAT)
+   if (&
+#ifdef __BAROSTAT
+&       barostat .or. &
+#endif
+#ifdef __DASYSTAT
+&       dasystat .or. &
+#endif
+&       .false. ) surf_dist_changed=.true. ! we only need this variable for barostat/dasystat
+#endif
+
+ endif ! compute surface distance / contour value
+!========================== compute contour value ^
+#ifdef __DASYSTAT
+! compute outer-boundary bulk2_dist.
+ if (dasystat .and. abs(obulk_boundary_distance).lt.__ERRTOL ) then
+  obulk_boundary_distance = - (abs(surface_distance) - __OUTER_BULK_BOUNDARY_OFFSET )
+  obulk_boundary_contour_value = __RHOSAFE(obulk_boundary_distance)
+ endif
+#endif
+!========================== compute forces :
+ if (output_freq.gt.izero) then ; qsbe=__CHKUPDATE(output_freq) ; else ; qsbe=.false. ; endif ! E needed for output, not otherwise
+!
+ surface_energy=zero
+ surface_force=zero
+ curvature_energy=zero
+ curvature_force=zero
+ nsolvent_outside=izero
+#ifdef __DASYSTAT
+ solvent_mass_outside=zero
+#endif
+!
+! if running a FD check, first save (-)current forces, in case they are nonzero (this subtracts the forces we are _NOT_ interested in)
+#ifdef __FD_CHECK
+ __DBGOUT('Allocate solvent arrays for FD check')
+ __ALLOC(ffd2(3,nsolvent))
+ ffd2=-fr(:,isolvent_atoms(:))
+#endif
+! NOTE: minimum distance (mindist) algorithm has been removed in version 2 ; density-based only
+! NOTE: here OPENMP does not make much difference but keeping for consistency and completeness
+! NOTE: Hamiltonian dynamics (in which forces are propagated onto the surface atoms) are _NOT_ yet implemented for wsh2 (7/24)
+ nsolvent_unsupported=0 ! for counting unsupported atoms in the erf density method
+!================= compute forces, now that density-related properties are known
+#ifdef __OMP
+!$omp parallel _OMP_EXTRA &
+!$omp shared (rho_solv,drho_solv,d2rho_solv,dsurf_solv,acurv_solv,surface_contour_value,surface_distance,surface_force_constant,curvature_force_constant,&
+!$omp nsolvent_unsupported,qsbe,&
+#ifdef __DASYSTAT
+!$omp solvent_mass_outside, solvent_mass, &
+#endif
+#ifdef __HAMILTONIAN
+!$omp drho_surf, &
+#endif
+!$omp nsolvent_outside, surface_force, surface_energy, curvature_force, curvature_energy, isolvent_atoms, fr) &
+!$omp private (i, d0, pre, sbfe, __U(nsolvent_outside), __U(surface_energy), __U(surface_force), __U(curvature_energy), __U(curvature_force) &
+#if defined(__HAMILTONIAN) && !defined(__H_THREAD_REDUCE)
+!$omp , ii &
+#endif
+#ifdef __DASYSTAT
+!$omp , __U(solvent_mass_outside) &
+#endif
+!$omp )
+!
+ __U(surface_force)=zero
+ if (qsbe) then
+  __U(surface_energy)=zero
+  __U(curvature_energy)=zero
+ endif
+ __U(curvature_force)=zero
+ __U(nsolvent_outside)=izero
+#ifdef __DASYSTAT
+ __U(solvent_mass_outside)=zero
+#endif
+
+#ifdef __HAMILTONIAN
+  if (structure_update_freq.gt.0) then
+   if (__CHKUPDATE(structure_update_freq)) then
+! note : this is incorrect if dummy atoms are present !
+!$omp do schedule(runtime)
+   do i=1, nsurface_coord
+#ifdef __H_THREAD_REDUCE
+    __INCR(fr(1,isurface_atoms(i)),drho_surf(1,i,1)) ! note that the 1 array corresponds to the global sum on 0th thread (0th array is the inst support)
+    __INCR(fr(2,isurface_atoms(i)),drho_surf(2,i,1))
+    __INCR(fr(3,isurface_atoms(i)),drho_surf(3,i,1))
+#else
+! each thread sums up contributions previously computed by different threads
+    do ii=1, 2*numthreads, 2
+     __INCR(fr(1,isurface_atoms(i)),drho_surf(1,i,ii))
+     __INCR(fr(2,isurface_atoms(i)),drho_surf(2,i,ii))
+     __INCR(fr(3,isurface_atoms(i)),drho_surf(3,i,ii))
+    enddo
+#endif
+   enddo
+!$omp end do
+  endif
+  endif
+#endif
+!^HAMILTONIAN
+!$omp do schedule(runtime)
+#endif
+!^OMP
+ do i=1, nsolvent
+  if ( qoutside_solv(i) ) then
+   __INC(__U(nsolvent_outside))
+#ifdef __DASYSTAT
+   if(dasystat) __INCR(__U(solvent_mass_outside), mass_solv(i))
+#endif
+   if ( rho_solv(i) .le. zero ) then ! proceed if the density is positive ; otherwise warn that we are outside of the support and cycle
+! note that is is also possible that erf/exp approximations (or single precision calc) near zero densities will produce negative numbers, hence above
+!    __WRN(whoami, '#'//itoa(iteration)//': SOLVENT ATOM '//itoa(isolvent_atoms(i))//' OUTSIDE OF SOLUTE SUPPORT. RESTART WITH A SMALLER SURFACE DISTANCE OR A LARGER FILTER CUTOFF OR PADDING.')
+#ifdef __OMP
+!$omp atomic update
+#endif
+    nsolvent_unsupported = nsolvent_unsupported + 1 ! openmp compiler cannot take __INC()
+#ifdef __OMP
+!$omp end atomic
+#endif
+    cycle
+   endif
+  endif ! outside the surface contour boundary
+!
+#ifndef __HAMILTONIAN
+! gradient norm :
+  d0=sum(drho_solv(:,i)**2)
+  if (pre.le.__ERRTOL) then ; d0=zero ; else ; d0=one/sqrt(d0) ; endif
+!
+#ifdef __DRHOINV
+! compute average curvature at sovent coordinate from gradient and hessian
+! unnormalized/unscaled grad formula:
+  acurv_solv(i) = half * d0  * ( d2rho_solv(1,i) + d2rho_solv(4,i) + d2rho_solv(6,i) \
+              - d0**2 * ( d2rho_solv(1,i)*drho_solv(1,i)**2 + d2rho_solv(4,i)*drho_solv(2,i)**2 + d2rho_solv(6,i)*drho_solv(3,i)**2 \
+            + ( drho_solv(1,i)*(d2rho_solv(2,i)*drho_solv(2,i) + d2rho_solv(3,i)*drho_solv(3,i)) + d2rho_solv(5,i)*drho_solv(2,i)*drho_solv(3,i) )*2 ) )
+#else
+  __SCALE(drho_solv(:,i),d0) ! normalize gradient (note that we use the normalized grad as the surface unit normal for forces)
+! normalized grad formula:
+  acurv_solv(i) = half * d0  * ( d2rho_solv(1,i)*(one-drho_solv(1,i)**2) + d2rho_solv(4,i)*(one-drho_solv(2,i)**2) + d2rho_solv(6,i)*(one-drho_solv(3,i)**2) \
+            - ( drho_solv(1,i)*( d2rho_solv(2,i)*drho_solv(2,i) + d2rho_solv(3,i)*drho_solv(3,i)) + d2rho_solv(5,i)*drho_solv(2,i)*drho_solv(3,i) )*2 )
+#endif
+! now can compute the boundary force from spline data
+! NB: this is the lowest order of approximation for the distance to boundary and curvature
+! a very slightly better curvature value is obtained by adding a function of the distance to boundary :
+! any improvement over the below requires another instance of the _compute routine, which is computationally expensive
+!
+!  d0=__Q(rho_solv(i)) ! unsafe inverse, but at least rho > 0, per above
+  d0=__QSAFE(rho_solv(i))
+!  dsurf_solv(i) = ( __RHO_INVSAFE ( rho_solv(i) ) - surface_distance ) ! distance to boundary using the approximate inverse (+/- for inside/outside bdry)
+  dsurf_solv(i) = ( __RHO_INVERSE2 ( d0 ) - surface_distance ) ! need this for correction below
+! note that the above is the lowest order approximation for distance to bdry (more accurate ones, e.g. NR, are much slower)
+! note also, that we are technically missing (in the derivative of potential sense) the derivative of the inverse wrt rho (same as wsh1)
+#if (_DBGLEV>1)
+  __DBGOUT('solv. atom#:', i, 'density:', rho_solv(i), 'distance to bdry:', dsurf_solv(i), 'outside?:', qoutside_solv(i))
+#endif
+!
+  if (dsurf_solv(i).gt.0) &
+  acurv_solv(i) = acurv_solv(i) / ( one + abs(acurv_solv(i)) * dsurf_solv(i) ) ! in this model the curvature correction is independent of curvature sign
+! for molecules outside the boundary, dsurf < 0, and therefore the curvature increases ; in principle, it is technically possible to go to zero in the denominator,
+! which makes the curvature go very high ... (10 or more) ; so as a minimal fix, modified not to decrease (in cases with dR<0)
+!
+!  sbfe = watershell_sbf_spline_compute(acurv_solv(i), dsurf_solv(i), output_freq.gt.0 .and. __CHKUPDATE(output_freq) ) ! compute forces and (optionally) energies
+  sbfe = watershell_sbf_spline_compute(acurv_solv(i), dsurf_solv(i), qsbe)
+! note : the flag above can be computed outside ; also we may want to compute more often if we need energy averages
+! sbfe(1,2,3,4) contain surface_force, curvature_force, surface_energy, curvature_energy, respectively
+  __SCALE( sbfe(1), surface_force_constant )
+  __SCALE( sbfe(2), curvature_force_constant )
+!
+  pre = - ( sbfe(1) + sbfe(2) )
+#ifdef __DRHOINV
+! include derivative of distance function (simplest model only)
+  __SCALE(pre, surf_stdev * sq2pi * exp (d0**2))
+#endif
+! add forces to force arrays ; the normalized gradient gives direction
+! note that the gradient is inwardly directed, and the force has the "correct" sign (+/-) for inside/in, so need (-) above
+  __INCR(fr(1,isolvent_atoms(i)), pre * drho_solv(1,i))
+  __INCR(fr(2,isolvent_atoms(i)), pre * drho_solv(2,i))
+  __INCR(fr(3,isolvent_atoms(i)), pre * drho_solv(3,i))
+#ifdef __BAROSTAT
+  d0=d0*norm3(drho_solv(:,i))
+#endif
+#else
+!#HAMILTONIAN defined v
+! derivative already includes force prefactor
+  __DECR(fr(1,isolvent_atoms(i)), drho_solv(1,i))
+  __DECR(fr(2,isolvent_atoms(i)), drho_solv(2,i))
+  __DECR(fr(3,isolvent_atoms(i)), drho_solv(3,i))
+#ifdef __BAROSTAT
+  d0=norm3(drho_solv(:,i))
+#endif
+#endif
+!
+! sum "energy"
+! this requires evaluating additional splines (indicated above by qsbe flag), so should be done only when required
+! NOT clear whether the surface_energy is physically meaningful
+! surface force is used only if barostat is on !
+#ifdef __BAROSTAT
+  __INCR(__U(surface_force), sbfe(1) )   ! k0 force exerted on the surface
+  __INCR(__U(curvature_force), sbfe(2) ) ! remaining force exerted on the surface
+#endif
+  if (qsbe) then
+#ifndef __HAMILTONIAN
+   __INCR(__U(surface_energy), sbfe(3)) ! surface_force_constant below
+   __INCR(__U(curvature_energy), sbfe(4)) ! curvature_force_constant below
+#else
+! NOTE : not implemented for wsh2 yet:
+  __INCR(__U(surface_energy), (__RHO_INVSAFE(rho_solv(i)) - surface_distance)**2) ! x k/2, below
+#endif
+  endif
+ enddo ! nsolvent
+#ifdef __OMP
+!$omp end do
+!$omp atomic
+  __REDUCE(nsolvent_outside)
+  if (qsbe) then
+!$omp atomic
+   __REDUCE(surface_energy)
+!$omp atomic
+   __REDUCE(curvature_energy)
+  endif
+#ifdef __BAROSTAT
+if (barostat) then
+!$omp atomic
+  __REDUCE(surface_force)
+!$omp atomic
+  __REDUCE(curvature_force)
+endif
+#endif
+#ifdef __DASYSTAT
+if (dasystat) then
+!$omp atomic
+ __REDUCE(solvent_mass_outside)
+endif
+#endif // __DASYSTAT
+#endif // __OMP
+!
+#ifdef __FD_CHECK
+! make sure torque removal forces do not contaminate the potential (shell) forces in the FD comparison :
+#ifdef __OMP
+!$omp do schedule(runtime)
+#endif
+ do i=1,nsolvent
+  __INCR(ffd2(:,i), fr(:,isolvent_atoms(i))) ! ffd2 was set to -fr earlier, so in ffd2 we have _ONLY_ the boundary forces
+ enddo
+#ifdef __OMP
+!$omp end do
+#endif
+#endif //__FD_CHECK
+!
+#ifdef __OMP
+!$omp end parallel
+#endif
+!
+#ifdef __FD_CHECK
+! FD test of shell potential
+ __ALLOC(ffd(3,nsolvent))
+  do i=1, nsolvent ; do j=1, 3
+   ffd(j,i)=zero ! initialize
+   pre=r_solv(j,i) ! save coordinate
+   do ii=-1,1,2
+    __INCR ( r_solv(j,i) , ii * h ) ! perturb
+! recompute density and curvature at the perturbed coordinate
+! no need for forces, but still need curvature from hessian & gradient, unless we neglect curvature variation
+#ifdef __FD_WITH_CURV
+#if defined(__NEIGHBOR_LIST) && defined(__SORT_LIST)
+    call __NM(compute_density)(QTRUNCATE_LOOP=.not.qneighbor_list, QCOMPUTE_GRAD=.true., QCOMPUTE_HESS=.true.)
+!    call __NM(compute_density)(.not.qneighbor_list,.true.,.false.)
+#else
+    call __NM(compute_density)(QTRUNCATE_LOOP=.true.,QCOMPUTE_GRAD=.true.,QCOMPUTE_HESS=.true.)
+!    call __NM(compute_density)(.true.,.true.,.true.)
+#endif
+#else
+#if defined(__NEIGHBOR_LIST) && defined(__SORT_LIST)
+    call __NM(compute_density)(QTRUNCATE_LOOP=.not.qneighbor_list, QCOMPUTE_GRAD=.false., QCOMPUTE_HESS=.false.)
+!    call __NM(compute_density)(.not.qneighbor_list,.true.,.false.)
+#else
+    call __NM(compute_density)(QTRUNCATE_LOOP=.true.,QCOMPUTE_GRAD=.false.,QCOMPUTE_HESS=.false.)
+!    call __NM(compute_density)(.true.,.true.,.true.)
+#endif
+#endif
+!    dsurf_solv(i) = ( __RHO_INVSAFE ( rho_solv(i) ) - surface_distance ) ! distance to boundary
+    d0=__QSAFE(rho_solv(i))
+    dsurf_solv(i) = ( __RHO_INVERSE2 ( d0 ) - surface_distance )
+! gradient norm :
+#ifdef __FD_WITH_CURV
+    d0=sum(drho_solv(:,i)**2)
+    if (d0.le.__ERRTOL) then ; d0=zero ; else ; d0=one/sqrt(d0); endif
+    __SCALE(drho_solv(:,i),d0) ! normalize gradient
+! compute average curvature at solvent coordinate from gradient and hessian
+! note that recomputing the curvature implicitly means that we are including force changes wrt curvature as the solvent
+! particle moves around ; this is the more correct approach than our analytical implementation, in which there is no curvature
+! derivative ; i.e. we expand the surface to 2nd order, and assume that transverse variations are negligible
+! technically, we are (1) violating Hamiltonian dynamics, or (2) projecting out (removing) non-normal forces
+! the FD formula that corresponds to the analytical 2nd order surface model has to exclude the curvature variation, i.e. use the 
+! values already computed for the analytical forces
+    acurv_solv(i) = half * d0  * ( d2rho_solv(1,i)*(one-drho_solv(1,i)**2) + d2rho_solv(4,i)*(one-drho_solv(2,i)**2) + d2rho_solv(6,i)*(one-drho_solv(3,i)**2) \
+            - ( drho_solv(1,i)*( d2rho_solv(2,i)*drho_solv(2,i) + d2rho_solv(3,i)*drho_solv(3,i)) + d2rho_solv(5,i)*drho_solv(2,i)*drho_solv(3,i) )*2 )
+    if (dsurf_solv(i).gt.0) &
+     acurv_solv(i) = acurv_solv(i) / ( one + abs(acurv_solv(i)) * dsurf_solv(i) ) ! in this model the curvature correction is independent of curvature sign
+#endif
+! boundary energy from spline data
+    sbfe = watershell_sbf_spline_compute(acurv_solv(i), dsurf_solv(i), .true.)
+! note : the flag above can be computed outside ; also we may want to compute more often if we need energy averages
+! sbfe(1,2,3,4) contain surface_force, curvature_force, surface_energy, curvature_energy, respectively
+    __SCALE( sbfe(3), surface_force_constant )
+    __SCALE( sbfe(4), curvature_force_constant )
+! incorporate into FD
+    __INCR ( ffd(j,i), ii * ( sbfe(3) + sbfe(4) ) )
+! restore coordinate
+    r_solv(j,i)=pre
+   enddo ! ii
+  enddo ; enddo ! j, i
+  __SCALE(ffd, - half / h ) ! forces are negative gradients
+
+#ifdef __DEBUG
+ write(800,*) iteration
+ write(800,*) ffd(1,:)
+ write(800,*) ffd2(1,isurface_atoms(:))
+ close(800)
+#endif
+
+   d0=sqrt(sum ( ffd(1,:)-ffd2(1,:) )**2 / nsolvent)
+   __WARN(whoami, ' ABSOLUTE RMS X-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
+   d0=d0/sqrt( sum ( ffd2(1,:) )**2 / nsolvent )
+   __WARN(whoami, ' RELATIVE RMS X-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
+!
+   d0=sqrt(sum ( ffd(2,:)-ffd2(2,:) )**2 / nsolvent)
+   __WARN(whoami, ' ABSOLUTE RMS Y-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
+   d0=d0/sqrt( sum ( ffd2(2,:) )**2 / nsolvent )
+   __WARN(whoami, ' RELATIVE RMS Y-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
+!
+   d0=sqrt(sum ( ffd(3,:)-ffd2(3,:) )**2 / nsolvent)
+   __WARN(whoami, ' ABSOLUTE RMS Z-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
+   d0=d0/sqrt( sum ( ffd2(3,:) )**2 / nsolvent )
+   __WARN(whoami, ' RELATIVE RMS Z-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
+!
+  __FREE(ffd)
+  __FREE(ffd2)
+#endif //__FD_CHECK
+!
+!
+  if (nsolvent_unsupported.gt.0) then
+#ifdef __ADAPTIVE_SUPPORT
+#ifdef __ADAPTIVE_CUTOFF
+   __WRN(whoami, 'DETECTED '//itoa(nsolvent_unsupported)//' ATOM(S) OUTSIDE SOLUTE SUPPORT. DENSITY CUTOFF IS '//ftoa(cutoff_surf));
+! increase cutoff adaptively
+   __INCR(cutoff_surf, solvent_support_factor_grow)
+  else
+   if (cutoff_surf.gt.cutoff_surf_stdev*surf_stdev) then 
+    __INCR(cutoff_surf, solvent_support_factor_shrink)
+   endif
+#else
+   __WRN(whoami, 'DETECTED '//itoa(nsolvent_unsupported)//' ATOM(S) OUTSIDE SOLUTE SUPPORT. SURFACE PADDING IS '//ftoa(surf_padding));
+! increase padding adaptively
+   __INCR(surf_padding, solvent_support_factor_grow)
+  else
+   if (surf_padding.gt.surf_padding_input) then
+    __INCR(surf_padding, solvent_support_factor_shrink)
+   else
+    surf_padding=surf_padding_input
+   endif
+#endif
+#else
+   __WRN(whoami, 'DETECTED '//itoa(nsolvent_unsupported)//' ATOM(S) OUTSIDE SOLUTE SUPPORT. RESTART WITH A LARGER CUTOFF OR SURFACE PADDING.')
+#endif
+  endif
+!
+! NOTE: check below to make sure consistent for erf/density ; yes it is;
+
+ if (nsolvent_outside .gt. 0) then
+  oonsolvent_outside=one/nsolvent_outside
+ else
+  oonsolvent_outside=zero ;
+ endif
+!
+ if (qsbe) then
+ __SCALE(surface_energy, surface_force_constant)
+ __SCALE(curvature_energy, curvature_force_constant)
+! note that this will not be available at every iteration ! However, typically, output freqs between the main sim & plugin should match
+  if (present(energy)) then
+   __INCR(energy,surface_energy+curvature_energy)
+  endif
+ endif
+!
+#ifdef __BAROSTAT
+! barostat-related code :
+! ==========================================================================================
+ if (barostat) then
+!== compute/update pressure :
+  if (pressure_update_freq.gt.0) then
+   if __CHKUPDATE(pressure_update_freq) then
+!
+ __DBGVAR(r_surf_changed,1)
+ __DBGVAR(surface_area_compute_freq,1)
+ __DBGVAR(pressure_update_freq,1)
+ __DBGVAR(iteration,1)
+ __DBGVAR(__CHKUPDATE(surface_area_compute_freq*pressure_update_freq),1)
+!== first, compute surface area :
+    if (((r_surf_changed.or.surf_dist_changed).and.surface_area_compute_freq.gt.0).or.surface_area<zero) then ! note : a check to only recompute SA if surface atoms changed
+     if (__CHKUPDATE(surface_area_compute_freq*pressure_update_freq) .or. surface_area<zero) then
+! check periodicity flag
+      __PRESENT(qper,qper_parser_override)
+      if (qper.neqv.qper_parser_override) then
+       __WRN(whoami, 'CANNOT CHANGE PERIODICITY FLAG DURING DYNAMICS WITH WATERSHELL BAROSTAT. INITIAL :'//ltoa(qper_parser_override)//', CURRENT :'//ltoa(qper))
+      elseif (qper) then ! check that mdcell, if passed in, did not change
+       if (present(mdcell)) then
+        if &
+&        ((abs(mdcell%a - sagrid%lengths(1)) .gt. __ERRTOL) .or. &
+&         (abs(mdcell%b - sagrid%lengths(2)) .gt. __ERRTOL) .or. &
+&         (abs(mdcell%c - sagrid%lengths(3)) .gt. __ERRTOL)) then
+          __WRN(whoami, 'CANNOT CHANGE UNIT CELL DIMENSIONS DURING DYNAMICS WITH WATERSHELL BAROSTAT.')
+          __ASSERT(abs(mdcell%a - sagrid%lengths(1)),<, __ERRTOL)
+          __ASSERT(abs(mdcell%b - sagrid%lengths(2)),<, __ERRTOL)
+          __ASSERT(abs(mdcell%c - sagrid%lengths(3)),<, __ERRTOL)
+        endif
+       endif
+      endif ! qper
+      r_com_sa=oonsurface * sum(r_surf,2)
+! check that grid dimensions are still adequate : 
+      if (.not.qper_parser_override.and.surface_area_grid_check_freq.gt.0) then
+       if __CHKUPDATE(surface_area_grid_check_freq*surface_area_compute_freq*pressure_update_freq) then
+!
+        r_surf_minmax(1,1) = minval(r_surf(1,:)-rad_surf) - r_com_sa(1) - ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+        r_surf_minmax(2,1) = maxval(r_surf(1,:)+rad_surf) - r_com_sa(1) + ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+!
+        r_surf_minmax(1,2) = minval(r_surf(2,:)-rad_surf) - r_com_sa(2) - ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+        r_surf_minmax(2,2) = maxval(r_surf(2,:)+rad_surf) - r_com_sa(2) + ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+!
+        r_surf_minmax(1,3) = minval(r_surf(3,:)-rad_surf) - r_com_sa(3) - ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+        r_surf_minmax(2,3) = maxval(r_surf(3,:)+rad_surf) - r_com_sa(3) + ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+!
+        if (any(abs(r_surf_minmax(2,:) - r_surf_minmax(1,:) - sagrid%lengths).gt.surface_area_grid_recompute_change)) then
+         __MESSAGE(whoami, 'REINITIALIZING SURFACE AREA COMPUTATION GRID.');
+         call ugrid_finalize(sagrid)
+         call ugrid_initialize(sagrid, 3, r_surf_minmax, (/surface_area_grid_spacing/), adjust_spacings_=.false.)
+!
+#ifdef __DEBUG
+         __DBGVAR(sagrid%n,1)
+         write(666,'(2G20.10)') r_surf_minmax
+         write(666,*) sagrid%initialized
+         write(666,*) sagrid%ndim
+         write(666,*) sagrid%n
+         close(666)
+#endif
+!
+#ifdef __OMP
+         __DEALL(sarhof_all_threads)
+         allocate(sarhof_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:numthreads-1))
+#else
+         __DEALL(sarhof)
+         allocate(sarhof(sagrid%n(1),sagrid%n(2),sagrid%n(3)))
+#endif
+!
+        endif
+       endif
+      endif
+! compute SA
+      call __NM(compute_surface_area)()
+!
+      r_surf_changed=.false.
+      surf_dist_changed=.false.
+!
+     endif ! chkupdate
+    endif ! surface area compute
+!
+    pressure = surface_force/surface_area * atm_per_akma ! note that for code generality this would have to be made nondimensional
+__DBGVAR(surface_force,1)
+__DBGVAR(surface_area,1)
+__DBGVAR(akma_per_pa,1)
+__DBGVAR(akma_per_atm,1)
+__DBGVAR(atm_per_akma,1)
+__DBGVAR(pressure,1)
+__DBGVAR(pressure_ave,1)
+!
+! update running average
+    if (pressure_num_samples < pressure_max_samples) __INC(pressure_num_samples)
+    d0=1d0/pressure_num_samples
+     __INCR(pressure_ave, d0 * (pressure - pressure_ave))
+! repeat for long-time average pressure
+    if (pressure_num_long_samples<pressure_max_long_samples) __INC(pressure_num_long_samples)
+    d0=1d0/pressure_num_long_samples
+     __INCR(pressure_long_ave, d0 * (pressure - pressure_long_ave))
+   endif ! chkupdate
+  endif ! pressure update
+!
+!=========================== evolve/update contour/distance value
+  if (distance_update_freq.gt.0) then
+! NOTE : it might happen that we did not yet compute the pressure; in this case, pressure_ave is unphysical ; unclear what to do in this case
+! we could disallow negative pressures (which are unphysical, but could be useful in a controller) ; then could use pressure<0 as a flag, as done in the density case
+   if __CHKUPDATE(distance_update_freq) then
+!
+! note that when the pressure is lower than the target pressure (NB: we technically cannot get below zero pressure because of the type of potential)
+! the code will most likely adjust it up very slowly (since the pressures in question are quite small - e.g. 1 atm) ; in such cases, we should have a faster
+! method of adjustment
+!
+    if (abs(distance_update_step).gt.0) then
+#ifdef __PDIRECT
+     d0 = ( pressure_target - pressure_ave )
+#else
+! a more gentle evolution, based loosely on the hypothesis that PV ~= const
+! need to protect against large divide by zero
+!    d0 = ( one/pressure_ave - one/pressure_target )
+     d0 = ( one/max(__ERRTOL,pressure_ave) - oopressure_target )
+#endif
+!  limit large changes for stability, e.g.
+     d0 = sign( min(one, abs(d0)), d0 );
+     if ((surface_distance.gt.__MINSURFDIST) .or. (d0.gt.zero)) then
+      __INCR(surface_distance, distance_update_step * d0) ! note that surface_distance < 0 in our notation ; so too high p => dist decr.
+      surf_dist_changed=.true.
+! check to make sure the distance is not too large; if so, warn and limit
+      if (surface_distance .lt. __MINSURFDIST) then
+       __WRN(whoami, 'SHELL SURFACE DISTANCE HAS REACHED LOWEST ALLOWED VALUE ('//ftoa(__MINSURFDIST)//'). RESTART WITH INCREASED CUTOFF OR PADDING')
+       surface_distance = __MINSURFDIST
+      endif
+      surface_contour_value = __RHOSAFE(surface_distance)
+     else
+      __WRN(whoami, 'SHELL SURFACE DISTANCE HAS REACHED LOWEST ALLOWED VALUE ('//ftoa(__MINSURFDIST)//'). RESTART WITH INCREASED CUTOFF OR PADDING')
+     endif
+ __DBGVAR(distance_update_step * d0, 1)
+ __DBGVAR(surface_distance, 1)
+ __DBGVAR(surface_contour_value, 1)
+    endif
+   endif
+  endif
+ endif ! barostat-related
+! BAROSTAT-RELATED CODE ^
+#endif
+! ==========================================================================================
+#ifdef __DASYSTAT
+! DASYSTAT-RELATED CODE v (much overlap with barostat code, but otherwise too complicated to follow if intermingled with barostat)
+ if (dasystat) then
+!== compute/update density :
+  if (density_update_freq.gt.0) then
+   if __CHKUPDATE(density_update_freq) then
+!
+ __DBGVAR(r_surf_changed,1)
+ __DBGVAR(surface_area_compute_freq,1)
+ __DBGVAR(density_update_freq,1)
+ __DBGVAR(iteration,1)
+ __DBGVAR(__CHKUPDATE(surface_area_compute_freq*density_update_freq),1)
+!== first, compute volume :
+    if (((r_surf_changed.or.surf_dist_changed).and.surface_area_compute_freq.gt.0).or.volume_bulk<zero) then ! note : a check to only recompute SA if surface atoms changed
+     if (__CHKUPDATE(surface_area_compute_freq*density_update_freq).or.volume_bulk<zero) then
+! check periodicity flag
+      __PRESENT(qper,qper_parser_override)
+      if (qper.neqv.qper_parser_override) then
+       __WRN(whoami, 'CANNOT CHANGE PERIODICITY FLAG DURING DYNAMICS WITH WATERSHELL DASYSTAT. INITIAL :'//ltoa(qper_parser_override)//', CURRENT :'//ltoa(qper))
+      elseif (qper) then ! check that mdcell, if passed in, did not change
+       if (present(mdcell)) then
+        if &
+&        ((abs(mdcell%a - sagrid%lengths(1)) .gt. __ERRTOL) .or. &
+&         (abs(mdcell%b - sagrid%lengths(2)) .gt. __ERRTOL) .or. &
+&         (abs(mdcell%c - sagrid%lengths(3)) .gt. __ERRTOL)) then
+          __WRN(whoami, 'CANNOT CHANGE UNIT CELL DIMENSIONS DURING DYNAMICS WITH WATERSHELL DASYSTAT.')
+          __ASSERT(abs(mdcell%a - sagrid%lengths(1)),<, __ERRTOL)
+          __ASSERT(abs(mdcell%b - sagrid%lengths(2)),<, __ERRTOL)
+          __ASSERT(abs(mdcell%c - sagrid%lengths(3)),<, __ERRTOL)
+        endif
+       endif
+      endif ! qper
+      r_com_sa=oonsurface * sum(r_surf,2)
+! check that grid dimensions are still adequate : 
+      if (.not.qper_parser_override.and.surface_area_grid_check_freq.gt.0) then
+       if __CHKUPDATE(surface_area_grid_check_freq*surface_area_compute_freq*density_update_freq) then
+!
+!        r_surf_minmax(1,:) = minval(r_surf,2) - r_com_sa - (abs(surface_distance)+surface_area_grid_buffer)
+!        r_surf_minmax(2,:) = maxval(r_surf,2) - r_com_sa + (abs(surface_distance)+surface_area_grid_buffer)
+!
+        r_surf_minmax(1,1) = minval(r_surf(1,:)-rad_surf) - r_com_sa(1) - ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+        r_surf_minmax(2,1) = maxval(r_surf(1,:)+rad_surf) - r_com_sa(1) + ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+!
+        r_surf_minmax(1,2) = minval(r_surf(2,:)-rad_surf) - r_com_sa(2) - ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+        r_surf_minmax(2,2) = maxval(r_surf(2,:)+rad_surf) - r_com_sa(2) + ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+!
+        r_surf_minmax(1,3) = minval(r_surf(3,:)-rad_surf) - r_com_sa(3) - ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+        r_surf_minmax(2,3) = maxval(r_surf(3,:)+rad_surf) - r_com_sa(3) + ( abs(surface_distance) + surface_area_grid_buffer + surf_padding)
+!
+        if (any(abs(r_surf_minmax(2,:) - r_surf_minmax(1,:) - sagrid%lengths).gt.surface_area_grid_recompute_change)) then
+         __MESSAGE(whoami, 'REINITIALIZING VOLUME COMPUTATION GRID.');
+         call ugrid_finalize(sagrid)
+         call ugrid_initialize(sagrid, 3, r_surf_minmax, (/surface_area_grid_spacing/), adjust_spacings_=.false.)
+!
+         __DBGVAR(sagrid%n,1)
+         __DBGVAR(r_surf_minmax,1)
+         __DBGVAR(sagrid%initialized,1)
+         __DBGVAR(sagrid%n,1)
+!
+#ifdef __OMP
+         __DEALL(sarhof_all_threads)
+         allocate(sarhof_all_threads(sagrid%n(1),sagrid%n(2),sagrid%n(3),0:numthreads-1))
+#else
+         __DEALL(sarhof)
+         allocate(sarhof(sagrid%n(1),sagrid%n(2),sagrid%n(3)))
+#endif
+        endif ! reallocate
+       endif ! grid size check
+      endif ! grid size check
+! compute volume
+      call __NM(compute_bulk_volume)()
+!
+  __DBGVAR(volume_bulk,1)
+!
+      r_surf_changed=.false.
+      surf_dist_changed=.false.
+!
+     endif ! chkupdate area compute
+    endif ! surface area/volume compute
+!
+    density = (solvent_mass_obulk - solvent_mass_ibulk)/volume_bulk*gml_per_akma
+! to keep outside mass :
+!    density = (solvent_mass - (solvent_mass_ibulk))/volume_bulk*gml_per_akma ! note that for code generality this would have to be made nondimensional
+__DBGVAR(surface_distance,1)
+__DBGVAR(ibulk_boundary_distance,1)
+__DBGVAR(obulk_boundary_distance,1)
+__DBGVAR(solvent_mass,1)
+__DBGVAR(solvent_mass_ibulk,1)
+__DBGVAR(solvent_mass_obulk,1)
+__DBGVAR(solvent_mass_outside,1)
+__DBGVAR(volume_bulk,1)
+__DBGVAR(gml_per_akma,1)
+__DBGVAR(density,1)
+__DBGVAR(density_ave,1)
+__DBGVAR(density_target,1)
+!
+! update running average
+    if (density_num_samples .lt. density_max_samples) __INC(density_num_samples)
+    d0=1d0/density_num_samples
+     __INCR(density_ave, d0 * (density - density_ave))
+   endif ! chkupdate
+  endif ! density update
+!
+!=========================== evolve/update contour/distance value
+  __DBGVAR(distance_update_freq,1)
+  __DBGVAR(distance_update_step,1)
+  if (distance_update_freq.gt.0) then
+! NOTE : in the current code it might happen that we did not yet compute the density (if done infrequently); in that case d<0
+   if (__CHKUPDATE(distance_update_freq) .and. density_ave>zero) then
+    if (abs(distance_update_step).gt.zero) then
+     d0 = ( density_target - density_ave )
+     if ((surface_distance.gt.__MINSURFDIST) .or. (d0.gt.zero)) then
+      __INCR(surface_distance, d0 * distance_update_step) ! note that surface_distance < 0 in our notation ; so too high p => dist decr.
+      surf_dist_changed=.true.
+! check to make sure the distance is not too large; if so, warn and limit (same as barostat code)
+      if (surface_distance .lt. __MINSURFDIST) then
+       __WRN(whoami, 'SHELL SURFACE DISTANCE HAS REACHED LOWEST ALLOWED VALUE ('//ftoa(__MINSURFDIST)//'). RESTART WITH INCREASED CUTOFF OR PADDING')
+       surface_distance = __MINSURFDIST
+      endif
+      surface_contour_value = __RHOSAFE(surface_distance)
+     else
+      __WRN(whoami, 'SHELL SURFACE DISTANCE HAS REACHED LOWEST ALLOWED VALUE ('//ftoa(__MINSURFDIST)//'). RESTART WITH INCREASED CUTOFF OR PADDING')
+     endif
+    endif
+   endif
+!
+   __DBGVAR(surface_distance,1)
+   __DBGVAR(surface_contour_value,1)
+!
+! make sure that the bulk boundary is not too close to the surface to obtain an accurate density
+   if( qbulk_boundary_recompute ) then
+    if ((abs(surface_distance) - abs(obulk_boundary_distance)) .lt. &
+&    ( __BULK_BOUNDARY_RECOMPUTE_LIMIT * __OUTER_BULK_BOUNDARY_OFFSET ) ) then ! recompute bulk boundary definition
+    __MESSAGE(whoami, 'OUTER BULK BOUNDARY ('//ftoa(obulk_boundary_distance)//') IS TOO CLOSE TO SURFACE BOUNDARY ('//ftoa(surface_distance)//'). WILL RECOMPUTE:')
+!
+    elseif( (abs(surface_distance) - abs(obulk_boundary_distance)) .gt. &
+&    ( ( two - __BULK_BOUNDARY_RECOMPUTE_LIMIT) * __OUTER_BULK_BOUNDARY_OFFSET ) ) then ! recompute bulk boundary definition
+    __MESSAGE(whoami, 'OUTER BULK BOUNDARY ('//ftoa(obulk_boundary_distance)//') IS TOO FAR FROM SURFACE BOUNDARY ('//ftoa(surface_distance)//'). WILL RECOMPUTE:')
+    else !
+     goto 998
+    endif ! outer bulk_bdry distance
+! 6/24/24 unclear how to best do the update, because changing the bulk definition too abruptly will cause oscillations
+    d0=third
+    obulk_boundary_distance = -( abs(surface_distance) - __OUTER_BULK_BOUNDARY_OFFSET ) * d0 + (one-d0) * obulk_boundary_distance
+    ibulk_boundary_distance = -( abs(surface_distance) - __INNER_BULK_BOUNDARY_OFFSET ) * d0 + (one-d0) * ibulk_boundary_distance
+    obulk_boundary_contour_value = __RHOSAFE(obulk_boundary_distance)
+    ibulk_boundary_contour_value = __RHOSAFE(ibulk_boundary_distance)
+!
+    __MESSAGE(whoami, 'LOCATION OF OUTER BULK BOUNDARY SET TO '//ftoa(obulk_boundary_distance)//' A FROM PROTEIN. CONTOUR VALUE IS '//ftoa(obulk_boundary_contour_value))
+    __MESSAGE(whoami, 'LOCATION OF INNER BULK BOUNDARY SET TO '//ftoa(ibulk_boundary_distance)//' A FROM PROTEIN. CONTOUR VALUE IS '//ftoa(ibulk_boundary_contour_value))
+ 998  continue
+   endif ! qbulk_recompute
+  endif ! distance update
+ endif ! dasystat-related
+#endif
+!============================================= output restart file
+ if (output_freq.gt.0) then
+  if __CHKUPDATE(output_freq) then
+! write a short update of simulation parameters:
+  i_=0 ;
+#define __OUT(...)  __INC(i_);write(_MSGBUF(i_),*) __VA_ARGS__
+#define _TAB char(9)//char(9)
+  __OUT('==========================================================================================')
+  __OUT('Iteration:', iteration)
+  __OUT('Surface boundary distance:       ', surface_distance,'(contour value:', surface_contour_value,')')
+#ifdef __DEBUG
+  __OUT('(MIN DISTANCE:',__MINSURFDIST,')')
+#endif
+#ifdef __DEBUG
+  __OUT('(MIN/MAX CONTOUR VALUES:',  __RHO_MIN,'/', __RHO_MAX,')')
+#endif
+! this needs to be computed here, because we do not need it at every step:
+! cannot use vector operation since a function is involved
+!  current_surface_distance=zero
+!  do ii=1, nsolvent
+!    if (qoutside_solv(ii)) then
+!     __INCR(current_surface_distance , __RHO_INVSAFE(rho_solv(ii)))
+!    endif
+!  enddo
+!   __SCALE(current_surface_distance, oonsolvent_outside)
+!   __SCALE(current_surface_distance, oonsolvent)
+!
+!  __OUT('Current avg. distance to protein:', current_surface_distance) ! not sure this is useful, in part because of the density cutoff below one
+  __OUT('Current avg. solvent contour val:', sum(rho_solv)*oonsolvent)
+  __ASSERT(qsbe,.eqv.,.true.)
+  __OUT('Surface energy:                  ', surface_energy)
+  __OUT('Curvature energy:                ', curvature_energy)
+  __OUT('# Solvent atoms outside / total: ', nsolvent_outside,'/',nsolvent)
+
+#ifdef __FORCE_STATS
+  total_solute_force=zero
+  total_solvent_force=zero
+  max_solute_force=zero
+  max_solvent_force=zero
+  rms_solute_force=zero
+  rms_solvent_force=zero
+!
+  do ii=1, nsurface_atoms
+   iforce=fr(:,isurface_atoms(ii))
+   __INCR(total_solute_force, iforce)
+   d0=iforce(1)**2 + iforce(2)**2 + iforce(3)**2
+   __INCR(rms_solute_force, d0)
+   max_solute_force=max(max_solute_force,d0)
+  enddo
+  do ii=1, nsolvent
+   iforce=fr(:,isolvent_atoms(ii))
+   __INCR(total_solvent_force, iforce)
+   d0=iforce(1)**2 + iforce(2)**2 + iforce(3)**2
+   __INCR(rms_solvent_force, d0)
+   max_solvent_force=max(max_solvent_force,d0)
+  enddo
+   __OUT('======= FORCE STATISTICS ==============')
+   __OUT('Total force applied to surface atoms:  ', total_solute_force)
+   __OUT('RMS of surface atom forces:            ', sqrt(rms_solute_force*oonsurface))
+   __OUT('Largest force acting on a surface atom:', sqrt(max_solute_force))
+   __OUT('Total force applied to solvent atoms:  ', total_solvent_force)
+   __OUT('RMS of solvent atom forces:            ', sqrt(rms_solvent_force*oonsolvent) )
+   __OUT('Largest force acting on a solvent atom:', sqrt(max_solvent_force))
+#endif
+!
+#ifdef __ROTRES
+  if (qrigid_body_restraint) then
+#ifdef __OBSOLETE
+! compute energy here, since this will happen rarely
+   rigid_body_energy=zero
+   if ( abs(rigid_body_force_constant).gt.__ERRTOL) then
+    do ii=1, nsurface_atoms
+     __INCR(rigid_body_energy, sum( dr_surf(:,ii) * rb_wgt(ii) *  matmul(A_rb,r_surf_ref(:,ii))) )
+    enddo
+   __OUT('Rotational restraint energy:        ', rigid_body_energy)
+! translational component :
+    d0=dot_product(dcom, dcom) / (rigid_body_force_constant * 2 )
+    __OUT('Translational restraint energy:     ', d0)
+    __INCR(rigid_body_energy, d0)
+   endif
+   __OUT('Total rigid-body restraint energy:  ', rigid_body_energy)
+#else
+   rigid_body_energy=zero
+   if ( abs(rigid_body_force_constant).gt.__ERRTOL) then
+    dcom = dcom / rigid_body_force_constant ! remove scaling from COM difference
+    A_rb = A_rb / rigid_body_force_constant + Id3 ! remove scaling from rotation matrix and add back identity
+    do ii=1, nsurface_atoms
+     __INCR(rigid_body_energy, sum( ( dr_surf(:,ii) - r_surf_ref(:,ii) )**2  - ( dr_surf(:,ii) - matmul(A_rb, r_surf_ref(:,ii)))**2) * rb_wgt(ii))
+    enddo
+    __SCALE(rigid_body_energy, half*rigid_body_force_constant)
+    __OUT('Rotational restraint energy:        ', rigid_body_energy)
+     d0=half*rigid_body_force_constant*dot_product( dcom, dcom )
+    __OUT('Translational restraint energy:     ', d0)
+    __INCR(rigid_body_energy, d0)
+    __OUT('Total rigid-body restraint energy:  ', rigid_body_energy)
+   endif
+#endif
+#ifdef __DEBUG
+! repeat
+! alternative calculation, close to the unsimplified analytical definition
+   rigid_body_energy=zero
+   if ( abs(rigid_body_force_constant).gt.__ERRTOL) then
+    do ii=1, nsurface_atoms
+     __INCR(rigid_body_energy, sum( ( dr_surf(:,ii) - r_surf_ref(:,ii) + dcom )**2 ) * rb_wgt(ii))
+     __DECR(rigid_body_energy, sum( ( dr_surf(:,ii) - matmul(A_rb, r_surf_ref(:,ii)))**2) * rb_wgt(ii))
+    enddo
+    __SCALE(rigid_body_energy, half*rigid_body_force_constant)
+    __OUT('Rigid-body restraint energy (DBG):  ', rigid_body_energy)
+   endif
+#endif
+  endif
+#endif
+!
+#ifdef __FORCE_STATS
+  __OUT('=======================================')
+#endif
+!
+#if defined(__SHOW_NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST) && defined(__SORT_LIST)
+  neighbor_dmin=nsurface_coords; neighbor_dmax=1; neighbor_dsum=0;
+#ifdef __OMP
+!$omp parallel do private(neighbor_depth,i) shared(solute_neighbor_mind,neighbor_list_factor) reduction(min:neighbor_dmin) reduction(max:neighbor_dmax) reduction(+:neighbor_dsum) _OMP_EXTRA
+#endif
+  do i=1, nsolvent
+   neighbor_depth = __NEIGHBOR_LIST_LENGTH_DENSITY
+   if ( neighbor_depth .lt. neighbor_dmin ) then 
+    neighbor_dmin=neighbor_depth
+   else if ( neighbor_depth .gt. neighbor_dmax ) then 
+    neighbor_dmax=neighbor_depth
+   endif
+    neighbor_dsum=neighbor_dsum + neighbor_depth
+  enddo
+#ifdef __OMP
+!$omp end parallel do
+#endif
+!  __OUT('================================')
+  __OUT('Solute neighbor list search depth (min:ave:max): (',neighbor_dmin,':',one*neighbor_dsum/nsolvent,':',neighbor_dmax,')')
+!  __OUT('================================')
+#endif
+!
+#ifdef __BAROSTAT
+  if (barostat) then
+   __OUT('======= PRESSURE STATISTICS ===========')
+   __OUT('Target pressure (atm):           ', pressure_target)
+   __OUT('Simulation pressure (short):     ', pressure_ave)
+   __OUT('Average pressure (long):         ', pressure_long_ave)
+   __OUT('Instantaneous pressure (atm):    ', pressure)
+   __OUT('Surface force on solvent shell:  ', surface_force)
+   __OUT('Curvature force on solvent shell:', curvature_force)
+   __OUT('Surface area of solvent shell:   ', surface_area)
+  endif
+#endif
+#ifdef __DASYSTAT
+  if (dasystat) then
+   __OUT('======= DENSITY STATISTICS ============')
+  __OUT('# Solute atoms used for density:  ', nsurface_atoms)
+#ifdef __DUMSURF
+  if (qdumsurf) then ; __OUT('# Fixed dummy atoms used for density: ', nsurface_coord) ; endif
+#endif
+   __OUT('Target density (g/mL):           ', density_target)
+   __OUT('Simulation density (g/mL):       ', density_ave)
+   __OUT('Instantaneous density (g/mL):    ', density)
+   __OUT('Volume of bulk solvent (Ang^3):  ', volume_bulk)
+   __OUT('Mass of bulk solvent (amu):      ', solvent_mass_obulk-solvent_mass_ibulk)
+   __OUT('Outer bulk boundary distance:    ', obulk_boundary_distance,'(contour value:', obulk_boundary_contour_value,')')
+   __OUT('Inner bulk boundary distance:    ', ibulk_boundary_distance,'(contour value:', ibulk_boundary_contour_value,')')
+__DBGVAR(solvent_mass,1)
+__DBGVAR(solvent_mass_outside,1)
+__DBGVAR(solvent_mass_obulk,1)
+__DBGVAR(solvent_mass_ibulk,1)
+  endif
+#endif
+  __OUT('======================================')
+!
+  __PRINT(_MSGBUF)
+!
+  endif
+ endif
+!
+ if (restart_freq.gt.0) then ; if __CHKUPDATE(restart_freq) then
+! write restart file
+   __MESSAGE(whoami, 'WRITING RESTART FILE TO ("'//trim(output_file)//'")') ! note that the _output_ restart is called output_file ; restart_file is for input (above)
+   call __NM(write_restart_file)
+ endif                      ; endif
+!
+!
+#ifdef __DEBUGDUMP
+! write simulation state to file for force debugging
+ i=-1;
+ call files_open(i, 'surfind.dat', 'FORMATTED','WRITE')
+ write(i,*) isurface_atoms
+ call files_close(i)
+!
+ call files_open(i, 'solvind.dat', 'FORMATTED','WRITE')
+ write(i,*) isolvent_atoms
+ call files_close(i)
+!
+ call files_open(i, 'forces.dat', 'FORMATTED','WRITE')
+ write(i,*) fr
+ call files_close(i)
+!
+ call files_open(i, 'positions.dat', 'FORMATTED','WRITE')
+ write(i,*) r
+ call files_close(i)
+!
+ call files_open(i, 'radii.dat', 'FORMATTED','WRITE')
+ write(i,*) rad_surf
+ call files_close(i)
+!
+ call files_open(i, 'r_surf.dat', 'FORMATTED','WRITE')
+ write(i,*) r_surf
+ call files_close(i)
+!
+ call files_open(i, 'r_solv.dat', 'FORMATTED','WRITE')
+ write(i,*) r_solv
+ call files_close(i)
+!
+ call files_open(i, 'rho_solv.dat', 'FORMATTED','WRITE')
+ write(i,*) rho_solv
+ call files_close(i)
+!
+ call files_open(i, 'drho_solv.dat', 'FORMATTED','WRITE')
+ write(i,*) drho_solv
+ call files_close(i)
+!
+ call files_open(i, 'd2rho_solv.dat', 'FORMATTED','WRITE')
+ write(i,*) d2rho_solv
+ call files_close(i)
+!
+ call files_open(i, 'dsurf_solv.dat', 'FORMATTED','WRITE')
+ write(i,*) dsurf_solv
+! write(i,*) __RHO_INVSAFE(rho_solv(1)), rho_solv(1), rho_solv(1)*2-1
+ call files_close(i)
+!
+ call files_open(i, 'acurv_solv.dat', 'FORMATTED','WRITE')
+ write(i,*) acurv_solv
+ call files_close(i)
+!
+ call files_open(i, 'misc.dat', 'FORMATTED','WRITE')
+ write(i,*) surf_stdev, surf_padding, surface_distance, surface_contour_value, surface_energy, surface_force_constant, cutoff_surf
+ call files_close(i)
+#endif
+!
+ end __SUB(main)
+!================================================================
+ __SUB(compute_density)(qtruncate_loop, qcompute_grad, qcompute_hess)
+#define __NEWGRADHESS
+#ifdef __OMP
+ use omp_lib
+#endif
+!
+ bool, intent(in) :: qtruncate_loop ! whether to loop over part of the (partially) sorted neighbor list, or the entire list
+ bool, intent(in) :: qcompute_grad  ! grads ?
+ bool, intent(in) :: qcompute_hess  ! hessian ?
+! ^ this makes sense only if the neighbor lists are sorted ; if _SORT_LIST is undefined then there is no effect
+!   NB:the density calculation is still truncated once the solvent atom is determined to be inside the shell
+!   to avoid the truncation, you must define an upper bound to the surface contour, e.g. I use nsurface_coord
+ int :: i, j
+ float :: rp(3), rw(3), dr(3), dr2(6), drn, drn2, b, expb, ooc
+#ifndef __SIMPLERHO
+ float :: a, expa, em, ep
+#endif
+#ifdef __NEWGRADHESS
+ float :: rhop, rhopp, oor
+#endif
+#ifdef __SORT_LIST
+ int :: jj, nsurface_coord_maxind
+ float :: dr2old ! squared distance difference from previous iteration
+#if defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+ int :: neighbor_list_length
+ int :: neighbor_list_misses
+#ifdef __OMP
+ int :: __U(neighbor_list_misses)
+#endif
+#endif
+#endif
+!
+#ifdef __HAMILTONIAN
+#ifdef __OMP
+ int :: tid
+#endif
+ int, dimension(:), pointer :: ispt_this_thread
+ float, dimension(:,:), pointer :: drho_surf_this_thread, drho_surf_all_thread
+#endif
+!
+#ifdef __ERFHYBRID
+ float :: isgn_, x_, erfb
+#ifndef __SIMPLERHO
+ float :: erfa
+#endif
+#endif
+ float :: rmaxsurf, rsurf ! , rsurfn
+#ifdef __DASYSTAT
+#ifdef __OMP
+ float :: __U(solvent_mass_ibulk)
+ float :: __U(solvent_mass_obulk)
+#endif
+ bool :: qibulk, qobulk
+#endif
+ bool :: qoutside
+ __IAM(__NM(compute_density))
+!
+! different erf implementations/approximations
+  float :: erfo7  ! approximation to within O(-7)
+  float :: erfo5  ! approximation to within O(-5) [contains an exponential term]
+!
+#if defined(__OMP) && defined(__OMP_DEBUG)
+!$omp parallel _OMP_EXTRA
+!$omp single
+ __DBGOUT('OMP: Available processors: ',omp_get_num_procs());
+ __DBGOUT('OMP: Maximum threads:      ',omp_get_max_threads());
+ __DBGOUT('OMP: Current threads:      ',omp_get_num_threads());
+ __DBGOUT('OMP: This thread:          ',omp_get_thread_num());
+ __DBGOUT('OMP: Ancestral thread:     ',omp_get_ancestor_thread_num(omp_get_level()));
+!$omp end single
+!$omp end parallel
+#endif
+!
+! compute density at each solvent coordinate
+! adapted from molecule.ftn in continua
+!
+! if openmp is used, cannot call the function erfo7, so hack to call inlined macro here
+#ifdef __OMP
+#//define erfo7 __erfo7s
+#define erfo7 __erfo7
+#endif
+!
+#ifdef __DASYSTAT
+ if (dasystat) then 
+  solvent_mass_ibulk=zero
+  solvent_mass_obulk=zero
+!
+__DBGVAR(surface_distance,1)
+__DBGVAR(ibulk_boundary_distance,1)
+__DBGVAR(obulk_boundary_distance,1)
+__DBGVAR(surface_contour_value,1)
+__DBGVAR(ibulk_boundary_contour_value,1)
+__DBGVAR(obulk_boundary_contour_value,1)
+!
+ endif
+#endif
+!========================================================================
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
+#ifdef __DDEBUG
+ __DBGOUT('Called ', whoami,'(full loop) with neighbor_list_factor=',neighbor_list_factor)
+#endif
+#ifdef __NEIGHBOR_LIST_CHECK
+ if (.not.qtruncate_loop) neighbor_list_misses=0
+#endif
+#endif
+!==========================================================================================
+#ifdef __OMP
+!$omp parallel _OMP_EXTRA &
+!$omp shared ( rho_solv, drho_solv, d2rho_solv, r_solv, r_surf, rad_surf, surf_padding, nsolvent, nsurface_coord, cutoff_surf, oo_surf_stdev &
+#ifdef __DASYSTAT
+!$omp , solvent_mass_ibulk, solvent_mass_obulk, mass_solv &
+#endif
+#ifdef __SORT_LIST
+!$omp , solute_neighbor_list &
+#ifdef __NEIGHBOR_LIST
+!$omp , solute_neighbor_mind &
+#ifdef __NEIGHBOR_LIST_CHECK
+!$omp , neighbor_list_misses &
+#endif
+#endif
+#endif
+!$omp ) &
+!$omp private ( rw, i, j, rp, rsurf, rmaxsurf, dr, dr2, drn, drn2, ooc, b, expb, qoutside &
+#ifdef __ERFHYBRID
+!$omp , x_, isgn_, erfb &
+#endif
+#ifndef __SIMPLERHO
+!$omp , a, expa, em, ep &
+#ifdef __ERFHYBRID
+!$omp , erfa &
+#endif
+#endif
+#ifdef __NEWGRADHESS
+!$omp , rhop, rhopp, oor &
+#endif
+#ifdef __DASYSTAT
+!$omp , __U(solvent_mass_ibulk), qibulk &
+!$omp , __U(solvent_mass_obulk), qobulk &
+#endif
+#ifdef __SORT_LIST
+!$omp ,dr2old, jj, nsurface_coord_maxind &
+#if defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+!$omp , __U(neighbor_list_misses), neighbor_list_length &
+#endif
+#endif
+#ifdef __HAMILTONIAN
+!$omp , tid, ispt_this_thread, drho_surf_this_thread, drho_surf_all_thread, __U(nspt) &
+#endif
+!$omp )
+!
+#ifdef __DASYSTAT
+ if (dasystat) then
+  __U(solvent_mass_ibulk)=zero
+  __U(solvent_mass_obulk)=zero
+ endif
+#endif
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+ if (.not.qtruncate_loop) __U(neighbor_list_misses)=0
+#endif
+#endif
+!
+#ifdef __HAMILTONIAN
+#ifdef __OMP
+ tid=omp_get_thread_num()
+#else
+#define tid 0
+#endif
+ ispt_this_thread=>ispt(:,tid)
+ drho_surf_this_thread=>drho_surf(:,:,2*tid)
+ drho_surf_all_thread=>drho_surf(:,:,2*tid+1)
+ drho_surf_all_thread=zero ! initialize this array because it is updated incrementally
+#ifndef __OMP
+#undef tid
+#endif
+#endif
+!
+#ifdef __OMP
+!$omp do schedule(runtime)
+#endif
+ do i=1, nsolvent ! outer loop over solvent atoms
+!
+#ifdef __HAMILTONIAN
+   __U(nspt)=0 ! set number of surface support atoms for this solvent atom to zero
+#endif
+!
+   qoutside=.true. ! check if atom is inside surface boundary
+#ifdef __DASYSTAT
+   if (dasystat) then 
+    qibulk=.true. ! check if atom within inner bulk
+    qobulk=.true. ! check if atom within outer bulk
+   endif
+#endif
+   rho_solv(i)=zero
+   if (qcompute_grad) drho_solv(:,i)=zero
+   if (qcompute_hess) d2rho_solv(:,i)=zero
+   rw=r_solv(:,i);
+#ifdef __SORT_LIST
+   dr2old=-1.d0  ! set to a small number to guarantee that no swap is done on first iteration
+!
+#ifdef __NEIGHBOR_LIST
+   if (qtruncate_loop) then
+    nsurface_coord_maxind = __NEIGHBOR_LIST_LENGTH_DENSITY
+   else
+    nsurface_coord_maxind = nsurface_coord ! full loop
+#ifdef __NEIGHBOR_LIST_CHECK
+    neighbor_list_length = __NEIGHBOR_LIST_LENGTH_DENSITY
+#endif
+   endif
+#else
+   nsurface_coord_maxind = nsurface_coord ! inner loop over solute atoms (list sorted, but distance checking not limited to neighbors)
+#endif
+   do jj=1, nsurface_coord_maxind
+    j=solute_neighbor_list(jj,i)
+#else
+   do j=1, nsurface_coord ! inner loop over solute atoms (list not sorted)
+#endif
+    rp=r_surf(:,j)
+    rsurf    = ( rad_surf(j) + surf_padding )
+    rmaxsurf = ( cutoff_surf  + rsurf  )
+    dr = rp-rw ; ! vector from rw to rp (i.e., usually inwardly-directed)
+#ifdef __UNWRAP_PBC
+    if (qper_parser_override) then
+     __DIST_PBC(dr(1),ucell%a)
+     __DIST_PBC(dr(2),ucell%b)
+     __DIST_PBC(dr(3),ucell%c)
+    endif
+#endif
+    drn2=sum(dr**2);
+#ifdef __SORT_LIST
+!   bubble sort between this and previous atom based on distance
+    if (drn2 .lt. dr2old) then ! bubble sort
+     solute_neighbor_list(jj,i)=solute_neighbor_list(jj-1,i)
+     solute_neighbor_list(jj-1,i)=j
+    endif
+    dr2old=drn2
+#endif
+    if (drn2 .gt. rmaxsurf**2) cycle ! solute atom outside cutoff for this solvent atom -- skip it
+!   atom is within the cutoff; record its index before computing density contribution
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
+    if (.not.qtruncate_loop) solute_neighbor_mind(i)=jj
+!   since jj is increasing, solute_neighbor_mindist(i) will store the largest index for any atom within the cutoff (otherwise we cycle above)
+!   this is a measure of how far we have to go to compute all the interactions within the cutoff ; so we store this number
+!   we only apply it for qtruncate_loop=.false. i.e. full loop over atoms ; otherwise, the result is probably too approximate (almost surely there will
+!   be atoms that diffuse forward and backward in the list, which are beyond the _NEIGHBOR_LIST_LENGTH_DENSITY cutoff
+#endif
+!   compute quantities required for density, but not necessarily for gradient or hessian :
+    rsurf=rsurf * oo_surf_stdev
+    drn = sqrt(drn2) * oo_surf_stdev !  = r/s
+    b = osq2 * (drn - rsurf)        !  = (dr-a)/(sqrt(2)s)
+#ifndef __SIMPLERHO
+    a = osq2 * (drn + rsurf)
+#ifndef __MEDIUMRHO
+    expa = __gauss(a)
+    expb = __gauss(b)               ! = e^( - 0.5 * ( (dr - a)/s )^2
+    ooc = one / drn                 ! = s/r
+#endif
+#endif
+!
+! update density
+#ifdef __ERFHYBRID
+    __erfo7i(b,erfb)
+#ifndef __SIMPLERHO
+    __erfo7i(a,erfa)
+#ifndef __MEDIUMRHO
+    __INCR(rho_solv(i), half * ( erfa - erfb ) + osq2pi * ooc * ( expa - expb ) ) ! full rho
+#else
+    __INCR(rho_solv(i), half * ( erfa - erfb ) ) ! medium rho
+#endif
+#else
+    __INCR(rho_solv(i), half * ( one  - erfb ) ) ! simple rho
+#endif
+#else
+#ifndef __SIMPLERHO
+#ifndef __MEDIUMRHO
+    __INCR(rho_solv(i), half * ( __erf(a) - __erf(b) ) + osq2pi * ooc * ( expa - expb ) )
+#else
+    __INCR(rho_solv(i), half * ( __erf(a) - __erf(b) ) )
+#endif
+#else
+    __INCR(rho_solv(i), half * ( one      - __erf(b) ) )
+#endif
+#endif
+!
+!calc gradient & hessian, if requested
+!
+! needed for rho (simple) : b
+! needed for rho (full)   : a,b,expa,expb,ooc=s/r (everything...)
+! needed for gradient (simplerho) : expb, b, ooc
+! needed for gradient (mediumrho) : expa, a, expb, b, ooc
+! needed for gradient (fullrho)   : expa, a, expb, b, ooc
+! needed for hessian (simple)     : expb, b, ooc
+! needed for hessian (medium)     : expa, a, expb, b, ooc
+! needed for hessian (full)       :
+!
+! 8/9/24 : rewrite gradient calculation for clarity
+    if(qcompute_grad.or.qcompute_hess) then
+#ifdef __NEWGRADHESS
+! defines for reuse (NB very dangerous b/c easy to make mistake) :
+! commented out in favor of adding new variables
+#//define em b
+#//define rhop expb
+#//define rhopp drn
+! note that multiplication by "oo_surf_stdev * osq2pi" can be moved out of all loops
+#if (defined(__SIMPLERHO))
+! rhop :  rho prime -- derivative wrt dr (separation distance) ; rhopp rho prime-prime, second derivative
+! factor out "oo_surf_stdev * osq2pi" henceforth
+     ooc=one/drn
+     expb=__gauss(b)
+     rhop  = - expb      ! prime
+#elif (defined(__MEDIUMRHO))
+#//define ep a
+     ooc=one/drn
+     expa=__gauss(a)
+     expb=__gauss(b)
+     em = expa-expb
+     rhop  = em ! prime
+#else
+#//define ep a
+     em = expa-expb
+     ep = expa+expb
+!     rhop = - oo_surf_stdev * osq2pi * ( ooc**2 * em + rsurf * ooc * ep ) ! rsurf x ooc  = a/r in notes
+     rhop = - ( ooc * ( ooc * em + rsurf * ep ) ) ! prime
+#endif
+#//define oor b
+     oor = ooc * oo_surf_stdev
+     if (qcompute_grad) then
+      __SCALE(dr, rhop * oor )
+      __DECR(drho_solv(:,i),dr) ! negative because dr = r_protein - r_water
+     endif
+     if (qcompute_hess) then
+      dr2(1)=dr(1)**2
+      dr2(2)=dr(1)*dr(2)
+      dr2(3)=dr(1)*dr(3)
+      dr2(4)=dr(2)**2
+      dr2(5)=dr(2)*dr(3)
+      dr2(6)=dr(3)**2
+#if defined(__SIMPLERHO)
+     rhopp = -oo_surf_stdev * (drn-rsurf) * rhop ! prime-prime
+!     rhopp =  oo_surf_stdev**2 * osq2pi * (drn-rsurf) * expb
+#elif defined (__MEDIUMRHO)
+     ep = expa+expb
+     rhopp =  - oo_surf_stdev * ( drn * em + rsurf * ep ) ! prime-prime
+#else
+     rhopp = oo_surf_stdev * ( ooc * (one + 2 * ooc**2 + rsurf**2) * em  +  rsurf * (ooc**2 + one) * ep ) ! prime-prime
+#endif
+      __SCALE(dr2,oor*(rhopp-rhop*oor))
+      __INCR(dr2(1),rhop)
+      __INCR(dr2(4),rhop)
+      __INCR(dr2(6),rhop)
+      __SCALE(dr2,oor)
+      __INCR(d2rho_solv(:,i),dr2)
+     endif
+#else
+!=================== OLDER CODE BELOW ===================================
+! 7/2/24 : the full and simpler rho models are coded (almost) separately
+#if !(defined(__SIMPLERHO) || defined(__MEDIUMRHO))
+! note that, if dr ~ small, ( expa - expb ) / c is singular, though the limit (and asymptote) exists
+! however, in the calculations here, that would imply atoms being very close together, which we consider impossible, so ignore this case
+     a=expa+expb
+     b=expa-expb
+     expa = (ooc*oo_surf_stdev)**2 ! 1/r^2
+! note the sign difference vs notes (dr = rp-rw here, and the derivative is wrt rw, so need - for grad)
+     expb = expa * ( a * rsurf + b * ooc ) ! drho/d|r| / |r|)
+!     b=ooc * oo_surf_stdev**2 ! reuse = 1/(sr)
+     if (qcompute_grad) then
+!      __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( a * rsurf + b * ooc) )
+!      __SCALE(dr, (ooc*oo_surf_stdev)**2 * ( a * rsurf + b * ooc) )
+       __SCALE(dr, expb)
+! add gradient contribution
+      __INCR(drho_solv(:,i),dr)
+     endif
+     if (qcompute_hess) then
+      dr2(1)=dr(1)**2
+      dr2(2)=dr(1)*dr(2)
+      dr2(3)=dr(1)*dr(3)
+      dr2(4)=dr(2)**2
+      dr2(5)=dr(2)*dr(3)
+      dr2(6)=dr(3)**2
+!      __SCALE(dr2, oo_surf_stdev**2 * expa * ( a*rsurf*(one+three*ooc**2) + b*ooc*(one+rsurf**2+three*ooc**2) ) )
+      __SCALE(dr2, oo_surf_stdev**2 * expa * ( (a*rsurf+b*ooc)*(one+three*ooc**2) + b*ooc*rsurf**2) )
+      __DECR(dr2(1),expb) ! identity times drho/d|r| / |r|)
+      __DECR(dr2(4),expb)
+      __DECR(dr2(6),expb)
+      __INCR(d2rho_solv(:,i),dr2)
+     endif ! hessian
+#else
+#ifdef __MEDIUMRHO
+     expa = __gauss(a)
+#endif
+     expb = __gauss(b)               ! = e^( - 0.5 * ( (dr - a)/s )^2
+     ooc = one / drn                 ! = s/r
+     b=ooc * oo_surf_stdev**2 ! reuse = 1/(sr)
+     if (qcompute_hess) then
+      dr2(1)=dr(1)**2
+      dr2(2)=dr(1)*dr(2)
+      dr2(3)=dr(1)*dr(3)
+      dr2(4)=dr(2)**2
+      dr2(5)=dr(2)*dr(3)
+      dr2(6)=dr(3)**2
+! reuse vars ; it's a nuisance to have many because of OMP
+#ifdef __MEDIUMRHO
+!        b * (  ( drn - rsurf + ooc ) * expb - (drn + rsurf + ooc) * expa ) =
+!        b * (  (drn + ooc) * (expb - expa) - rsurf * ( expb + expa ) )
+      a = b * (expb - expa) ! reuse a
+      __SCALE(dr2, b * (  (drn + ooc) * a - b * rsurf * ( expb + expa ) ) )
+      __DECR(dr2(1),a) ! subtract identity times (expb - expa)*b
+      __DECR(dr2(4),a)
+      __DECR(dr2(6),a)
+#else
+!      dr2 = ( ooc * oo_surf_stdev**2 * b * sqrt2  + ooc**2 * oo_surf_stdev**2 ) * dr2 ;
+! NOTE : 1/r = (s / r ) / s  = ooc * oo_surf_stdev
+!      dr2 = ooc * oo_surf_stdev**2 * ( b * sqrt2  + ooc ) * dr2 ; ! vecop ; invalid if b is reused (changed) above
+!      __SCALE(dr2 , ooc * oo_surf_stdev**2 * ( (drn-rsurf) + ooc ) )
+      __SCALE(dr2, b * ( drn - rsurf + ooc ) ) ! dr2 * ( (r-a)/s + 1/r^2 ) * 1/(sr)
+      __DECR(dr2(1),one) ! subtract identity
+      __DECR(dr2(4),one)
+      __DECR(dr2(6),one)
+!      __SCALE(dr2, osq2pi * ooc * oo_surf_stdev**2 * expb )
+      __SCALE(dr2, b * expb ) ! missing osq2pi, but that is a constant that could go outside the loop 
+#endif
+      __INCR(d2rho_solv(:,i),dr2)
+     endif ! qcompute_hess
+     if (qcompute_grad) then
+!     __SCALE(dr, osq2pi * ooc * oo_surf_stdev**2 * expb )
+#ifdef __MEDIUMRHO
+!      __SCALE(dr, osq2pi * a ) ! note that b was redefined for reuse above
+      __SCALE(dr, a ) ! note that b was redefined for reuse above
+#else
+!      __SCALE(dr, osq2pi * b * expb )
+      __SCALE(dr, b * expb )
+#endif
+! add gradient contribution
+      __INCR(drho_solv(:,i),dr) ! usually inwardly-directed (see dr above)
+     endif ! qcompute_grad
+#endif
+#endif __NEWGRADHESS
+    endif ! need gradient or hessian
+!
+#ifdef __DASYSTAT
+    if (dasystat) then
+     if (qibulk .and. (rho_solv(i).gt.ibulk_boundary_contour_value)) then ! inside inner bulk
+      __INCR(__U(solvent_mass_ibulk), mass_solv(i))
+      qibulk=.false. ! no need to check this atom further
+      qoutside=.false.
+! obulk (outer_bulk) is the boundary closer to the surface; get difference by subtraction at the end
+      __INCR(__U(solvent_mass_obulk), mass_solv(i))! also inside outer bulk
+      qobulk=.false. ! no need to check this atom further
+     elseif(qobulk .and. (rho_solv(i).gt.obulk_boundary_contour_value)) then
+      __INCR(__U(solvent_mass_obulk), mass_solv(i))
+      qobulk=.false.
+      qoutside=.false.
+     elseif(qoutside .and. (rho_solv(i).gt.surface_contour_value)) then
+      qoutside=.false.
+     endif ! qibulk
+    else & ! dasystat
+#endif
+    if (qoutside .and. (rho_solv(i).gt.surface_contour_value)) then
+     qoutside=.false.
+    endif
+!
+#ifdef __HAMILTONIAN
+! propagate force onto surface atoms
+    __INC(__U(nspt)) ! number of atoms in support
+    ispt_this_thread(__U(nspt)) = j ! index of support atom
+    drho_surf_this_thread(:,j) = dr ! density gradient (i.e. to compute force exerted on support atom)
+#endif
+!
+   enddo ! nsurface_coord
+#ifdef __NEWGRADHESS
+! scale hessian
+   if (qcompute_hess) then
+    __SCALE(d2rho_solv(:,i),osq2pi*oo_surf_stdev)
+   endif
+! scale gradient :
+   if (qcompute_grad) then
+    __SCALE(drho_solv(:,i),osq2pi*oo_surf_stdev)
+   endif
+#else
+   if (qcompute_hess) then
+    __SCALE(d2rho_solv(:,i),osq2pi)
+   endif
+! scale gradient :
+   if (qcompute_grad) then
+    __SCALE(drho_solv(:,i),osq2pi)
+   endif
+#endif
+!=========================== loop for solvent atom i over solute support (surface coordinates) ====
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+! check for _potential_ neighbor list violations :
+   if (.not. qtruncate_loop .and. solute_neighbor_mind(i) > neighbor_list_length ) __INC(__U(neighbor_list_misses))
+#endif
+   qoutside_solv(i)=qoutside
+#ifdef __HAMILTONIAN
+! Need to propagate Hamiltonian forces to surface atoms ; therefore, compute force prefactor and apply to gradients here
+! Also, do not recompute the prefactor in the main loop for solvent atoms (see main routine)
+   if (qoutside) then
+    b=__QSAFE(rho_solv(i))
+    b = surface_force_constant * surf_stdev * sq2pi * exp (b**2) * ( __RHO_INVERSE2(b) - surface_distance )
+    __SCALE(drho_solv(:,i),b)
+    __SCALE(b,one - structure_update_memory)
+    do j=1,__U(nspt)
+     __INCR(drho_surf_all_thread(:,ispt_this_thread(j)), b * drho_surf_this_thread(:,ispt_this_thread(j)) )
+    enddo
+   endif ! qoutside
+#endif
+!
+ enddo ! nsolvent
+#ifdef __OMP
+!$omp end do
+#ifdef __DASYSTAT
+ if (dasystat) then
+!$omp atomic
+  __REDUCE(solvent_mass_ibulk)
+!$omp atomic
+  __REDUCE(solvent_mass_obulk)
+ endif
+#endif
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+  if (.not. qtruncate_loop) then
+!$omp atomic
+   __REDUCE(neighbor_list_misses) ! maybe faster via atomic, since most of the time there will be no misses
+  endif
+#endif
+!
+#ifdef __HAMILTONIAN
+#ifdef __H_THREAD_REDUCE
+! reduce Hamiltonian forces on surface atoms (0th thread has final data)
+! adapted from volume/surface compute
+  i=1
+  do while (i.lt.numthreads)
+!$omp barrier ! make sure all threads have completed previous operation
+   if (mod(tid,2*i)==0 .and. (tid+i).lt.numthreads) then
+    __INCR(drho_surf_all_thread, drho_surf(:,:,2*(tid+i)+1)) ! maybe better to reindex to tid+i, as in the volume/surface code ?
+   endif
+   __SCALE(i,2)
+  enddo
+#endif
+#endif
+!$omp end parallel
+#endif
+#if defined(__NEIGHBOR_LIST) && defined(__SORT_LIST)
+!#ifdef __DDEBUG
+!  if (.not. qtruncate_loop)
+!   write(666,'(7000(I4,"("I4")"))') (solute_neighbor_mind(i), solute_neighbor_list(solute_neighbor_mind(i),i), i=1,nsolvent)
+!   close(666)
+!  endif
+!#endif
+#endif
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+  if (.not.qtruncate_loop) then
+! should we output the violations here ?
+   if (neighbor_list_misses>0) then
+    if (neighbor_list_misses==1) then
+     __WRN(whoami, 'DETECTED '//itoa(neighbor_list_misses)//' POSSIBLE NEIGHBOR LIST MISS. NEIGHBOR LIST FACTOR IS '//ftoa(neighbor_list_factor))
+    else
+     __WRN(whoami, 'DETECTED '//itoa(neighbor_list_misses)//' POSSIBLE NEIGHBOR LIST MISSES. NEIGHBOR LIST FACTOR IS '//ftoa(neighbor_list_factor))
+    endif
+! increase neighbor_list_factor
+    __INCR(neighbor_list_factor, neighbor_list_factor_grow)
+   else
+    __INCR(neighbor_list_factor, neighbor_list_factor_shrink)
+! decrease neighbor_list_factor
+   endif ! nbl_misses
+  endif ! qtruncate_loop
+#endif
+!
+ end __SUB(compute_density)
+!================================================================
+#ifdef __BAROSTAT
+#undef _S
+#define _S compute_surface_area
+ __SUB(_S)
+!
+#ifdef __OMP
+ use omp_lib
+ int tid, numthreads, n
+#endif
+ int i, im, jm, km, ii, jj, kk, imin, imax, jmin, jmax, kmin, kmax, nx, ny, nz
+ float x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, dx2, dy2, dz2, x0, y0, z0
+! float support, support2, rsurf, a, b, oos
+ real*4 :: support, support2, rsurf, b, oos
+#ifndef __SIMPLERHO
+ real*4 :: a
+#endif
+ float, parameter :: sqrtmap(0:3)=(/zero, one, sqrt2, sqrt3/)
+#ifdef __PERTURB_GRID
+ float :: drand(3)
+#endif
+!
+ int1 :: rhomx, thisrho, igrad
+ float __U(grad)
+ __IAM(__NM(_S))
+!
+! make use of existing definitions in compute_density routine above
+! different erf implementations/approximations
+! if openmp is used, cannot call the function erfo7, so hack to call inlined macro here
+#ifndef __OMP
+ float :: erfo7  ! approximation to within O(-7)
+#endif
+ float :: erfo5  ! approximation to within O(-5) [contains an exponential term]
+!
+#ifdef __PERTURB_GRID
+ call randomu_vector(drand, 3, random_channel)
+ drand=(drand-half)*surface_area_grid_spacing
+#else
+#define drand(_A)
+#endif
+!
+ x0 = drand(1) + sagrid%limits(1,1)
+ y0 = drand(2) + sagrid%limits(1,2)
+ z0 = drand(3) + sagrid%limits(1,3)
+!
+ nx=sagrid%n(1)
+ ny=sagrid%n(2)
+ nz=sagrid%n(3)
+!
+#define qpbcx qper_parser_override
+#define qpbcy qpbcx
+#define qpbcz qpbcx
+
+! initialize
+ surface_area=zero
+!
+ oos=one/surface_contour_value
+!
+#ifdef __OMP
+!$omp parallel _OMP_EXTRA &
+!$omp shared(sarho_all_threads, sarhof_all_threads) &
+!$omp private(x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, dx2, dy2, dz2, ii, jj, kk, imin, imax, jmin, jmax, kmin, kmax, tid, &
+!$omp i, __U(grad), rhomx, thisrho, igrad, n, support, support2, rsurf, &
+#ifndef __SIMPLERHO
+!$omp a, &
+#endif
+!$omp b )
+ tid=omp_get_thread_num() ! thread index
+ numthreads=omp_get_num_threads()
+#ifdef rho
+#undef rho
+#endif
+#define rho(i,j,k) sarhof_all_threads(i,j,k,tid)
+#else
+#define rho sarhof
+#endif
+! assign to each thread a local copy of surface indicator
+ rho(:,:,:)=zero ! initialize
+ __U(grad)=0
+!$omp do schedule(runtime)
+ do i=1, nsurface_coord
+! determine support for this atom, i.e. all grid points which are within the filter support
+  rsurf = ( rad_surf(i) + surf_padding )
+  support = ( rsurf + cutoff_surf )
+  support2=support**2
+  x=r_surf(1,i)-r_com_sa(1)
+  xmin=x-support
+  xmax=xmin + two*support
+  imin = INT( (xmin-x0)*oo_surface_area_grid_spacing ) + 1 ! could be negative (i.e. off-the-grid), but the indices are consistent with the 1-based offset
+  imax = INT( (xmax-x0)*oo_surface_area_grid_spacing ) + 2
+  if (.not.qpbcx) then
+   imin=max(imin,1)
+   imax=min(imax,nx)
+  endif
+__DBGVAR(surface_area_grid_spacing,2)
+__DBGVAR(oo_surface_area_grid_spacing,2)
+__DBGVAR(x,2)
+__DBGVAR(xmin,2)
+__DBGVAR(xmax,2)
+__DBGVAR(x0,2)
+__DBGVAR(imin,2)
+__DBGVAR(imax,2)
+! same for y
+  y=r_surf(2,i)-r_com_sa(2)
+  ymin=y-support
+  ymax=ymin + two*support
+  jmin = INT( (ymin-y0)*oo_surface_area_grid_spacing ) + 1
+  jmax = INT( (ymax-y0)*oo_surface_area_grid_spacing ) + 2
+  if (.not.qpbcy) then
+   jmin=max(jmin,1)
+   jmax=min(jmax,ny)
+  endif
+__DBGVAR(y,2)
+__DBGVAR(ymin,2)
+__DBGVAR(ymax,2)
+__DBGVAR(y0,2)
+__DBGVAR(jmin,2)
+__DBGVAR(jmax,2)
+! and for z
+  z=r_surf(3,i)-r_com_sa(3)
+  zmin=z-support
+  zmax=zmin + two*support
+  kmin = INT( (zmin-z0)*oo_surface_area_grid_spacing ) + 1
+  kmax = INT( (zmax-z0)*oo_surface_area_grid_spacing ) + 2
+  if (.not.qpbcz) then
+   kmin=max(kmin,1)
+   kmax=min(kmax,nz)
+  endif
+__DBGVAR(z,2)
+__DBGVAR(zmin,2)
+__DBGVAR(zmax,2)
+__DBGVAR(z0,2)
+__DBGVAR(kmin,2)
+__DBGVAR(kmax,2)
+
+  do kk=kmin,kmax
+   dz2=(surface_area_grid_spacing*(kk-1) - (z - z0) )**2; ! actual z-distance between gridpoint and atom
+   km=modulo(kk-1,nz-1)+1 ! works for PBC
+! NOTE : assume dz < support because indices kmin, kmax computed accordingly
+   do jj=jmin,jmax
+    dy2=dz2+(surface_area_grid_spacing*(jj-1) - (y - y0) )**2;
+    if (dy2>support2) cycle
+    jm=modulo(jj-1,ny-1)+1
+    do ii=imin,imax
+     dx2=dy2+(surface_area_grid_spacing*(ii-1) - (x - x0) )**2;
+     if (dx2>support2) cycle
+     im=modulo(ii-1,nx-1)+1
+! update density
+     if (rho(im,jm,km).lt.surface_contour_value) then
+      support=rsurf * oo_surf_stdev ! reuse support var
+      dx2 = sqrt(dx2) * oo_surf_stdev
+#ifndef __SIMPLERHO
+      a = osq2 * (dx2 + support)
+#endif
+      b = osq2 * (dx2 - support)
+#ifdef __ERFHYBRID
+#ifndef __SIMPLERHO
+      __erfo7i(a,erfa)
+#endif
+      __erfo7i(b,erfb)
+#else
+#ifdef __erf
+#undef __erf
+#endif
+#// use the single precision version
+#define __erf(_Y) __erfo7s(_Y)
+#// single prec ^
+#ifndef __SIMPLERHO
+#define erfa __erf(a)
+#endif
+#define erfb __erf(b)
+#endif
+! NOTE that we will have a singularity for small dx ; treat this case here
+#ifdef __SIMPLERHO
+       __INCR(rho(im,jm,km), half * ( one - erfb ) )
+#elif defined(__MEDIUMRHO)
+       __INCR(rho(im,jm,km), half * ( erfa - erfb ) )
+#else
+#ifdef __ERF_REGULARIZE
+      if ( dx2 .gt. 1e-5 ) then
+#endif
+       __INCR(rho(im,jm,km), half * ( erfa - erfb ) + osq2pi * ( __gauss1(a) - __gauss1(b) ) / dx2 )
+#ifdef __ERF_REGULARIZE
+      else
+       __INCR(rho(im,jm,km), half * ( erfa - erfb ) - osq2pi * support * (two + third * ( support * dx2 )**2 ) * exp ( - half * ( support**2 + dx2**2) ) )
+      endif
+#endif
+#endif
+     endif ! rho<surface_contour value
+    enddo !ii
+   enddo !jj
+  enddo !kk
+ enddo ! nsurface atoms, i
+#ifdef __OMP
+!$omp end do
+! now reduce all indicator arrays to master array (0th thread)
+ n=1
+ do while (n.lt.numthreads)
+!$omp barrier ! make sure all threads have completed previous operation
+  if (mod(tid,2*n)==0 .and. (tid+n).lt.numthreads) then
+   __INCR(rho(:,:,:), sarhof_all_threads(:,:,:,tid+n))
+  endif
+  __SCALE(n,2)
+ enddo
+! now compute surface area integral
+#if defined rho
+#undef rho
+#endif
+#define rho(i,j,k) sarhof_all_threads(i,j,k,0)
+#// use the same array below
+#define irho(i,j,k) sarhof_all_threads(i,j,k,0)
+!$omp barrier ! make sure thread reduction is complete, otherwise volumes will be too small
+! first, digitize continuous density :
+!$omp do schedule(runtime)
+#else
+#define irho sarhof
+#endif
+ do kk=1,nz
+  do jj=1,ny
+   do ii=1,nx
+!    irho(ii,jj,kk)=INT(rho(ii,jj,kk)*oos)
+    if (rho(ii,jj,kk).gt.surface_contour_value) then ; irho(ii,jj,kk)=1 ; else ; irho(ii,jj,kk)=0 ; endif
+   enddo
+  enddo
+ enddo
+#ifdef __OMP
+!$omp end do
+!$omp barrier ! make sure irho is computed everywhere
+! second, integrate digitized gradient
+!$omp do schedule(runtime)
+#endif
+ do kk=2,nz
+  do jj=2,ny
+   rhomx=irho(1,jj,kk)
+   do ii=2,nx ; thisrho=irho(ii,jj,kk)
+! specialized code below : we know that in this case, rho can only be 0,1;
+! therefore diff(rho) can only be 0,1, which means igrad can be 0 1 2 or 3, and there is no need to use squares or square roots
+! simpified :
+    igrad = abs(thisrho-rhomx) + abs(thisrho-irho(ii,jj-1,kk)) + abs(thisrho-irho(ii,jj,kk-1))
+    rhomx=thisrho
+    __INCR(__U(grad),sqrtmap(igrad))
+   enddo
+  enddo
+ enddo
+#ifdef __OMP
+!$omp end do
+!$omp atomic
+#endif
+ surface_area=surface_area + __U(grad)
+#ifdef __OMP
+!$omp end parallel
+#endif
+ __SCALE(surface_area,surface_area_grid_spacing**2)
+ __DBGVAR(surface_area,1)
+!
+#undef rho
+ end __SUB(_S)
+!================================================================
+#endif
+!
+#ifdef __DASYSTAT
+#undef _S
+#define _S compute_bulk_volume
+ __SUB(_S)
+!
+#ifdef __OMP
+ use omp_lib
+ int tid, n !, numthreads
+ int :: __U(ivolume), __U(ivolume_inner)
+#endif
+ int :: ivolume, ivolume_inner
+ int i, im, jm, km, ii, jj, kk, imin, imax, jmin, jmax, kmin, kmax, nx, ny, nz
+ float x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, dx2, dy2, dz2, x0, y0, z0
+! real*4 ::  x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, dx2, dy2, dz2, x0, y0, z0
+! float :: support, support2, rsurf, b, oos, oobs
+ real*4 :: support, support2, rsurf, b, oos, oobs
+#ifdef __ERFHYBRID
+ real*4 :: isgn_, x_, erfa, erfb
+#endif
+!
+#ifndef __SIMPLERHO
+ real*4 :: a
+#endif
+#ifdef __PERTURB_GRID
+ float :: drand(3)
+#endif
+!
+ __IAM(__NM(_S))
+!
+! make use of existing definitions in compute_desity_grad routine above
+! different erf implementations/approximations
+! if openmp is used, cannot call the function erfo7, so hack to call inlined macro here
+#ifndef __OMP
+ float :: erfo7  ! approximation to within O(-7)
+#endif
+ float :: erfo5  ! approximation to within O(-5) [contains an exponential term]
+!
+#ifdef __PERTURB_GRID
+ call randomu_vector(drand, 3, random_channel)
+ drand=(drand-half)*surface_area_grid_spacing
+#else
+#define drand(_A)
+#endif
+!
+ x0 = drand(1) + sagrid%limits(1,1)
+ y0 = drand(2) + sagrid%limits(1,2)
+ z0 = drand(3) + sagrid%limits(1,3)
+!
+ nx=sagrid%n(1)
+ ny=sagrid%n(2)
+ nz=sagrid%n(3)
+!
+#define qpbcx qper_parser_override
+#define qpbcy qpbcx
+#define qpbcz qpbcx
+
+! initialize
+ ivolume=0
+ ivolume_inner=0
+!
+#if defined(__VOLUME_THREAD_REDUCE) || !defined(__OMP)
+ oos=one/obulk_boundary_contour_value ! outer boundary of bulk region
+ oobs=one/ibulk_boundary_contour_value ! inner boundary
+#else
+ oos=obulk_boundary_contour_value
+ oobs=ibulk_boundary_contour_value
+#define surface_contour_value4 oos
+#define bulk_boundary_contour_value4 oobs
+#endif
+!
+#ifdef __OMP
+!$omp parallel _OMP_EXTRA &
+!$omp shared(sarhof_all_threads, ivolume, ivolume_inner, oos, oobs) &
+!$omp private(x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, dx2, dy2, dz2, ii, jj, kk, imin, imax, jmin, jmax, kmin, kmax, tid, &
+!$omp i, __U(ivolume), __U(ivolume_inner), n, support, support2, rsurf, b, im, jm, km &
+#ifdef __ERFHYBRID
+!$omp , x_, isgn_, erfb &
+#ifndef __SIMPLERHO
+!$omp , erfa &
+#endif
+#endif
+!
+#ifndef __SIMPLERHO
+!$omp , a &
+#endif
+!$omp )
+ tid=omp_get_thread_num() ! thread index
+! numthreads=omp_get_num_threads()
+#ifdef rho
+#undef rho
+#endif
+#define rho(i,j,k) sarhof_all_threads(i,j,k,tid)
+#else
+#define rho sarhof
+#endif
+! assign to each thread a local copy of surface indicator
+ rho(:,:,:)=zero ! initialize
+ __U(ivolume)=0
+ __U(ivolume_inner)=0
+!$omp do schedule(runtime)
+ do i=1, nsurface_coord
+! determine support for this atom, i.e. all grid points which are within the filter support
+  rsurf = ( rad_surf(i) + surf_padding )
+  support = ( rsurf + cutoff_surf )
+  support2=support**2
+  x=r_surf(1,i)-r_com_sa(1)
+  xmin=x-support
+  xmax=xmin + two*support
+  imin = INT( (xmin-x0)*oo_surface_area_grid_spacing ) + 1 ! could be negative (i.e. off-the-grid), but the indices are consistent with the 1-based offset
+  imax = INT( (xmax-x0)*oo_surface_area_grid_spacing ) + 2
+  if (.not.qpbcx) then
+   imin=max(imin,1)
+   imax=min(imax,nx)
+  endif
+__DBGVAR(surface_area_grid_spacing,2)
+__DBGVAR(oo_surface_area_grid_spacing,2)
+__DBGVAR(x,2)
+__DBGVAR(xmin,2)
+__DBGVAR(xmax,2)
+__DBGVAR(x0,2)
+__DBGVAR(imin,2)
+__DBGVAR(imax,2)
+! same for y
+  y=r_surf(2,i)-r_com_sa(2)
+  ymin=y-support
+  ymax=ymin + two*support
+  jmin = INT( (ymin-y0)*oo_surface_area_grid_spacing ) + 1
+  jmax = INT( (ymax-y0)*oo_surface_area_grid_spacing ) + 2
+  if (.not.qpbcy) then
+   jmin=max(jmin,1)
+   jmax=min(jmax,ny)
+  endif
+__DBGVAR(y,2)
+__DBGVAR(ymin,2)
+__DBGVAR(ymax,2)
+__DBGVAR(y0,2)
+__DBGVAR(jmin,2)
+__DBGVAR(jmax,2)
+! and for z
+  z=r_surf(3,i)-r_com_sa(3)
+  zmin=z-support
+  zmax=zmin + two*support
+  kmin = INT( (zmin-z0)*oo_surface_area_grid_spacing ) + 1
+  kmax = INT( (zmax-z0)*oo_surface_area_grid_spacing ) + 2
+  if (.not.qpbcz) then
+   kmin=max(kmin,1)
+   kmax=min(kmax,nz)
+  endif
+__DBGVAR(z,2)
+__DBGVAR(zmin,2)
+__DBGVAR(zmax,2)
+__DBGVAR(z0,2)
+__DBGVAR(kmin,2)
+__DBGVAR(kmax,2)
+
+  do kk=kmin,kmax
+   dz2=(surface_area_grid_spacing*(kk-1) - (z - z0) )**2; ! actual z-distance between gridpoint and atom
+   km=modulo(kk-1,nz-1)+1 ! works for PBC
+   do jj=jmin,jmax
+    dy2=dz2+(surface_area_grid_spacing*(jj-1) - (y - y0) )**2;
+    if (dy2>support2) cycle
+    jm=modulo(jj-1,ny-1)+1
+    do ii=imin,imax
+     dx2=dy2+(surface_area_grid_spacing*(ii-1) - (x - x0) )**2;
+     if (dx2>support2) cycle
+     im=modulo(ii-1,nx-1)+1
+! update density
+     if (rho(im,jm,km).lt.ibulk_boundary_contour_value) then ! otherwise will already exceed threshold
+      support=rsurf * oo_surf_stdev ! reuse support var
+      dx2 = sqrt(dx2) * oo_surf_stdev
+#ifndef __SIMPLERHO
+      a = osq2 * (dx2 + support)
+#endif
+      b = osq2 * (dx2 - support)
+#ifdef __ERFHYBRID
+#undef __PCODE
+#define __PCODE e
+#ifndef __SIMPLERHO
+      __erfo7i(a,erfa)
+#endif
+      __erfo7i(b,erfb)
+#undef __PCODE
+#else
+#ifdef __erf
+#undef __erf
+#endif
+#//define __erf(_Y) erf(_Y)
+#define __erf(_Y) __erfo7s(_Y)
+#// single prec          ^
+#ifndef __SIMPLERHO
+#define erfa __erf(a)
+#endif
+#define erfb __erf(b)
+#endif
+! NOTE that we will have a singularity for small dx ; treat this case here
+#ifdef __SIMPLERHO
+       __INCR(rho(im,jm,km), half * ( one - erfb ) )
+#elif defined(__MEDIUMRHO)
+       __INCR(rho(im,jm,km), half * ( erfa - erfb ) )
+#else
+#ifdef __ERF_REGULARIZE
+      if ( dx2 .gt. 1e-5 ) then ! standard expression! Taylor expansion for exponentials
+#endif
+       __INCR(rho(im,jm,km), half * ( erfa - erfb ) + osq2pi * ( __gauss1(a) - __gauss1(b) ) / dx2 )
+#ifdef __ERF_REGULARIZE
+      else ! Taylor expansion for exponentials
+       __INCR(rho(im,jm,km), half * ( erfa - erfb ) - osq2pi * exp ( - half * ( support**2 + dx2**2) ) * support * (two + third * ( support * dx2 )**2 )  )
+      endif
+#endif
+#endif
+     endif ! rho<ibulk_boundary_contour value
+    enddo !ii
+   enddo !jj
+  enddo !kk
+ enddo ! nsurface atoms, i
+#ifdef __OMP
+!$omp end do
+#ifdef __VOLUME_THREAD_REDUCE
+! now reduce all indicator arrays to master array (0th thread)
+ n=1
+ do while (n.lt.numthreads)
+!$omp barrier ! make sure all threads have completed previous operation
+  if (mod(tid,2*n)==0 .and. (tid+n).lt.numthreads) then
+   __INCR(rho(:,:,:), sarhof_all_threads(:,:,:,tid+n))
+  endif
+  __SCALE(n,2)
+ enddo
+#endif
+! now compute volume integrals
+#ifdef rho
+#undef rho
+#endif
+#define rho(i,j,k) sarhof_all_threads(i,j,k,0)
+!$omp barrier ! make sure thread reduction is complete, otherwise volumes will be too small
+!$omp do schedule(runtime)
+#endif
+ do kk=2,nz
+  do jj=2,ny
+   do ii=2,nx
+! not clear how to do this in the fastest way possible
+! perhaps an if/else statement would be faster, densities that map to the outside of the main shell, also map to the outside of
+! the nonbulk (i.e. interfacial) region
+#if defined(__VOLUME_THREAD_REDUCE) || !defined(__OMP)
+     __INCR(__U(ivolume), min(1,INT(rho(ii,jj,kk)*oos)))
+     __INCR(__U(ivolume_inner), min(1,INT(rho(ii,jj,kk)*oobs)))
+#else
+     b=0.0
+     do n=0,numthreads-1
+      __INCR(b,sarhof_all_threads(ii,jj,kk,n))
+      if (b.gt.bulk_boundary_contour_value4) then
+       __INC(__U(ivolume_inner))
+       exit ! quit do loop since highest possible threshold exceeded
+      endif
+     enddo ! n; if this loop completes, then a has the reduced density from all threads
+     if (b.gt.surface_contour_value4) then
+      __INC(__U(ivolume))
+     endif
+#endif
+   enddo
+  enddo
+ enddo
+#ifdef __OMP
+!$omp end do
+!$omp atomic
+ __REDUCE(ivolume)
+!$omp atomic
+ __REDUCE(ivolume_inner)
+#endif
+#ifdef __OMP
+!$omp end parallel
+#endif
+ volume_bulk=(max(1,ivolume-ivolume_inner))*surface_area_grid_spacing**3 ! make sure volume is always positive
+!
+ __DBGVAR(ivolume,1)
+ __DBGVAR(ivolume_inner,1)
+ __DBGVAR(volume_bulk,1)
+
+ end __SUB(_S)
+!================================================================
+#endif
+!================================================================
+end module _N
+!

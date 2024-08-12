@@ -3,6 +3,7 @@ LINKOBJS+=\
  ierfappx.o \
  erfsun_ref.o \
  erfsun_value.o \
+ erf_ext.o \
  lu.o \
  bestfit.o \
  constants.o\
@@ -42,4 +43,6 @@ LINKOBJS+=\
  bonds.o \
  angles.o \
  dihedrals.o \
- unitcell.o
+ unitcell.o \
+ ppoly1.o \
+ ppoly2.o
