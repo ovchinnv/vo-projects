@@ -1111,6 +1111,9 @@ endif
  endif ! get mass
  if (.not.dmasses_initialized) __WRN(whoami, 'COULD NOT INITIALIZE DASYSTAT MASSES');
  endif ! dasystat
+#ifdef __DEBUG
+ __DBGOUT('TOTAL DASYSTAT MASS : ', sum(dasystat_masses)) 
+#endif
 #endif
 ! initialize coordinate arrays
 #ifdef __DUMSURF
@@ -1230,6 +1233,8 @@ endif
 #ifdef __SORT_LIST
   __ALLOC(solute_neighbor_list(nsurface_coord,nsolvent))
 ! initialize neighbor list with solute indices from 1 to nsurface_coord for each solute atom:
+! 8/2024: note that this is misleading: can have sort_list on, which sorts the neighbors, but does not actually cut off the loop (as in a true nbl)
+! for that, need the neighbor_list define flag
 #ifdef __DEBUG
   __DBGOUT('INITIALIZING SOLUTE NEIGHBOR LIST');
 #endif
@@ -1384,6 +1389,9 @@ __DBGVAR(r_surf(:,l),1)
 #ifdef __DASYSTAT
  mass_solv=dasystat_masses(isolvent_atoms)
  solvent_mass=sum(mass_solv)
+#ifdef __DEBUG
+ __DBGOUT('TOTAL MASS OF SOLVENT ATOMS:', solvent_mass)
+#endif
 #endif
 !
 #if defined(__BAROSTAT) || defined(__DASYSTAT)
@@ -3095,6 +3103,11 @@ __DBGVAR(solvent_mass_ibulk,1)
  call files_open(i, 'misc.dat', 'FORMATTED','WRITE')
  write(i,*) surf_stdev, surf_padding, surface_distance, surface_contour_value, surface_energy, surface_force_constant, cutoff_surf
  call files_close(i)
+#ifdef __DASYSTAT
+ call files_open(i, 'mass_solv.dat', 'FORMATTED','WRITE')
+ write(i,*) mass_solv
+ call files_close(i)
+#endif
 #endif
 !
  end __SUB(main)
@@ -3291,6 +3304,8 @@ __DBGVAR(obulk_boundary_contour_value,1)
     qobulk=.true. ! check if atom within outer bulk
    endif
 #endif
+! NOTE that there is an important difference between qibulk+qobulk vs qoutside ; the former indicate whether to check the for
+! the property, but the latter _also_ shows whether the condition is true (i.e. atom is outside the bdry)
    rho_solv(i)=zero
    if (qcompute_grad) drho_solv(:,i)=zero
    if (qcompute_hess) d2rho_solv(:,i)=zero
@@ -3544,7 +3559,9 @@ __DBGVAR(obulk_boundary_contour_value,1)
       qibulk=.false. ! no need to check this atom further
       qoutside=.false.
 ! obulk (outer_bulk) is the boundary closer to the surface; get difference by subtraction at the end
-      __INCR(__U(solvent_mass_obulk), mass_solv(i))! also inside outer bulk
+! NOTE : it is possible that we already added this mass to solvent_mass_obulk, if, in a previous iteration we were inside the
+! outer, but _NOT_ inner boundary, so should check for this before adding :
+      if (qobulk) __INCR(__U(solvent_mass_obulk), mass_solv(i))! also inside outer bulk
       qobulk=.false. ! no need to check this atom further
      elseif(qobulk .and. (rho_solv(i).gt.obulk_boundary_contour_value)) then
       __INCR(__U(solvent_mass_obulk), mass_solv(i))
