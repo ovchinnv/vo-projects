@@ -136,10 +136,14 @@ module _N
  float :: surface_energy, curvature_energy
  float :: sbfe(4) ! array that holds instantaneous force and energy on a single solvent particle
  bool :: qsbe ! whether to compute energy from the splines
+#ifdef __BAROSTAT
  float :: surface_force, curvature_force
+#endif
 #ifdef __OMP
  float :: __U(surface_energy), __U(curvature_energy)
+#ifdef __BAROSTAT
  float :: __U(surface_force), __U(curvature_force)
+#endif
 #endif
 #ifdef __DASYSTAT
  float :: ibulk_boundary_contour_value ! value of density at inner bulk boundary (must be greater than surface_contour_value)
@@ -2041,7 +2045,6 @@ endif ! decide whether to compute dr_surf
    __WARN(whoami, ' RELATIVE RMS Z-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
 #endif
 !
-
   __DBGOUT('Free surface arrays for FD check')
   __FREE(ffd)
   __FREE(ffd2)
@@ -2202,9 +2205,11 @@ endif ! decide whether to compute dr_surf
  if (output_freq.gt.izero) then ; qsbe=__CHKUPDATE(output_freq) ; else ; qsbe=.false. ; endif ! E needed for output, not otherwise
 !
  surface_energy=zero
- surface_force=zero
  curvature_energy=zero
+#ifdef __BAROSTAT
+ surface_force=zero
  curvature_force=zero
+#endif
 !
 ! if running a FD check, first save (-)current forces, in case they are nonzero (this subtracts the forces we are _NOT_ interested in)
 #ifdef __FD_CHECK
@@ -2219,26 +2224,38 @@ endif ! decide whether to compute dr_surf
 !================= compute forces, now that density-related properties are known
 #ifdef __OMP
 !$omp parallel _OMP_EXTRA &
-!$omp shared (rho_solv,drho_solv,d2rho_solv,dsurf_solv,acurv_solv,surface_contour_value,surface_distance,surface_force_constant,curvature_force_constant,&
-!$omp nsolvent_unsupported,qsbe,&
-#ifdef __DASYSTAT
-!$omp solvent_mass, &
+!$omp default (none) &
+!$omp shared (qoutside_solv,nsolvent,rho_solv,drho_solv,nsolvent_unsupported,qsbe,&
+#ifndef __HAMILTONIAN
+!$omp sbfe,d2rho_solv,acurv_solv,dsurf_solv,surface_distance,surface_force_constant,curvature_force_constant,surface_energy,curvature_energy,&
+#ifdef __DRHOINV
+!$omp surf_stdev, &
 #endif
-#ifdef __HAMILTONIAN
-!$omp drho_surf, &
+#ifdef __BAROSTAT
+!$omp surface_force, curvature_force, &
+#endif
 #else
-!$omp sbfe, &
+!$omp structure_update_freq, drho_surf, isurface_atoms, numthreads, nsurface_coord, iteration, &
 #endif
-!$omp surface_force, surface_energy, curvature_force, curvature_energy, isolvent_atoms, fr) &
-!$omp private (i, d0, pre, __U(surface_energy), __U(surface_force), __U(curvature_energy), __U(curvature_force) &
-#if defined(__HAMILTONIAN) && !defined(__H_THREAD_REDUCE)
+!$omp isolvent_atoms, fr) &
+!$omp private (i &
+#ifndef __HAMILTONIAN
+!$omp , d0, pre, __U(surface_energy), __U(curvature_energy) &
+#ifdef __BAROSTAT
+!$omp , __U(surface_force), __U(curvature_force) &
+#endif
+#else
+#ifndef __H_THREAD_REDUCE
 !$omp , ii &
+#endif
 #endif
 !$omp )
 !
 #ifndef __HAMILTONIAN
+#ifdef __BAROSTAT
  __U(surface_force)=zero
  __U(curvature_force)=zero
+#endif
  if (qsbe) then
   __U(surface_energy)=zero
   __U(curvature_energy)=zero
@@ -2335,7 +2352,7 @@ endif ! decide whether to compute dr_surf
 !  sbfe = watershell_sbf_spline_compute(acurv_solv(i), dsurf_solv(i), output_freq.gt.0 .and. __CHKUPDATE(output_freq) ) ! compute forces and (optionally) energies
   sbfe = watershell_sbf_spline_compute(acurv_solv(i), dsurf_solv(i), qsbe)
 ! note : the flag above can be computed outside ; also we may want to compute more often if we need energy averages
-! sbfe(1,2,3,4) contain surface_force, curvature_force, surface_energy, curvature_energy, respectively
+! sbfe(1,2,3,4) contain "surface" force (with crv subtracted out), curvature_force, surface_energy, curvature_energy, respectively
   __SCALE( sbfe(1), surface_force_constant )
   __SCALE( sbfe(2), curvature_force_constant )
 !
@@ -2351,7 +2368,7 @@ endif ! decide whether to compute dr_surf
   __INCR(fr(1,isolvent_atoms(i)), pre * drho_solv(1,i))
   __INCR(fr(2,isolvent_atoms(i)), pre * drho_solv(2,i))
   __INCR(fr(3,isolvent_atoms(i)), pre * drho_solv(3,i))
-
+!
 ! sum "energy"
 ! this requires evaluating additional splines (indicated above by qsbe flag), so should be done only when required
 ! NOT clear whether the surface_energy is physically meaningful
@@ -2393,6 +2410,7 @@ endif ! decide whether to compute dr_surf
 #endif
 #endif
 !
+!
 #ifdef __FD_CHECK
 ! make sure torque removal forces do not contaminate the potential (shell) forces in the FD comparison :
 #ifdef __OMP
@@ -2410,7 +2428,10 @@ endif ! decide whether to compute dr_surf
 !$omp end parallel
 #endif
 !
+
+
 #ifdef __FD_CHECK
+! NOTE : FD is done without OPENMP, since it is only a debugging check !
 ! FD test of shell potential
  __ALLOC(ffd(3,nsolvent))
   do i=1, nsolvent ; do j=1, 3
@@ -2525,8 +2546,10 @@ endif ! decide whether to compute dr_surf
  endif
 !
  if (qsbe) then
+#ifndef __HAMILTONIAN
   __SCALE(surface_energy, surface_force_constant)
   __SCALE(curvature_energy, curvature_force_constant)
+#endif
 ! note that this will not be available at every iteration ! However, typically, output freqs between the main sim & plugin should match
   if (present(energy)) then
    __INCR(energy,surface_energy+curvature_energy)
@@ -3185,14 +3208,23 @@ __DBGVAR(obulk_boundary_contour_value,1)
 !==========================================================================================
 #ifdef __OMP
 !$omp parallel _OMP_EXTRA &
-!$omp shared ( rho_solv, drho_solv, d2rho_solv, r_solv, r_surf, rad_surf, surf_padding, nsolvent, nsurface_coord, cutoff_surf, oo_surf_stdev &
+!$omp default(none) &
+!$omp shared (rho_solv,drho_solv,d2rho_solv,r_solv,r_surf,rad_surf,surf_padding,nsolvent,nsurface_coord,cutoff_surf,oo_surf_stdev,qoutside_solv,surface_contour_value &
+!$omp , obulk_boundary_contour_value,ibulk_boundary_contour_value,qcompute_hess,qcompute_grad, qtruncate_loop &
 #ifdef __DASYSTAT
-!$omp , solvent_mass_ibulk, solvent_mass_obulk, mass_solv &
+!$omp , dasystat, solvent_mass_ibulk, solvent_mass_obulk, mass_solv &
+#endif
+#ifdef __HAMILTONIAN
+!$omp ,numthreads,structure_update_memory,curvature_force_constant,surface_force_constant,qsbe,dsurf_solv,surface_distance,surf_stdev,acurv_solv,drho_surf,ispt &
+!$omp ,surface_energy, curvature_energy &
+#ifdef __BAROSTAT
+!$omp ,surface_force, curvature_force &
+#endif
 #endif
 #ifdef __SORT_LIST
 !$omp , solute_neighbor_list &
 #ifdef __NEIGHBOR_LIST
-!$omp , solute_neighbor_mind &
+!$omp , solute_neighbor_mind, neighbor_list_factor &
 #ifdef __NEIGHBOR_LIST_CHECK
 !$omp , neighbor_list_misses &
 #endif
@@ -3200,6 +3232,12 @@ __DBGVAR(obulk_boundary_contour_value,1)
 #endif
 !$omp ) &
 !$omp private ( rw, i, j, rp, rsurf, rmaxsurf, dr, dr2, drn, drn2, ooc, b, expb, qoutside &
+#ifdef __HAMILTONIAN
+!$omp , __U(surface_energy), __U(curvature_energy) &
+#ifdef __BAROSTAT
+!$omp ,__U(surface_force), __U(curvature_force) &
+#endif
+#endif
 #ifdef __ERFHYBRID
 !$omp , x_, isgn_, erfb &
 #endif
@@ -3614,6 +3652,16 @@ __DBGVAR(obulk_boundary_contour_value,1)
      __INCR(drho_surf_all_thread(:,ispt_this_thread(j)), b * drho_surf_this_thread(:,ispt_this_thread(j)) )
    enddo
 ! HAMILTONIAN^
+!
+#ifdef __BAROSTAT
+  __INCR(__U(surface_force), sbfe(1) )   ! k0 force exerted on the surface
+  __INCR(__U(curvature_force), sbfe(2) ) ! remaining force exerted on the surface
+#endif
+  if (qsbe) then
+   __INCR(__U(surface_energy), sbfe(3)) ! surface_force_constant below
+   __INCR(__U(curvature_energy), sbfe(4)) ! curvature_force_constant below
+  endif
+!
 #endif
 !===============================================================================================================================================================
  enddo ! nsolvent
@@ -3628,28 +3676,51 @@ __DBGVAR(obulk_boundary_contour_value,1)
  endif
 #endif
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
-  if (.not. qtruncate_loop) then
+ if (.not. qtruncate_loop) then
 !$omp atomic
-   __REDUCE(neighbor_list_misses) ! maybe faster via atomic, since most of the time there will be no misses
-  endif
+  __REDUCE(neighbor_list_misses) ! maybe faster via atomic, since most of the time there will be no misses
+ endif
 #endif
 !
 #ifdef __HAMILTONIAN
+ if (qsbe) then
+!$omp atomic
+   __REDUCE(surface_energy)
+!$omp atomic
+   __REDUCE(curvature_energy)
+ endif
+#ifdef __BAROSTAT
+ if (barostat) then
+!$omp atomic
+  __REDUCE(surface_force)
+!$omp atomic
+  __REDUCE(curvature_force)
+ endif
+#endif
+!
 #ifdef __H_THREAD_REDUCE
 ! reduce Hamiltonian forces on surface atoms (0th thread has final data)
 ! adapted from volume/surface compute
-  i=1
-  do while (i.lt.numthreads)
+ i=1
+ do while (i.lt.numthreads)
 !$omp barrier ! make sure all threads have completed previous operation
-   if (mod(tid,2*i)==0 .and. (tid+i).lt.numthreads) then
-    __INCR(drho_surf_all_thread, drho_surf(:,:,2*(tid+i)+1)) ! maybe better to reindex to tid+i, as in the volume/surface code ?
-   endif
-   __SCALE(i,2)
-  enddo
+  if (mod(tid,2*i)==0 .and. (tid+i).lt.numthreads) then
+   __INCR(drho_surf_all_thread, drho_surf(:,:,2*(tid+i)+1)) ! maybe better to reindex to tid+i, as in the volume/surface code ?
+  endif
+  __SCALE(i,2)
+ enddo
 #endif
 #endif
 !$omp end parallel
 #endif
+!
+#ifdef __HAMILTONIAN
+ if (qsbe) then
+  __SCALE(surface_energy, surface_force_constant)
+  __SCALE(curvature_energy, curvature_force_constant)
+ endif
+#endif
+!
 #if defined(__NEIGHBOR_LIST) && defined(__SORT_LIST)
 !#ifdef __DDEBUG
 !  if (.not. qtruncate_loop)
@@ -3659,21 +3730,21 @@ __DBGVAR(obulk_boundary_contour_value,1)
 !#endif
 #endif
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
-  if (.not.qtruncate_loop) then
+ if (.not.qtruncate_loop) then
 ! should we output the violations here ?
-   if (neighbor_list_misses>0) then
-    if (neighbor_list_misses==1) then
+  if (neighbor_list_misses>0) then
+   if (neighbor_list_misses==1) then
      __WRN(whoami, 'DETECTED '//itoa(neighbor_list_misses)//' POSSIBLE NEIGHBOR LIST MISS. NEIGHBOR LIST FACTOR IS '//ftoa(neighbor_list_factor))
-    else
+   else
      __WRN(whoami, 'DETECTED '//itoa(neighbor_list_misses)//' POSSIBLE NEIGHBOR LIST MISSES. NEIGHBOR LIST FACTOR IS '//ftoa(neighbor_list_factor))
-    endif
+   endif
 ! increase neighbor_list_factor
     __INCR(neighbor_list_factor, neighbor_list_factor_grow)
-   else
+  else
     __INCR(neighbor_list_factor, neighbor_list_factor_shrink)
 ! decrease neighbor_list_factor
-   endif ! nbl_misses
-  endif ! qtruncate_loop
+  endif ! nbl_misses
+ endif ! qtruncate_loop
 #endif
 !
  end __SUB(compute_density)
