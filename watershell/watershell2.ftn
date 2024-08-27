@@ -15,7 +15,11 @@
 ! I initially set this to 0.5, perhaps because the logistic inverse was inaccurate
 ! However, with that option gone, do not see any reason not to approach -> 1 :
 #//define  __RHO_MAX half
-#define  __RHO_MAX (0.999999d0)
+#ifdef __SINGLE
+#define  __RHO_MAX 0.9999e0
+#else
+#define  __RHO_MAX 0.999999d0
+#endif
 #define  __RHOSAFE(_X) (min(__RHO_MAX, __RHO(_X)))
 #//-////////////////////// DISTANCE FUNCTION FROM DENSITY :
 #// error function inverse
@@ -130,6 +134,17 @@ module _N
  float :: cutoff_surf, oo_surf_stdev
  float :: surface_contour_value ! value of density which defines the surface ; negative means to compute from structure
  float :: surface_energy, curvature_energy
+ float :: sbfe(4) ! array that holds instantaneous force and energy on a single solvent particle
+ bool :: qsbe=.false. ! whether to compute energy from the splines
+#ifdef __BAROSTAT
+ float :: surface_force, curvature_force
+#endif
+#ifdef __OMP
+ float :: __U(surface_energy), __U(curvature_energy)
+#ifdef __BAROSTAT
+ float :: __U(surface_force), __U(curvature_force)
+#endif
+#endif
 #ifdef __DASYSTAT
  float :: ibulk_boundary_contour_value ! value of density at inner bulk boundary (must be greater than surface_contour_value)
  float :: obulk_boundary_contour_value ! value of density at outer bulk boundary
@@ -255,7 +270,6 @@ module _N
 #define nsurface_coordinates nsurface_coord
 #define nsurface_coords nsurface_coord
 !
- int :: nsolvent_outside
  int :: nsolvent_unsupported ! solvent atoms that fall outside of the density support in the erf/density algorithm
 #ifdef __ADAPTIVE_SUPPORT
  float, parameter :: solvent_support_factor_grow = 0.01d0
@@ -265,11 +279,10 @@ module _N
 #endif
 #ifdef __DASYSTAT
  float :: solvent_mass         ! total mass of solvent atoms (constant throughout simulation)
- float :: solvent_mass_outside ! mass of solvent atoms that are outside the shell surface
  float :: solvent_mass_obulk   ! mass of solvent inside outer bulk shell
  float :: solvent_mass_ibulk   ! mass of solvent inside inner bulk shell
 #endif
- float :: oonsurface, oonsolvent, oonsolvent_outside
+ float :: oonsurface, oonsolvent
  float :: current_surface_distance
 #ifdef __ROTRES
  float :: r_com_inst(3) =(/zero, zero, zero/); ! inst. center of mass (__ROTRES)
@@ -321,7 +334,7 @@ module _N
 #ifdef __HAMILTONIAN
  int :: __U(nspt)
  int, allocatable, target :: ispt(:,:) ! support array , i.e. those atoms which contribute to the density at a particular solvent atom
- float, allocatable, target :: drho_surf(:,:,:) ! array that stores forces on surcace atoms 
+ float, allocatable, target :: drho_surf(:,:,:) ! array that stores forces on surface atoms 
 #define ddist_surf drho_surf
 #endif
 !
@@ -433,7 +446,7 @@ module _N
 !
  endif ! have restart file
 !
-#if defined(__SORT_LIST) & defined(__NEIGHBOR_LIST)
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
 #define __BOOL
 #define __TAG neighbor_list
 #define __VAR __CONCAT(q,__TAG)
@@ -1107,6 +1120,9 @@ endif
  endif ! get mass
  if (.not.dmasses_initialized) __WRN(whoami, 'COULD NOT INITIALIZE DASYSTAT MASSES');
  endif ! dasystat
+#ifdef __DEBUG
+ __DBGOUT('TOTAL DASYSTAT MASS : ', sum(dasystat_masses)) 
+#endif
 #endif
 ! initialize coordinate arrays
 #ifdef __DUMSURF
@@ -1182,12 +1198,12 @@ endif
   __ALLOC(rad_surf(nsurface_coord))
 
 ! add atoms to list if provided
-!  if (present(atoms)) then
-   do l=1, nsurface_atoms
+! if (present(atoms)) then
+  do l=1, nsurface_atoms
 #ifdef __CLASS
-    ierr=atoms%uadd(isurface_atoms(l))
+   ierr=atoms%uadd(isurface_atoms(l))
 #else
-    ierr=int_vector_uadd(atoms,isurface_atoms(l))
+   ierr=int_vector_uadd(atoms,isurface_atoms(l))
 #endif
 ! NOTE : it is important to record all atoms to which forces will be applied :
 #if defined(__HAMILTONIAN) || defined(__ROTRES)
@@ -1198,13 +1214,13 @@ endif
 #endif
 #endif
 #ifdef __CLASS
- ierr=forced_atoms%uadd(isurface_atoms(l))
+   ierr=forced_atoms%uadd(isurface_atoms(l))
 #else
- ierr=int_vector_uadd(forced_atoms,isurface_atoms(l))
+   ierr=int_vector_uadd(forced_atoms,isurface_atoms(l))
 #endif
 #endif
-   enddo ! physical surface atoms
-!  endif ! present
+  enddo ! physical surface atoms
+! endif ! present
 !
  else
   __WRN(whoami, 'COULD NOT ALLOCATE MEMORY FOR SURFACE ATOM INDICES.')
@@ -1226,6 +1242,8 @@ endif
 #ifdef __SORT_LIST
   __ALLOC(solute_neighbor_list(nsurface_coord,nsolvent))
 ! initialize neighbor list with solute indices from 1 to nsurface_coord for each solute atom:
+! 8/2024: note that this is misleading: can have sort_list on, which sorts the neighbors, but does not actually cut off the loop (as in a true nbl)
+! for that, need the neighbor_list define flag
 #ifdef __DEBUG
   __DBGOUT('INITIALIZING SOLUTE NEIGHBOR LIST');
 #endif
@@ -1380,6 +1398,9 @@ __DBGVAR(r_surf(:,l),1)
 #ifdef __DASYSTAT
  mass_solv=dasystat_masses(isolvent_atoms)
  solvent_mass=sum(mass_solv)
+#ifdef __DEBUG
+ __DBGOUT('TOTAL MASS OF SOLVENT ATOMS:', solvent_mass)
+#endif
 #endif
 !
 #if defined(__BAROSTAT) || defined(__DASYSTAT)
@@ -1539,7 +1560,7 @@ __DBGVAR(r_com_sa,1)
  if ( trim(spline_input_file).ne.trim(default_spline_input_file) ) &
 & _W 'spline_input_file=',trim(spline_input_file)
 !
-#if defined(__SORT_LIST) & defined(__NEIGHBOR_LIST)
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
  if (qneighbor_list) then
   _W 'neighbor_list=on # use a neighbor list for solvent forces'
  else
@@ -1655,10 +1676,7 @@ __DBGVAR(r_com_sa,1)
  __OPAR(qper,bool)
 !
  type (cell), optional :: mdcell
-! int :: ibeg, iend ! atom indices for looping
  float :: distance_from_solute, distance_from_solute2, pre, d0
- float :: surface_force, curvature_force
- float :: sbfe(4) ! array that holds instantaneous force and energy on a single solvent particle
 !
 #ifdef __ROTRES
  float :: dcom(3), r1(3)
@@ -1673,12 +1691,6 @@ __DBGVAR(r_com_sa,1)
 #define __REDUCEADD(_W) __REDUCE(_W)
 #define __REDUCEMAX(_W) _W=MAX(_W,__U(_W)) ! thread reduction
 #define __AREDUCE(_W,_I) _W(_I)=_W(_I)+__U(_W)(_I)
- float :: __U(surface_energy), __U(curvature_energy)
- float :: __U(surface_force), __U(curvature_force)
- int :: __U(nsolvent_outside)
-#ifdef __DASYSTAT
- float :: __U(solvent_mass_outside)
-#endif
 #endif
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
  int :: ind, istep ! variables for binary search
@@ -1707,7 +1719,6 @@ __DBGVAR(r_com_sa,1)
 #endif
 
  int :: i, ii
- bool :: qsbe
  __IAM(__NM(main))
 !================================================================
 #if defined(__OMP) && defined (__OMP_DEBUG)
@@ -1951,7 +1962,7 @@ endif ! decide whether to compute dr_surf
   __SCALE(A_rb, rigid_body_force_constant) ! pre-scale matrix
   dcom=(r_com_inst-r_com_ref)*rigid_body_force_constant ! pre-scale
 ! compute and apply forces on surface atoms :
-! NOTE: FFD will fail right now because the restraints can be nonuniform !
+! NOTE: FD will fail right now because the restraints can be nonuniform !
 #ifdef __FD_CHECK
 ! record current forces in case they are nonzero :
    __ALLOC(ffd2(3,nsurface_atoms))
@@ -2001,7 +2012,7 @@ endif ! decide whether to compute dr_surf
  write(600,*) rb_wgt
  close(600)
 #endif
-
+! note that below the second subtraction is to isolate the rotres forces !
    d0=sqrt(dot_product( (ffd(1,:)-(fr(1,isurface_atoms(:))-ffd2(1,:)) )**2 , rb_wgt))
    __WARN(whoami, ' ABSOLUTE RMS X-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
    d0=d0/sqrt( dot_product (( fr(1,isurface_atoms(:))-ffd2(1,:) )**2, rb_wgt ))
@@ -2034,7 +2045,6 @@ endif ! decide whether to compute dr_surf
    __WARN(whoami, ' RELATIVE RMS Z-GRAD FD ERROR IN RIGID RESTRAINT IS ', d0 )
 #endif
 !
-
   __DBGOUT('Free surface arrays for FD check')
   __FREE(ffd)
   __FREE(ffd2)
@@ -2056,16 +2066,24 @@ endif ! decide whether to compute dr_surf
 !============================================= compute contour value/distance and gradient at solvent coordinates
 #endif // __ROTRES
 !
-! surface_energy=zero ! not needed ?
- distance_from_solute=zero
- distance_from_solute2=zero ! for computing second moment
+ if (output_freq.gt.izero) then ; qsbe=__CHKUPDATE(output_freq) ; else ; qsbe=.false. ; endif ! E needed for output, not otherwise
 !
+ __DBGOUT('Compute boundary energy (qsbe) ? : ', qsbe )
+!
+ surface_energy=zero
+ curvature_energy=zero
+#ifdef __BAROSTAT
+ surface_force=zero
+ curvature_force=zero
+#endif
 !========================== compute contour value if needed
 ! if surface distance value is zero, estimate a reasonable value from current coordinates
  if ( abs(surface_distance) .lt. __ERRTOL) then
   __DBGOUT('Will compute approximate surface distance')
-!  call __NM(compute_density)(QTRUNCATE_LOOP=.false., QCOMPUTE_GRAD=.false., QCOMPUTE_HESS=.false. ) ! false to force traverse entire solute atom list ; do not need grads
-  call __NM(compute_density)(.false.,.false.,.false.)
+  distance_from_solute=zero
+  distance_from_solute2=zero ! for computing second moment
+  call __NM(compute_density)(QTRUNCATE_LOOP=.false., QCOMPUTE_GRAD=.true., QCOMPUTE_HESS=.true. )
+!  call __NM(compute_density)(.true.,.true.,.true.)
   do i=1, nsolvent
 ! convert to distance
     if ( rho_solv(i) .le. zero ) then ! warn that we are outside of the support
@@ -2137,15 +2155,23 @@ endif ! decide whether to compute dr_surf
 #ifdef __HAMILTONIAN
 ! no easy solution but to recompute the gradients, now that surface contour value is known
 ! note that forces will be applied to surface atoms as well, which is why they need to be correct
-!  call __NM(compute_density)(QTRUNCATE_LOOP=.false., QCOMPUTE_GRAD=.true., QCOMPUTE_HESS=.false.) ! long loop, compute grads
-  call __NM(compute_density)(.false.,.true.,.false.)
+!  call __NM(compute_density)(QTRUNCATE_LOOP=.false., QCOMPUTE_GRAD=.true., QCOMPUTE_HESS=.true.) ! long loop, compute grad, hess
+! NOTE : the Hessian calc is relatively cheap, we might always ask for it to avoid incorrect/undefined curvatures !
+! reset energies to zero :
+ surface_energy=zero
+ curvature_energy=zero
+#ifdef __BAROSTAT
+ surface_force=zero
+ curvature_force=zero
+#endif
+  call __NM(compute_density)(.false.,.true.,.true.)
 #else
   qoutside_solv=rho_solv.lt.surface_contour_value
 #endif
 !====== NOTE : if we requested to run without neighbor lists then we need to reset solute_neighbor_mind to max
 !====== otherwise, the early exit (qtruncate_loop=T) version of force routine could miss crucial atoms (the mind list is _not_ updated b/c qnlist=0)
 !====== this is because solute_neighbor_mind is recomputed in a full loop, so it will be smaller than nsurf
-#if defined(__NEIGHBOR_LIST) & defined(__SORT_LIST)
+#if defined(__NEIGHBOR_LIST) && defined(__SORT_LIST)
   if (.not. qneighbor_list) solute_neighbor_mind=nsurface_coord
 #endif
 !=========================================================================
@@ -2154,7 +2180,6 @@ endif ! decide whether to compute dr_surf
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
    if (full_sum_freq.gt.izero) then ! if full_sum_freq<=0, will always run the short(truncate) loop -- see below
 !    call __NM(compute_density)(QTRUNCATE_LOOP=((.not.qneighbor_list) .or. (.not.__CHKUPDATE(full_sum_freq))), QCOMPUTE_GRAD=.true., QCOMPUTE_HESS=.false.)
-!    call __NM(compute_density)(((.not.qneighbor_list) .or. (.not.__CHKUPDATE(full_sum_freq))),.true.,.false.)
     call __NM(compute_density)(((.not.qneighbor_list) .or. (.not.__CHKUPDATE(full_sum_freq))),.true.,.true.)
 ! the full version will [flag=FALSE]  be called if :
 ! (1) qneighbor_list is TRUE AND iteration is a multiple of full_sum_freq
@@ -2192,97 +2217,108 @@ endif ! decide whether to compute dr_surf
  endif
 #endif
 !========================== compute forces :
- if (output_freq.gt.izero) then ; qsbe=__CHKUPDATE(output_freq) ; else ; qsbe=.false. ; endif
 !
- surface_energy=zero
- surface_force=zero
- curvature_energy=zero
- curvature_force=zero
- nsolvent_outside=izero
-#ifdef __DASYSTAT
- solvent_mass_outside=zero
-#endif
-!
-! if running a FD check, first save current forces, in case they are nonzero
+! if running a FD check, first save (-)current forces, in case they are nonzero (this subtracts the forces we are _NOT_ interested in)
 #ifdef __FD_CHECK
  __DBGOUT('Allocate solvent arrays for FD check')
  __ALLOC(ffd2(3,nsolvent))
  ffd2=-fr(:,isolvent_atoms(:))
 #endif
-! simple minimum distance algorithm
+! NOTE: minimum distance (mindist) algorithm has been removed in version 2 ; density-based only
 ! NOTE: here OPENMP does not make much difference but keeping for consistency and completeness
  nsolvent_unsupported=0 ! for counting unsupported atoms in the erf density method
 !================= compute forces, now that density-related properties are known
+! put the below here to avoid omp single inside OMP
+#ifdef __HAMILTONIAN
+#ifdef __NEWGRADHESS
+ pre=osq2pi*oo_surf_stdev
+#else
+ pre=osq2pi
+#endif
+#endif
 #ifdef __OMP
 !$omp parallel _OMP_EXTRA &
-!$omp shared (rho_solv,drho_solv,d2rho_solv,dsurf_solv,acurv_solv,surface_contour_value,surface_distance,surface_force_constant,curvature_force_constant,&
-!$omp nsolvent_unsupported,qsbe,&
-#ifdef __DASYSTAT
-!$omp solvent_mass_outside, solvent_mass, &
+!$omp default (none) &
+!$omp shared (qoutside_solv,nsolvent,rho_solv,drho_solv,nsolvent_unsupported,qsbe,&
+#ifndef __HAMILTONIAN
+!$omp sbfe,d2rho_solv,acurv_solv,dsurf_solv,surface_distance,surface_force_constant,curvature_force_constant,surface_energy,curvature_energy,&
+#if ( defined(__DRHOINV) || defined(__NEWGRADHESS) )
+!$omp surf_stdev, &
 #endif
-#ifdef __HAMILTONIAN
-!$omp drho_surf, &
+#ifdef __BAROSTAT
+!$omp surface_force, curvature_force, &
 #endif
-!$omp nsolvent_outside, surface_force, surface_energy, curvature_force, curvature_energy, isolvent_atoms, fr) &
-!$omp private (i, d0, pre, sbfe, __U(nsolvent_outside), __U(surface_energy), __U(surface_force), __U(curvature_energy), __U(curvature_force) &
-#if defined(__HAMILTONIAN) && !defined(__H_THREAD_REDUCE)
+#else
+!$omp structure_update_freq, drho_surf, isurface_atoms, numthreads, nsurface_coord, iteration, pre, &
+#endif
+!$omp isolvent_atoms, fr) &
+!$omp private (i &
+#ifndef __HAMILTONIAN
+!$omp , d0, pre, __U(surface_energy), __U(curvature_energy) &
+#ifdef __BAROSTAT
+!$omp , __U(surface_force), __U(curvature_force) &
+#endif
+#else
+#ifndef __H_THREAD_REDUCE
 !$omp , ii &
 #endif
-#ifdef __DASYSTAT
-!$omp , __U(solvent_mass_outside) &
 #endif
 !$omp )
 !
+#ifndef __HAMILTONIAN
+#ifdef __BAROSTAT
  __U(surface_force)=zero
+ __U(curvature_force)=zero
+#endif
  if (qsbe) then
   __U(surface_energy)=zero
   __U(curvature_energy)=zero
  endif
- __U(curvature_force)=zero
- __U(nsolvent_outside)=izero
-#ifdef __DASYSTAT
- __U(solvent_mass_outside)=zero
 #endif
-
+#endif
+#//__OMP
+!
 #ifdef __HAMILTONIAN
-  if (structure_update_freq.gt.0) then
-   if (__CHKUPDATE(structure_update_freq)) then
+ if (structure_update_freq.gt.0) then
+  if (__CHKUPDATE(structure_update_freq)) then
 ! note : this is incorrect if dummy atoms are present !
+#ifdef __OMP
 !$omp do schedule(runtime)
+#endif
    do i=1, nsurface_coord
-#ifdef __H_THREAD_REDUCE
-    __INCR(fr(1,isurface_atoms(i)),drho_surf(1,i,1)) ! note that the 1 array corresponds to the global sum on 0th thread (0th array is the inst support)
-    __INCR(fr(2,isurface_atoms(i)),drho_surf(2,i,1))
-    __INCR(fr(3,isurface_atoms(i)),drho_surf(3,i,1))
-#else
+#if (defined(__OMP) && !defined(__H_THREAD_REDUCE))
 ! each thread sums up contributions previously computed by different threads
     do ii=1, 2*numthreads, 2
-     __INCR(fr(1,isurface_atoms(i)),drho_surf(1,i,ii))
-     __INCR(fr(2,isurface_atoms(i)),drho_surf(2,i,ii))
-     __INCR(fr(3,isurface_atoms(i)),drho_surf(3,i,ii))
+     __DECR(fr(1,isurface_atoms(i)),drho_surf(1,i,ii)*pre)
+     __DECR(fr(2,isurface_atoms(i)),drho_surf(2,i,ii)*pre)
+     __DECR(fr(3,isurface_atoms(i)),drho_surf(3,i,ii)*pre)
     enddo
+#else
+    __DECR(fr(1,isurface_atoms(i)),drho_surf(1,i,1)*pre) ! note that the 1 array corresponds to the global sum on 0th thread (0th array is the local support sum)
+    __DECR(fr(2,isurface_atoms(i)),drho_surf(2,i,1)*pre)
+    __DECR(fr(3,isurface_atoms(i)),drho_surf(3,i,1)*pre)
 #endif
    enddo
+#ifdef __OMP
 !$omp end do
-  endif
-  endif
 #endif
-
+  endif
+ endif
+#endif
+!^HAMILTONIAN
+#ifdef __OMP
 !$omp do schedule(runtime)
 #endif
+!^OMP
  do i=1, nsolvent
   if ( qoutside_solv(i) ) then
-   __INC(__U(nsolvent_outside))
-#ifdef __DASYSTAT
-   if(dasystat) __INCR(__U(solvent_mass_outside), mass_solv(i))
-#endif
    if ( rho_solv(i) .le. zero ) then ! proceed if the density is positive ; otherwise warn that we are outside of the support and cycle
 ! note that is is also possible that erf/exp approximations (or single precision calc) near zero densities will produce negative numbers, hence above
 !    __WRN(whoami, '#'//itoa(iteration)//': SOLVENT ATOM '//itoa(isolvent_atoms(i))//' OUTSIDE OF SOLUTE SUPPORT. RESTART WITH A SMALLER SURFACE DISTANCE OR A LARGER FILTER CUTOFF OR PADDING.')
 #ifdef __OMP
 !$omp atomic update
 #endif
-    nsolvent_unsupported = nsolvent_unsupported + 1 ! openmp compiler cannot take __INC()
+    nsolvent_unsupported = nsolvent_unsupported + 1
 #ifdef __OMP
 !$omp end atomic
 #endif
@@ -2291,35 +2327,37 @@ endif ! decide whether to compute dr_surf
   endif ! outside the surface contour boundary
 !
 #ifndef __HAMILTONIAN
-  dsurf_solv(i) = ( __RHO_INVSAFE ( rho_solv(i) ) - surface_distance ) ! distance to boundary using the approximate inverse (+/- for inside/outside bdry)
-! note that the above is the lowest order approximation
-! otherwise, need custom code for wshell2
-! What happens if we do not know surface distance going into the grad routine ? In that case, the computed prefactor will be wrong !
-#endif
-#if (_DBGLEV>1)
-  __DBGOUT('solv. atom#:', i, 'density:', rho_solv(i), 'distance to bdry:', dsurf_solv(i), 'outside?:', qoutside_solv(i)
-#ifndef __HAMILTONIAN
-  , 'pre:', pre
-#endif
- )
-#endif
-#ifndef __HAMILTONIAN
 ! gradient norm :
   d0=sum(drho_solv(:,i)**2)
-  if (d0.le.__ERRTOL) then ; d0=zero ; else ; d0=one/sqrt(d0); endif
-  __SCALE(drho_solv(:,i),d0) ! normalize gradient
+  if (d0.le.__ERRTOL) then ; d0=zero ; else ; d0=one/sqrt(d0) ; endif
+!
+#ifdef __DRHOINV
 ! compute average curvature at sovent coordinate from gradient and hessian
-! unnormalized grad formula:
-!  acurv_solv(i) = half * d0  * ( d2rho_solv(1,i) + d2rho_solv(4,i) + d2rho_solv(6,i) \
-!              - d0**2 * ( d2rho_solv(1,i)*drho_solv(1,i)**2 + d2rho_solv(4,i)*drho_solv(2,i)**2 + d2rho_solv(6,i)*drho_solv(3,i)**2 \
-!            + ( drho_solv(1,i)*(d2rho_solv(2,i)*drho_solv(2,i) + d2rho_solv(3,i)*drho_solv(3,i)) + d2rho_solv(5,i)*drho_solv(2,i)*drho_solv(3,i) )*2 ) )
+! unnormalized/unscaled grad formula:
+  acurv_solv(i) = half * d0  * ( d2rho_solv(1,i) + d2rho_solv(4,i) + d2rho_solv(6,i) \
+              - d0**2 * ( d2rho_solv(1,i)*drho_solv(1,i)**2 + d2rho_solv(4,i)*drho_solv(2,i)**2 + d2rho_solv(6,i)*drho_solv(3,i)**2 \
+            + ( drho_solv(1,i)*(d2rho_solv(2,i)*drho_solv(2,i) + d2rho_solv(3,i)*drho_solv(3,i)) + d2rho_solv(5,i)*drho_solv(2,i)*drho_solv(3,i) )*2 ) )
+#else
+  __SCALE(drho_solv(:,i),d0) ! normalize gradient (note that we use the normalized grad as the surface unit normal for forces)
 ! normalized grad formula:
   acurv_solv(i) = half * d0  * ( d2rho_solv(1,i)*(one-drho_solv(1,i)**2) + d2rho_solv(4,i)*(one-drho_solv(2,i)**2) + d2rho_solv(6,i)*(one-drho_solv(3,i)**2) \
             - ( drho_solv(1,i)*( d2rho_solv(2,i)*drho_solv(2,i) + d2rho_solv(3,i)*drho_solv(3,i)) + d2rho_solv(5,i)*drho_solv(2,i)*drho_solv(3,i) )*2 )
+#endif
 ! now can compute the boundary force from spline data
 ! NB: this is the lowest order of approximation for the distance to boundary and curvature
 ! a very slightly better curvature value is obtained by adding a function of the distance to boundary :
-! any improvement over the below requires another instance of the _compute routine
+! any improvement over the below requires another instance of the _compute routine, which is computationally expensive
+!
+!  d0=__Q(rho_solv(i)) ! unsafe inverse, but at least rho > 0, per above
+  d0=__QSAFE(rho_solv(i))
+!  dsurf_solv(i) = ( __RHO_INVSAFE ( rho_solv(i) ) - surface_distance ) ! distance to boundary using the approximate inverse (+/- for inside/outside bdry)
+  dsurf_solv(i) = ( __RHO_INVERSE2 ( d0 ) - surface_distance ) ! need this for correction below
+! note that the above is the lowest order approximation for distance to bdry (more accurate ones, e.g. NR, are much slower)
+! note also, that we are technically missing (in the derivative of potential sense) the derivative of the inverse wrt rho (same as wsh1)
+#if (_DBGLEV>1)
+  __DBGOUT('solv. atom#:', i, 'density:', rho_solv(i), 'distance to bdry:', dsurf_solv(i), 'outside?:', qoutside_solv(i))
+#endif
+!
   if (dsurf_solv(i).gt.0) &
   acurv_solv(i) = acurv_solv(i) / ( one + abs(acurv_solv(i)) * dsurf_solv(i) ) ! in this model the curvature correction is independent of curvature sign
 ! for molecules outside the boundary, dsurf < 0, and therefore the curvature increases ; in principle, it is technically possible to go to zero in the denominator,
@@ -2328,33 +2366,25 @@ endif ! decide whether to compute dr_surf
 !  sbfe = watershell_sbf_spline_compute(acurv_solv(i), dsurf_solv(i), output_freq.gt.0 .and. __CHKUPDATE(output_freq) ) ! compute forces and (optionally) energies
   sbfe = watershell_sbf_spline_compute(acurv_solv(i), dsurf_solv(i), qsbe)
 ! note : the flag above can be computed outside ; also we may want to compute more often if we need energy averages
-! sbfe(1,2,3,4) contain surface_force, curvature_force, surface_energy, curvature_energy, respectively
+! sbfe(1,2,3,4) contain "surface" force (with crv subtracted out), curvature_force, surface_energy, curvature_energy, respectively
   __SCALE( sbfe(1), surface_force_constant )
   __SCALE( sbfe(2), curvature_force_constant )
 !
   pre = - ( sbfe(1) + sbfe(2) )
-!  pre = - sbfe(1)
+#ifdef __DRHOINV
+! include derivative of distance function (simplest model only)
+  __SCALE(pre, surf_stdev * sq2pi * exp (d0**2)) ! recall our sign convention, in which distance to boundary is negative
+#else
+! in this case, we should scale by 1/|grad rho|, but this was done in the first protected block above, so need nothing here
+#endif
 ! add forces to force arrays ; the normalized gradient gives direction
 ! note that the gradient is inwardly directed, and the force has the "correct" sign (+/-) for inside/in, so need (-) above
   __INCR(fr(1,isolvent_atoms(i)), pre * drho_solv(1,i))
   __INCR(fr(2,isolvent_atoms(i)), pre * drho_solv(2,i))
   __INCR(fr(3,isolvent_atoms(i)), pre * drho_solv(3,i))
-#ifdef __BAROSTAT
-  d0=d0*norm3(drho_solv(:,i))
-#endif
-#else
-!#HAMILTONIAN
-! derivative already includes force prefactor
-  __DECR(fr(1,isolvent_atoms(i)), drho_solv(1,i))
-  __DECR(fr(2,isolvent_atoms(i)), drho_solv(2,i))
-  __DECR(fr(3,isolvent_atoms(i)), drho_solv(3,i))
-#ifdef __BAROSTAT
-  d0=norm3(drho_solv(:,i))
-#endif
-#endif
 !
 ! sum "energy"
-! this requires evaluating additional splines, so should be done only when required
+! this requires evaluating additional splines (indicated above by qsbe flag), so should be done only when required
 ! NOT clear whether the surface_energy is physically meaningful
 ! surface force is used only if barostat is on !
 #ifdef __BAROSTAT
@@ -2362,39 +2392,38 @@ endif ! decide whether to compute dr_surf
   __INCR(__U(curvature_force), sbfe(2) ) ! remaining force exerted on the surface
 #endif
   if (qsbe) then
-#ifndef __HAMILTONIAN
    __INCR(__U(surface_energy), sbfe(3)) ! surface_force_constant below
    __INCR(__U(curvature_energy), sbfe(4)) ! curvature_force_constant below
-#else
-  __INCR(__U(surface_energy), (__RHO_INVSAFE(rho_solv(i)) - surface_distance)**2) ! x k/2, below
-#endif
   endif
+#else
+!#HAMILTONIAN defined v
+! derivative already includes force prefactor
+  __INCR(fr(1,isolvent_atoms(i)), drho_solv(1,i))
+  __INCR(fr(2,isolvent_atoms(i)), drho_solv(2,i))
+  __INCR(fr(3,isolvent_atoms(i)), drho_solv(3,i))
+#endif
+!
  enddo ! nsolvent
 #ifdef __OMP
 !$omp end do
-!$omp atomic
-  __REDUCE(nsolvent_outside)
-  if (qsbe) then
+#ifndef __HAMILTONIAN
+ if (qsbe) then
 !$omp atomic
    __REDUCE(surface_energy)
 !$omp atomic
    __REDUCE(curvature_energy)
-  endif
+ endif
 #ifdef __BAROSTAT
-if (barostat) then
+ if (barostat) then
 !$omp atomic
   __REDUCE(surface_force)
 !$omp atomic
   __REDUCE(curvature_force)
-endif
+ endif
 #endif
-#ifdef __DASYSTAT
-if (dasystat) then
-!$omp atomic
- __REDUCE(solvent_mass_outside)
-endif
-#endif // __DASYSTAT
-#endif // __OMP
+#endif
+#endif
+!
 !
 #ifdef __FD_CHECK
 ! make sure torque removal forces do not contaminate the potential (shell) forces in the FD comparison :
@@ -2402,7 +2431,7 @@ endif
 !$omp do schedule(runtime)
 #endif
  do i=1,nsolvent
-  __INCR(ffd2(:,i), fr(:,isolvent_atoms(i))) ! ffd2 was set to -fr earlier
+  __INCR(ffd2(:,i), fr(:,isolvent_atoms(i))) ! ffd2 was set to -fr earlier, so in ffd2 we have _ONLY_ the boundary forces
  enddo
 #ifdef __OMP
 !$omp end do
@@ -2413,28 +2442,69 @@ endif
 !$omp end parallel
 #endif
 !
+
+
 #ifdef __FD_CHECK
+! NOTE : FD is done without OPENMP, since it is only a debugging check !
 ! FD test of shell potential
  __ALLOC(ffd(3,nsolvent))
   do i=1, nsolvent ; do j=1, 3
    ffd(j,i)=zero ! initialize
-   d0=r_solv(j,i) ! save coordinate
+   pre=r_solv(j,i) ! save coordinate
    do ii=-1,1,2
     __INCR ( r_solv(j,i) , ii * h ) ! perturb
-#if defined(NEIGHBOR_LIST) && defined(SORT_LIST)
-!    call __NM(compute_density)(QTRUNCATE_LOOP=.not.qneighbor_list, QCOMPUTE_GRAD=.false., QCOMPUTE_HESS=.false.)
-    call __NM(compute_density)(.not.qneighbor_list,.false.,.false.)
+! recompute density and curvature at the perturbed coordinate
+! no need for forces, but still need curvature from hessian & gradient, unless we neglect curvature variation
+#ifdef __FD_WITH_CURV
+#if defined(__NEIGHBOR_LIST) && defined(__SORT_LIST)
+    call __NM(compute_density)(QTRUNCATE_LOOP=.not.qneighbor_list, QCOMPUTE_GRAD=.true., QCOMPUTE_HESS=.true.)
+!    call __NM(compute_density)(.not.qneighbor_list,.true.,.false.)
 #else
-!    call __NM(compute_density)(QTRUNCATE_LOOP=.true.,QCOMPUTE_GRAD=.false.,QCOMPUTE_HESS=.false.) ! no grads, just values, since this is FD
-    call __NM(compute_density)(.true.,.false.,.false.) ! no grads, just values, since this is FD
+    call __NM(compute_density)(QTRUNCATE_LOOP=.true.,QCOMPUTE_GRAD=.true.,QCOMPUTE_HESS=.true.)
+!    call __NM(compute_density)(.true.,.true.,.true.)
 #endif
+#else
+#if defined(__NEIGHBOR_LIST) && defined(__SORT_LIST)
+    call __NM(compute_density)(QTRUNCATE_LOOP=.not.qneighbor_list, QCOMPUTE_GRAD=.false., QCOMPUTE_HESS=.false.)
+!    call __NM(compute_density)(.not.qneighbor_list,.true.,.false.)
+#else
+    call __NM(compute_density)(QTRUNCATE_LOOP=.true.,QCOMPUTE_GRAD=.false.,QCOMPUTE_HESS=.false.)
+!    call __NM(compute_density)(.true.,.true.,.true.)
+#endif
+#endif
+!    dsurf_solv(i) = ( __RHO_INVSAFE ( rho_solv(i) ) - surface_distance ) ! distance to boundary
+    d0=__QSAFE(rho_solv(i))
+    dsurf_solv(i) = ( __RHO_INVERSE2 ( d0 ) - surface_distance )
+! gradient norm :
+#ifdef __FD_WITH_CURV
+    d0=sum(drho_solv(:,i)**2)
+    if (d0.le.__ERRTOL) then ; d0=zero ; else ; d0=one/sqrt(d0); endif
+    __SCALE(drho_solv(:,i),d0) ! normalize gradient
+! compute average curvature at solvent coordinate from gradient and hessian
+! note that recomputing the curvature implicitly means that we are including force changes wrt curvature as the solvent
+! particle moves around ; this is the more correct approach than our analytical implementation, in which there is no curvature
+! derivative ; i.e. we expand the surface to 2nd order, and assume that transverse variations are negligible
+! technically, we are (1) violating Hamiltonian dynamics, or (2) projecting out (removing) non-normal forces
+! the FD formula that corresponds to the analytical 2nd order surface model has to exclude the curvature variation, i.e. use the 
+! values already computed for the analytical forces
+    acurv_solv(i) = half * d0  * ( d2rho_solv(1,i)*(one-drho_solv(1,i)**2) + d2rho_solv(4,i)*(one-drho_solv(2,i)**2) + d2rho_solv(6,i)*(one-drho_solv(3,i)**2) \
+            - ( drho_solv(1,i)*( d2rho_solv(2,i)*drho_solv(2,i) + d2rho_solv(3,i)*drho_solv(3,i)) + d2rho_solv(5,i)*drho_solv(2,i)*drho_solv(3,i) )*2 )
+    if (dsurf_solv(i).gt.0) &
+     acurv_solv(i) = acurv_solv(i) / ( one + abs(acurv_solv(i)) * dsurf_solv(i) ) ! in this model the curvature correction is independent of curvature sign
+#endif
+! boundary energy from spline data
+    sbfe = watershell_sbf_spline_compute(acurv_solv(i), dsurf_solv(i), .true.)
+! note : the flag above can be computed outside ; also we may want to compute more often if we need energy averages
+! sbfe(1,2,3,4) contain surface_force, curvature_force, surface_energy, curvature_energy, respectively
+    __SCALE( sbfe(3), surface_force_constant )
+    __SCALE( sbfe(4), curvature_force_constant )
 ! incorporate into FD
-    __INCR ( ffd(j,i), ii * min(zero, (__RHO_INVERSE(rho_solv(i))-surface_distance))**2 ) ! recall that distance is negative, or inside shell
+    __INCR ( ffd(j,i), ii * ( sbfe(3) + sbfe(4) ) )
 ! restore coordinate
-    r_solv(j,i)=d0
+    r_solv(j,i)=pre
    enddo ! ii
   enddo ; enddo ! j, i
-  __SCALE(ffd, - half * surface_force_constant / ( 2*h ) ) ! negative for force direction
+  __SCALE(ffd, - half / h ) ! forces are negative gradients
 
 #ifdef __DEBUG
  write(800,*) iteration
@@ -2443,64 +2513,57 @@ endif
  close(800)
 #endif
 
-   d0=sqrt(sum ( ffd(1,:)-ffd2(1,:) )**2 / nsolvent_outside)
+   d0=sqrt(sum ( ffd(1,:)-ffd2(1,:) )**2 / nsolvent)
    __WARN(whoami, ' ABSOLUTE RMS X-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
-   d0=d0/sqrt( sum ( ffd2(1,:) )**2 / nsolvent_outside )
+   d0=d0/sqrt( sum ( ffd2(1,:) )**2 / nsolvent )
    __WARN(whoami, ' RELATIVE RMS X-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
 !
-   d0=sqrt(sum ( ffd(2,:)-ffd2(2,:) )**2 / nsolvent_outside)
+   d0=sqrt(sum ( ffd(2,:)-ffd2(2,:) )**2 / nsolvent)
    __WARN(whoami, ' ABSOLUTE RMS Y-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
-   d0=d0/sqrt( sum ( ffd2(2,:) )**2 / nsolvent_outside )
+   d0=d0/sqrt( sum ( ffd2(2,:) )**2 / nsolvent )
    __WARN(whoami, ' RELATIVE RMS Y-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
 !
-   d0=sqrt(sum ( ffd(3,:)-ffd2(3,:) )**2 / nsolvent_outside)
+   d0=sqrt(sum ( ffd(3,:)-ffd2(3,:) )**2 / nsolvent)
    __WARN(whoami, ' ABSOLUTE RMS Z-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
-   d0=d0/sqrt( sum ( ffd2(3,:) )**2 / nsolvent_outside )
+   d0=d0/sqrt( sum ( ffd2(3,:) )**2 / nsolvent )
    __WARN(whoami, ' RELATIVE RMS Z-GRAD FD ERROR IN SOLVENT BOUNDARY POTENTIAL IS ', d0 )
 !
   __FREE(ffd)
   __FREE(ffd2)
-! at this point the distance and derivatives are computed with one coordinate off ; is there any need to recompute them correctly ? They do not seem to be used below.
 #endif //__FD_CHECK
 !
 !
-  if (nsolvent_unsupported.gt.0) then
+ if (nsolvent_unsupported.gt.0) then
 #ifdef __ADAPTIVE_SUPPORT
 #ifdef __ADAPTIVE_CUTOFF
-   __WRN(whoami, 'DETECTED '//itoa(nsolvent_unsupported)//' ATOM(S) OUTSIDE SOLUTE SUPPORT. DENSITY CUTOFF IS '//ftoa(cutoff_surf));
+  __WRN(whoami, 'DETECTED '//itoa(nsolvent_unsupported)//' ATOM(S) OUTSIDE SOLUTE SUPPORT. DENSITY CUTOFF IS '//ftoa(cutoff_surf));
 ! increase cutoff adaptively
-   __INCR(cutoff_surf, solvent_support_factor_grow)
-  else
-   if (cutoff_surf.gt.cutoff_surf_stdev*surf_stdev) then 
-    __INCR(cutoff_surf, solvent_support_factor_shrink)
-   endif
-#else
-   __WRN(whoami, 'DETECTED '//itoa(nsolvent_unsupported)//' ATOM(S) OUTSIDE SOLUTE SUPPORT. SURFACE PADDING IS '//ftoa(surf_padding));
-! increase padding adaptively
-   __INCR(surf_padding, solvent_support_factor_grow)
-  else
-   if (surf_padding.gt.surf_padding_input) then
-    __INCR(surf_padding, solvent_support_factor_shrink)
-   else
-    surf_padding=surf_padding_input
-   endif
-#endif
-#else
-   __WRN(whoami, 'DETECTED '//itoa(nsolvent_unsupported)//' ATOM(S) OUTSIDE SOLUTE SUPPORT. RESTART WITH A LARGER CUTOFF OR SURFACE PADDING.')
-#endif
-  endif
-!
-! NOTE: check below to make sure consistent for erf/density ; yes it is;
-
- if (nsolvent_outside .gt. 0) then
-  oonsolvent_outside=one/nsolvent_outside
+  __INCR(cutoff_surf, solvent_support_factor_grow)
  else
-  oonsolvent_outside=zero ;
+  if (cutoff_surf.gt.cutoff_surf_stdev*surf_stdev) then 
+    __INCR(cutoff_surf, solvent_support_factor_shrink)
+  endif
+#else
+  __WRN(whoami, 'DETECTED '//itoa(nsolvent_unsupported)//' ATOM(S) OUTSIDE SOLUTE SUPPORT. SURFACE PADDING IS '//ftoa(surf_padding));
+! increase padding adaptively
+  __INCR(surf_padding, solvent_support_factor_grow)
+ else
+  if (surf_padding.gt.surf_padding_input) then
+   __INCR(surf_padding, solvent_support_factor_shrink)
+  else
+   surf_padding=surf_padding_input
+  endif
+#endif
+#else
+  __WRN(whoami, 'DETECTED '//itoa(nsolvent_unsupported)//' ATOM(S) OUTSIDE SOLUTE SUPPORT. RESTART WITH A LARGER CUTOFF OR SURFACE PADDING.')
+#endif
  endif
 !
  if (qsbe) then
- __SCALE(surface_energy, surface_force_constant)
- __SCALE(curvature_energy, curvature_force_constant)
+#ifndef __HAMILTONIAN
+  __SCALE(surface_energy, surface_force_constant)
+  __SCALE(curvature_energy, curvature_force_constant)
+#endif
 ! note that this will not be available at every iteration ! However, typically, output freqs between the main sim & plugin should match
   if (present(energy)) then
    __INCR(energy,surface_energy+curvature_energy)
@@ -2740,7 +2803,6 @@ __DBGVAR(obulk_boundary_distance,1)
 __DBGVAR(solvent_mass,1)
 __DBGVAR(solvent_mass_ibulk,1)
 __DBGVAR(solvent_mass_obulk,1)
-__DBGVAR(solvent_mass_outside,1)
 __DBGVAR(volume_bulk,1)
 __DBGVAR(gml_per_akma,1)
 __DBGVAR(density,1)
@@ -2830,7 +2892,6 @@ __DBGVAR(density_target,1)
 !     __INCR(current_surface_distance , __RHO_INVSAFE(rho_solv(ii)))
 !    endif
 !  enddo
-!   __SCALE(current_surface_distance, oonsolvent_outside)
 !   __SCALE(current_surface_distance, oonsolvent)
 !
 !  __OUT('Current avg. distance to protein:', current_surface_distance) ! not sure this is useful, in part because of the density cutoff below one
@@ -2838,7 +2899,6 @@ __DBGVAR(density_target,1)
   __ASSERT(qsbe,.eqv.,.true.)
   __OUT('Surface energy:                  ', surface_energy)
   __OUT('Curvature energy:                ', curvature_energy)
-  __OUT('# Solvent atoms outside / total: ', nsolvent_outside,'/',nsolvent)
 
 #ifdef __FORCE_STATS
   total_solute_force=zero
@@ -2962,7 +3022,7 @@ __DBGVAR(density_target,1)
    __OUT('======= DENSITY STATISTICS ============')
   __OUT('# Solute atoms used for density:  ', nsurface_atoms)
 #ifdef __DUMSURF
-  if (qdumsurf) __OUT('# Fixed dummy atoms used for density: ', nsurface_coord)
+  if (qdumsurf) then ; __OUT('# Fixed dummy atoms used for density: ', nsurface_coord) ; endif
 #endif
    __OUT('Target density (g/mL):           ', density_target)
    __OUT('Simulation density (g/mL):       ', density_ave)
@@ -2972,7 +3032,6 @@ __DBGVAR(density_target,1)
    __OUT('Outer bulk boundary distance:    ', obulk_boundary_distance,'(contour value:', obulk_boundary_contour_value,')')
    __OUT('Inner bulk boundary distance:    ', ibulk_boundary_distance,'(contour value:', ibulk_boundary_contour_value,')')
 __DBGVAR(solvent_mass,1)
-__DBGVAR(solvent_mass_outside,1)
 __DBGVAR(solvent_mass_obulk,1)
 __DBGVAR(solvent_mass_ibulk,1)
   endif
@@ -3006,6 +3065,14 @@ __DBGVAR(solvent_mass_ibulk,1)
  write(i,*) fr
  call files_close(i)
 !
+ call files_open(i, 'forces_solv.dat', 'FORMATTED','WRITE')
+ write(i,*) fr(:,isolvent_atoms)
+ call files_close(i)
+!
+ call files_open(i, 'forces_surf.dat', 'FORMATTED','WRITE')
+ write(i,*) fr(:,isurface_atoms)
+ call files_close(i)
+!
  call files_open(i, 'positions.dat', 'FORMATTED','WRITE')
  write(i,*) r
  call files_close(i)
@@ -3026,12 +3093,18 @@ __DBGVAR(solvent_mass_ibulk,1)
  write(i,*) rho_solv
  call files_close(i)
 !
+#ifdef __HAMILTONIAN
+ call files_open(i, 'drho_surf.dat', 'FORMATTED','WRITE')
+ write(i,*) drho_surf(:,:,0)
+ call files_close(i)
+#endif
+!
  call files_open(i, 'drho_solv.dat', 'FORMATTED','WRITE')
  write(i,*) drho_solv
  call files_close(i)
 !
  call files_open(i, 'd2rho_solv.dat', 'FORMATTED','WRITE')
- write(i,*) d2rho_solv
+ write(i,'(G20.12)') d2rho_solv
  call files_close(i)
 !
  call files_open(i, 'dsurf_solv.dat', 'FORMATTED','WRITE')
@@ -3046,6 +3119,11 @@ __DBGVAR(solvent_mass_ibulk,1)
  call files_open(i, 'misc.dat', 'FORMATTED','WRITE')
  write(i,*) surf_stdev, surf_padding, surface_distance, surface_contour_value, surface_energy, surface_force_constant, cutoff_surf
  call files_close(i)
+#ifdef __DASYSTAT
+ call files_open(i, 'mass_solv.dat', 'FORMATTED','WRITE')
+ write(i,*) mass_solv
+ call files_close(i)
+#endif
 #endif
 !
  end __SUB(main)
@@ -3064,7 +3142,10 @@ __DBGVAR(solvent_mass_ibulk,1)
  int :: i, j
  float :: rp(3), rw(3), dr(3), dr2(6), drn, drn2, b, expb, ooc
 #ifndef __SIMPLERHO
- float :: a, expa
+ float :: a, expa, em, ep
+#endif
+#ifdef __NEWGRADHESS
+ float :: rhop, rhopp, oor
 #endif
 #ifdef __SORT_LIST
  int :: jj, nsurface_coord_maxind
@@ -3154,14 +3235,23 @@ __DBGVAR(obulk_boundary_contour_value,1)
 !==========================================================================================
 #ifdef __OMP
 !$omp parallel _OMP_EXTRA &
-!$omp shared ( rho_solv, drho_solv, d2rho_solv, r_solv, r_surf, rad_surf, surf_padding, nsolvent, nsurface_coord, cutoff_surf, oo_surf_stdev &
+!$omp default(none) &
+!$omp shared (rho_solv,drho_solv,d2rho_solv,r_solv,r_surf,rad_surf,surf_padding,nsolvent,nsurface_coord,cutoff_surf,oo_surf_stdev,qoutside_solv,surface_contour_value &
+!$omp , obulk_boundary_contour_value,ibulk_boundary_contour_value,qcompute_hess,qcompute_grad, qtruncate_loop &
 #ifdef __DASYSTAT
-!$omp , solvent_mass_ibulk, solvent_mass_obulk, mass_solv &
+!$omp , dasystat, solvent_mass_ibulk, solvent_mass_obulk, mass_solv &
+#endif
+#ifdef __HAMILTONIAN
+!$omp ,numthreads,structure_update_memory,curvature_force_constant,surface_force_constant,qsbe,dsurf_solv,surface_distance,surf_stdev,acurv_solv,drho_surf,ispt &
+!$omp ,surface_energy, curvature_energy &
+#ifdef __BAROSTAT
+!$omp ,surface_force, curvature_force &
+#endif
 #endif
 #ifdef __SORT_LIST
 !$omp , solute_neighbor_list &
 #ifdef __NEIGHBOR_LIST
-!$omp , solute_neighbor_mind &
+!$omp , solute_neighbor_mind, neighbor_list_factor &
 #ifdef __NEIGHBOR_LIST_CHECK
 !$omp , neighbor_list_misses &
 #endif
@@ -3169,8 +3259,23 @@ __DBGVAR(obulk_boundary_contour_value,1)
 #endif
 !$omp ) &
 !$omp private ( rw, i, j, rp, rsurf, rmaxsurf, dr, dr2, drn, drn2, ooc, b, expb, qoutside &
+#ifdef __HAMILTONIAN
+!$omp , __U(surface_energy), __U(curvature_energy) &
+#ifdef __BAROSTAT
+!$omp ,__U(surface_force), __U(curvature_force) &
+#endif
+#endif
+#ifdef __ERFHYBRID
+!$omp , x_, isgn_, erfb &
+#endif
 #ifndef __SIMPLERHO
-!$omp , a, expa &
+!$omp , a, expa, em, ep &
+#ifdef __ERFHYBRID
+!$omp , erfa &
+#endif
+#endif
+#ifdef __NEWGRADHESS
+!$omp , rhop, rhopp, oor &
 #endif
 #ifdef __DASYSTAT
 !$omp , __U(solvent_mass_ibulk), qibulk &
@@ -3183,7 +3288,7 @@ __DBGVAR(obulk_boundary_contour_value,1)
 #endif
 #endif
 #ifdef __HAMILTONIAN
-!$omp , tid, ispt_this_thread, drho_surf_this_thread, drho_surf_all_thread, __U(nspt) &
+!$omp , tid, ispt_this_thread, drho_surf_this_thread, drho_surf_all_thread, __U(nspt), sbfe &
 #endif
 !$omp )
 !
@@ -3193,10 +3298,23 @@ __DBGVAR(obulk_boundary_contour_value,1)
   __U(solvent_mass_obulk)=zero
  endif
 #endif
+!
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
  if (.not.qtruncate_loop) __U(neighbor_list_misses)=0
 #endif
+!
+#ifdef __HAMILTONIAN
+#ifdef __BAROSTAT
+ __U(surface_force)=zero
+ __U(curvature_force)=zero
 #endif
+ if (qsbe) then
+  __U(surface_energy)=zero
+  __U(curvature_energy)=zero
+ endif
+#endif
+#endif
+#//__OMP
 !
 #ifdef __HAMILTONIAN
 #ifdef __OMP
@@ -3205,9 +3323,9 @@ __DBGVAR(obulk_boundary_contour_value,1)
 #define tid 0
 #endif
  ispt_this_thread=>ispt(:,tid)
- drho_surf_this_thread=>drho_surf(:,:,2*tid)
- drho_surf_all_thread=>drho_surf(:,:,2*tid+1)
- drho_surf_all_thread=zero ! initialize this aray because it is updated incrementally
+ drho_surf_this_thread=>drho_surf(:,:,2*tid) ! for _this_ (ith) solvent molecule
+ drho_surf_all_thread=>drho_surf(:,:,2*tid+1) ! for all solvent molecules
+ drho_surf_all_thread=zero ! initialize this array because it is updated incrementally
 #ifndef __OMP
 #undef tid
 #endif
@@ -3229,6 +3347,8 @@ __DBGVAR(obulk_boundary_contour_value,1)
     qobulk=.true. ! check if atom within outer bulk
    endif
 #endif
+! NOTE that there is an important difference between qibulk+qobulk vs qoutside ; the former indicate whether to check the for
+! the property, but the latter _also_ shows whether the condition is true (i.e. atom is outside the bdry)
    rho_solv(i)=zero
    if (qcompute_grad) drho_solv(:,i)=zero
    if (qcompute_hess) d2rho_solv(:,i)=zero
@@ -3301,12 +3421,12 @@ __DBGVAR(obulk_boundary_contour_value,1)
 #ifndef __SIMPLERHO
     __erfo7i(a,erfa)
 #ifndef __MEDIUMRHO
-    __INCR(rho_solv(i), half * ( erfa - erfb ) + osq2pi * ooc * ( expa - expb ) )
+    __INCR(rho_solv(i), half * ( erfa - erfb ) + osq2pi * ooc * ( expa - expb ) ) ! full rho
 #else
-    __INCR(rho_solv(i), half * ( erfa - erfb ) )
+    __INCR(rho_solv(i), half * ( erfa - erfb ) ) ! medium rho
 #endif
 #else
-    __INCR(rho_solv(i), half * ( one  - erfb ) )
+    __INCR(rho_solv(i), half * ( one  - erfb ) ) ! simple rho
 #endif
 #else
 #ifndef __SIMPLERHO
@@ -3323,24 +3443,97 @@ __DBGVAR(obulk_boundary_contour_value,1)
 !calc gradient & hessian, if requested
 !
 ! needed for rho (simple) : b
-! needed for rho (full)   : a,b,expa,expb,ooc (everything...)
+! needed for rho (full)   : a,b,expa,expb,ooc=s/r (everything...)
 ! needed for gradient (simplerho) : expb, b, ooc
 ! needed for gradient (mediumrho) : expa, a, expb, b, ooc
 ! needed for gradient (fullrho)   : expa, a, expb, b, ooc
 ! needed for hessian (simple)     : expb, b, ooc
 ! needed for hessian (medium)     : expa, a, expb, b, ooc
 ! needed for hessian (full)       :
-
+!
+! 8/9/24 : rewrite gradient calculation for clarity
     if(qcompute_grad.or.qcompute_hess) then
-#if !(defined(__SIMPLERHO)||defined(__MEDIUMRHO))
+#ifdef __NEWGRADHESS
+! note that multiplication by "oo_surf_stdev * osq2pi" can be moved out of all loops
+#if (defined(__SIMPLERHO))
+! rhop :  rho prime -- derivative wrt dr (separation distance) ; rhopp rho prime-prime, second derivative
+! factor out "oo_surf_stdev * osq2pi" henceforth
+     ooc=one/drn ! s/r
+     expb=__gauss(b)
+     rhop  = - expb      ! prime, but not scaled by 1/sqrt(2*pi)/s, which is done below
+#elif (defined(__MEDIUMRHO))
+     ooc=one/drn
+     expa=__gauss(a)
+     expb=__gauss(b)
+     em = expa-expb
+     rhop  = em ! prime
+#else
+     em = expa-expb
+     ep = expa+expb
+!     rhop = - oo_surf_stdev * osq2pi * ( ooc**2 * em + rsurf * ooc * ep ) ! rsurf x ooc  = a/r in notes
+     rhop = - ( ooc * ( ooc * em + rsurf * ep ) ) ! prime
+#endif
+     oor = ooc * oo_surf_stdev ! 1/r
+     if (qcompute_hess) then
+      dr2(1)=dr(1)**2
+      dr2(2)=dr(1)*dr(2)
+      dr2(3)=dr(1)*dr(3)
+      dr2(4)=dr(2)**2
+      dr2(5)=dr(2)*dr(3)
+      dr2(6)=dr(3)**2
+#if defined(__SIMPLERHO)
+      rhopp = -oo_surf_stdev * (drn-rsurf) * rhop ! prime-prime
+!     rhopp =  oo_surf_stdev**2 * osq2pi * (drn-rsurf) * expb
+#elif defined (__MEDIUMRHO)
+      ep = expa+expb
+      rhopp =  - oo_surf_stdev * ( drn * em + rsurf * ep ) ! prime-prime
+#else
+      rhopp = oo_surf_stdev * ( ooc * (one + 2 * ooc**2 + rsurf**2) * em  +  rsurf * (ooc**2 + one) * ep ) ! prime-prime
+#endif
+      __SCALE(dr2,oor*(rhopp-rhop*oor))
+      __INCR(dr2(1),rhop)
+      __INCR(dr2(4),rhop)
+      __INCR(dr2(6),rhop)
+      __SCALE(dr2,oor)
+      __INCR(d2rho_solv(:,i),dr2)
+     endif
      if (qcompute_grad) then
-      __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( (expa + expb) * rsurf + (expa - expb) * ooc) )
+      __SCALE(dr, - rhop * oor ) ! note that this destroys dr for use after, which is why it is at the end !!!
+      __INCR(drho_solv(:,i),dr) ! negative above because dr = r_protein - r_water
+     endif
+#else
+!=================== OLDER CODE BELOW ===================================
+! 7/2/24 : the full and simpler rho models are coded (almost) separately
+#if !(defined(__SIMPLERHO) || defined(__MEDIUMRHO))
+! note that, if dr ~ small, ( expa - expb ) / c is singular, though the limit (and asymptote) exists
+! however, in the calculations here, that would imply atoms being very close together, which we consider impossible, so ignore this case
+     a=expa+expb
+     b=expa-expb
+     expa = (ooc*oo_surf_stdev)**2 ! 1/r^2
+! note the sign difference vs notes (dr = rp-rw here, and the derivative is wrt rw, so need - for grad)
+     expb = expa * ( a * rsurf + b * ooc ) ! drho/d|r| / |r|)
+!     b=ooc * oo_surf_stdev**2 ! reuse = 1/(sr)
+     if (qcompute_grad) then
+!      __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( a * rsurf + b * ooc) )
+!      __SCALE(dr, (ooc*oo_surf_stdev)**2 * ( a * rsurf + b * ooc) )
+       __SCALE(dr, expb)
 ! add gradient contribution
       __INCR(drho_solv(:,i),dr)
      endif
-! Hessian to be implemented
-! note that, if dr ~ small, ( expa - expb ) / c is singular, though the limit (and asymptote) exists
-! however, in the calculations here, that would imply atoms being very close together, which we consider impossible, so ignore this case
+     if (qcompute_hess) then
+      dr2(1)=dr(1)**2
+      dr2(2)=dr(1)*dr(2)
+      dr2(3)=dr(1)*dr(3)
+      dr2(4)=dr(2)**2
+      dr2(5)=dr(2)*dr(3)
+      dr2(6)=dr(3)**2
+!      __SCALE(dr2, oo_surf_stdev**2 * expa * ( a*rsurf*(one+three*ooc**2) + b*ooc*(one+rsurf**2+three*ooc**2) ) )
+      __SCALE(dr2, oo_surf_stdev**2 * expa * ( (a*rsurf+b*ooc)*(one+three*ooc**2) + b*ooc*rsurf**2) )
+      __DECR(dr2(1),expb) ! identity times drho/d|r| / |r|)
+      __DECR(dr2(4),expb)
+      __DECR(dr2(6),expb)
+      __INCR(d2rho_solv(:,i),dr2)
+     endif ! hessian
 #else
 #ifdef __MEDIUMRHO
      expa = __gauss(a)
@@ -3369,7 +3562,7 @@ __DBGVAR(obulk_boundary_contour_value,1)
 ! NOTE : 1/r = (s / r ) / s  = ooc * oo_surf_stdev
 !      dr2 = ooc * oo_surf_stdev**2 * ( b * sqrt2  + ooc ) * dr2 ; ! vecop ; invalid if b is reused (changed) above
 !      __SCALE(dr2 , ooc * oo_surf_stdev**2 * ( (drn-rsurf) + ooc ) )
-      __SCALE(dr2, b * ( drn - rsurf + ooc ) ) ! dr2 * ( (r-a)/s + 1/r^2 ) * 1/(sr)
+      __SCALE(dr2, b * ( drn - rsurf + ooc ) ) ! dr2 * ( (r-a)/s + s/r ) * 1/(sr) = dr2 * ( (r-a)/(s^2*r) + 1/r2 )
       __DECR(dr2(1),one) ! subtract identity
       __DECR(dr2(4),one)
       __DECR(dr2(6),one)
@@ -3381,15 +3574,19 @@ __DBGVAR(obulk_boundary_contour_value,1)
      if (qcompute_grad) then
 !     __SCALE(dr, osq2pi * ooc * oo_surf_stdev**2 * expb )
 #ifdef __MEDIUMRHO
-      __SCALE(dr, osq2pi * a ) ! note that b was redefined for reuse above
+!      __SCALE(dr, osq2pi * a ) ! note that b was redefined for reuse above
+      __SCALE(dr, a ) ! note that b was redefined for reuse above
 #else
-      __SCALE(dr, osq2pi * b * expb )
+!      __SCALE(dr, osq2pi * b * expb )
+      __SCALE(dr, b * expb )
 #endif
 ! add gradient contribution
       __INCR(drho_solv(:,i),dr) ! usually inwardly-directed (see dr above)
      endif ! qcompute_grad
 #endif
+#endif __NEWGRADHESS
     endif ! need gradient or hessian
+!
 #ifdef __DASYSTAT
     if (dasystat) then
      if (qibulk .and. (rho_solv(i).gt.ibulk_boundary_contour_value)) then ! inside inner bulk
@@ -3397,7 +3594,9 @@ __DBGVAR(obulk_boundary_contour_value,1)
       qibulk=.false. ! no need to check this atom further
       qoutside=.false.
 ! obulk (outer_bulk) is the boundary closer to the surface; get difference by subtraction at the end
-      __INCR(__U(solvent_mass_obulk), mass_solv(i))! also inside outer bulk
+! NOTE : it is possible that we already added this mass to solvent_mass_obulk, if, in a previous iteration we were inside the
+! outer, but _NOT_ inner boundary, so should check for this before adding :
+      if (qobulk) __INCR(__U(solvent_mass_obulk), mass_solv(i))! also inside outer bulk
       qobulk=.false. ! no need to check this atom further
      elseif(qobulk .and. (rho_solv(i).gt.obulk_boundary_contour_value)) then
       __INCR(__U(solvent_mass_obulk), mass_solv(i))
@@ -3420,9 +3619,24 @@ __DBGVAR(obulk_boundary_contour_value,1)
 #endif
 !
    enddo ! nsurface_coord
+#ifdef __NEWGRADHESS
+! scale hessian
+   if (qcompute_hess) then
+    __SCALE(d2rho_solv(:,i),osq2pi*oo_surf_stdev)
+   endif
+! scale gradient :
+   if (qcompute_grad) then
+    __SCALE(drho_solv(:,i),osq2pi*oo_surf_stdev)
+   endif
+#else
    if (qcompute_hess) then
     __SCALE(d2rho_solv(:,i),osq2pi)
    endif
+! scale gradient :
+   if (qcompute_grad) then
+    __SCALE(drho_solv(:,i),osq2pi)
+   endif
+#endif
 !=========================== loop for solvent atom i over solute support (surface coordinates) ====
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
 ! check for _potential_ neighbor list violations :
@@ -3430,19 +3644,63 @@ __DBGVAR(obulk_boundary_contour_value,1)
 #endif
    qoutside_solv(i)=qoutside
 #ifdef __HAMILTONIAN
+!===============================================================================================================================================================
 ! Need to propagate Hamiltonian forces to surface atoms ; therefore, compute force prefactor and apply to gradients here
 ! Also, do not recompute the prefactor in the main loop for solvent atoms (see main routine)
-   if (qoutside) then
-    b=__QSAFE(rho_solv(i))
-    b = surface_force_constant * surf_stdev * sq2pi * exp (b**2) * ( __RHO_INVERSE2(b) - surface_distance )
-    __SCALE(drho_solv(:,i),b)
-    __SCALE(b,one - structure_update_memory)
-    do j=1,__U(nspt)
-     __INCR(drho_surf_all_thread(:,ispt_this_thread(j)), b * drho_surf_this_thread(:,ispt_this_thread(j)) )
-    enddo
-   endif ! qoutside
+! need to compute curvature from grad and hessian :
+! gradient norm :
+  b=sum(drho_solv(:,i)**2)
+  if (b.le.__ERRTOL) then ; b=zero ; else ; b=one/sqrt(b) ; endif
+#ifdef __DRHOINV
+! compute average curvature at solvent coordinate from gradient and hessian
+! NOTE : need hessian for this, but it is possible that the hessian was _Not_ requested in the calling routine (no check here)
+! unnormalized/unscaled grad formula:
+  acurv_solv(i) = half * b  * ( d2rho_solv(1,i) + d2rho_solv(4,i) + d2rho_solv(6,i) \
+              - b**2 * ( d2rho_solv(1,i)*drho_solv(1,i)**2 + d2rho_solv(4,i)*drho_solv(2,i)**2 + d2rho_solv(6,i)*drho_solv(3,i)**2 \
+            + ( drho_solv(1,i)*(d2rho_solv(2,i)*drho_solv(2,i) + d2rho_solv(3,i)*drho_solv(3,i)) + d2rho_solv(5,i)*drho_solv(2,i)*drho_solv(3,i) )*2 ) )
+#else
+  __SCALE(drho_solv(:,i),b) ! normalize gradient (note that we use the normalized grad as the surface unit normal for forces)
+! normalized grad formula:
+  acurv_solv(i) = half * b  * ( d2rho_solv(1,i)*(one-drho_solv(1,i)**2) + d2rho_solv(4,i)*(one-drho_solv(2,i)**2) + d2rho_solv(6,i)*(one-drho_solv(3,i)**2) \
+            - ( drho_solv(1,i)*( d2rho_solv(2,i)*drho_solv(2,i) + d2rho_solv(3,i)*drho_solv(3,i)) + d2rho_solv(5,i)*drho_solv(2,i)*drho_solv(3,i) )*2 )
 #endif
+!  expb=__Q(rho_solv(i)) ! unsafe inverse
+  expb=__QSAFE(rho_solv(i))
+  dsurf_solv(i) = ( __RHO_INVERSE2 ( expb ) - surface_distance ) ! need this for curvature correction model below
+  if (dsurf_solv(i).gt.0) &
+    acurv_solv(i) = acurv_solv(i) / ( one + abs(acurv_solv(i)) * dsurf_solv(i) ) ! in this model the curvature correction is independent of curvature sign
+  sbfe = watershell_sbf_spline_compute(acurv_solv(i), dsurf_solv(i), qsbe)
+  __SCALE( sbfe(1), surface_force_constant )
+  __SCALE( sbfe(2), curvature_force_constant )
+! reuse b as force prefactor
+#ifdef __DRHOINV
+  expb = surf_stdev * sq2pi * exp (expb**2) ! include model distance derivative in the force prefactor
+#else
+  expb = one ! drho has been scaled by 1/|grad rho| above, so nothing to do
+#endif
+  expb = - ( sbfe(1) + sbfe(2) ) * expb
+  __SCALE(drho_solv(:,i),expb) ! scale gradient array by prefactor
+  __SCALE(expb,one - structure_update_memory) ! scale force by the fraction of 'new' coordinates in surface coords (this breaks Hamiltonian dynamics)
+#ifndef __DRHOINV
+! note that if we scaled drho_solv, we also need to scale drho_surf :
+  __SCALE(expb,b)
+#endif
+  do j=1,__U(nspt)  ! loop over all local support surface atoms for this solvent atom
+    __INCR(drho_surf_all_thread(:,ispt_this_thread(j)), expb * drho_surf_this_thread(:,ispt_this_thread(j)) ) ! NB cannot take *b outside b/c it depends on rho(i)
+  enddo
+! HAMILTONIAN^
 !
+#ifdef __BAROSTAT
+  __INCR(__U(surface_force), sbfe(1) )   ! k0 force exerted on the surface
+  __INCR(__U(curvature_force), sbfe(2) ) ! remaining force exerted on the surface
+#endif
+  if (qsbe) then
+   __INCR(__U(surface_energy), sbfe(3)) ! surface_force_constant below
+   __INCR(__U(curvature_energy), sbfe(4)) ! curvature_force_constant below
+  endif
+!
+#endif
+!===============================================================================================================================================================
  enddo ! nsolvent
 #ifdef __OMP
 !$omp end do
@@ -3455,29 +3713,52 @@ __DBGVAR(obulk_boundary_contour_value,1)
  endif
 #endif
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
-  if (.not. qtruncate_loop) then
+ if (.not. qtruncate_loop) then
 !$omp atomic
-   __REDUCE(neighbor_list_misses) ! maybe faster via atomic, since most of the time there will be no misses
-  endif
+  __REDUCE(neighbor_list_misses) ! maybe faster via atomic, since most of the time there will be no misses
+ endif
 #endif
 !
 #ifdef __HAMILTONIAN
+ if (qsbe) then
+!$omp atomic
+   __REDUCE(surface_energy)
+!$omp atomic
+   __REDUCE(curvature_energy)
+ endif
+#ifdef __BAROSTAT
+ if (barostat) then
+!$omp atomic
+  __REDUCE(surface_force)
+!$omp atomic
+  __REDUCE(curvature_force)
+ endif
+#endif
+!
 #ifdef __H_THREAD_REDUCE
 ! reduce Hamiltonian forces on surface atoms (0th thread has final data)
 ! adapted from volume/surface compute
-  i=1
-  do while (i.lt.numthreads)
+ i=1
+ do while (i.lt.numthreads)
 !$omp barrier ! make sure all threads have completed previous operation
-   if (mod(tid,2*i)==0 .and. (tid+i).lt.numthreads) then
-    __INCR(drho_surf_all_thread, drho_surf(:,:,2*(tid+i)+1)) ! maybe better to reindex to tid+i, as in the volume/surface code ?
-   endif
-   __SCALE(i,2)
-  enddo
+  if (mod(tid,2*i)==0 .and. (tid+i).lt.numthreads) then
+   __INCR(drho_surf_all_thread, drho_surf(:,:,2*(tid+i)+1)) ! maybe better to reindex to tid+i, as in the volume/surface code ?
+  endif
+  __SCALE(i,2)
+ enddo
 #endif
 #endif
 !$omp end parallel
 #endif
-#if defined(__NEIGHBOR_LIST) & defined(__SORT_LIST)
+!
+#ifdef __HAMILTONIAN
+ if (qsbe) then
+  __SCALE(surface_energy, surface_force_constant)
+  __SCALE(curvature_energy, curvature_force_constant)
+ endif
+#endif
+!
+#if defined(__NEIGHBOR_LIST) && defined(__SORT_LIST)
 !#ifdef __DDEBUG
 !  if (.not. qtruncate_loop)
 !   write(666,'(7000(I4,"("I4")"))') (solute_neighbor_mind(i), solute_neighbor_list(solute_neighbor_mind(i),i), i=1,nsolvent)
@@ -3486,21 +3767,21 @@ __DBGVAR(obulk_boundary_contour_value,1)
 !#endif
 #endif
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
-  if (.not.qtruncate_loop) then
+ if (.not.qtruncate_loop) then
 ! should we output the violations here ?
-   if (neighbor_list_misses>0) then
-    if (neighbor_list_misses==1) then
+  if (neighbor_list_misses>0) then
+   if (neighbor_list_misses==1) then
      __WRN(whoami, 'DETECTED '//itoa(neighbor_list_misses)//' POSSIBLE NEIGHBOR LIST MISS. NEIGHBOR LIST FACTOR IS '//ftoa(neighbor_list_factor))
-    else
+   else
      __WRN(whoami, 'DETECTED '//itoa(neighbor_list_misses)//' POSSIBLE NEIGHBOR LIST MISSES. NEIGHBOR LIST FACTOR IS '//ftoa(neighbor_list_factor))
-    endif
+   endif
 ! increase neighbor_list_factor
     __INCR(neighbor_list_factor, neighbor_list_factor_grow)
-   else
+  else
     __INCR(neighbor_list_factor, neighbor_list_factor_shrink)
 ! decrease neighbor_list_factor
-   endif ! nbl_misses
-  endif ! qtruncate_loop
+  endif ! nbl_misses
+ endif ! qtruncate_loop
 #endif
 !
  end __SUB(compute_density)
@@ -3670,7 +3951,7 @@ __DBGVAR(kmax,2)
 #endif
 #// use the single precision version
 #define __erf(_Y) __erfo7s(_Y)
-#// singe prec ^
+#// single prec ^
 #ifndef __SIMPLERHO
 #define erfa __erf(a)
 #endif
@@ -3780,6 +4061,10 @@ __DBGVAR(kmax,2)
 ! real*4 ::  x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, dx2, dy2, dz2, x0, y0, z0
 ! float :: support, support2, rsurf, b, oos, oobs
  real*4 :: support, support2, rsurf, b, oos, oobs
+#ifdef __ERFHYBRID
+ real*4 :: isgn_, x_, erfa, erfb
+#endif
+!
 #ifndef __SIMPLERHO
  real*4 :: a
 #endif
@@ -3835,6 +4120,13 @@ __DBGVAR(kmax,2)
 !$omp shared(sarhof_all_threads, ivolume, ivolume_inner, oos, oobs) &
 !$omp private(x, y, z, xmin, ymin, zmin, xmax, ymax, zmax, dx2, dy2, dz2, ii, jj, kk, imin, imax, jmin, jmax, kmin, kmax, tid, &
 !$omp i, __U(ivolume), __U(ivolume_inner), n, support, support2, rsurf, b, im, jm, km &
+#ifdef __ERFHYBRID
+!$omp , x_, isgn_, erfb &
+#ifndef __SIMPLERHO
+!$omp , erfa &
+#endif
+#endif
+!
 #ifndef __SIMPLERHO
 !$omp , a &
 #endif
@@ -3928,10 +4220,13 @@ __DBGVAR(kmax,2)
 #endif
       b = osq2 * (dx2 - support)
 #ifdef __ERFHYBRID
+#undef __PCODE
+#define __PCODE e
 #ifndef __SIMPLERHO
       __erfo7i(a,erfa)
 #endif
       __erfo7i(b,erfb)
+#undef __PCODE
 #else
 #ifdef __erf
 #undef __erf

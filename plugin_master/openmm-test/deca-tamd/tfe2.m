@@ -21,10 +21,10 @@ data   = [ cv(1:minlen), fcv(1:minlen) ] ;
 
 x0=12 ;
 x1=32 ;
-nxcor=25 ;
+nxcor=20 ;
 
 xcor=linspace(x0, x1, nxcor);
-xcen=xcor(2:end)-xcor(1:end-1);
+xcen=0.5*(xcor(2:end)+xcor(1:end-1));
 nxcen=nxcor-1;
 dx=xcor(2)-xcor(1);
 
@@ -48,11 +48,27 @@ end
 % integrate derivative :
 fe=cumsum(fx)*dx ; 
 fe=fe-fe(1);
-fe=fe-min(fe);
-plot(xcor(1:nxcen), fe,'k*-');
-errorbar(xcor(1:nxcen), fe, fxe,'k.-');
+%fe=fe-min(fe);
+plot(xcen(1:nxcen), fe,'k*-'); hold on ;
+errorbar(xcen(1:nxcen), fe, fxe,'k.-');
 xlim([x0 x1])
+ylim([-5 26])
 hold on ;
+
+%%%%%%%%%%%% plot US data :
+fnames={'usfb/fe8.mat','usfb/fe10.mat','usfb/fe16.mat','usfb/fe32.mat'};
+styles={'ro-','gs-','bv-','k.-'};
+i=0;
+inds=[4];
+for fname=fnames(inds)
+ load(char(fname));
+ i=i+1;
+% plot(cvs0,fave-min(fave), char(styles(i)));
+ plot(cvs0,fave, char(styles(i)), 'markersize',8,'linewidth',0.75);
+end
+errorbar(cvs0,fave,fstd,char(styles(i)));
+usleg={'$\delta$=2.5806','$\delta$=1.9355','$\delta$=1.2903','$\delta$=0.6452'};
+legend([{'TAMD 6000K'} usleg(inds)], 'location','southeast');
 
 %legend(leg,'location','northwest');
 box on;
@@ -60,6 +76,6 @@ ylabel('\it F (kcal/mol)', 'fontsize',14);
 xlabel('\it x', 'fontsize',14);
 %
 set(gcf, 'paperpositionmode', 'auto');
-%print(gcf, '-depsc2', 'wfe.eps');
-print(gcf, '-dpng', 'tfe.png');
-
+print(gcf, '-depsc2', 'tfe2.eps');
+print(gcf, '-dpng', 'tfe2.png');
+%
