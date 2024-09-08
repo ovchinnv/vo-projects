@@ -1,0 +1,105 @@
+#undef _N
+#define _N watershell_sbf_spline1d
+
+module _N
+ use ppoly1
+! __DEP_CONST
+ __DEP_FILES
+ __IMPNONE
+! this is a wrapper around splines to compute 
+
+ type(pp1data) :: pp1, pp1int ! 1st order spline in the distance to boundary and integral
+ float :: pp1int_offset ! 0-curvature energy offset
+ float :: maxd ! distance beyond which the force and potential energy is zero
+ bool :: __NM(initialized)=.false.
+!
+ __PAR(datafile, character(len=vartaglen),'sbf-rcut12spldzk0.dat')
+ private datafile
+ private default_datafile
+ public __NM(init)
+ contains
+!=============================================
+ __SUB(init)(datafile_)
+ __IAM(__SUB(init))
+ character(*), optional :: datafile_
+ int :: fid=-1
+ int :: nz, zpdeg
+ float, pointer :: z(:), coefs(:,:) ! distance to boundary, spline coeffs
+ __PRESENT(datafile,default_datafile)
+ call files_open(fid, datafile, 'FORMATTED', 'READ')
+ read(fid,*) nz
+ allocate(z(nz)) ;
+ read(fid,*) z
+ read(fid,*) zpdeg
+ allocate(coefs(zpdeg+1,nz-1)) ;
+ read(fid,*) coefs
+ call files_close(fid)
+
+#ifdef __DEBUG
+ __MESG(whoami,'distance (z) grid size: ', nz)
+ __MESG(whoami,'z-grid:', z)
+ __MESG(whoami,'polynomial interpolant degree (z): ', zpdeg)
+#endif
+! do not write coeffs
+! initialize spline structures :
+ if (present(datafile_)) then
+  __MESG(whoami,'Initializing 1D (distance) force spline array from file '//trim(datafile))
+ else
+  __MESG(whoami,'Initializing 1D (distance) force spline array')
+ endif
+ call ppoly1_init(pp1, zpdeg, nz, z, coefs(1:zpdeg+1, 1:nz-1) ,.false.) ! last argument is for continuity checking
+! compute integral in z :
+#ifdef __DEBUG
+ __MESG(whoami,'Integrating (1D) spline')
+#endif
+ pp1int=ppoly1_integral(pp1)
+! compute offset for energy
+ maxd = z(nz)
+ pp1int_offset=ppoly1_compute(pp1int,maxd) ! this is a number
+#ifdef __DEBUG
+ __MESG(whoami,'1D potential offset for 0-curvature energy is', pp1int_offset )
+#endif
+!
+ __FREE(coefs)
+ __FREE(z)
+ __NM(initialized)=.true.
+ end __SUB(init)
+!===========================
+ __SUB(done)
+ __IAM(__SUB(done))
+ __MESG(whoami,'Destroying 2D (curvature,distance) spline array')
+ call ppoly1_done(pp1)
+ call ppoly1_done(pp1int)
+ __NM(initialized)=.false.
+ end __SUB(done)
+!===========================
+#ifdef _ME
+#undef _ME
+#endif
+#define _ME __NM(compute)
+ function __NM(compute)(d,qpe)
+ bool, intent(in) :: qpe ! whether to compute potential energies in addition to forces
+ float, intent(in) :: d
+ float :: _ME(2)
+ int :: igrid
+!
+ __IAM(_ME)
+ __ASSERT(__NM(initialized),.eqv.,.true.)
+!
+ if (d.gt.maxd) then 
+  _ME = (/0d0, 0d0/) ! assume that the force beyond the largest support point is zero (this corresponds to being inside and far away from the boundary)
+! construct the potential to be continuous at maxd
+ else
+! note : positive force means pushing molecule toward the boundary
+  igrid=ppoly1_getind(pp1,d)
+  _ME(1)=ppoly1_compute_igrid(pp1,d,igrid) ! 0-k force
+  if (qpe) then ! also compute integral
+   _ME(2)=ppoly1_compute_igrid(pp1int,d,igrid) - pp1int_offset ! 0-k potential
+  else
+   _ME(2)=0d0
+  endif
+ endif
+!
+ end __FUN(compute)
+
+end module
