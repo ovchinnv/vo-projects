@@ -2098,7 +2098,12 @@ endif ! decide whether to compute dr_surf
   do i=1, nsolvent
 ! convert to distance
     if ( rho_solv(i) .le. zero ) then ! warn that we are outside of the support
+#ifndef __QREPELSBP
      __WRN(whoami, 'SOLVENT ATOM '//itoa(isolvent_atoms(i))//' OUTSIDE OF SOLUTE SUPPORT. RESTART WITH A LARGER FILTER CUTOFF OR PADDING.')
+#else
+! in this case, we expect most atoms to be unsupported with (a zero force) ; unclear whether to issue a warning :
+!     __WRN(whoami, 'SOLVENT ATOM '//itoa(isolvent_atoms(i))//' OUTSIDE OF SOLUTE SUPPORT. THIS MAY BE OK SINCE __QREPELSBP IS ON.')
+#endif
     endif
     d0 = __RHO_INVSAFE(rho_solv(i))
     __DBGOUT('Inst. density/distance from solute for atom ',i,' are ',rho_solv(i),'/',d0);
@@ -2120,6 +2125,9 @@ endif ! decide whether to compute dr_surf
   surface_contour_value = __RHOSAFE(surface_distance) ! for mindist, determine this for information, even though not relevant to algorithm
   __DBGOUT( 'COMPUTED SD, SCV: ', surface_distance, surface_contour_value)
   __MESSAGE(whoami, 'COMPUTED SURFACE DISTANCE AT '//ftoa(surface_distance)//' A FROM PROTEIN. CONTOUR VALUE IS '//ftoa(surface_contour_value))
+#ifdef __QREPELSBP
+  __MESSAGE(whoami, 'THIS VALUE IS VERY CRUDE WITH REPULSIVE SBP (__QREPELSBP)')
+#endif
 !
 #ifdef __DASYSTAT
 !
@@ -2187,7 +2195,7 @@ endif ! decide whether to compute dr_surf
 #endif
 &    )
 #else
-  qoutside_solv=rho_solv.lt.surface_contour_value
+  qoutside_solv = (_QREPELMINUS rho_solv) .lt. (_QREPELMINUS surface_contour_value)
 #endif
 !====== NOTE : if we requested to run without neighbor lists then we need to reset solute_neighbor_mind to max
 !====== otherwise, the early exit (qtruncate_loop=T) version of force routine could miss crucial atoms (the mind list is _not_ updated b/c qnlist=0)
@@ -2405,8 +2413,8 @@ endif ! decide whether to compute dr_surf
 !
 !  d0=__Q(rho_solv(i)) ! unsafe inverse, but at least rho > 0, per above
   d0=__QSAFE(rho_solv(i))
-!  dsurf_solv(i) = ( __RHO_INVSAFE ( rho_solv(i) ) - surface_distance ) ! distance to boundary using the approximate inverse (+/- for inside/outside bdry)
-  dsurf_solv(i) = ( __RHO_INVERSE2 ( d0 ) - surface_distance ) ! need this for correction below
+!  dsurf_solv(i) =  _QREPELMINUS ( __RHO_INVSAFE ( rho_solv(i) ) - surface_distance ) ! distance to boundary using the approximate inverse (+/- for inside/outside bdry)
+  dsurf_solv(i) = _QREPELMINUS ( __RHO_INVERSE2 ( d0 ) - surface_distance ) ! need this for correction below
 ! note that the above is the lowest order approximation for distance to bdry (more accurate ones, e.g. NR, are much slower)
 ! note also, that we are technically missing (in the derivative of potential sense) the derivative of the inverse wrt rho (same as wsh1)
 #if (_DBGLEV>1)
@@ -2414,8 +2422,8 @@ endif ! decide whether to compute dr_surf
 #endif
 !
 #ifndef __1DSBP
-  if (dsurf_solv(i).gt.0) &
-  acurv_solv(i) = acurv_solv(i) / ( one + abs(acurv_solv(i)) * dsurf_solv(i) ) ! in this model the curvature correction is independent of curvature sign
+  if ( _QREPELMINUS dsurf_solv(i).gt.0) &
+  acurv_solv(i) = acurv_solv(i) / ( one + abs(acurv_solv(i)) * ( _QREPELMINUS dsurf_solv(i)) ) ! in this model the curvature correction is independent of curvature sign
 ! for molecules outside the boundary, dsurf < 0, and therefore the curvature increases ; in principle, it is technically possible to go to zero in the denominator,
 ! which makes the curvature go very high ... (10 or more) ; so as a minimal fix, modified not to decrease (in cases with dR<0)
 !
@@ -2423,12 +2431,12 @@ endif ! decide whether to compute dr_surf
   sbfe = watershell_sbf_spline_compute(acurv_solv(i), dsurf_solv(i), qsbe)
 ! note : the flag above can be computed outside ; also we may want to compute more often if we need energy averages
 ! sbfe(1,2,3,4) contain "surface" force (with crv subtracted out), curvature_force, surface_energy, curvature_energy, respectively
-  pre = -curvature_force_constant*sbfe(2)
+  pre = - ( _QREPELMINUS curvature_force_constant*sbfe(2) )
 #else
   sbfe = watershell_sbf_spline1D_compute(dsurf_solv(i), qsbe)
   pre=zero
 #endif
-  __DECR(pre, surface_force_constant*sbfe(1))
+  __DECR(pre, _QREPELMINUS surface_force_constant*sbfe(1))
 
 #ifdef __DRHOINV
 ! include derivative of distance function (simplest model only)
@@ -2447,9 +2455,9 @@ endif ! decide whether to compute dr_surf
 ! NOT clear whether the surface_energy is physically meaningful
 ! surface force is used only if barostat is on !
 #ifdef __BAROSTAT
-  __INCR(__U(surface_force), sbfe(1) )   ! k0 force exerted on the surface
+  __INCR(__U(surface_force), _QREPELMINUS sbfe(1) )   ! k0 force exerted on the surface
 #ifndef __1DSBP
-  __INCR(__U(curvature_force), sbfe(2) ) ! remaining force exerted on the surface
+  __INCR(__U(curvature_force), _QREPELMINUS sbfe(2) ) ! remaining force exerted on the surface
 #endif
 #endif
   if (qsbe) then
@@ -2539,7 +2547,7 @@ endif ! decide whether to compute dr_surf
 #endif
 !    dsurf_solv(i) = ( __RHO_INVSAFE ( rho_solv(i) ) - surface_distance ) ! distance to boundary
     d0=__QSAFE(rho_solv(i))
-    dsurf_solv(i) = ( __RHO_INVERSE2 ( d0 ) - surface_distance )
+    dsurf_solv(i) = _QREPELMINUS ( __RHO_INVERSE2 ( d0 ) - surface_distance )
 ! gradient norm :
 #ifndef __1DSBP
 #ifdef __FD_WITH_CURV
@@ -2553,7 +2561,7 @@ endif ! decide whether to compute dr_surf
 ! technically, we are (1) violating Hamiltonian dynamics, or (2) projecting out (removing) non-normal forces
 ! the FD formula that corresponds to the analytical 2nd order surface model has to exclude the curvature variation, i.e. use the 
 ! values already computed for the analytical forces
-    acurv_solv(i) = half * d0  * ( d2rho_solv(1,i)*(one-drho_solv(1,i)**2) + d2rho_solv(4,i)*(one-drho_solv(2,i)**2) + d2rho_solv(6,i)*(one-drho_solv(3,i)**2) \
+    acurv_solv(i) = half * d0 * ( d2rho_solv(1,i)*(one-drho_solv(1,i)**2) + d2rho_solv(4,i)*(one-drho_solv(2,i)**2) + d2rho_solv(6,i)*(one-drho_solv(3,i)**2) \
             - ( drho_solv(1,i)*( d2rho_solv(2,i)*drho_solv(2,i) + d2rho_solv(3,i)*drho_solv(3,i)) + d2rho_solv(5,i)*drho_solv(2,i)*drho_solv(3,i) )*2 )
     if (dsurf_solv(i).gt.0) &
      acurv_solv(i) = acurv_solv(i) / ( one + abs(acurv_solv(i)) * dsurf_solv(i) ) ! in this model the curvature correction is independent of curvature sign
@@ -3319,9 +3327,12 @@ __DBGVAR(obulk_boundary_contour_value,1)
 !$omp parallel _OMP_EXTRA &
 !$omp default(none) &
 !$omp shared (rho_solv,drho_solv,d2rho_solv,r_solv,r_surf,rad_surf,surf_padding,nsolvent,nsurface_coord,cutoff_surf,oo_surf_stdev,qoutside_solv,surface_contour_value &
-!$omp , obulk_boundary_contour_value,ibulk_boundary_contour_value,qcompute_hess,qcompute_grad, qtruncate_loop &
+!$omp ,qcompute_hess,qcompute_grad, qtruncate_loop &
+#ifdef __UNWRAP_PBC
+!$omp , qper_parser_override, ucell &
+#endif
 #ifdef __DASYSTAT
-!$omp , dasystat, solvent_mass_ibulk, solvent_mass_obulk, mass_solv &
+!$omp , dasystat, solvent_mass_ibulk, solvent_mass_obulk, mass_solv, obulk_boundary_contour_value,ibulk_boundary_contour_value &
 #endif
 #ifdef __HAMILTONIAN
 !$omp ,numthreads,structure_update_memory,surface_force_constant,qsbe,dsurf_solv,surface_distance,surf_stdev,drho_surf,ispt &
@@ -3762,13 +3773,13 @@ __DBGVAR(obulk_boundary_contour_value,1)
   __SCALE(drho_solv(:,i),b) ! normalize gradient (note that we use the normalized grad as the surface unit normal for forces)
 #ifndef __1DSBP
 ! normalized grad formula:
-  acurv_solv(i) = half * b  * ( d2rho_solv(1,i)*(one-drho_solv(1,i)**2) + d2rho_solv(4,i)*(one-drho_solv(2,i)**2) + d2rho_solv(6,i)*(one-drho_solv(3,i)**2) \
+  acurv_solv(i) =  half * b  * ( d2rho_solv(1,i)*(one-drho_solv(1,i)**2) + d2rho_solv(4,i)*(one-drho_solv(2,i)**2) + d2rho_solv(6,i)*(one-drho_solv(3,i)**2) \
             - ( drho_solv(1,i)*( d2rho_solv(2,i)*drho_solv(2,i) + d2rho_solv(3,i)*drho_solv(3,i)) + d2rho_solv(5,i)*drho_solv(2,i)*drho_solv(3,i) )*2 )
 #endif
 #endif
 !  expb=__Q(rho_solv(i)) ! unsafe inverse
   expb=__QSAFE(rho_solv(i))
-  dsurf_solv(i) = ( __RHO_INVERSE2 ( expb ) - surface_distance ) ! need this for curvature correction model below
+  dsurf_solv(i) = _QREPELMINUS ( __RHO_INVERSE2 ( expb ) - surface_distance ) ! need this for curvature correction model below
 ! reuse b as force prefactor
 #ifdef __DRHOINV
   expb = surf_stdev * sq2pi * exp (expb**2) ! include model distance derivative in the force prefactor
@@ -3776,15 +3787,15 @@ __DBGVAR(obulk_boundary_contour_value,1)
   expb = one ! drho has been scaled by 1/|grad rho| above, so nothing to do
 #endif
 #ifndef __1DSBP
-  if (dsurf_solv(i).gt.0) &
-    acurv_solv(i) = acurv_solv(i) / ( one + abs(acurv_solv(i)) * dsurf_solv(i) ) ! in this model the curvature correction is independent of curvature sign
+  if (_QREPELMINUS dsurf_solv(i).gt.0) &
+    acurv_solv(i) = acurv_solv(i) / ( one + abs(acurv_solv(i)) * ( _QREPELMINUS dsurf_solv(i)) ) ! in this model the curvature correction is independent of curvature sign
   sbfe = watershell_sbf_spline_compute(acurv_solv(i), dsurf_solv(i), qsbe)
   __SCALE( sbfe(1), surface_force_constant )
   __SCALE( sbfe(2), curvature_force_constant )
-  expb = - ( sbfe(1) + sbfe(2) ) * expb
+  expb = - ( _QREPELMINUS ( sbfe(1) + sbfe(2) ) * expb )
 #else
   sbfe = watershell_sbf_spline1d_compute(dsurf_solv(i), qsbe)
-  expb = - sbfe(1) * surface_force_constant * expb
+  expb = - ( _QREPELMINUS sbfe(1) * surface_force_constant * expb )
 #endif
 !
   __SCALE(drho_solv(:,i),expb) ! scale gradient array by prefactor
@@ -3799,9 +3810,9 @@ __DBGVAR(obulk_boundary_contour_value,1)
 ! HAMILTONIAN^
 !
 #ifdef __BAROSTAT
-  __INCR(__U(surface_force), sbfe(1) )   ! k0 force exerted on the surface
+  __INCR(__U(surface_force), _QREPELMINUS sbfe(1) )   ! k0 force exerted on the surface
 #ifndef __1DSBP
-  __INCR(__U(curvature_force), sbfe(2) ) ! remaining force exerted on the surface
+  __INCR(__U(curvature_force), _QREPELMINUS sbfe(2) ) ! remaining force exerted on the surface
 #endif
 #endif
   if (qsbe) then
