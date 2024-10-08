@@ -10,10 +10,11 @@ module _N
 ! this is a wrapper around splines to compute solvent boundary force and potential
 
  type(pp1data) :: pp1, pp1int ! 1st order spline in the distance to boundary and integral
- type(pp2data) :: pp2, pp2intd ! 2nd order spline in average curvature & distance, and distance integral
+ type(pp2data) :: pp2, pp2intd ! 2nd order spline in average/gaussian curvature & distance, and distance integral
  float :: pp1int_offset ! 0-curvature energy offset
  type (pp1data) :: pp2intd_offsets
  float :: maxd ! distance beyond which the force and potential energy is zero
+ float :: mink, maxk ! curvature interval limits outside of which the curvature does not change (neumann) ; spline file should have 0 slope at eps
  bool :: __NM(initialized)=.false.
 !
  __PAR(datafile, character(len=vartaglen),'sbf-rcut12spl2dkz.dat')
@@ -32,7 +33,7 @@ module _N
  call files_open(fid, datafile, 'FORMATTED', 'READ')
  read(fid,*) nk
  allocate(kave(nk)) ;
- read(fid,*) kave ! average curvature
+ read(fid,*) kave ! average curvature (the current version assumes the forces do not vary significantly if the average/gaussian curvature is constant)
  read(fid,*) nz
  allocate(z(nz)) ;
  read(fid,*) z
@@ -44,7 +45,7 @@ module _N
 
 #ifdef __DEBUG
  __MESG(whoami,'Curvature (k) grid size: ', nk)
- __MESG(whoami, 'average curvature grid:', kave)
+ __MESG(whoami,'average curvature grid:', kave)
  __MESG(whoami,'distance (z) grid size: ', nz)
  __MESG(whoami,'z-grid:', z)
  __MESG(whoami,'polynomial interpolant degree (k,z): ', kpdeg, zpdeg)
@@ -56,7 +57,11 @@ module _N
  else
   __MESG(whoami,'Initializing 2D (curvature,distance) force spline array')
  endif
+#ifdef __DEBUG
+ call ppoly2_init(pp2, kpdeg, zpdeg, nk, nz, kave, z, coefs(1:kpdeg+1, 1:zpdeg+1, 1:nk-1, 1:nz-1) ,.true.) ! last argument is for continuity checking
+#else
  call ppoly2_init(pp2, kpdeg, zpdeg, nk, nz, kave, z, coefs(1:kpdeg+1, 1:zpdeg+1, 1:nk-1, 1:nz-1) ,.false.) ! last argument is for continuity checking
+#endif
 ! compute integral in z :
 #ifdef __DEBUG
  __MESG(whoami,'Integrating 2D spline in d-dimension')
@@ -73,12 +78,15 @@ module _N
 #endif
  pp1int=ppoly1_integral(pp1)
 ! compute offsets for energy
- maxd = z(nz)
+ maxd = z(nz) ! set distance beyond which will not apply force (or force is zero)
  pp1int_offset=ppoly1_compute(pp1int,maxd) ! this is a number
  pp2intd_offsets=ppoly2_compute_y(pp2intd,maxd) ! this is a 1D spline
 #ifdef __DEBUG
  __MESG(whoami,'1D potential offset for 0-curvature energy is', pp1int_offset )
 #endif
+! set curvature caps : (curvature is capped at these values beyond the corresponding boundary)
+ mink=kave(1)
+ maxk=kave(nk)
 !
  __FREE(coefs)
  __FREE(z)
@@ -105,6 +113,7 @@ module _N
  bool, intent(in) :: qpe ! whether to compute potential energies in addition to forces
  float, intent(in) :: k, d
  float :: _ME(4)
+ float :: kcapped ! curvature capped at endpoints
  int :: igrid(2)
 !
  __IAM(_ME)
@@ -114,14 +123,15 @@ module _N
   _ME = (/0d0, 0d0, 0d0, 0d0/) ! assume that the force beyond the largest support point is zero (this corresponds to being inside and far away from the boundary)
 ! construct the potential to be continuous at maxd
  else
+  if (k.gt.maxk) then ; kcapped=maxk ; elseif (k.lt.mink) then ; kcapped=mink ; else ; kcapped=k ; endif ! cap curvature
 ! note : positive force means pushing molecule toward the boundary
-  igrid=ppoly2_getind(pp2,k,d)
+  igrid=ppoly2_getind(pp2,kcapped,d)
   _ME(1)=ppoly1_compute_igrid(pp1,d,igrid(2)) ! 0-k force
 !  _ME(1)=ppoly2_compute(pp2,0d0,d) ! 0-k force DBG
-  _ME(2)=ppoly2_compute_igrid(pp2,k,d,igrid) - _ME(1) ! remaining force
+  _ME(2)=ppoly2_compute_igrid(pp2,kcapped,d,igrid) - _ME(1) ! remaining force
   if (qpe) then ! also compute integrals
    _ME(3)=ppoly1_compute_igrid(pp1int,d,igrid(2)) - pp1int_offset ! 0-k potential
-   _ME(4)=ppoly2_compute_igrid(pp2intd,k,d,igrid) - ppoly1_compute_igrid(pp2intd_offsets,k,igrid(1)) - _ME(3) ! remaining potential
+   _ME(4)=ppoly2_compute_igrid(pp2intd,kcapped,d,igrid) - ppoly1_compute_igrid(pp2intd_offsets,kcapped,igrid(1)) - _ME(3) ! remaining potential
   else
    _ME(3)=0d0 ; _ME(4)=0d0
   endif
