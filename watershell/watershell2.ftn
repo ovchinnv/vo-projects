@@ -106,6 +106,10 @@ module _N
 #ifndef __1DSBP
  float :: curvature_energy
  float :: sbfe(4) ! array that holds instantaneous force and energy on a single solvent particle (distance and curvature force & energy ==> 4 values)
+#ifdef __ALLOW_FIXED_CURV
+ bool :: qfixed_curvature=.false. ! whether to force the use of a fixed curvature
+ float :: fixed_curvature=zero
+#endif
 #else
  float :: sbfe(2)
 #endif
@@ -478,6 +482,19 @@ module _N
 #define __DOIFOK if (abs(__VAR).le.__ERRTOL) __WRN(whoami, 'SURFACE CURVATURE FORCE IS OFF.')
 ! check all contexts:
 #include "parser/parser_macro3.src"
+#ifdef __ALLOW_FIXED_CURV
+! 10/24 : force constant curvature radius
+#define __VAR fixed_curvature
+#define __TAG __VAR
+#define __NAME forced constant curvature
+#define __DOIFOK qfixed_curvature=.true. ;\
+                 __WARN(whoami, 'WILL SET SURFACE CURVATURE EVERYWHERE AT '//ftoa(fixed_curvature)//'.') ;
+#undef __DEFAULT
+#undef __WARNIFMISSING
+#include "parser/parser_macro3.src"
+#define __DEFAULT
+#define __WARNIFMISSING
+#endif
 #endif
 !
 #define __LEZEROERR
@@ -2280,6 +2297,9 @@ endif ! decide whether to compute dr_surf
 !$omp parallel _OMP_EXTRA &
 !$omp default (none) &
 !$omp shared (qoutside_solv,nsolvent,rho_solv,drho_solv,nsolvent_unsupported,qsbe,&
+#ifdef __ALLOW_FIXED_CURV
+!$omp qfixed_curvature,fixed_curvature,&
+#endif
 #ifndef __HAMILTONIAN
 !$omp sbfe,d2rho_solv,dsurf_solv,surface_distance,surface_force_constant,surface_energy,&
 #ifdef __ADD_PADDING_RHOINV
@@ -2394,16 +2414,32 @@ endif ! decide whether to compute dr_surf
 #ifndef __1DSBP
 ! compute average curvature at sovent coordinate from gradient and hessian
 ! unnormalized/unscaled grad formula:
-  acurv_solv(i) = half * d0  * ( d2rho_solv(1,i) + d2rho_solv(4,i) + d2rho_solv(6,i) \
+#ifdef __ALLOW_FIXED_CURV
+  if (qfixed_curvature) then ! this is making the code core complicated ; and, at present, I anticipate _NOT_ having use for this except in debugging, but faster ?
+   acurv_solv(i)=fixed_curvature
+  else
+#endif
+   acurv_solv(i) = half * d0  * ( d2rho_solv(1,i) + d2rho_solv(4,i) + d2rho_solv(6,i) \
               - d0**2 * ( d2rho_solv(1,i)*drho_solv(1,i)**2 + d2rho_solv(4,i)*drho_solv(2,i)**2 + d2rho_solv(6,i)*drho_solv(3,i)**2 \
             + ( drho_solv(1,i)*(d2rho_solv(2,i)*drho_solv(2,i) + d2rho_solv(3,i)*drho_solv(3,i)) + d2rho_solv(5,i)*drho_solv(2,i)*drho_solv(3,i) )*2 ) )
+#ifdef __ALLOW_FIXED_CURV
+  endif
+#endif
 #endif
 #else
   __SCALE(drho_solv(:,i),d0) ! normalize gradient (note that we use the normalized grad as the surface unit normal for forces)
 #ifndef __1DSBP
 ! normalized grad formula:
-  acurv_solv(i) = half * d0  * ( d2rho_solv(1,i)*(one-drho_solv(1,i)**2) + d2rho_solv(4,i)*(one-drho_solv(2,i)**2) + d2rho_solv(6,i)*(one-drho_solv(3,i)**2) \
+#ifdef __ALLOW_FIXED_CURV
+  if (qfixed_curvature) then
+   acurv_solv(i)=fixed_curvature
+  else
+#endif
+   acurv_solv(i) = half * d0  * ( d2rho_solv(1,i)*(one-drho_solv(1,i)**2) + d2rho_solv(4,i)*(one-drho_solv(2,i)**2) + d2rho_solv(6,i)*(one-drho_solv(3,i)**2) \
             - ( drho_solv(1,i)*( d2rho_solv(2,i)*drho_solv(2,i) + d2rho_solv(3,i)*drho_solv(3,i)) + d2rho_solv(5,i)*drho_solv(2,i)*drho_solv(3,i) )*2 )
+#ifdef __ALLOW_FIXED_CURV
+  endif
+#endif
 #endif
 #endif
 ! now can compute the boundary force from spline data
@@ -2422,7 +2458,11 @@ endif ! decide whether to compute dr_surf
 #endif
 !
 #ifndef __1DSBP
-  if ( _QREPELMINUS dsurf_solv(i).gt.0) &
+  if ( _QREPELMINUS dsurf_solv(i).gt.0 & 
+#ifdef __ALLOW_FIXED_CURV
+   .and. (.not.qfixed_curvature) & 
+#endif
+     ) &
   acurv_solv(i) = acurv_solv(i) / ( one + abs(acurv_solv(i)) * ( _QREPELMINUS dsurf_solv(i)) ) ! in this model the curvature correction is independent of curvature sign
 ! for molecules outside the boundary, dsurf < 0, and therefore the curvature increases ; in principle, it is technically possible to go to zero in the denominator,
 ! which makes the curvature go very high ... (10 or more) ; so as a minimal fix, modified not to decrease (in cases with dR<0)
@@ -2561,10 +2601,18 @@ endif ! decide whether to compute dr_surf
 ! technically, we are (1) violating Hamiltonian dynamics, or (2) projecting out (removing) non-normal forces
 ! the FD formula that corresponds to the analytical 2nd order surface model has to exclude the curvature variation, i.e. use the 
 ! values already computed for the analytical forces
-    acurv_solv(i) = half * d0 * ( d2rho_solv(1,i)*(one-drho_solv(1,i)**2) + d2rho_solv(4,i)*(one-drho_solv(2,i)**2) + d2rho_solv(6,i)*(one-drho_solv(3,i)**2) \
+#ifdef __ALLOW_FIXED_CURV
+    if (qfixed_curvature) then
+     acurv_solv(i) = fixed_curvature
+    else
+#endif
+     acurv_solv(i) = half * d0 * ( d2rho_solv(1,i)*(one-drho_solv(1,i)**2) + d2rho_solv(4,i)*(one-drho_solv(2,i)**2) + d2rho_solv(6,i)*(one-drho_solv(3,i)**2) \
             - ( drho_solv(1,i)*( d2rho_solv(2,i)*drho_solv(2,i) + d2rho_solv(3,i)*drho_solv(3,i)) + d2rho_solv(5,i)*drho_solv(2,i)*drho_solv(3,i) )*2 )
-    if (dsurf_solv(i).gt.0) &
-     acurv_solv(i) = acurv_solv(i) / ( one + abs(acurv_solv(i)) * dsurf_solv(i) ) ! in this model the curvature correction is independent of curvature sign
+     if (dsurf_solv(i).gt.0) &
+      acurv_solv(i) = acurv_solv(i) / ( one + abs(acurv_solv(i)) * dsurf_solv(i) ) ! in this model the curvature correction is independent of curvature sign
+#ifdef __ALLOW_FIXED_CURV
+    endif
+#endif
 #endif
 ! boundary energy from spline data
     sbfe = watershell_sbf_spline_compute(acurv_solv(i), dsurf_solv(i), .true.)
@@ -3337,6 +3385,9 @@ __DBGVAR(obulk_boundary_contour_value,1)
 !$omp ,numthreads,structure_update_memory,surface_force_constant,qsbe,dsurf_solv,surface_distance,surf_stdev,drho_surf,ispt &
 #ifndef _1DSBP
 !$omp ,curvature_force_constant,acurv_solv, curvature_energy &
+#ifdef __ALLOW_FIXED_CURV
+!$omp ,qfixed_curvature,fixed_curvature &
+#endif
 #endif
 !$omp ,surface_energy &
 #ifdef __BAROSTAT
@@ -3757,16 +3808,32 @@ __DBGVAR(obulk_boundary_contour_value,1)
 ! compute average curvature at solvent coordinate from gradient and hessian
 ! NOTE : need hessian for this, but it is possible that the hessian was _Not_ requested in the calling routine (no check here)
 ! unnormalized/unscaled grad formula:
-  acurv_solv(i) = half * b  * ( d2rho_solv(1,i) + d2rho_solv(4,i) + d2rho_solv(6,i) \
+#ifdef __ALLOW_FIXED_CURV
+  if (qfixed_curvature) then
+   acurv_solv(i)=fixed_curvature
+  else
+#endif
+   acurv_solv(i) = half * b  * ( d2rho_solv(1,i) + d2rho_solv(4,i) + d2rho_solv(6,i) \
               - b**2 * ( d2rho_solv(1,i)*drho_solv(1,i)**2 + d2rho_solv(4,i)*drho_solv(2,i)**2 + d2rho_solv(6,i)*drho_solv(3,i)**2 \
             + ( drho_solv(1,i)*(d2rho_solv(2,i)*drho_solv(2,i) + d2rho_solv(3,i)*drho_solv(3,i)) + d2rho_solv(5,i)*drho_solv(2,i)*drho_solv(3,i) )*2 ) )
+#ifdef __ALLOW_FIXED_CURV
+  endif
+#endif
 #endif
 #else
   __SCALE(drho_solv(:,i),b) ! normalize gradient (note that we use the normalized grad as the surface unit normal for forces)
 #ifndef __1DSBP
 ! normalized grad formula:
-  acurv_solv(i) =  half * b  * ( d2rho_solv(1,i)*(one-drho_solv(1,i)**2) + d2rho_solv(4,i)*(one-drho_solv(2,i)**2) + d2rho_solv(6,i)*(one-drho_solv(3,i)**2) \
+#ifdef __ALLOW_FIXED_CURV
+  if (qfixed_curvature) then
+   acurv_solv(i)=fixed_cuevature
+  else
+#endif
+   acurv_solv(i) =  half * b  * ( d2rho_solv(1,i)*(one-drho_solv(1,i)**2) + d2rho_solv(4,i)*(one-drho_solv(2,i)**2) + d2rho_solv(6,i)*(one-drho_solv(3,i)**2) \
             - ( drho_solv(1,i)*( d2rho_solv(2,i)*drho_solv(2,i) + d2rho_solv(3,i)*drho_solv(3,i)) + d2rho_solv(5,i)*drho_solv(2,i)*drho_solv(3,i) )*2 )
+#ifdef __ALLOW_FIXED_CURV
+  endif
+#endif
 #endif
 #endif
 !  expb=__Q(rho_solv(i)) ! unsafe inverse
@@ -3779,7 +3846,11 @@ __DBGVAR(obulk_boundary_contour_value,1)
   expb = one ! drho has been scaled by 1/|grad rho| above, so nothing to do
 #endif
 #ifndef __1DSBP
-  if (_QREPELMINUS dsurf_solv(i).gt.0) &
+  if ((_QREPELMINUS dsurf_solv(i).gt.0) &
+#ifdef __ALLOW_FIXED_CURV
+   .and. .not.qfixed_curvature &
+#endif
+     ) &
     acurv_solv(i) = acurv_solv(i) / ( one + abs(acurv_solv(i)) * ( _QREPELMINUS dsurf_solv(i)) ) ! in this model the curvature correction is independent of curvature sign
   sbfe = watershell_sbf_spline_compute(acurv_solv(i), dsurf_solv(i), qsbe)
   __SCALE( sbfe(1), surface_force_constant )
