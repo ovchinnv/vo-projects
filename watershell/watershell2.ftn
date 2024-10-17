@@ -2297,11 +2297,14 @@ endif ! decide whether to compute dr_surf
 !$omp parallel _OMP_EXTRA &
 !$omp default (none) &
 !$omp shared (qoutside_solv,nsolvent,rho_solv,drho_solv,nsolvent_unsupported,qsbe,&
+#ifdef __FLIM
+!$omp iteration , &
+#endif
 #ifdef __ALLOW_FIXED_CURV
 !$omp qfixed_curvature,fixed_curvature,&
 #endif
 #ifndef __HAMILTONIAN
-!$omp sbfe,d2rho_solv,dsurf_solv,surface_distance,surface_force_constant,surface_energy,&
+!$omp d2rho_solv,dsurf_solv,surface_distance,surface_force_constant,surface_energy,&
 #ifdef __ADD_PADDING_RHOINV
 !$omp surf_padding,&
 #endif
@@ -2322,8 +2325,11 @@ endif ! decide whether to compute dr_surf
 #endif
 !$omp isolvent_atoms, fr) &
 !$omp private (i &
+#ifdef __FLIM
+!$omp , i_ , msg___ &
+#endif
 #ifndef __HAMILTONIAN
-!$omp , d0, pre, __U(surface_energy) &
+!$omp , d0, pre, __U(surface_energy), sbfe &
 #ifndef __1DSBP
 !$omp , __U(curvature_energy) &
 #endif
@@ -2484,6 +2490,37 @@ endif ! decide whether to compute dr_surf
 #else
 ! in this case, we should scale by 1/|grad rho|, but this was done in the first protected block above, so need nothing here
 #endif
+!
+#ifdef __FLIM
+#ifndef __DRHOINV
+  if ( abs(pre) .gt. __FMAX ) then
+   __WRN(whoami, 'FORCE PREFACTOR FOR SOLVENT ATOM '//itoa(i)//' IS TOO HIGH (|'//ftoa(pre)//'|>'//ftoa(__FMAX)//') AT ITERATION '//itoa(iteration))
+#else
+! in this case we need to multiply by |grad rho| for a fair comparison
+  if ( abs(pre)*sqrt(sum(drho_solv(:,i)**2)) .gt. __FMAX ) then
+   __WRN(whoami, 'FORCE PREFACTOR FOR SOLVENT ATOM '//itoa(i)//' IS TOO HIGH (|'//ftoa(pre*sqrt(sum(drho_solv(:,i)**2)))//'|>'//ftoa(__FMAX)//') AT ITERATION '//itoa(iteration))
+#endif
+! from output section below
+#define __OUT(...)  __INC(i_);write(_MSGBUF(i_),*) __VA_ARGS__
+   i_=0 ; _MSGBUF='';
+   __OUT('== PROPERTIES FOR SOLVENT ATOM '//itoa(i)//'==');
+   __OUT('=Surface density:', rho_solv(i))
+   __OUT('=Surface distance:', dsurf_solv(i))
+   __OUT('=Surface density gradient (magnitude):',drho_solv(:,i),sqrt(sum(drho_solv(:,i)**2)));
+   __OUT('=Surface curvature:', acurv_solv(i))
+   __OUT('=Surface spline force:',sbfe(1))
+#ifndef __1DSBP
+   __OUT('=Curvature spline force:',sbfe(2))
+#endif
+#ifdef __DRHOINV
+   __OUT('=d0=erf^-1(2rho-1):', d0)
+   __OUT('=sigma * sqrt(pi) * exp(d0^2):', surf_stdev * sq2pi * exp(d0**2))
+#endif
+   __OUT('=================================')
+   __PRINT(_MSGBUF)
+  endif
+#endif
+! check force magnitude :
 ! add forces to force arrays ; the normalized gradient gives direction
 ! note that the gradient is inwardly directed, and the force has the "correct" sign (+/-) for inside/in, so need (-) above
   __INCR(fr(1,isolvent_atoms(i)), pre * drho_solv(1,i))
