@@ -36,9 +36,9 @@ watershell2.o : watershell_sbf_spline.o watershell_sbf_spline1d.o
 
 watershell_plugin.o : watershell.o watershell2.o
 
-watershell.F90 watershell_plugin.F90 : parser/parser_macro2.src parser/parser_macro3.src watershell_rmft_aux1.ftn
+watershell.F90 watershell_plugin.F90 : parser/parser_macro2.src parser/parser_macro3.src watershell_rmft_aux1.ftn rho.src
 
-watershell2.F90 : parser/parser_macro2.src parser/parser_macro3.src
+watershell2.F90 : parser/parser_macro2.src parser/parser_macro3.src rho.src
 
 watershell_plugin_acemd.o : aceplug.h
 
