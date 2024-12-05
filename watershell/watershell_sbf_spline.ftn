@@ -11,8 +11,14 @@ module _N
 
  type(pp1data) :: pp1, pp1int ! 1st order spline in the distance to boundary and integral
  type(pp2data) :: pp2, pp2intd ! 2nd order spline in average/gaussian curvature & distance, and distance integral
+#ifdef __GRADCURV
+ type(pp2data) :: pp2diffkintd ! 2nd order spline that gives the derivative of the potential w.r.t. curvature
+#endif
  float :: pp1int_offset ! 0-curvature energy offset
  type (pp1data) :: pp2intd_offsets
+#ifdef __GRADCURV
+ type(pp1data) :: pp2diffkintd_offsets ! differentiated energy offset curve above
+#endif
  float :: maxd ! distance beyond which the force and potential energy is zero
  float :: mink, maxk ! curvature interval limits outside of which the curvature does not change (neumann) ; spline file should have 0 slope at eps
  bool :: __NM(initialized)=.false.
@@ -62,7 +68,7 @@ module _N
 #else
  call ppoly2_init(pp2, kpdeg, zpdeg, nk, nz, kave, z, coefs(1:kpdeg+1, 1:zpdeg+1, 1:nk-1, 1:nz-1) ,.false.) ! last argument is for continuity checking
 #endif
-! compute integral in z :
+! compute integral in z (also distance, d) :
 #ifdef __DEBUG
  __MESG(whoami,'Integrating 2D spline in d-dimension')
 #endif
@@ -79,14 +85,23 @@ module _N
  pp1int=ppoly1_integral(pp1)
 ! compute offsets for energy
  maxd = z(nz) ! set distance beyond which will not apply force (or force is zero)
- pp1int_offset=ppoly1_compute(pp1int,maxd) ! this is a number
- pp2intd_offsets=ppoly2_compute_y(pp2intd,maxd) ! this is a 1D spline
+ pp1int_offset=ppoly1_compute(pp1int,maxd) ! this is a number, which is the energy offset for the zero curvature distance potential
+ pp2intd_offsets=ppoly2_compute_y(pp2intd,maxd) ! this is a 1D spline through the curvature, at the maximum distance from the surface location
 #ifdef __DEBUG
  __MESG(whoami,'1D potential offset for 0-curvature energy is', pp1int_offset )
 #endif
 ! set curvature caps : (curvature is capped at these values beyond the corresponding boundary)
  mink=kave(1)
  maxk=kave(nk)
+#ifdef __GRADCURV
+! compute derivative of the distance integral w.r.t. curvature:
+#ifdef __DEBUG
+ __MESG(whoami,'Differentiating 2D (potential) spline in curvature dimension')
+#endif
+ pp2diffkintd = ppoly2_derivative_x(pp2intd) ! this spline will provides the energy derivative w.r.t curvature
+! also compute the derivative of the energy offset k-curve:
+ pp2diffkintd_offsets = ppoly1_derivative(pp2intd_offsets)
+#endif
 !
  __FREE(coefs)
  __FREE(z)
@@ -102,6 +117,10 @@ module _N
  call ppoly2_done(pp2)
  call ppoly2_done(pp2intd)
  call ppoly1_done(pp2intd_offsets)
+#ifdef __GRADCURV
+ call ppoly2_done(pp2diffkintd)
+ call ppoly1_done(pp2diffkintd_offsets)
+#endif
  __NM(initialized)=.false.
  end __SUB(done)
 !===========================
@@ -109,19 +128,25 @@ module _N
 #undef _ME
 #endif
 #define _ME __NM(compute)
- function __NM(compute)(k,d,qpe)
+ function __NM(compute)(k,d,qpe,qdcurv_)
  bool, intent(in) :: qpe ! whether to compute potential energies in addition to forces
+ __OPAR(qdcurv,bool)
  float, intent(in) :: k, d
+#ifdef __GRADCURV
+ float :: _ME(5) ! put curvature dervative in the last position
+#else
  float :: _ME(4)
+#endif
  float :: kcapped ! curvature capped at endpoints
  int :: igrid(2)
 !
  __IAM(_ME)
  __ASSERT(__NM(initialized),.eqv.,.true.)
+ __PRESENT(qdcurv,.true.)
 !
- if (d.gt.maxd) then 
-  _ME = (/0d0, 0d0, 0d0, 0d0/) ! assume that the force beyond the largest support point is zero (this corresponds to being inside and far away from the boundary)
-! construct the potential to be continuous at maxd
+ if (d.gt.maxd) then
+  _ME = zero ! assume that the force beyond the largest support point is zero (this corresponds to being inside and far away from the boundary)
+! construct the potential to be continuous (=0) at maxd
  else
   if (k.gt.maxk) then ; kcapped=maxk ; elseif (k.lt.mink) then ; kcapped=mink ; else ; kcapped=k ; endif ! cap curvature
 ! note : positive force means pushing molecule toward the boundary
@@ -135,6 +160,18 @@ module _N
   else
    _ME(3)=0d0 ; _ME(4)=0d0
   endif
+! 12/24 : derivative w.r.t. curvature
+#ifdef __GRADCURV
+  if (qdcurv) then ! otherwise zero
+   if (k.lt.maxk.and.k.gt.mink) then ! otherwise zero
+    _ME(5)=ppoly2_compute_igrid(pp2diffkintd,kcapped,d,igrid) - ppoly1_compute_igrid(pp2diffkintd_offsets,kcapped,igrid(1))
+   else
+    _ME(5)=zero
+   endif
+  else
+   _ME(5)=zero
+  endif
+#endif
  endif
 !
  end __FUN(compute)
