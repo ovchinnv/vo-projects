@@ -107,6 +107,9 @@ module _N
  __FREE(z)
  __FREE(kave)
  __NM(initialized)=.true.
+#ifdef __DEBUGDUMP
+ call __NM(print2dmaps)
+#endif
  end __SUB(init)
 !===========================
  __SUB(done)
@@ -163,7 +166,7 @@ module _N
 ! 12/24 : derivative w.r.t. curvature
 #ifdef __GRADCURV
   if (qdcurv) then ! otherwise zero
-   if (k.lt.maxk.and.k.gt.mink) then ! otherwise zero
+   if (k.le.maxk.and.k.ge.mink) then ! otherwise zero
     _ME(5)=ppoly2_compute_igrid(pp2diffkintd,kcapped,d,igrid) - ppoly1_compute_igrid(pp2diffkintd_offsets,kcapped,igrid(1))
    else
     _ME(5)=zero
@@ -175,5 +178,59 @@ module _N
  endif
 !
  end __FUN(compute)
-
+!=============================
+! for debugging
+ __SUB(print2dmaps)
+ __DEP_FILES
+ __IMPNONE
+ int, parameter :: np=100 , nk=np-1, nz=np+1 ! map resolution (diffferent to avoid accidental mixing of dimensions)
+ float :: kk(nk), zz(nz)
+ float, dimension(nk,nz) :: Ucurv, dUcurvdz, dUdk
+ float, dimension(nz) :: Usurf, dUsurfdz ! 0-curvature part ; add to Ucurv to get the full potential
+ float, parameter :: mind=-2 ! farthest point outside the boundary (we have an extrapolant, so this is arbitrary)
+ int :: ik,iz
+ float :: dk, dz
+#ifdef __GRADCURV
+ float :: sbfe(5)
+#else
+ float :: sbfe(4)
+#endif
+ int :: fout
+ __IAM(_SUB(print2dmaps))
+ __ASSERT(__NM(initialized),.eqv.,.true.)
+! compute grids
+ dk=(maxk-mink)/(nk-1)
+ dz=(maxd-mind)/(nz-1)
+ do ik=1,nk
+  kk(ik)=mink+(ik-1)*dk
+ enddo
+ do iz=1,nz
+  zz(iz)=mind+(iz-1)*dz
+ enddo
+! compute function values
+ do iz=1,nz
+  do ik=1,nk
+   sbfe=__NM(compute)(kk(ik),zz(iz),.true.,.true.)
+   dUcurvdz(ik,iz)=sbfe(2)
+   Ucurv(ik,iz)=sbfe(4)
+#ifdef __GRADCURV)
+   dUdk(ik,iz)=sbfe(5)
+#endif
+  enddo
+  dUsurfdz(iz)=sbfe(1)
+  Usurf(iz)=sbfe(3)
+ enddo
+! write out map files for visualization
+#define __TXTDUMP(_W) \
+ fout=-1 ; call files_open(fout, __STRING(_W)//'.dat', 'FORMATTED','WRITE');\
+ write(fout,*) _W;\
+ close(fout);
+ __TXTDUMP(kk)
+ __TXTDUMP(zz)
+ __TXTDUMP(Ucurv)
+ __TXTDUMP(dUcurvdz)
+ __TXTDUMP(Usurf)
+ __TXTDUMP(dUsurfdz)
+ __TXTDUMP(dUdk)
+ end __SUB(print2dmaps)
 end module
