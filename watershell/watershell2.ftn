@@ -105,7 +105,11 @@ module _N
  float :: surface_energy
 #ifndef __1DSBP
  float :: curvature_energy
+#ifdef __GRADCURV
+ float :: sbfe(5) ! array that holds instantaneous force and energy on a single solvent particle (distance and curvature force & energy ==> 4 values); 5: dU/dcurv
+#else
  float :: sbfe(4) ! array that holds instantaneous force and energy on a single solvent particle (distance and curvature force & energy ==> 4 values)
+#endif
 #ifdef __ALLOW_FIXED_CURV
  bool :: qfixed_curvature=.false. ! whether to force the use of a fixed curvature
  float :: fixed_curvature=zero
@@ -240,6 +244,9 @@ module _N
 &                  rho_solv(:), & ! density value at solvent coordinate
 &                  drho_solv(:,:),& ! density gradient at solvent coordinate (inward surface normal)
 &                  d2rho_solv(:,:),& ! density hessian at solvent coordinate (xx,xy,xz,yy,yz,zz)
+#ifdef __GRADCURV
+&                  d3rho_solv(:,:),& ! density third order gradient at solvent coordinate (xxx,xxy,xxz,xyy,xyz,xzz,yyy,yyz,yzz,zzz)
+#endif
 #ifndef __1DSBP
 &                  acurv_solv(:),& ! average surface curvature corresponding to solvent coordinate
 #endif
@@ -1270,6 +1277,9 @@ endif
 #endif
   __ALLOC(drho_solv(3,nsolvent))
   __ALLOC(d2rho_solv(6,nsolvent))
+#ifdef __GRADCURV
+  __ALLOC(d3rho_solv(10,nsolvent))
+#endif
 #ifdef __SORT_LIST
   __ALLOC(solute_neighbor_list(nsurface_coord,nsolvent))
 ! initialize neighbor list with solute indices from 1 to nsurface_coord for each solute atom:
@@ -1661,6 +1671,9 @@ __DBGVAR(r_com_sa,1)
  __FREE(rho_solv)
  __FREE(drho_solv)
  __FREE(d2rho_solv)
+#ifdef __GRADCURV
+ __FREE(d3rho_solv)
+#endif
  __FREE(dsurf_solv)
 #ifndef __1DSBP
  __FREE(acurv_solv)
@@ -1716,6 +1729,9 @@ __DBGVAR(r_com_sa,1)
 !
  type (cell), optional :: mdcell
  float :: distance_from_solute, distance_from_solute2, pre, d0
+#ifdef __GRADCURV
+ float :: HoG(3), Lap, dCurv(3)
+#endif
 !
 #ifdef __ROTRES
  float :: dcom(3), r1(3)
@@ -2221,7 +2237,11 @@ endif ! decide whether to compute dr_surf
 #endif
   call __NM(compute_density)(.false.,.true.,&
 #ifndef __1DSBP
+#ifndef __ALLOW_FIXED_CURV
 &    .true. &
+#else
+&    .not.qfixed_curvature &
+#endif
 #else
 &    .false. &
 #endif
@@ -2243,7 +2263,12 @@ endif ! decide whether to compute dr_surf
 !    call __NM(compute_density)(QTRUNCATE_LOOP=((.not.qneighbor_list) .or. (.not.__CHKUPDATE(full_sum_freq))), QCOMPUTE_GRAD=.true., QCOMPUTE_HESS=.false.)
     call __NM(compute_density)(((.not.qneighbor_list) .or. (.not.__CHKUPDATE(full_sum_freq))),.true.,&
 #ifndef __1DSBP
+! below, if we are running with fixed curvature, omit hessian computation (as well as 3rd derivatives, which are conditional on the same flag)
+#ifndef __ALLOW_FIXED_CURV
 &    .true. &
+#else
+&    .not.qfixed_curvature &
+#endif
 #else
 &    .false. &
 #endif
@@ -2258,7 +2283,11 @@ endif ! decide whether to compute dr_surf
 !    call __NM(compute_density)(QTRUNCATE_LOOP=.true., QCOMPUTE_GRAD=.true., QCOMPUTE_HESS=.false.)
     call __NM(compute_density)(.true.,.true.,&
 #ifndef __1DSBP
+#ifndef __ALLOW_FIXED_CURV
 &    .true. &
+#else
+&    .not.qfixed_curvature &
+#endif
 #else
 &    .false. &
 #endif
@@ -2315,11 +2344,16 @@ endif ! decide whether to compute dr_surf
 #ifdef __FLIM
 !$omp iteration , &
 #endif
+#ifndef __1DSBP
 #ifdef __ALLOW_FIXED_CURV
 !$omp qfixed_curvature,fixed_curvature,&
 #endif
+#endif
 #ifndef __HAMILTONIAN
 !$omp d2rho_solv,dsurf_solv,surface_distance,surface_force_constant,surface_energy,&
+#ifdef __GRADCURV
+!$omp d3rho_solv,&
+#endif
 #ifdef __ADD_PADDING_RHOINV
 !$omp surf_padding,&
 #endif
@@ -2347,6 +2381,9 @@ endif ! decide whether to compute dr_surf
 !$omp , d0, pre, __U(surface_energy), sbfe &
 #ifndef __1DSBP
 !$omp , __U(curvature_energy) &
+#ifdef __GRADCURV
+!$omp , Lap, HoG, dCurv &
+#endif
 #endif
 #ifdef __BAROSTAT
 !$omp , __U(surface_force) &
@@ -2440,14 +2477,27 @@ endif ! decide whether to compute dr_surf
    acurv_solv(i)=fixed_curvature
   else
 #endif
-   acurv_solv(i) = half * d0  * ( d2rho_solv(1,i) + d2rho_solv(4,i) + d2rho_solv(6,i) \
+!for curvature gradient
+#ifdef __GRADCURV
+! NOTE THAT USING D0 rather than d0 is an _intentional_ preprocessor hack ;)
+! gradient vector unnormalized :
+#define _D0 d0
+#include "gradcurv.src"
+#undef _D0
+#else
+! compute curvature without derivative
+! note that qrepelminus is present because the curvature flips sign when we cross the boundary ; the c-gradient should also flip the sign (can do at force application)
+   acurv_solv(i) = _QREPELMINUS  half * d0  * ( d2rho_solv(1,i) + d2rho_solv(4,i) + d2rho_solv(6,i) \
               - d0**2 * ( d2rho_solv(1,i)*drho_solv(1,i)**2 + d2rho_solv(4,i)*drho_solv(2,i)**2 + d2rho_solv(6,i)*drho_solv(3,i)**2 \
             + ( drho_solv(1,i)*(d2rho_solv(2,i)*drho_solv(2,i) + d2rho_solv(3,i)*drho_solv(3,i)) + d2rho_solv(5,i)*drho_solv(2,i)*drho_solv(3,i) )*2 ) )
+#endif
+!
 #ifdef __ALLOW_FIXED_CURV
   endif
 #endif
 #endif
 #else
+! __DROINV = FALSE (undefined) case
   __SCALE(drho_solv(:,i),d0) ! normalize gradient (note that we use the normalized grad as the surface unit normal for forces)
 #ifndef __1DSBP
 ! normalized grad formula:
@@ -2456,8 +2506,18 @@ endif ! decide whether to compute dr_surf
    acurv_solv(i)=fixed_curvature
   else
 #endif
-   acurv_solv(i) = half * d0  * ( d2rho_solv(1,i)*(one-drho_solv(1,i)**2) + d2rho_solv(4,i)*(one-drho_solv(2,i)**2) + d2rho_solv(6,i)*(one-drho_solv(3,i)**2) \
-            - ( drho_solv(1,i)*( d2rho_solv(2,i)*drho_solv(2,i) + d2rho_solv(3,i)*drho_solv(3,i)) + d2rho_solv(5,i)*drho_solv(2,i)*drho_solv(3,i) )*2 )
+!for curvature gradient
+#ifdef __GRADCURV
+! NOTE THAT USING D0 rather than d0 is an _intentional_ preprocessor hack ;)
+! gradient vector normalized above :
+#define _D0 1
+#include "gradcurv.src"
+#undef _D0
+#else
+ acurv_solv(i)= _QREPELMINUS half * d0  * ( d2rho_solv(1,i)*(one-drho_solv(1,i)**2) + d2rho_solv(4,i)*(one-drho_solv(2,i)**2) + d2rho_solv(6,i)*(one-drho_solv(3,i)**2)\
+                       - ( drho_solv(1,i)*( d2rho_solv(2,i)*drho_solv(2,i) + d2rho_solv(3,i)*drho_solv(3,i)) + d2rho_solv(5,i)*drho_solv(2,i)*drho_solv(3,i) )*2 )
+#endif
+!
 #ifdef __ALLOW_FIXED_CURV
   endif
 #endif
@@ -2474,25 +2534,55 @@ endif ! decide whether to compute dr_surf
   dsurf_solv(i) = _QREPELMINUS ( __RHO_INVERSE2 ( d0 ) - surface_distance ) ! need this for correction below
 ! note that the above is the lowest order approximation for distance to bdry (more accurate ones, e.g. NR, are much slower)
 ! note also, that we are technically missing (in the derivative of potential sense) the derivative of the inverse wrt rho (same as wsh1)
+! note 2/24 : double check signs for qrepelminus (-); the point of qrepelminus is to have a means of repelling from the boundary (rather than attracting)
+! note also that the curvature would be negative from the perception of a atom beyond the wall
 #if (_DBGLEV>1)
   __DBGOUT('solv. atom#:', i, 'density:', rho_solv(i), 'distance to bdry:', dsurf_solv(i), 'outside?:', qoutside_solv(i))
 #endif
 !
 #ifndef __1DSBP
-  if ( _QREPELMINUS dsurf_solv(i).gt.0 & 
+#ifdef __CURVCORRECT
+  if ( dsurf_solv(i).gt.zero & ! i.e., when positive, we are on the outside of bdry (note that qrepelminus negates the distance
 #ifdef __ALLOW_FIXED_CURV
    .and. (.not.qfixed_curvature) & 
 #endif
      ) &
-  acurv_solv(i) = acurv_solv(i) / ( one + abs(acurv_solv(i)) * ( _QREPELMINUS dsurf_solv(i)) ) ! in this model the curvature correction is independent of curvature sign
+#ifdef __GRADCURV
+&  then
+    Lap = one / ( one + abs(acurv_solv(i)) * ( dsurf_solv(i)) ) ! reuse Lap from diff calc for later
+    __SCALE(acurv_solv(i),Lap)
+! compute multiplicative curvature gradient correction
+    Lap = Lap * ( one - abs(acurv_solv(i)) )
+  else
+   Lap=one ! just in case to allow using var even when the appx not applied
+  endif
+#else
+   acurv_solv(i) = acurv_solv(i) / ( one + abs(acurv_solv(i)) * ( dsurf_solv(i)) ) ! in this model the curvature correction is independent of curvature sign
+#endif
 ! for molecules outside the boundary, dsurf < 0, and therefore the curvature increases ; in principle, it is technically possible to go to zero in the denominator,
 ! which makes the curvature go very high ... (10 or more) ; so as a minimal fix, modified not to decrease (in cases with dR<0)
+! unclear how to proceed with qrepelminus; expect qrepelminus to be rarely used
+! for now, issue a compile time warning when qrepelminus and curvcorrect are used together
+#endif
 !
 !  sbfe = watershell_sbf_spline_compute(acurv_solv(i), dsurf_solv(i), output_freq.gt.0 .and. __CHKUPDATE(output_freq) ) ! compute forces and (optionally) energies
-  sbfe = watershell_sbf_spline_compute(acurv_solv(i), dsurf_solv(i), qsbe)
+  sbfe = watershell_sbf_spline_compute(acurv_solv(i), dsurf_solv(i), qsbe &
+#ifdef __ALLOW_FIXED_CURV
+&  , .not.qfixed_curvature &
+#endif
+&  )
+
 ! note : the flag above can be computed outside ; also we may want to compute more often if we need energy averages
 ! sbfe(1,2,3,4) contain "surface" force (with crv subtracted out), curvature_force, surface_energy, curvature_energy, respectively
-  pre = - ( _QREPELMINUS curvature_force_constant*sbfe(2) )
+  pre = sbfe(2)
+#if defined(__GRADCURV) && defined(__CURVCORRECT)
+! gradient contribution coming from the crude curvature correction model (note that with fixed curvature sbfe(5) =0)
+  if ( dsurf_solv(i).gt.zero ) __DECR(pre, sbfe(5)*acurv_solv(i)*abs(acurv_solv(i)) ) 
+!^ NB:check sign above ; sbfe(5) obtained from integrating and differentiating (i.e. w/o sign changes); so it seems the only source of sigh change is dK/dd=-c|c|
+! where c is the distance-corrected curvature (which is what gives c the d-dependence in the first place)
+#endif
+  __SCALE(pre, -( _QREPELMINUS curvature_force_constant ))
+!
 #else
   sbfe = watershell_sbf_spline1D_compute(dsurf_solv(i), qsbe)
   pre=zero
@@ -2501,12 +2591,14 @@ endif ! decide whether to compute dr_surf
 
 #ifdef __DRHOINV
 ! include derivative of distance function (simplest model only)
-  __SCALE(pre, surf_stdev * sq2pi * exp (d0**2)) ! recall our sign convention, in which distance to boundary is negative
+  __SCALE(pre, surf_stdev * sq2pi * exp (d0**2)) ! recall our sign convention, in which distance to boundary is negative when you are inside, + for outside
 #else
 ! in this case, we should scale by 1/|grad rho|, but this was done in the first protected block above, so need nothing here
 #endif
 !
 #ifdef __FLIM
+! check force magnitude (note that this does _NOT_ include curvature gradient force, so might not be useful; candidate for removal, since the purpose was debugging ... ):
+! it does include the curvature correction gradient mod of distance gradient, but that's not enough, and maybe even confusing
 #ifndef __DRHOINV
   if ( abs(pre) .gt. __FMAX ) then
    __WRN(whoami, 'FORCE PREFACTOR FOR SOLVENT ATOM '//itoa(i)//' IS TOO HIGH (|'//ftoa(pre)//'|>'//ftoa(__FMAX)//') AT ITERATION '//itoa(iteration))
@@ -2535,12 +2627,24 @@ endif ! decide whether to compute dr_surf
    __PRINT(_MSGBUF)
   endif
 #endif
-! check force magnitude :
 ! add forces to force arrays ; the normalized gradient gives direction
-! note that the gradient is inwardly directed, and the force has the "correct" sign (+/-) for inside/in, so need (-) above
+! note that the gradient is inwardly directed, and the force has the "correct" sign (+/-) for inside/out, so need (-) above
   __INCR(fr(1,isolvent_atoms(i)), pre * drho_solv(1,i))
   __INCR(fr(2,isolvent_atoms(i)), pre * drho_solv(2,i))
   __INCR(fr(3,isolvent_atoms(i)), pre * drho_solv(3,i))
+#ifdef __GRADCURV
+! note two mods : (1) derivative of potential wrt curvature x grad curv (here), and
+! (2) a modification of the above to account for the curvature correction (already included above)
+! Lap has the curvature correction, if needed, otherwise =1
+  pre = - ( _QREPELMINUS curvature_force_constant * sbfe(5) &    ! _qrepelminus to account for curvature sign flip upon bdry crossing
+#ifdef __CURVCORRECT
+  * Lap &
+#endif
+  )
+  __INCR(fr(1,isolvent_atoms(i)), pre * dCurv(1))
+  __INCR(fr(2,isolvent_atoms(i)), pre * dCurv(2))
+  __INCR(fr(3,isolvent_atoms(i)), pre * dCurv(3))
+#endif
 !
 ! sum "energy"
 ! this requires evaluating additional splines (indicated above by qsbe flag), so should be done only when required
@@ -3295,6 +3399,12 @@ __DBGVAR(solvent_mass_ibulk,1)
  write(i,'(G20.12)') d2rho_solv
  call files_close(i)
 !
+#ifdef __GRADCURV
+ call files_open(i, 'd3rho_solv.dat', 'FORMATTED','WRITE')
+ write(i,'(G20.12)') d3rho_solv
+ call files_close(i)
+#endif
+!
  call files_open(i, 'dsurf_solv.dat', 'FORMATTED','WRITE')
  write(i,*) dsurf_solv
 ! write(i,*) __RHO_INVSAFE(rho_solv(1)), rho_solv(1), rho_solv(1)*2-1
@@ -3331,10 +3441,16 @@ __DBGVAR(solvent_mass_ibulk,1)
 !   to avoid the truncation, you must define an upper bound to the surface contour, e.g. I use nsurface_coord
  int :: i, j
  float :: rp(3), rw(3), dr(3), dr2(6), drn, drn2, b, expb, ooc
+#ifdef __GRADCURV
+ float :: rhoppp
+#endif
 #ifndef __SIMPLERHO
  float :: a, expa, em, ep
 #endif
 #ifdef __NEWGRADHESS
+#ifdef __GRADCURV
+ float :: dr3(10)
+#endif
  float :: rhop, rhopp, oor
 #endif
 #ifdef __SORT_LIST
@@ -3426,6 +3542,9 @@ __DBGVAR(obulk_boundary_contour_value,1)
 !$omp parallel _OMP_EXTRA &
 !$omp default(none) &
 !$omp shared (rho_solv,drho_solv,d2rho_solv,r_solv,r_surf,rad_surf,surf_padding,nsolvent,nsurface_coord,cutoff_surf,oo_surf_stdev,qoutside_solv,surface_contour_value &
+#ifdef __GRADCURV
+!$omp ,d3rho_solv &
+#endif
 !$omp ,qcompute_hess,qcompute_grad, qtruncate_loop &
 #ifdef __UNWRAP_PBC
 !$omp , qper_parser_override, ucell &
@@ -3434,14 +3553,13 @@ __DBGVAR(obulk_boundary_contour_value,1)
 !$omp , dasystat, solvent_mass_ibulk, solvent_mass_obulk, mass_solv, obulk_boundary_contour_value,ibulk_boundary_contour_value &
 #endif
 #ifdef __HAMILTONIAN
-!$omp ,numthreads,structure_update_memory,surface_force_constant,qsbe,dsurf_solv,surface_distance,surf_stdev,drho_surf,ispt &
-#ifndef _1DSBP
+!$omp ,numthreads,structure_update_memory,surface_force_constant,qsbe,dsurf_solv,surface_distance,surf_stdev,drho_surf,ispt,surface_energy &
+#ifndef __1DSBP
 !$omp ,curvature_force_constant,acurv_solv, curvature_energy &
 #ifdef __ALLOW_FIXED_CURV
-!$omp ,qfixed_curvature,fixed_curvature &
+!$omp ,qfixed_curvature, fixed_curvature &
 #endif
 #endif
-!$omp ,surface_energy &
 #ifdef __BAROSTAT
 !$omp ,surface_force &
 #ifndef __1DSBP
@@ -3460,6 +3578,9 @@ __DBGVAR(obulk_boundary_contour_value,1)
 #endif
 !$omp ) &
 !$omp private ( rw, i, j, rp, rsurf, rmaxsurf, dr, dr2, drn, drn2, ooc, b, expb &
+#ifdef __GRADCURV
+!$omp , dr3 &
+#endif
 #ifdef __HAMILTONIAN
 !$omp , __U(surface_energy) &
 #ifndef __1DSBP
@@ -3483,6 +3604,9 @@ __DBGVAR(obulk_boundary_contour_value,1)
 #endif
 #ifdef __NEWGRADHESS
 !$omp , rhop, rhopp, oor &
+#ifdef __GRADCURV
+!$omp , rhoppp &
+#endif
 #endif
 #ifdef __DASYSTAT
 !$omp , __U(solvent_mass_ibulk), qibulk &
@@ -3561,7 +3685,12 @@ __DBGVAR(obulk_boundary_contour_value,1)
 ! the property, but the latter _also_ shows whether the condition is true (i.e. atom is outside the bdry)
    rho_solv(i)=zero
    if (qcompute_grad) drho_solv(:,i)=zero
-   if (qcompute_hess) d2rho_solv(:,i)=zero
+   if (qcompute_hess) then
+    d2rho_solv(:,i)=zero
+#ifdef __GRADCURV
+    d3rho_solv(:,i)=zero
+#endif
+   endif
    rw=r_solv(:,i);
 #ifdef __SORT_LIST
    dr2old=-1.d0  ! set to a small number to guarantee that no swap is done on first iteration
@@ -3617,8 +3746,10 @@ __DBGVAR(obulk_boundary_contour_value,1)
     drn = sqrt(drn2) * oo_surf_stdev !  = r/s
     b = osq2 * (drn - rsurf)        !  = (dr-a)/(sqrt(2)s)
 #ifndef __SIMPLERHO
+! need A for medium & full
     a = osq2 * (drn + rsurf)
 #ifndef __MEDIUMRHO
+! precompute exponentials
     expa = __gauss(a)
     expb = __gauss(b)               ! = e^( - 0.5 * ( (dr - a)/s )^2
     ooc = one / drn                 ! = s/r
@@ -3660,6 +3791,7 @@ __DBGVAR(obulk_boundary_contour_value,1)
 ! needed for hessian (simple)     : expb, b, ooc
 ! needed for hessian (medium)     : expa, a, expb, b, ooc
 ! needed for hessian (full)       :
+! needed for third derivatives (s): expb, b
 !
 ! 8/9/24 : rewrite gradient calculation for clarity
     if(qcompute_grad.or.qcompute_hess) then
@@ -3670,7 +3802,7 @@ __DBGVAR(obulk_boundary_contour_value,1)
 ! factor out "oo_surf_stdev * osq2pi" henceforth
      ooc=one/drn ! s/r
      expb=__gauss(b)
-     rhop  = - expb      ! prime, but not scaled by 1/sqrt(2*pi)/s, which is done below
+     rhop  = - expb      ! prime, but not scaled by 1/sqrt(2*pi)/s, which is done below (ca. line 3850)
 #elif (defined(__MEDIUMRHO))
      ooc=one/drn
      expa=__gauss(a)
@@ -3685,34 +3817,99 @@ __DBGVAR(obulk_boundary_contour_value,1)
 #endif
      oor = ooc * oo_surf_stdev ! 1/r
      if (qcompute_hess) then
-      dr2(1)=dr(1)**2
-      dr2(2)=dr(1)*dr(2)
-      dr2(3)=dr(1)*dr(3)
-      dr2(4)=dr(2)**2
-      dr2(5)=dr(2)*dr(3)
-      dr2(6)=dr(3)**2
+      dr2(1)=dr(1)**2    !xx
+      dr2(2)=dr(1)*dr(2) !xy
+      dr2(3)=dr(1)*dr(3) !xz
+      dr2(4)=dr(2)**2    !yy
+      dr2(5)=dr(2)*dr(3) !yz
+      dr2(6)=dr(3)**2    !zz
+!
+#ifdef __GRADCURV
+! computing curvature gradient reuires third derivatives
+      dr3(1)=dr2(1)*dr(1) !xxx
+      dr3(2)=dr2(1)*dr(2) !xxy
+      dr3(3)=dr2(1)*dr(3) !xxz
+      dr3(4)=dr2(2)*dr(2) !xyy
+      dr3(5)=dr2(2)*dr(3) !xyz
+      dr3(6)=dr2(3)*dr(3) !xzz
+      dr3(7)=dr2(4)*dr(2) !yyy
+      dr3(8)=dr2(4)*dr(3) !yyz
+      dr3(9)=dr2(5)*dr(3) !yzz
+      dr3(10)=dr2(6)*dr(3)!zzz
+#endif
 #if defined(__SIMPLERHO)
-      rhopp = -oo_surf_stdev * (drn-rsurf) * rhop ! prime-prime
-!     rhopp =  oo_surf_stdev**2 * osq2pi * (drn-rsurf) * expb
+!      rhopp = -oo_surf_stdev * (drn-rsurf) * rhop ! prime-prime (note 1/sqrt(2*pi)/s scaling missing here)
+      rhopp = oo_surf_stdev * (drn-rsurf) * expb ! prime-prime (note 1/sqrt(2*pi)/s scaling missing here)
+#ifdef __GRADCURV
+      rhoppp = oo_surf_stdev**2 * expb*(one-2*b**2)
+#endif
 #elif defined (__MEDIUMRHO)
       ep = expa+expb
       rhopp =  - oo_surf_stdev * ( drn * em + rsurf * ep ) ! prime-prime
+!      rhopp = oo_surf_stdev*sqrt2*(b*expb - a*expa); ! same as above; w/ extra x
+#ifdef __GRADCURV
+      rhoppp = oo_surf_stdev**2 * ( expb*(one-2*b**2) - expa*(one-2*a**2) )
+#endif
 #else
       rhopp = oo_surf_stdev * ( ooc * (one + 2 * ooc**2 + rsurf**2) * em  +  rsurf * (ooc**2 + one) * ep ) ! prime-prime
+#ifdef __GRADCURV
+      rhoppp = - ( ( three*oor**2 * ( one + rsurf**2 + two*ooc**2 ) + oo_surf_stdev**2 * ( one + two*rsurf**2 ) ) * em &
+     &           + rsurf*ooc * ( six * oor**2 + (three+rsurf**2+drn**2) * oo_surf_stdev**2 ) * ep )
+! from matlab FD-tested):
+!      rhoppp = -oosig*oosq2pi*( ( 3*oodR.^2 .* (1 + (arad/sig)^2 + 2*(sig.*oodR).^2) + (1+2*(arad/sig)^2)/sig^2 ) .* (expA-expB) + ...
+!                                                arad * ( ( 6*oodR.^2 + (3+(arad/sig)^2+(dR/sig).^2)/sig^2).*oodR ).* (expA+expB) );
 #endif
+#endif
+#ifdef __GRADCURV
+!% from matlab, fd-tested
+! drhoxxx = drhoxxx +  dX.* (dX.^2 .* ( rhoppp - 3*d2 ) + 3*d2 ) ;
+! drhoyyy = drhoyyy +  dY.* (dY.^2 .* ( rhoppp - 3*d2 ) + 3*d2 ) ;
+! drhozzz = drhozzz +  dZ.* (dZ.^2 .* ( rhoppp - 3*d2 ) + 3*d2 ) ;
+!%
+! drhoxxy = drhoxxy +  dY.* (dX.^2 .* ( rhoppp - 3*d2 ) + d2 ) ;
+! drhoxxz = drhoxxz +  dZ.* (dX.^2 .* ( rhoppp - 3*d2 ) + d2 ) ;
+! drhoxyy = drhoxyy +  dX.* (dY.^2 .* ( rhoppp - 3*d2 ) + d2 ) ;
+! drhoxyz = drhoxyz +  dX.* dY.*dZ .* ( rhoppp - 3*d2 ) ;
+! drhoxzz = drhoxzz +  dX.* (dZ.^2 .* ( rhoppp - 3*d2 ) + d2 ) ;
+! drhoyyz = drhoyyz +  dZ.* (dY.^2 .* ( rhoppp - 3*d2 ) + d2 ) ;
+! drhoyzz = drhoyzz +  dY.* (dZ.^2 .* ( rhoppp - 3*d2 ) + d2 ) ;
+!
+      b=oor*(rhopp-rhop*oor) ! reuse vars to avoid defining new ones
+      __SCALE(dr2,b)
+      expb=(rhoppp-three*b)*oor**2
+      __SCALE(dr3,expb)
+      __INCR(dr3(2),b*dr(2)) !xxy
+      __INCR(dr3(3),b*dr(3)) !xxz
+      __INCR(dr3(4),b*dr(1)) !xyy
+      __INCR(dr3(6),b*dr(1)) !xzz
+      __INCR(dr3(8),b*dr(3)) !yyz
+      __INCR(dr3(9),b*dr(2)) !yzz
+!
+      b=three*b
+      __INCR(dr3(1), b*dr(1)) !xxx
+      __INCR(dr3(7), b*dr(2)) !yyy
+      __INCR(dr3(10),b*dr(3)) !zzz
+      __SCALE(dr3,oor)
+      __INCR(d3rho_solv(:,i),dr3)
+#else
       __SCALE(dr2,oor*(rhopp-rhop*oor))
+#endif
       __INCR(dr2(1),rhop)
       __INCR(dr2(4),rhop)
       __INCR(dr2(6),rhop)
       __SCALE(dr2,oor)
       __INCR(d2rho_solv(:,i),dr2)
-     endif
+     endif ! qcompute_hess
      if (qcompute_grad) then
       __SCALE(dr, - rhop * oor ) ! note that this destroys dr for use after, which is why it is at the end !!!
       __INCR(drho_solv(:,i),dr) ! negative above because dr = r_protein - r_water
      endif
 #else
 !=================== OLDER CODE BELOW ===================================
+! 12/24 : note : old code does _not_ have curvature derivatives implemented :
+#ifdef __GRADCURV
+#error __GRADCURV is not compatible with __NEWGRADHESS
+#endif
 ! 7/2/24 : the full and simpler rho models are coded (almost) separately
 #if !(defined(__SIMPLERHO) || defined(__MEDIUMRHO))
 ! note that, if dr ~ small, ( expa - expb ) / c is singular, though the limit (and asymptote) exists
@@ -3826,6 +4023,9 @@ __DBGVAR(obulk_boundary_contour_value,1)
 ! scale hessian
    if (qcompute_hess) then
     __SCALE(d2rho_solv(:,i),osq2pi*oo_surf_stdev)
+#ifdef __GRADCURV
+    __SCALE(d3rho_solv(:,i),osq2pi*oo_surf_stdev)
+#endif
    endif
 ! scale gradient :
    if (qcompute_grad) then
@@ -3878,7 +4078,7 @@ __DBGVAR(obulk_boundary_contour_value,1)
 ! normalized grad formula:
 #ifdef __ALLOW_FIXED_CURV
   if (qfixed_curvature) then
-   acurv_solv(i)=fixed_cuevature
+   acurv_solv(i)=fixed_curvature
   else
 #endif
    acurv_solv(i) =  half * b  * ( d2rho_solv(1,i)*(one-drho_solv(1,i)**2) + d2rho_solv(4,i)*(one-drho_solv(2,i)**2) + d2rho_solv(6,i)*(one-drho_solv(3,i)**2) \
