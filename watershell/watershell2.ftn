@@ -110,6 +110,7 @@ module _N
 #else
  float :: sbfe(4) ! array that holds instantaneous force and energy on a single solvent particle (distance and curvature force & energy ==> 4 values)
 #endif
+ float :: maximum_curvature=ilarge, minimum_curvature=-ilarge ! NOTE: these values are only used to set max/min curvatures in the spline code if set in input file
 #ifdef __ALLOW_FIXED_CURV
  bool :: qfixed_curvature=.false. ! whether to force the use of a fixed curvature
  float :: fixed_curvature=zero
@@ -481,28 +482,6 @@ module _N
 ! check all contexts:
 #include "parser/parser_macro3.src"
 !
-#ifndef __1DSBP
-#define __VAR curvature_force_constant
-#define __TAG __VAR
-#define __NAME force constant for surface curvature potential
-#define __DOIFOK if (abs(__VAR).le.__ERRTOL) __WRN(whoami, 'SURFACE CURVATURE FORCE IS OFF.')
-! check all contexts:
-#include "parser/parser_macro3.src"
-#ifdef __ALLOW_FIXED_CURV
-! 10/24 : force constant curvature radius
-#define __VAR fixed_curvature
-#define __TAG __VAR
-#define __NAME forced constant curvature
-#define __DOIFOK qfixed_curvature=.true. ;\
-                 __WARN(whoami, 'WILL SET SURFACE CURVATURE EVERYWHERE AT '//ftoa(fixed_curvature)//'.') ;
-#undef __DEFAULT
-#undef __WARNIFMISSING
-#include "parser/parser_macro3.src"
-#define __DEFAULT
-#define __WARNIFMISSING
-#endif
-#endif
-!
 #define __LEZEROERR
 ! cutoff for density
 #define __VAR	cutoff_surf_stdev
@@ -603,6 +582,45 @@ module _N
 #else
  call watershell_sbf_spline1d_init(spline_input_file)
 #endif
+!
+#ifndef __1DSBP
+#define __VAR curvature_force_constant
+#define __TAG __VAR
+#define __NAME force constant for surface curvature potential
+#define __DOIFOK if (abs(__VAR).le.__ERRTOL) __WRN(whoami, 'SURFACE CURVATURE FORCE IS OFF.')
+! check all contexts:
+#include "parser/parser_macro3.src"
+! 12/24 : set min/max curvatures
+#undef __DEFAULT
+#undef __WARNIFMISSING
+#undef __MINUSERR
+#define __VAR minimum_curvature
+#define __TAG __VAR
+#define __NAME minimum allowed curvature
+#define __DOIFOK call watershell_sbf_spline_set_minmaxk(__VAR,.true.)
+#include "parser/parser_macro3.src"
+#define __VAR maximum_curvature
+#define __TAG __VAR
+#define __NAME maximum allowed curvature
+#define __DOIFOK call watershell_sbf_spline_set_minmaxk(__VAR,.false.)
+#include "parser/parser_macro3.src"
+!
+#ifdef __ALLOW_FIXED_CURV
+! 10/24 : to force constant curvature:
+#define __VAR fixed_curvature
+#define __TAG __VAR
+#define __NAME forced constant curvature
+#define __DOIFOK qfixed_curvature=.true. ;\
+                 __WARN(whoami, 'WILL SET SURFACE CURVATURE EVERYWHERE AT '//ftoa(fixed_curvature)//'.') ;\
+                 call watershell_sbf_spline_set_minmaxk(fixed_curvature,.true.);\
+                 call watershell_sbf_spline_set_minmaxk(fixed_curvature,.false.)
+#include "parser/parser_macro3.src"
+#endif
+#define __DEFAULT
+#define __WARNIFMISSING
+#define __MINUSERR
+#endif
+!
 ! ====== done with (possible) restart file data
  context=contexts(main_context) ! reset context if changed
 #define __DEFAULT
@@ -2473,7 +2491,7 @@ endif ! decide whether to compute dr_surf
 ! compute average curvature at sovent coordinate from gradient and hessian
 ! unnormalized/unscaled grad formula:
 #ifdef __ALLOW_FIXED_CURV
-  if (qfixed_curvature) then ! this is making the code core complicated ; and, at present, I anticipate _NOT_ having use for this except in debugging, but faster ?
+  if (qfixed_curvature) then ! this is making the code more complicated ; and, at present, I anticipate _NOT_ having use for this except in debugging, but faster ?
    acurv_solv(i)=fixed_curvature
   else
 #endif
