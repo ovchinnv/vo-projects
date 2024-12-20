@@ -1758,6 +1758,9 @@ __DBGVAR(r_com_sa,1)
 #ifdef __FORCE_STATS
  float :: iforce(3)
 #endif
+#ifndef __1DSBP
+ float :: acurv_max, acurv_min, acurv_sum
+#endif
 !
 #ifdef __OMP
 #//define __REDUCE(_W) __INCR(_W,__U(_W)) ! thread reduction
@@ -2506,6 +2509,7 @@ endif ! decide whether to compute dr_surf
 #else
 ! compute curvature without derivative
 ! note that qrepelminus is present because the curvature flips sign when we cross the boundary ; the c-gradient should also flip the sign (can do at force application)
+! 12/24 : note that I am averaging the two curvatures (trace of the curvature matrix) to get the mean curvature
    acurv_solv(i) = _QREPELMINUS  half * d0  * ( d2rho_solv(1,i) + d2rho_solv(4,i) + d2rho_solv(6,i) \
               - d0**2 * ( d2rho_solv(1,i)*drho_solv(1,i)**2 + d2rho_solv(4,i)*drho_solv(2,i)**2 + d2rho_solv(6,i)*drho_solv(3,i)**2 \
             + ( drho_solv(1,i)*(d2rho_solv(2,i)*drho_solv(2,i) + d2rho_solv(3,i)*drho_solv(3,i)) + d2rho_solv(5,i)*drho_solv(2,i)*drho_solv(3,i) )*2 ) )
@@ -2561,7 +2565,7 @@ endif ! decide whether to compute dr_surf
 !
 #ifndef __1DSBP
 #ifdef __CURVCORRECT
-  if ( dsurf_solv(i).gt.zero & ! i.e., when positive, we are on the outside of bdry (note that qrepelminus negates the distance
+  if ( dsurf_solv(i).gt.zero & ! i.e., when positive, we are inside the bdry (note that qrepelminus negates the distance)
 #ifdef __ALLOW_FIXED_CURV
    .and. (.not.qfixed_curvature) & 
 #endif
@@ -2596,7 +2600,7 @@ endif ! decide whether to compute dr_surf
   pre = sbfe(2)
 #if defined(__GRADCURV) && defined(__CURVCORRECT)
 ! gradient contribution coming from the crude curvature correction model (note that with fixed curvature sbfe(5) =0)
-  if ( dsurf_solv(i).gt.zero ) __DECR(pre, sbfe(5)*acurv_solv(i)*abs(acurv_solv(i)) ) 
+  if ( dsurf_solv(i).gt.zero ) __DECR(pre, sbfe(5)*acurv_solv(i)*abs(acurv_solv(i)) )
 !^ NB:check sign above ; sbfe(5) obtained from integrating and differentiating (i.e. w/o sign changes); so it seems the only source of sigh change is dK/dd=-c|c|
 ! where c is the distance-corrected curvature (which is what gives c the d-dependence in the first place)
 #endif
@@ -3207,6 +3211,22 @@ __DBGVAR(density_target,1)
   __OUT('Surface energy:                  ', surface_energy)
 #ifndef __1DSBP
   __OUT('Curvature energy:                ', curvature_energy)
+  acurv_min=ilarge ; acurv_max=-ilarge ; acurv_sum=zero;
+#ifdef __OMP
+!$omp parallel do private(ii) shared(acurv_solv) reduction(min:acurv_min) reduction(max:acurv_max) reduction(+:acurv_sum) _OMP_EXTRA
+#endif
+  do ii=1, nsolvent
+   if (acurv_solv(i).lt.acurv_min) then
+    acurv_min=acurv_solv(ii)
+   elseif (acurv_solv(i).gt.acurv_max) then
+    acurv_max=acurv_solv(ii)
+   endif
+   __INCR(acurv_sum, acurv_solv(ii))
+  enddo
+#ifdef __OMP
+!$omp end parallel do
+#endif
+  __OUT('Surface curvature at solvent (min:ave:max): (',acurv_min,':',oonsolvent*acurv_sum,':',acurv_max,')')
 #endif
 
 #ifdef __FORCE_STATS
@@ -3310,7 +3330,7 @@ __DBGVAR(density_target,1)
 !$omp end parallel do
 #endif
 !  __OUT('================================')
-  __OUT('Solute neighbor list search depth (min:ave:max): (',neighbor_dmin,':',one*neighbor_dsum/nsolvent,':',neighbor_dmax,')')
+  __OUT('Solute neighbor list search depth (min:ave:max): (',neighbor_dmin,':',oonsolvent*neighbor_dsum,':',neighbor_dmax,')')
 !  __OUT('================================')
 #endif
 !
@@ -3857,9 +3877,11 @@ __DBGVAR(obulk_boundary_contour_value,1)
       dr3(10)=dr2(6)*dr(3)!zzz
 #endif
 #if defined(__SIMPLERHO)
+! matlab :  rhopp  =  B.*expB*oosig^2/sqrt(pi);
 !      rhopp = -oo_surf_stdev * (drn-rsurf) * rhop ! prime-prime (note 1/sqrt(2*pi)/s scaling missing here)
       rhopp = oo_surf_stdev * (drn-rsurf) * expb ! prime-prime (note 1/sqrt(2*pi)/s scaling missing here)
 #ifdef __GRADCURV
+! matlab :   rhoppp =  oosig^3 * oosq2pi * expB.*(1-2*B.^2);
       rhoppp = oo_surf_stdev**2 * expb*(one-2*b**2)
 #endif
 #elif defined (__MEDIUMRHO)
