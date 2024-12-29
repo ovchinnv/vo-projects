@@ -1,3 +1,4 @@
+#include "rho.src"
 #undef _N
 #define _N watershell_sbf_spline
 
@@ -6,6 +7,7 @@ module _N
  use ppoly2
 ! __DEP_CONST
  __DEP_FILES
+ __DEP_CONSTANTS
  __IMPNONE
 ! this is a wrapper around splines to compute solvent boundary force and potential
 
@@ -21,6 +23,12 @@ module _N
 #endif
  float :: maxd ! distance beyond which the force and potential energy is zero
  float :: mink, maxk ! curvature interval limits outside of which the curvature does not change (neumann) ; spline file should have 0 slope at epts
+#ifdef __CURVSMOOTH
+ float :: ksig = 0.03d0 ! the gaussian filter width to smoothen curvature kinks
+ float :: oossq2 = one/(0.03d0*sqrt2) ! must be computed from ksig
+ float :: midk ! average of mink and maxk
+! 12/24 : will add a mechanism to change ksig at runtime, if needed
+#endif
  bool :: __NM(initialized)=.false.
 !
  __PAR(datafile, character(len=vartaglen),'sbf-rcut12spl2dkz.dat')
@@ -93,6 +101,9 @@ module _N
 ! set curvature caps : (curvature is capped at these values beyond the corresponding boundary)
  mink=kave(1)
  maxk=kave(nk)
+#ifdef __CURVSMOOTH
+ midk=half*(mink+maxk)
+#endif
 #ifdef __GRADCURV
 ! compute derivative of the distance integral w.r.t. curvature:
 #ifdef __DEBUG
@@ -141,6 +152,9 @@ module _N
  float :: _ME(4)
 #endif
  float :: kcapped ! curvature capped at endpoints
+#ifdef __CURVSMOOTH
+ float :: kmax, kmin, ekmax, ekmin
+#endif
  int :: igrid(2)
 !
  __IAM(_ME)
@@ -151,7 +165,15 @@ module _N
   _ME = zero ! assume that the force beyond the largest support point is zero (this corresponds to being inside and far away from the boundary)
 ! construct the potential to be continuous (=0) at maxd
  else
-  if (k.gt.maxk) then ; kcapped=maxk ; elseif (k.lt.mink) then ; kcapped=mink ; else ; kcapped=k ; endif ! cap curvature
+#ifdef __CURVSMOOTH
+  kmin=oossq2 * ( mink - k )
+  kmax=oossq2 * ( maxk - k )
+  ekmin=__erf(kmin)
+  ekmax=__erf(kmax)
+  kcapped = midk + ksig * osq2 * ( kmin*ekmin-kmax*ekmax + opi*(exp(-kmin**2)-exp(-kmax**2)))
+#else
+  if (k.gt.maxk) then ; kcapped=maxk ; elseif (k.lt.mink) then ; kcapped=mink ; else ; kcapped=k ; endif
+#endif
 ! note : positive force means pushing molecule toward the boundary
   igrid=ppoly2_getind(pp2,kcapped,d)
   _ME(1)=ppoly1_compute_igrid(pp1,d,igrid(2)) ! 0-k force
@@ -166,11 +188,17 @@ module _N
 ! 12/24 : derivative w.r.t. curvature
 #ifdef __GRADCURV
   if (qdcurv) then ! otherwise zero
+#ifndef __CURVSMOOTH
    if (k.le.maxk.and.k.ge.mink) then ! otherwise zero
+#endif
     _ME(5)=ppoly2_compute_igrid(pp2diffkintd,kcapped,d,igrid) - ppoly1_compute_igrid(pp2diffkintd_offsets,kcapped,igrid(1))
+#ifdef __CURVSMOOTH
+    _ME(5) = _ME(5) * half * (ekmax-ekmin) ! curvature derivative modification from smoothing kernel
+#else
    else
     _ME(5)=zero
    endif
+#endif
   else
    _ME(5)=zero
   endif
@@ -201,6 +229,9 @@ module _N
    maxk=mink
   endif
  endif
+#ifdef __CURVSMOOTH
+ midk=half*(mink+maxk)
+#endif
 ! check curvature grid support
  if (pp2%xgrid(1).gt.mink) then
   __WRN(whoami, 'Minimum allowed curvature ('//trim(ftoa(mink))//') below grid support ('//trim(ftoa(pp2%xgrid(1)))//'). Extrapolation possible.')

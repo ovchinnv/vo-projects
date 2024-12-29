@@ -91,6 +91,7 @@ module _N
 ! surface computation parameters :
 ! __PAR(surface_contour_value, float, -one) ! value of density isosurface which is defines the surface ; negative means to compute from structure
  __PAR(surface_distance, float, zero) ! in the original density method, obtained by `inverting` density (as an approximation)
+ __PAR(maxinner_contour_value, float, -one) ! contour value beyond which no force is applied
 #ifdef __DASYSTAT
  __PAR(ibulk_boundary_distance, float, zero) ! distance to the bulk solvent boundary (should obviously be smaller than the shell surface distance)
  __PAR(obulk_boundary_distance, float, zero) ! distance to the outer bulk solvent boundary
@@ -252,7 +253,7 @@ module _N
 &                  acurv_solv(:),& ! average surface curvature corresponding to solvent coordinate
 #endif
 &                  dsurf_solv(:)  ! distance to solvent boundary
- bool, pointer :: qoutside_solv(:) ! flags that indicate whether the solvent atom is outside of boundary
+ bool, pointer :: qforced_solv(:) ! flags that indicate whether the solvent atom will experience a surface boundary force
 #ifdef __SORT_LIST
  shortint, pointer :: solute_neighbor_list(:,:) ! for each solvent atom, the solute atoms are sorted by proximity
 #ifdef __NEIGHBOR_LIST
@@ -330,7 +331,6 @@ module _N
  bool :: qdumsurf=.false. ! whether the surface atoms are fixed 'dummies'
 #endif
 !
- float, private, parameter :: osq2=one/sqrt2
  float, private, parameter :: sq2pi=sqrt(twopi), osq2pi=one/sq2pi
 !
 ! for Hamiltonian dynamics
@@ -1289,7 +1289,7 @@ endif
 #ifdef __DASYSTAT
   __ALLOC(mass_solv(nsolvent))
 #endif
-  __ALLOC(qoutside_solv(nsolvent))
+  __ALLOC(qforced_solv(nsolvent))
   __ALLOC(dsurf_solv(nsolvent))
 #ifndef __1DSBP
   __ALLOC(acurv_solv(nsolvent))
@@ -1685,7 +1685,7 @@ __DBGVAR(r_com_sa,1)
  __FREE(rb_wgt)
 #endif
  __FREE(r_solv)
- __FREE(qoutside_solv)
+ __FREE(qforced_solv)
  __FREE(rad_surf)
  __FREE(rho_solv)
  __FREE(drho_solv)
@@ -2157,10 +2157,12 @@ endif ! decide whether to compute dr_surf
  curvature_force=zero
 #endif
 #endif
+!
 !========================== compute contour value if needed
 ! if surface distance value is zero, estimate a reasonable value from current coordinates
  if ( abs(surface_distance) .lt. __ERRTOL) then
   __DBGOUT('Will compute approximate surface distance')
+  maxinner_contour_value=ilarge ! make sure forces are computed, to preserve original behavior
   distance_from_solute=zero
   distance_from_solute2=zero ! for computing second moment
   call __NM(compute_density)(QTRUNCATE_LOOP=.false., QCOMPUTE_GRAD=.true., QCOMPUTE_HESS=.true. )
@@ -2239,8 +2241,8 @@ endif ! decide whether to compute dr_surf
   endif ! dasystat
 #endif
 !
-! at this point, qoutside_solv is wrong : it will be true everywhere, because surface distance was undefined (=0) in the calc. loop
-! recompute qoutside_solv :
+! at this point, qforced_solv is wrong : it will be true everywhere, because maxinner was high in the calc. loop
+! to recompute qforced_solv :
 #ifdef __HAMILTONIAN
 ! no easy solution but to recompute the gradients, now that surface contour value is known
 ! note that forces will be applied to surface atoms as well, which is why they need to be correct
@@ -2269,7 +2271,7 @@ endif ! decide whether to compute dr_surf
 #endif
 &    )
 #else
-  qoutside_solv = (_QREPELMINUS rho_solv) .lt. (_QREPELMINUS surface_contour_value)
+  qforced_solv = (_QREPELMINUS rho_solv) .lt. (_QREPELMINUS maxinner_contour_value)
 #endif
 !====== NOTE : if we requested to run without neighbor lists then we need to reset solute_neighbor_mind to max
 !====== otherwise, the early exit (qtruncate_loop=T) version of force routine could miss crucial atoms (the mind list is _not_ updated b/c qnlist=0)
@@ -2279,7 +2281,11 @@ endif ! decide whether to compute dr_surf
 #endif
 !=========================================================================
  else ! compute approximate reference surface distance from coordinates
-! NOTE :  this is the most time consuming part of the force calculation
+! NOTE : this is the most time consuming part of the force calculation
+! NOTE : (re) compute maximum contour value at which forces are applied
+   maxinner_contour_value = __RHOSAFE ( _QREPELMINUS (maxd + surface_distance) )
+!  dsurf_solv(i) =  _QREPELMINUS ( __RHO_INVSAFE ( rho_solv(i) ) - surface_distance ) ! distance to boundary using the approximate inverse (+/- for inside/outside bdry)
+!
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
    if (full_sum_freq.gt.izero) then ! if full_sum_freq<=0, will always run the short(truncate) loop -- see below
 !    call __NM(compute_density)(QTRUNCATE_LOOP=((.not.qneighbor_list) .or. (.not.__CHKUPDATE(full_sum_freq))), QCOMPUTE_GRAD=.true., QCOMPUTE_HESS=.false.)
@@ -2362,7 +2368,7 @@ endif ! decide whether to compute dr_surf
 #ifdef __OMP
 !$omp parallel _OMP_EXTRA &
 !$omp default (none) &
-!$omp shared (qoutside_solv,nsolvent,rho_solv,drho_solv,nsolvent_unsupported,qsbe,&
+!$omp shared (qforced_solv,nsolvent,rho_solv,drho_solv,nsolvent_unsupported,qsbe,&
 #ifdef __FLIM
 !$omp iteration , &
 #endif
@@ -2470,8 +2476,7 @@ endif ! decide whether to compute dr_surf
 #endif
 !^OMP
  do i=1, nsolvent
-  if ( qoutside_solv(i) ) then
-   if ( rho_solv(i) .le. zero ) then ! proceed if the density is positive ; otherwise warn that we are outside of the support and cycle
+  if ( rho_solv(i) .le. zero ) then ! proceed if the density is positive ; otherwise warn that we are outside of the support and cycle
 ! note that is is also possible that erf/exp approximations (or single precision calc) near zero densities will produce negative numbers, hence above
 !    __WRN(whoami, '#'//itoa(iteration)//': SOLVENT ATOM '//itoa(isolvent_atoms(i))//' OUTSIDE OF SOLUTE SUPPORT. RESTART WITH A SMALLER SURFACE DISTANCE OR A LARGER FILTER CUTOFF OR PADDING.')
 #ifdef __OMP
@@ -2482,8 +2487,9 @@ endif ! decide whether to compute dr_surf
 !$omp end atomic
 #endif
     cycle
-   endif
-  endif ! outside the surface contour boundary
+  elseif (.not.qforced_solv(i)) then
+   cycle
+  endif ! skip this atom
 !
 #ifndef __HAMILTONIAN
 ! gradient norm :
@@ -2556,9 +2562,8 @@ endif ! decide whether to compute dr_surf
 !  dsurf_solv(i) =  _QREPELMINUS ( __RHO_INVSAFE ( rho_solv(i) ) - surface_distance ) ! distance to boundary using the approximate inverse (+/- for inside/outside bdry)
   dsurf_solv(i) = _QREPELMINUS ( __RHO_INVERSE2 ( d0 ) - surface_distance ) ! need this for correction below
 ! note that the above is the lowest order approximation for distance to bdry (more accurate ones, e.g. NR, are much slower)
-! note also, that we are technically missing (in the derivative of potential sense) the derivative of the inverse wrt rho (same as wsh1)
 ! note 2/24 : double check signs for qrepelminus (-); the point of qrepelminus is to have a means of repelling from the boundary (rather than attracting)
-! note also that the curvature would be negative from the perception of a atom beyond the wall
+! note also that the curvature would be negative from the perception of an atom beyond the wall
 #if (_DBGLEV>1)
   __DBGOUT('solv. atom#:', i, 'density:', rho_solv(i), 'distance to bdry:', dsurf_solv(i), 'outside?:', qoutside_solv(i))
 #endif
@@ -2738,7 +2743,6 @@ endif ! decide whether to compute dr_surf
 !$omp end parallel
 #endif
 !
-
 
 #ifdef __FD_CHECK
 ! NOTE : FD is done without OPENMP, since it is only a debugging check !
@@ -3212,21 +3216,25 @@ __DBGVAR(density_target,1)
 #ifndef __1DSBP
   __OUT('Curvature energy:                ', curvature_energy)
   acurv_min=ilarge ; acurv_max=-ilarge ; acurv_sum=zero;
+  i=0 ! counter for solvent atoms with gforced=T
 #ifdef __OMP
-!$omp parallel do private(ii) shared(acurv_solv) reduction(min:acurv_min) reduction(max:acurv_max) reduction(+:acurv_sum) _OMP_EXTRA
+!$omp parallel do private(ii) shared(acurv_solv) reduction(min:acurv_min) reduction(max:acurv_max) reduction(+:acurv_sum) reduction(+:i) _OMP_EXTRA
 #endif
   do ii=1, nsolvent
-   if (acurv_solv(i).lt.acurv_min) then
-    acurv_min=acurv_solv(ii)
-   elseif (acurv_solv(i).gt.acurv_max) then
-    acurv_max=acurv_solv(ii)
+   if (qforced_solv(ii)) then
+    if (acurv_solv(i).lt.acurv_min) then
+     acurv_min=acurv_solv(ii)
+    elseif (acurv_solv(i).gt.acurv_max) then
+     acurv_max=acurv_solv(ii)
+    endif
+    __INCR(acurv_sum, acurv_solv(ii))
+    i=i+1
    endif
-   __INCR(acurv_sum, acurv_solv(ii))
   enddo
 #ifdef __OMP
 !$omp end parallel do
 #endif
-  __OUT('Surface curvature at solvent (min:ave:max): (',acurv_min,':',oonsolvent*acurv_sum,':',acurv_max,')')
+  __OUT('Surface curvature at solvent (min:ave:max): (',acurv_min,':',acurv_sum/i,':',acurv_max,')')
 #endif
 
 #ifdef __FORCE_STATS
@@ -3245,11 +3253,13 @@ __DBGVAR(density_target,1)
    max_solute_force=max(max_solute_force,d0)
   enddo
   do ii=1, nsolvent
-   iforce=fr(:,isolvent_atoms(ii))
-   __INCR(total_solvent_force, iforce)
-   d0=iforce(1)**2 + iforce(2)**2 + iforce(3)**2
-   __INCR(rms_solvent_force, d0)
-   max_solvent_force=max(max_solvent_force,d0)
+   if (qforced_solv(ii)) then
+    iforce=fr(:,isolvent_atoms(ii))
+    __INCR(total_solvent_force, iforce)
+    d0=iforce(1)**2 + iforce(2)**2 + iforce(3)**2
+    __INCR(rms_solvent_force, d0)
+    max_solvent_force=max(max_solvent_force,d0)
+   endif
   enddo
    __OUT('======= FORCE STATISTICS ==============')
    __OUT('Total force applied to surface atoms:  ', total_solute_force)
@@ -3524,7 +3534,7 @@ __DBGVAR(solvent_mass_ibulk,1)
  float :: __U(solvent_mass_ibulk)
  float :: __U(solvent_mass_obulk)
 #endif
- bool :: qibulk, qobulk
+ bool :: qibulk, qobulk, qforced
 #endif
  __IAM(__NM(compute_density))
 !
@@ -3580,7 +3590,8 @@ __DBGVAR(obulk_boundary_contour_value,1)
 #ifdef __OMP
 !$omp parallel _OMP_EXTRA &
 !$omp default(none) &
-!$omp shared (rho_solv,drho_solv,d2rho_solv,r_solv,r_surf,rad_surf,surf_padding,nsolvent,nsurface_coord,cutoff_surf,oo_surf_stdev,qoutside_solv,surface_contour_value &
+!$omp shared (rho_solv,drho_solv,d2rho_solv,r_solv,r_surf,rad_surf,surf_padding,nsolvent,nsurface_coord,cutoff_surf,oo_surf_stdev,qforced_solv,surface_contour_value &
+!$omp , maxinner_contour_value &
 #ifdef __GRADCURV
 !$omp ,d3rho_solv &
 #endif
@@ -3616,7 +3627,7 @@ __DBGVAR(obulk_boundary_contour_value,1)
 #endif
 #endif
 !$omp ) &
-!$omp private ( rw, i, j, rp, rsurf, rmaxsurf, dr, dr2, drn, drn2, ooc, b, expb &
+!$omp private ( rw, i, j, rp, rsurf, rmaxsurf, dr, dr2, drn, drn2, ooc, b, expb, qforced &
 #ifdef __GRADCURV
 !$omp , dr3 &
 #endif
@@ -3714,14 +3725,14 @@ __DBGVAR(obulk_boundary_contour_value,1)
    __U(nspt)=0 ! set number of surface support atoms for this solvent atom to zero
 #endif
 !
+   qforced=.true.
 #ifdef __DASYSTAT
    if (dasystat) then 
     qibulk=.true. ! check if atom within inner bulk
     qobulk=.true. ! check if atom within outer bulk
    endif
 #endif
-! NOTE that there is an important difference between qibulk+qobulk vs qoutside_solv ; the former indicate whether to check the for
-! the property, but the latter _also_ shows whether the condition is true (i.e. atom is outside the bdry)
+!
    rho_solv(i)=zero
    if (qcompute_grad) drho_solv(:,i)=zero
    if (qcompute_hess) then
@@ -3821,7 +3832,31 @@ __DBGVAR(obulk_boundary_contour_value,1)
 #endif
 !
 !calc gradient & hessian, if requested
+! 12/24 : note that the density rho might already be too high, i.e. we could be inside the volume where no forces are applied
+    if (qforced) qforced = _QREPELMINUS rho_solv(i) .lt. _QREPELMINUS maxinner_contour_value
+#ifdef __DASYSTAT
+    if (dasystat) then
+     if (qibulk .and. (rho_solv(i).gt.ibulk_boundary_contour_value)) then ! inside inner bulk
+      __INCR(__U(solvent_mass_ibulk), mass_solv(i))
+      qibulk=.false. ! no need to check this atom further
+! obulk (outer_bulk) is the boundary closer to the surface; get difference by subtraction at the end
+! NOTE : it is possible that we already added this mass to solvent_mass_obulk, if, in a previous iteration we were inside the
+! outer, but _NOT_ inner boundary, so should check for this before adding :
+      if (qobulk) __INCR(__U(solvent_mass_obulk), mass_solv(i))! also inside outer bulk
+      qobulk=.false. ! no need to check this atom further
+      if (qtruncate_loop .and. .not. qforced) exit ! without truncate_loop traverse entire surface atom list
+     elseif(qobulk .and. (rho_solv(i).gt.obulk_boundary_contour_value)) then
+      __INCR(__U(solvent_mass_obulk), mass_solv(i))
+      qobulk=.false.
+     endif ! qibulk
+    else
+#endif
+     if (qtruncate_loop .and. .not. qforced) exit
+#ifdef __DASYSTAT
+    endif ! dasystat
+#endif
 !
+    if (qforced) then ! compute derivatives only if the force will be nonzero (per maxd in spline file via innermax var)
 ! needed for rho (simple) : b
 ! needed for rho (full)   : a,b,expa,expb,ooc=s/r (everything...)
 ! needed for gradient (simplerho) : expb, b, ooc
@@ -4035,23 +4070,6 @@ __DBGVAR(obulk_boundary_contour_value,1)
 #endif __NEWGRADHESS
     endif ! need gradient or hessian
 !
-#ifdef __DASYSTAT
-    if (dasystat) then
-     if (qibulk .and. (rho_solv(i).gt.ibulk_boundary_contour_value)) then ! inside inner bulk
-      __INCR(__U(solvent_mass_ibulk), mass_solv(i))
-      qibulk=.false. ! no need to check this atom further
-! obulk (outer_bulk) is the boundary closer to the surface; get difference by subtraction at the end
-! NOTE : it is possible that we already added this mass to solvent_mass_obulk, if, in a previous iteration we were inside the
-! outer, but _NOT_ inner boundary, so should check for this before adding :
-      if (qobulk) __INCR(__U(solvent_mass_obulk), mass_solv(i))! also inside outer bulk
-      qobulk=.false. ! no need to check this atom further
-     elseif(qobulk .and. (rho_solv(i).gt.obulk_boundary_contour_value)) then
-      __INCR(__U(solvent_mass_obulk), mass_solv(i))
-      qobulk=.false.
-     endif ! qibulk
-    endif ! dasystat
-#endif
-!
 #ifdef __HAMILTONIAN
 ! propagate force onto surface atoms
     __INC(__U(nspt)) ! number of atoms in support
@@ -4059,7 +4077,17 @@ __DBGVAR(obulk_boundary_contour_value,1)
     drho_surf_this_thread(:,j) = dr ! density gradient (i.e. to compute force exerted on support atom)
 #endif
 !
+   endif ! qforced
    enddo ! nsurface_coord
+!=========================== loop for solvent atom i over solute support (surface coordinates) ====
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+! check for _potential_ neighbor list violations :
+   if (.not. qtruncate_loop .and. solute_neighbor_mind(i) > neighbor_list_length ) __INC(__U(neighbor_list_misses))
+#endif
+   qforced_solv(i) = qforced ! save for use in main routine
+!
+   if (qforced) then
+!
 #ifdef __NEWGRADHESS
 ! scale hessian
    if (qcompute_hess) then
@@ -4081,13 +4109,7 @@ __DBGVAR(obulk_boundary_contour_value,1)
     __SCALE(drho_solv(:,i),osq2pi)
    endif
 #endif
-!=========================== loop for solvent atom i over solute support (surface coordinates) ====
-#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
-! check for _potential_ neighbor list violations :
-   if (.not. qtruncate_loop .and. solute_neighbor_mind(i) > neighbor_list_length ) __INC(__U(neighbor_list_misses))
-#endif
-
-   qoutside_solv(i) = ( _QREPELMINUS rho_solv(i) .lt. _QREPELMINUS surface_contour_value)
+!
 #ifdef __HAMILTONIAN
 !===============================================================================================================================================================
 ! Need to propagate Hamiltonian forces to surface atoms ; therefore, compute force prefactor and apply to gradients here
@@ -4182,6 +4204,7 @@ __DBGVAR(obulk_boundary_contour_value,1)
 !
 #endif
 !===============================================================================================================================================================
+ endif ! qforced
  enddo ! nsolvent
 #ifdef __OMP
 !$omp end do
@@ -4245,14 +4268,6 @@ __DBGVAR(obulk_boundary_contour_value,1)
  endif
 #endif
 !
-#if defined(__NEIGHBOR_LIST) && defined(__SORT_LIST)
-!#ifdef __DDEBUG
-!  if (.not. qtruncate_loop)
-!   write(666,'(7000(I4,"("I4")"))') (solute_neighbor_mind(i), solute_neighbor_list(solute_neighbor_mind(i),i), i=1,nsolvent)
-!   close(666)
-!  endif
-!#endif
-#endif
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
  if (.not.qtruncate_loop) then
 ! should we output the violations here ?
