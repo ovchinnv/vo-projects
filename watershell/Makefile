@@ -38,7 +38,7 @@ watershell_plugin.o : watershell.o watershell2.o
 
 watershell.F90 watershell_plugin.F90 : parser/parser_macro2.src parser/parser_macro3.src watershell_rmft_aux1.ftn rho.src
 
-watershell2.F90 : parser/parser_macro2.src parser/parser_macro3.src rho.src gradcurv.src
+watershell2.F90 : parser/parser_macro2.src parser/parser_macro3.src rho.src gradcurv.src watershell_sortnlist.src
 
 watershell_sbf_spline.F90 : rho.src
 
