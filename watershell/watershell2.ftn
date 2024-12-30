@@ -21,6 +21,9 @@
 ! neighbor list length
 #// to check a subset of surface atom list
 #define __NEIGHBOR_LIST_LENGTH_DENSITY max(1,min(nsurface_coord, INT (half * solute_neighbor_mind(i) * neighbor_list_factor) ))
+#ifdef __PROTFORCE
+#define __NEIGHBOR_LIST_LENGTH_DENSITY_PFORCE max(1,min(nsurface_coord, INT (half * solute_neighbor_mind_pforce(i) * neighbor_list_factor) ))
+#endif
 #endif
 
 #ifdef __UNWRAP_PBC
@@ -168,6 +171,9 @@ module _N
 #ifndef __1DSBP
  __PAR(curvature_force_constant, float, one)    ! surface restraint force constant (curvature contribution to SBF)
 #endif
+#ifdef __PROTFORCE
+ __PAR(pforce_scale, float, one) ! constant for scaling (up, usually) SBP forces acting on protein atoms ; fo speed, desirable not to have to force _all_ atoms
+#endif
 !
 #ifdef __BAROSTAT
 ! === v barostat parameters v ====
@@ -235,6 +241,10 @@ module _N
  __PAR(solvent_atom_selection, character(len=vartaglen), 'ANAME=OH2') ! TIP3 oxygen atoms
  int, pointer, public :: isurface_atoms(:)=>NULL()
  int, pointer, public :: isolvent_atoms(:)=>NULL()
+#ifdef __PROTFORCE
+ __PAR(pforce_atom_selection, character(len=vartaglen), 'ANAME=CB') ! protein CB atoms
+ int, pointer, public :: ipforce_atoms(:)=>NULL()
+#endif
 !
  float, pointer :: r_surf(:,:), & ! reference atom coordinates
 &                  rad_surf(:), & ! reference atom radii
@@ -254,12 +264,32 @@ module _N
 #endif
 &                  dsurf_solv(:)  ! distance to solvent boundary
  bool, pointer :: qforced_solv(:) ! flags that indicate whether the solvent atom will experience a surface boundary force
+#ifdef __PROTFORCE
+ float, pointer :: r_pforce(:,:), & ! forced protein atom coordinates
+&                  rho_pforce(:), & ! here and below : same as above for the forced protein atoms
+&                  drho_pforce(:,:),&
+&                  d2rho_pforce(:,:),&
+#ifdef __GRADCURV
+&                  d3rho_pforce(:,:),&
+#endif
+#ifndef __1DSBP
+&                  acurv_pforce(:),&
+#endif
+&                  dsurf_pforce(:)
+ bool, pointer :: qforced_pforce(:)
+#endif
 #ifdef __SORT_LIST
  shortint, pointer :: solute_neighbor_list(:,:) ! for each solvent atom, the solute atoms are sorted by proximity
+#ifdef __PROTFORCE
+ shortint, pointer :: solute_neighbor_list_pforce(:,:) ! same as above but for the forced protein atoms
+#endif
 #ifdef __NEIGHBOR_LIST
  __PAR(qneighbor_list, bool, .true.) ! whether to use a neighbor list to shorten loops over surface atoms
  float :: neighbor_list_factor ! coefficient used to relate sorting frequency and limit index to loop length
  int, pointer :: solute_neighbor_mind(:) ! for each solvent atom, index of closest solute atom in the mindist algorithm ; also used in erf method
+#ifdef __PROTFORCE
+ int, pointer :: solute_neighbor_mind_pforce(:) ! same as above for the forced protein atoms
+#endif
  bool :: qneighbor_list_sorted ! flag to ensure initial sorting of neighbor list
 !
  float, parameter :: neighbor_list_factor_grow = 0.1d0
@@ -271,10 +301,17 @@ module _N
 #endif
 !
  int, public :: nsurface_coord=-1, nsurface_atoms=-1, nsolvent=-1 ! 1/19 introducing surface atoms and coords to allow for atomless (dummy) coordinates
+#ifdef __PROTFORCE
+ int, public :: npforce=-1 ! number of protein atoms experiencing solvent boundary force
+#endif
 #define nsurface_coordinates nsurface_coord
 #define nsurface_coords nsurface_coord
 !
  int :: nsolvent_unsupported ! solvent atoms that fall outside of the density support in the erf/density algorithm
+#ifdef __PROTFORCE
+ int :: npforce_unsupported
+#endif
+!
 #ifdef __ADAPTIVE_SUPPORT
  float, parameter :: solvent_support_factor_grow = 0.01d0
  float, parameter :: solvent_support_factor_shrink = - solvent_support_factor_grow / 500d0 ! not sure that it is a good idea to decrease it, perhaps not below original value ?
@@ -287,6 +324,9 @@ module _N
  float :: solvent_mass_ibulk   ! mass of solvent inside inner bulk shell
 #endif
  float :: oonsurface, oonsolvent
+#ifdef __PROTFORCE
+ float :: oonpforce
+#endif
  float :: current_surface_distance
 #ifdef __ROTRES
  float :: r_com_inst(3) =(/zero, zero, zero/); ! inst. center of mass (__ROTRES)
@@ -481,6 +521,14 @@ module _N
 #define __DOIFOK if (abs(__VAR).le.__ERRTOL) __WRN(whoami, 'SURFACE BOUNDARY FORCE IS OFF.')
 ! check all contexts:
 #include "parser/parser_macro3.src"
+!
+#ifdef __PROTFORCE
+#define __VAR pforce_scale
+#define __TAG __VAR
+#define __NAME multiplicative scaling for boundary force acting on protein atoms
+#define __DOIFOK if (abs(__VAR).le.__ERRTOL) __WRN(whoami, 'SURFACE BOUNDARY FORCE WILL NOT ACT ON SOLUTE ATOMS.')
+#include "parser/parser_macro3.src"
+#endif
 !
 #define __LEZEROERR
 ! cutoff for density
@@ -998,6 +1046,13 @@ module _N
 #define __TAG	solvent_atoms
 #define __NAME	solvent atoms
 #include "parser/parser_macro2.src"
+! solute atoms (e.g. protein) to which forces are applied
+#ifdef __PROTFORCE
+#define __VAR	pforce_atom_selection
+#define __TAG	forced_protein_atoms
+#define __NAME	forced solute atoms
+#include "parser/parser_macro2.src"
+#endif
 !
 ! output file
 #undef __WARNIFMISSING
@@ -1066,7 +1121,7 @@ __ASSERT(neighbor_list_factor,>=,zero)
 #undef __INT
 #endif
 !
-!
+! code dup below : to allow alternate use of "structure_update_memory" or "structure_updat_memo" (backward compat)
 #ifndef __WARNIFMISSING
 #define __WARNIFMISSING
 #endif
@@ -1340,6 +1395,62 @@ endif
  else
   __WRN(whoami, 'COULD NOT ALLOCATE MEMORY FOR SOLVENT ATOM INDICES.')
  endif
+!
+#ifdef __PROTFORCE
+! repeat for forced protein atoms
+ ipforce_atoms=>system_getind(pforce_atom_selection)
+ if (associated(ipforce_atoms)) then
+  npforce=size(ipforce_atoms) ; oonpforce=one/npforce ;
+  __ALLOC(r_pforce(3,npforce))
+  __ALLOC(rho_pforce(npforce))
+  __ALLOC(qforced_pforce(npforce))
+  __ALLOC(dsurf_pforce(npforce))
+#ifndef __1DSBP
+  __ALLOC(acurv_pforce(npforce))
+#endif
+  __ALLOC(drho_pforce(3,npforce))
+  __ALLOC(d2rho_pforce(6,npforce))
+#ifdef __GRADCURV
+  __ALLOC(d3rho_pforce(10,npforce))
+#endif
+#ifdef __SORT_LIST
+  __ALLOC(solute_neighbor_list_pforce(nsurface_coord,npforce))
+#ifdef __DEBUG
+  __DBGOUT('INITIALIZING SOLUTE NEIGHBOR LIST FOR FORCED PROTEIN ATOMS');
+#endif
+  do l=1,nsurface_coord
+   solute_neighbor_list_pforce(l,:)=l
+  enddo
+! because we are possibly using short ints to store neighbor list indices, we should make sure that the largest index is representable:
+  l=solute_neighbor_list_pforce(nsurface_coord,1)
+  __ASSERT(l, .eq., nsurface_coord)
+!
+#ifdef __NEIGHBOR_LIST
+  __ALLOC(solute_neighbor_mind_pforce(npforce))
+  solute_neighbor_mind_pforce=nsurface_coord ! initialize to last position in the solute neighbor list array
+#endif
+#endif
+! add atoms to lists if provided
+   do l=1, npforce
+#ifdef __CLASS
+    ierr=atoms%uadd(ipforce_atoms(l))
+#else
+    ierr=int_vector_uadd(atoms,ipforce_atoms(l))
+#endif
+   enddo
+   do l=1, npforce
+#ifdef __CLASS
+    ierr=forced_atoms%uadd(ipforce_atoms(l))
+#else
+    ierr=int_vector_uadd(forced_atoms,ipforce_atoms(l))
+#endif
+   enddo
+!
+ else
+  __WRN(whoami, 'COULD NOT ALLOCATE MEMORY FOR FORCED PROTEIN ATOM INDICES.')
+ endif
+#endif // __PROTFORCE
+!
 !
 #ifdef __OMP
  numthreads=omp_get_max_threads()
@@ -1618,6 +1729,9 @@ __DBGVAR(r_com_sa,1)
 #ifndef __1DSBP
  _W 'curvature_force_constant=',curvature_force_constant, ' # curvature force constant'
 #endif
+#ifdef __PROTFORCE
+ _W 'pforce_scale=', pforce_scale, ' # constant for scaling boundary forces on protein atoms'
+#endif
 ! write spline file, if different from default:
  if ( trim(spline_input_file).ne.trim(default_spline_input_file) ) &
 & _W 'spline_input_file=',trim(spline_input_file)
@@ -1705,6 +1819,28 @@ __DBGVAR(r_com_sa,1)
  __FREE(solute_neighbor_mind)
 #endif
 #endif
+#ifdef __PROTFORCE
+ __FREE(r_pforce)
+ __FREE(qforced_pforce)
+ __FREE(rho_pforce)
+ __FREE(drho_pforce)
+ __FREE(d2rho_pforce)
+#ifdef __GRADCURV
+ __FREE(d3rho_pforce)
+#endif
+ __FREE(dsurf_pforce)
+#ifndef __1DSBP
+ __FREE(acurv_pforce)
+#endif
+ __FREE(ipforce_atoms)
+#ifdef __SORT_LIST
+ __FREE(solute_neighbor_list_pforce)
+#ifdef __NEIGHBOR_LIST
+ __FREE(solute_neighbor_mind_pforce)
+#endif
+#endif
+#endif
+!
 #if defined(__BAROSTAT) || defined(__DASYSTAT)
 #ifdef __OMP
  __DEALL(sarho_all_threads)
@@ -1814,7 +1950,12 @@ __DBGVAR(r_com_sa,1)
 !
  __INC(iteration)
 ! copy solvent coordinates
+! 12/24 : wonder whether the below copy is ever more efficient with OMP; based on tests in plugin_master wth __OMPCOPY, the answer seems to be no
  r_solv=r(:,isolvent_atoms)
+#ifdef __PROTFORCE
+ r_pforce=r(:,ipforce_atoms)
+#endif
+!
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
 ! sort neighbor list on first iteration
  if (qneighbor_list.and.sort_neighbor_list_freq.gt.izero) then
@@ -1849,6 +1990,7 @@ __DBGVAR(r_com_sa,1)
 #if defined(__OMP) && defined(__NBLSORT_OMP)
 !$omp do schedule(runtime)
 #endif
+!==================== sort the neighbor list for each solvent atom
    do i=1, nsolvent
     do ii=1, nsurface_coord
 #ifdef __PBC_UNWRAP
@@ -1941,9 +2083,11 @@ __DBGVAR(r_com_sa,1)
      solute_neighbor_mind(i)=ind
     endif
    enddo ! nsolvent
+
 #if defined(__OMP) && defined(__NBLSORT_OMP)
 !$omp end do
 #endif
+
   endif ! qper_parser_override
 #endif
 #if defined(__OMP) && defined(__NBLSORT_OMP)
@@ -1959,7 +2103,7 @@ __DBGVAR(r_com_sa,1)
 !
 ! compute displacement from inst. surface atom coordinates to current surface coordinates ; for convenience in subsequent calcs
 ! note that it is needed only in certain circumstances (compilations and runtime conditions), so we test for that below :
-
+!
  if ( ((structure_update_freq.gt.izero) .and. __CHKUPDATE(structure_update_freq)) &
 #ifdef __ROTRES
 &  .or. qrigid_body_restraint &
@@ -3239,12 +3383,13 @@ __DBGVAR(density_target,1)
 
 #ifdef __FORCE_STATS
   total_solute_force=zero
-  total_solvent_force=zero
   max_solute_force=zero
-  max_solvent_force=zero
   rms_solute_force=zero
+  total_solvent_force=zero
+  max_solvent_force=zero
   rms_solvent_force=zero
 !
+  __OUT('======= FORCE STATISTICS ==============')
   do ii=1, nsurface_atoms
    iforce=fr(:,isurface_atoms(ii))
    __INCR(total_solute_force, iforce)
@@ -3252,6 +3397,9 @@ __DBGVAR(density_target,1)
    __INCR(rms_solute_force, d0)
    max_solute_force=max(max_solute_force,d0)
   enddo
+  __OUT('Total force applied to surface atoms:  ', total_solute_force)
+  __OUT('RMS of surface atom forces:            ', sqrt(rms_solute_force*oonsurface))
+  __OUT('Largest force acting on a surface atom:', sqrt(max_solute_force))
   do ii=1, nsolvent
    if (qforced_solv(ii)) then
     iforce=fr(:,isolvent_atoms(ii))
@@ -3261,13 +3409,28 @@ __DBGVAR(density_target,1)
     max_solvent_force=max(max_solvent_force,d0)
    endif
   enddo
-   __OUT('======= FORCE STATISTICS ==============')
-   __OUT('Total force applied to surface atoms:  ', total_solute_force)
-   __OUT('RMS of surface atom forces:            ', sqrt(rms_solute_force*oonsurface))
-   __OUT('Largest force acting on a surface atom:', sqrt(max_solute_force))
-   __OUT('Total force applied to solvent atoms:  ', total_solvent_force)
-   __OUT('RMS of solvent atom forces:            ', sqrt(rms_solvent_force*oonsolvent) )
-   __OUT('Largest force acting on a solvent atom:', sqrt(max_solvent_force))
+  __OUT('Total force applied to solvent atoms:  ', total_solvent_force)
+  __OUT('RMS of solvent atom forces:            ', sqrt(rms_solvent_force*oonsolvent) ) ! note that including atoms that experience zero force
+  __OUT('Largest force acting on a solvent atom:', sqrt(max_solvent_force))
+!
+#ifdef __PROTFORCE
+! NOTE : not sure how informative the below is ; maybe better for a debug compile
+  total_solute_force=zero
+  max_solute_force=zero
+  rms_solute_force=zero
+  do ii=1, npforce
+   if (qforced_pforce(ii)) then
+    iforce=fr(:,ipforce_atoms(ii))
+    __INCR(total_solute_force, iforce)
+    d0=iforce(1)**2 + iforce(2)**2 + iforce(3)**2
+    __INCR(rms_solute_force, d0)
+    max_solute_force=max(max_solute_force,d0)
+   endif
+  enddo
+  __OUT('Total force applied to forced solute atoms:  ', total_solute_force)
+  __OUT('RMS of forced solute atom forces:            ', sqrt(rms_solute_force*oonsurface))
+  __OUT('Largest force acting on a forced solute atom:', sqrt(max_solute_force))
+#endif
 #endif
 !
 #ifdef __ROTRES
