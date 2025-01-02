@@ -40,6 +40,8 @@ watershell.F90 watershell_plugin.F90 : parser/parser_macro2.src parser/parser_ma
 
 watershell2.F90 : parser/parser_macro2.src parser/parser_macro3.src rho.src gradcurv.src
 
+watershell_sbf_spline.F90 : rho.src
+
 watershell_plugin_acemd.o : aceplug.h
 
 aceplug.h:
