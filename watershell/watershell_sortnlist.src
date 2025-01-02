@@ -1,0 +1,112 @@
+#ifdef __PBC_UNWRAP
+  if(qper_parser_override) then
+#endif
+!
+#ifdef __NLDBG
+    jj=-1
+    call files_open(jj, __STRING(__CONCAT3(neighbors,_LTAG,.dat)), 'FORMATTED','WRITE')
+#endif
+#if defined(__OMP) && defined(__NBLSORT_OMP)
+!$omp do schedule(runtime)
+#endif
+!==================== sort the neighbor list for each solvent atom
+   do i=1, _NRR
+    do ii=1, nsurface_coord
+#ifdef __PBC_UNWRAP
+     distance2(ii)=zero
+! x
+     d0=r_surf(1,ii)-_RR(1,i)
+     __DIST_PBC(d0,ucell%a)
+     __INCR(distance2(ii),d0*d0)
+! y
+     d0=r_surf(2,ii)-_RR(2,i)
+     __DIST_PBC(d0,ucell%b)
+     __INCR(distance2(ii),d0*d0)
+! z
+     d0=r_surf(3,ii)-_RR(3,i)
+     __DIST_PBC(d0,ucell%c)
+     __INCR(distance2(ii),d0*d0)
+#else
+!     distance2(ii) = sum ( (r_surf(:,ii)-_RR(:,i))**2 )
+! slightly faster :
+     distance2(ii)=zero
+     d0=r_surf(1,ii)-_RR(1,i)
+     __INCR(distance2(ii),d0*d0)
+     d0=r_surf(2,ii)-_RR(2,i)
+     __INCR(distance2(ii),d0*d0)
+     d0=r_surf(3,ii)-_RR(3,i)
+     __INCR(distance2(ii),d0*d0)
+#endif
+    enddo ! nsurface_coord
+!  sort neighbor list:
+    call rsort_index('i',nsurface_coord,distance2(:), __CONCAT(solute_neighbor_list,_LTAG)(:,i),ierr)
+#ifdef __NLDBG
+    write(jj,*) __CONCAT(solute_neighbor_list,_LTAG)(:,i)
+    write(jj,*) sqrt(distance2(:))
+#endif
+!
+    if (nsurface_coord>0) then
+! for the erf/density method, we need to find the largest index in the set of atoms supported by filter:
+! use this search macro:
+#ifndef __MXLOC
+#define __MXLOC(_A,_a,_len,_ind,_istep) \
+ _ind=(1+_len)/2;\
+ _istep=(1+_ind)/2;\
+ do;\
+  if (_A(_ind)>(_a)) then;\
+   _ind=max(1,_ind-_istep); \
+  else; \
+   _ind=min((_len),_ind+_istep); \
+  endif;\
+  if (_istep<2) exit;\
+  _istep=(_istep+1)/2;\
+ enddo;\
+ if ( _A(_ind)>(_a) .and. _ind>1) _ind=_ind-1
+#endif
+!
+     __MXLOC( distance2, pre, nsurface_coord, ind, istep )
+!
+     __CONCAT(solute_neighbor_mind,_LTAG)(i)=ind
+    endif
+! __DBGVAR(pre,2)
+! __DBGVAR(distance2(1:10),2)
+! __DBGVAR(solute_neighbor_mind(i),2)
+   enddo ! _NRR
+#if defined(__OMP) && defined(__NBLSORT_OMP)
+!$omp end do
+#endif
+#ifdef __NLDBG
+    write(jj,*) solute_neighbor_mind
+    write(jj,*) sqrt(pre) ! search distance cutoff
+    call files_close(jj)
+#endif
+#ifdef __PBC_UNWRAP
+  else ! qper_parser_override
+#if defined(__OMP) && defined(__NBLSORT_OMP)
+!$omp do schedule(runtime)
+#endif
+   do i=1, _NRR
+    do ii=1, nsurface_coord
+!     distance2(ii) = sum ( (r_surf(:,ii)-_RR(:,i))**2 )
+! slightly faster :
+     distance2(ii)=zero
+     d0=r_surf(1,ii)-_RR(1,i)
+     __INCR(distance2(ii),d0*d0)
+     d0=r_surf(2,ii)-_RR(2,i)
+     __INCR(distance2(ii),d0*d0)
+     d0=r_surf(3,ii)-_RR(3,i)
+     __INCR(distance2(ii),d0*d0)
+    enddo ! nsurface
+!  sort neighbor list:
+    call rsort_index('i',nsurface_coord,distance2(:),__CONCAT(solute_neighbor_list,_LTAG)(:,i),ierr)
+    if (nsurface_coord>0) then
+     __MXLOC( distance2, pre, nsurface_coord, ind, istep )
+     __CONCAT(solute_neighbor_mind,_LTAG)(i)=ind
+    endif
+   enddo ! _NRR
+
+#if defined(__OMP) && defined(__NBLSORT_OMP)
+!$omp end do
+  endif ! qper_parser_override
+#endif
+#endif

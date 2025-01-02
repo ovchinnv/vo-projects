@@ -1,0 +1,424 @@
+#ifdef __OMP
+!$omp do schedule(runtime)
+#endif
+ do i=1, nsolvent_ ! outer loop over solvent atoms
+!
+#ifdef __HAMILTONIAN
+   __U(nspt)=0 ! set number of surface support atoms for this solvent atom to zero
+#endif
+!
+   qforced=.true.
+#if defined(__DASYSTAT) & !defined(__DASY_OFF)
+   if (dasystat) then
+    qibulk=.true. ! check if atom within inner bulk
+    qobulk=.true. ! check if atom within outer bulk
+   endif
+#endif
+!
+   rho_solv_(i)=zero
+   if (qcompute_grad) drho_solv_(:,i)=zero
+   if (qcompute_hess) then
+    d2rho_solv_(:,i)=zero
+#ifdef __GRADCURV
+    d3rho_solv_(:,i)=zero
+#endif
+   endif
+   rw=r_solv_(:,i);
+#ifdef __SORT_LIST
+   dr2old=-1.d0  ! set to a small number to guarantee that no swap is done on first iteration
+!
+#ifdef __NEIGHBOR_LIST
+   if (qtruncate_loop) then
+    nsurface_coord_maxind = __NEIGHBOR_LIST_LENGTH_DENSITY
+   else
+    nsurface_coord_maxind = nsurface_coord ! full loop
+#ifdef __NEIGHBOR_LIST_CHECK
+    neighbor_list_length = __NEIGHBOR_LIST_LENGTH_DENSITY
+#endif
+   endif
+#else
+   nsurface_coord_maxind = nsurface_coord ! inner loop over solute atoms (list sorted, but distance checking not limited to neighbors)
+#endif
+   do jj=1, nsurface_coord_maxind
+    j=__CONCAT(solute_neighbor_list,_LTAG)(jj,i)
+#else
+   do j=1, nsurface_coord ! inner loop over solute atoms (list not sorted)
+#endif
+    rp=r_surf(:,j)
+    rsurf    = ( rad_surf(j) + surf_padding )
+    rmaxsurf = ( cutoff_surf  + rsurf  )
+    dr = rp-rw ; ! vector from rw to rp (i.e., usually inwardly-directed)
+#ifdef __UNWRAP_PBC
+    if (qper_parser_override) then
+     __DIST_PBC(dr(1),ucell%a)
+     __DIST_PBC(dr(2),ucell%b)
+     __DIST_PBC(dr(3),ucell%c)
+    endif
+#endif
+    drn2=sum(dr**2);
+#ifdef __SORT_LIST
+!   bubble sort between this and previous atom based on distance
+    if (drn2 .lt. dr2old) then ! bubble sort
+     __CONCAT(solute_neighbor_list,_LTAG)(jj,i)=__CONCAT(solute_neighbor_list,_LTAG)(jj-1,i)
+     __CONCAT(solute_neighbor_list,_LTAG)(jj-1,i)=j
+    endif
+    dr2old=drn2
+#endif
+    if (drn2 .gt. rmaxsurf**2) cycle ! solute atom outside cutoff for this solvent atom -- skip it
+!   atom is within the cutoff; record its index before computing density contribution
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
+    if (.not.qtruncate_loop) __CONCAT(solute_neighbor_mind,_LTAG)(i)=jj
+!   since jj is increasing, solute_neighbor_mindist(i) will store the largest index for any atom within the cutoff (otherwise we cycle above)
+!   this is a measure of how far we have to go to compute all the interactions within the cutoff ; so we store this number
+!   we only apply it for qtruncate_loop=.false. i.e. full loop over atoms ; otherwise, the result is probably too approximate (almost surely there will
+!   be atoms that diffuse forward and backward in the list, which are beyond the _NEIGHBOR_LIST_LENGTH_DENSITY cutoff
+#endif
+!   compute quantities required for density, but not necessarily for gradient or hessian :
+    rsurf=rsurf * oo_surf_stdev
+    drn = sqrt(drn2) * oo_surf_stdev !  = r/s
+    b = osq2 * (drn - rsurf)        !  = (dr-a)/(sqrt(2)s)
+#ifndef __SIMPLERHO
+! need A for medium & full
+    a = osq2 * (drn + rsurf)
+#ifndef __MEDIUMRHO
+! precompute exponentials
+    expa = __gauss(a)
+    expb = __gauss(b)               ! = e^( - 0.5 * ( (dr - a)/s )^2
+    ooc = one / drn                 ! = s/r
+#endif
+#endif
+!
+! update density
+#ifdef __ERFHYBRID
+    __erfo7i(b,erfb)
+#ifndef __SIMPLERHO
+    __erfo7i(a,erfa)
+#ifndef __MEDIUMRHO
+    __INCR(rho_solv_(i), half * ( erfa - erfb ) + osq2pi * ooc * ( expa - expb ) ) ! full rho
+#else
+    __INCR(rho_solv_(i), half * ( erfa - erfb ) ) ! medium rho
+#endif
+#else
+    __INCR(rho_solv_(i), half * ( one  - erfb ) ) ! simple rho
+#endif
+#else
+#ifndef __SIMPLERHO
+#ifndef __MEDIUMRHO
+    __INCR(rho_solv_(i), half * ( __erf(a) - __erf(b) ) + osq2pi * ooc * ( expa - expb ) )
+#else
+    __INCR(rho_solv_(i), half * ( __erf(a) - __erf(b) ) )
+#endif
+#else
+    __INCR(rho_solv_(i), half * ( one      - __erf(b) ) )
+#endif
+#endif
+!
+!calc gradient & hessian, if requested
+! 12/24 : note that the density rho might already be too high, i.e. we could be inside the volume where no forces are applied
+    if (qforced) qforced = _QREPELMINUS rho_solv_(i) .lt. _QREPELMINUS maxinner_contour_value
+#if defined(__DASYSTAT) & !defined(__DASY_OFF)
+    if (dasystat) then
+     if (qibulk .and. (rho_solv_(i).gt.ibulk_boundary_contour_value)) then ! inside inner bulk
+      __INCR(__U(solvent_mass_ibulk), mass_solv_(i))
+      qibulk=.false. ! no need to check this atom further
+! obulk (outer_bulk) is the boundary closer to the surface; get difference by subtraction at the end
+! NOTE : it is possible that we already added this mass to solvent_mass_obulk, if, in a previous iteration we were inside the
+! outer, but _NOT_ inner boundary, so should check for this before adding :
+      if (qobulk) __INCR(__U(solvent_mass_obulk), mass_solv_(i))! also inside outer bulk
+      qobulk=.false. ! no need to check this atom further
+      if (qtruncate_loop .and. .not. qforced) exit ! without truncate_loop traverse entire surface atom list
+     elseif(qobulk .and. (rho_solv_(i).gt.obulk_boundary_contour_value)) then
+      __INCR(__U(solvent_mass_obulk), mass_solv_(i))
+      qobulk=.false.
+     endif ! qibulk
+    else
+#endif
+     if (qtruncate_loop .and. .not. qforced) exit
+#if defined(__DASYSTAT) & !defined(__DASY_OFF)
+    endif ! dasystat
+#endif
+!
+    if (qforced) then ! compute derivatives only if the force will be nonzero (per maxd in spline file via innermax var)
+! needed for rho (simple) : b
+! needed for rho (full)   : a,b,expa,expb,ooc=s/r (everything...)
+! needed for gradient (simplerho) : expb, b, ooc
+! needed for gradient (mediumrho) : expa, a, expb, b, ooc
+! needed for gradient (fullrho)   : expa, a, expb, b, ooc
+! needed for hessian (simple)     : expb, b, ooc
+! needed for hessian (medium)     : expa, a, expb, b, ooc
+! needed for hessian (full)       :
+! needed for third derivatives (s): expb, b
+!
+! 8/9/24 : rewrite gradient calculation for clarity
+    if(qcompute_grad.or.qcompute_hess) then
+! note that multiplication by "oo_surf_stdev * osq2pi" can be moved out of all loops
+#if (defined(__SIMPLERHO))
+! rhop :  rho prime -- derivative wrt dr (separation distance) ; rhopp rho prime-prime, second derivative
+! factor out "oo_surf_stdev * osq2pi" henceforth
+     ooc=one/drn ! s/r
+     expb=__gauss(b)
+     rhop  = - expb      ! prime, but not scaled by 1/sqrt(2*pi)/s, which is done below (ca. line 3850)
+#elif (defined(__MEDIUMRHO))
+     ooc=one/drn
+     expa=__gauss(a)
+     expb=__gauss(b)
+     em = expa-expb
+     rhop  = em ! prime
+#else
+     em = expa-expb
+     ep = expa+expb
+!     rhop = - oo_surf_stdev * osq2pi * ( ooc**2 * em + rsurf * ooc * ep ) ! rsurf x ooc  = a/r in notes
+     rhop = - ( ooc * ( ooc * em + rsurf * ep ) ) ! prime
+#endif
+     oor = ooc * oo_surf_stdev ! 1/r
+     if (qcompute_hess) then
+      dr2(1)=dr(1)**2    !xx
+      dr2(2)=dr(1)*dr(2) !xy
+      dr2(3)=dr(1)*dr(3) !xz
+      dr2(4)=dr(2)**2    !yy
+      dr2(5)=dr(2)*dr(3) !yz
+      dr2(6)=dr(3)**2    !zz
+!
+#ifdef __GRADCURV
+! computing curvature gradient requires third derivatives
+      dr3(1)=dr2(1)*dr(1) !xxx
+      dr3(2)=dr2(1)*dr(2) !xxy
+      dr3(3)=dr2(1)*dr(3) !xxz
+      dr3(4)=dr2(2)*dr(2) !xyy
+      dr3(5)=dr2(2)*dr(3) !xyz
+      dr3(6)=dr2(3)*dr(3) !xzz
+      dr3(7)=dr2(4)*dr(2) !yyy
+      dr3(8)=dr2(4)*dr(3) !yyz
+      dr3(9)=dr2(5)*dr(3) !yzz
+      dr3(10)=dr2(6)*dr(3)!zzz
+#endif
+#if defined(__SIMPLERHO)
+! matlab :  rhopp  =  B.*expB*oosig^2/sqrt(pi);
+!      rhopp = -oo_surf_stdev * (drn-rsurf) * rhop ! prime-prime (note 1/sqrt(2*pi)/s scaling missing here)
+      rhopp = oo_surf_stdev * (drn-rsurf) * expb ! prime-prime (note 1/sqrt(2*pi)/s scaling missing here)
+#ifdef __GRADCURV
+! matlab :   rhoppp =  oosig^3 * oosq2pi * expB.*(1-2*B.^2);
+      rhoppp = oo_surf_stdev**2 * expb*(one-2*b**2)
+#endif
+#elif defined (__MEDIUMRHO)
+      ep = expa+expb
+      rhopp =  - oo_surf_stdev * ( drn * em + rsurf * ep ) ! prime-prime
+!      rhopp = oo_surf_stdev*sqrt2*(b*expb - a*expa); ! same as above; w/ extra x
+#ifdef __GRADCURV
+      rhoppp = oo_surf_stdev**2 * ( expb*(one-2*b**2) - expa*(one-2*a**2) )
+#endif
+#else
+      rhopp = oo_surf_stdev * ( ooc * (one + 2 * ooc**2 + rsurf**2) * em  +  rsurf * (ooc**2 + one) * ep ) ! prime-prime
+#ifdef __GRADCURV
+      rhoppp = - ( ( three*oor**2 * ( one + rsurf**2 + two*ooc**2 ) + oo_surf_stdev**2 * ( one + two*rsurf**2 ) ) * em &
+     &           + rsurf*ooc * ( six * oor**2 + (three+rsurf**2+drn**2) * oo_surf_stdev**2 ) * ep )
+! from matlab FD-tested):
+!      rhoppp = -oosig*oosq2pi*( ( 3*oodR.^2 .* (1 + (arad/sig)^2 + 2*(sig.*oodR).^2) + (1+2*(arad/sig)^2)/sig^2 ) .* (expA-expB) + ...
+!                                                arad * ( ( 6*oodR.^2 + (3+(arad/sig)^2+(dR/sig).^2)/sig^2).*oodR ).* (expA+expB) );
+#endif
+#endif
+#ifdef __GRADCURV
+!% from matlab, fd-tested
+! drhoxxx = drhoxxx +  dX.* (dX.^2 .* ( rhoppp - 3*d2 ) + 3*d2 ) ;
+! drhoyyy = drhoyyy +  dY.* (dY.^2 .* ( rhoppp - 3*d2 ) + 3*d2 ) ;
+! drhozzz = drhozzz +  dZ.* (dZ.^2 .* ( rhoppp - 3*d2 ) + 3*d2 ) ;
+!%
+! drhoxxy = drhoxxy +  dY.* (dX.^2 .* ( rhoppp - 3*d2 ) + d2 ) ;
+! drhoxxz = drhoxxz +  dZ.* (dX.^2 .* ( rhoppp - 3*d2 ) + d2 ) ;
+! drhoxyy = drhoxyy +  dX.* (dY.^2 .* ( rhoppp - 3*d2 ) + d2 ) ;
+! drhoxyz = drhoxyz +  dX.* dY.*dZ .* ( rhoppp - 3*d2 ) ;
+! drhoxzz = drhoxzz +  dX.* (dZ.^2 .* ( rhoppp - 3*d2 ) + d2 ) ;
+! drhoyyz = drhoyyz +  dZ.* (dY.^2 .* ( rhoppp - 3*d2 ) + d2 ) ;
+! drhoyzz = drhoyzz +  dY.* (dZ.^2 .* ( rhoppp - 3*d2 ) + d2 ) ;
+!
+      b=oor*(rhopp-rhop*oor) ! reuse vars to avoid defining new ones
+      __SCALE(dr2,b)
+      expb=(rhoppp-three*b)*oor**2
+      __SCALE(dr3,expb)
+      __INCR(dr3(2),b*dr(2)) !xxy
+      __INCR(dr3(3),b*dr(3)) !xxz
+      __INCR(dr3(4),b*dr(1)) !xyy
+      __INCR(dr3(6),b*dr(1)) !xzz
+      __INCR(dr3(8),b*dr(3)) !yyz
+      __INCR(dr3(9),b*dr(2)) !yzz
+!
+      b=three*b
+      __INCR(dr3(1), b*dr(1)) !xxx
+      __INCR(dr3(7), b*dr(2)) !yyy
+      __INCR(dr3(10),b*dr(3)) !zzz
+      __SCALE(dr3,oor)
+      __INCR(d3rho_solv_(:,i),dr3)
+#else
+      __SCALE(dr2,oor*(rhopp-rhop*oor))
+#endif
+      __INCR(dr2(1),rhop)
+      __INCR(dr2(4),rhop)
+      __INCR(dr2(6),rhop)
+      __SCALE(dr2,oor)
+      __INCR(d2rho_solv_(:,i),dr2)
+     endif ! qcompute_hess
+     if (qcompute_grad) then
+      __SCALE(dr, - rhop * oor ) ! note that this destroys dr for use after, which is why it is at the end !!!
+      __INCR(drho_solv_(:,i),dr) ! negative above because dr = r_protein - r_water
+     endif
+    endif ! need gradient or hessian
+!
+#ifdef __HAMILTONIAN
+! propagate force onto surface atoms
+    __INC(__U(nspt)) ! number of atoms in support
+    ispt_this_thread(__U(nspt)) = j ! index of support atom
+    drho_surf_this_thread(:,j) = dr ! density gradient (i.e. to compute force exerted on support atom)
+#endif
+!
+   endif ! qforced
+   enddo ! nsurface_coord
+!=========================== loop for solvent atom i over solute support (surface coordinates) ====
+#if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST) && defined(__NEIGHBOR_LIST_CHECK)
+! check for _potential_ neighbor list violations :
+   if (.not. qtruncate_loop .and. __CONCAT(solute_neighbor_mind,_LTAG)(i) > neighbor_list_length ) __INC(__U(neighbor_list_misses))
+#endif
+   qforced_solv_(i) = qforced ! save for use in main routine
+!
+   if (qforced) then
+!===============================================================================================================================================================
+!
+! scale hessian
+   if (qcompute_hess) then
+    __SCALE(d2rho_solv_(:,i),osq2pi*oo_surf_stdev)
+#ifdef __GRADCURV
+    __SCALE(d3rho_solv_(:,i),osq2pi*oo_surf_stdev)
+#endif
+   endif
+! scale gradient :
+   if (qcompute_grad) then
+    __SCALE(drho_solv_(:,i),osq2pi*oo_surf_stdev)
+   endif
+!
+#ifdef __HAMILTONIAN
+!===============================================================================================================================================================
+! Need to propagate Hamiltonian forces to surface atoms ; therefore, compute force prefactor and apply to gradients here
+! Also, do not recompute the prefactor in the main loop for solvent atoms (see main routine)
+! need to compute curvature from grad and hessian :
+! gradient norm :
+   b=sum(drho_solv_(:,i)**2)
+   if (b.le.__ERRTOL) then ; b=zero ; else ; b=one/sqrt(b) ; endif
+#ifdef __DRHOINV
+#ifndef __1DSBP
+! compute average curvature at solvent coordinate from gradient and hessian
+! NOTE : need hessian for this, but it is possible that the hessian was _Not_ requested in the calling routine (no check here)
+! unnormalized/unscaled grad formula:
+#ifdef __ALLOW_FIXED_CURV
+   if (qfixed_curvature) then
+    acurv_solv_(i)=fixed_curvature
+   else
+#endif
+    acurv_solv_(i) = half * b  * ( d2rho_solv_(1,i) + d2rho_solv_(4,i) + d2rho_solv_(6,i) \
+              - b**2 * ( d2rho_solv_(1,i)*drho_solv_(1,i)**2 + d2rho_solv_(4,i)*drho_solv_(2,i)**2 + d2rho_solv_(6,i)*drho_solv_(3,i)**2 \
+            + ( drho_solv_(1,i)*(d2rho_solv_(2,i)*drho_solv_(2,i) + d2rho_solv_(3,i)*drho_solv_(3,i)) + d2rho_solv_(5,i)*drho_solv_(2,i)*drho_solv_(3,i) )*2 ) )
+#ifdef __ALLOW_FIXED_CURV
+   endif
+#endif
+#endif
+#else
+   __SCALE(drho_solv_(:,i),b) ! normalize gradient (note that we use the normalized grad as the surface unit normal for forces)
+#ifndef __1DSBP
+! normalized grad formula:
+#ifdef __ALLOW_FIXED_CURV
+   if (qfixed_curvature) then
+    acurv_solv_(i)=fixed_curvature
+   else
+#endif
+    acurv_solv_(i) =  half * b  * ( d2rho_solv_(1,i)*(one-drho_solv_(1,i)**2) + d2rho_solv_(4,i)*(one-drho_solv_(2,i)**2) + d2rho_solv_(6,i)*(one-drho_solv_(3,i)**2) \
+            - ( drho_solv_(1,i)*( d2rho_solv_(2,i)*drho_solv_(2,i) + d2rho_solv_(3,i)*drho_solv_(3,i)) + d2rho_solv_(5,i)*drho_solv_(2,i)*drho_solv_(3,i) )*2 )
+#ifdef __ALLOW_FIXED_CURV
+   endif
+#endif
+#endif
+#endif
+!  expb=__Q(rho_solv_(i)) ! unsafe inverse
+   expb=__QSAFE(rho_solv_(i))
+   dsurf_solv_(i) = _QREPELMINUS ( __RHO_INVERSE2 ( expb ) - surface_distance ) ! need this for curvature correction model below
+! reuse b as force prefactor
+#ifdef __DRHOINV
+   expb = surf_stdev * sq2pi * exp (expb**2) ! include model distance derivative in the force prefactor
+#else
+   expb = one ! drho has been scaled by 1/|grad rho| above, so nothing to do
+#endif
+#ifndef __1DSBP
+   if ((_QREPELMINUS dsurf_solv_(i).gt.0) &
+#ifdef __ALLOW_FIXED_CURV
+    .and. .not.qfixed_curvature &
+#endif
+     ) &
+    acurv_solv_(i) = acurv_solv_(i) / ( one + abs(acurv_solv_(i)) * ( _QREPELMINUS dsurf_solv_(i)) ) ! in this model the curvature correction is independent of curvature sign
+   sbfe = watershell_sbf_spline_compute(acurv_solv_(i), dsurf_solv_(i), qsbe)
+#ifdef __FORCE_SCALE
+   __SCALE(sbfe,__FORCE_SCALE)
+#endif
+   __SCALE( sbfe(1), surface_force_constant )
+   __SCALE( sbfe(2), curvature_force_constant )
+   expb = - ( _QREPELMINUS ( sbfe(1) + sbfe(2) ) * expb )
+#else
+! no curvature:
+   sbfe = watershell_sbf_spline1d_compute(dsurf_solv_(i), qsbe)
+#ifdef __FORCE_SCALE
+   __SCALE(sbfe,__FORCE_SCALE)
+#endif
+   expb = - ( _QREPELMINUS sbfe(1) * surface_force_constant * expb )
+#endif
+! 12/24 : NOTE that, in the case of forced protein atoms (2nd pass w/ __PROTFORCE) we need to scale the force constants (or expb) by pforce_scale
+
+!
+   __SCALE(drho_solv_(:,i),expb) ! scale gradient array by prefactor
+   __SCALE(expb,one - structure_update_memory) ! scale force by the fraction of 'new' coordinates in surface coords (this breaks Hamiltonian dynamics)
+#ifndef __DRHOINV
+! note that if we scaled drho_solv_, we also need to scale drho_surf :
+   __SCALE(expb,b)
+#endif
+   do j=1,__U(nspt)  ! loop over all local support surface atoms for this solvent atom
+    __INCR(drho_surf_all_thread(:,ispt_this_thread(j)), expb * drho_surf_this_thread(:,ispt_this_thread(j)) ) ! NB cannot take *b outside b/c it depends on rho(i)
+   enddo
+! HAMILTONIAN^
+!
+!#ifdef __BAROSTAT
+! 12/24 : for now, barostat is not completely implemented, so condition does not matter
+#if defined(__BAROSTAT) & !defined(__DASY_OFF)
+   __INCR(__U(surface_force), _QREPELMINUS sbfe(1) )   ! k0 force exerted on the surface
+#ifndef __1DSBP
+   __INCR(__U(curvature_force), _QREPELMINUS sbfe(2) ) ! remaining force exerted on the surface
+#endif
+#endif
+   if (qsbe) then
+#ifndef __1DSBP
+    __INCR(__U(surface_energy), sbfe(3)) ! surface_force_constant below
+    __INCR(__U(curvature_energy), sbfe(4)) ! curvature_force_constant below
+#else
+    __INCR(__U(surface_energy), sbfe(2))
+#endif
+   endif
+!
+#endif
+!===============================================================================================================================================================
+   endif ! qforced
+ enddo ! nsolvent_
+#ifdef __OMP
+!$omp end do
+#endif
+!
+#undef __DASY_OFF
+#undef _LTAG
+#undef nsolvent_
+#undef r_solv_
+#undef rho_solv_
+#undef drho_solv_
+#undef d2rho_solv_
+#undef d3rho_solv_
+#undef qforced_solv_
+#undef mass_solv_
+#undef __NEIGHBOR_LIST_LENGTH_DENSITY
+#ifdef __HAMILTONIAN
+#undef dsurf_solv_
+#ifndef __1DSBP
+#undef acurv_solv_
+#endif
+#endif
