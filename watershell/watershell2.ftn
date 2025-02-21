@@ -1311,8 +1311,10 @@ endif
    solute_neighbor_list(l,:)=l
   enddo
 ! because we are possibly using short ints to store neighbor list indices, we should make sure that the largest index is representable:
-  l=solute_neighbor_list(nsurface_coord,1)
-  __ASSERT(l, .eq., nsurface_coord)
+  if (nsolvent.gt.0) then
+   l=solute_neighbor_list(nsurface_coord,1)
+   __ASSERT(l, .eq., nsurface_coord)
+  endif
 !
 #ifdef __NEIGHBOR_LIST
   qneighbor_list_sorted=.not.qneighbor_list ! if not using qlist, set to true to avoid sorting
@@ -1814,6 +1816,7 @@ __DBGVAR(r_com_sa,1)
 !
  __INC(iteration)
 ! copy solvent coordinates
+! 12/24 : wonder whether the below copy is ever more efficient with OMP; based on tests in plugin_master wth __OMPCOPY, the answer seems to be no
  r_solv=r(:,isolvent_atoms)
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
 ! sort neighbor list on first iteration
@@ -2194,7 +2197,7 @@ endif ! decide whether to compute dr_surf
 ! in the original method above, I used a simple average ; however, when the surface force constants are large
 ! the initial shell is too 'tight' and leads to instabilities;
 !
-  surface_contour_value = __RHOSAFE(surface_distance) ! for mindist, determine this for information, even though not relevant to algorithm
+  surface_contour_value = __RHOSAFE(surface_distance) ! for mindist, determine this for information, even though not relevant to density algorithm
   __DBGOUT( 'COMPUTED SD, SCV: ', surface_distance, surface_contour_value)
   __MESSAGE(whoami, 'COMPUTED SURFACE DISTANCE AT '//ftoa(surface_distance)//' A FROM PROTEIN. CONTOUR VALUE IS '//ftoa(surface_contour_value))
 #ifdef __QREPELSBP
@@ -2355,7 +2358,7 @@ endif ! decide whether to compute dr_surf
 #endif
 ! NOTE: minimum distance (mindist) algorithm has been removed in version 2 ; density-based only
 ! NOTE: here OPENMP does not make much difference but keeping for consistency and completeness
- nsolvent_unsupported=0 ! for counting unsupported atoms in the erf density method
+ nsolvent_unsupported=0 ! for counting unsupported atoms
 !================= compute forces, now that density-related properties are known
 ! put the below here to avoid omp single inside OMP
 #ifdef __HAMILTONIAN
@@ -3238,9 +3241,9 @@ __DBGVAR(density_target,1)
 #endif
   do ii=1, nsolvent
    if (qforced_solv(ii)) then
-    if (acurv_solv(i).lt.acurv_min) then
+    if (acurv_solv(ii).lt.acurv_min) then
      acurv_min=acurv_solv(ii)
-    elseif (acurv_solv(i).gt.acurv_max) then
+    elseif (acurv_solv(ii).gt.acurv_max) then
      acurv_max=acurv_solv(ii)
     endif
     __INCR(acurv_sum, acurv_solv(ii))
@@ -3255,12 +3258,13 @@ __DBGVAR(density_target,1)
 
 #ifdef __FORCE_STATS
   total_solute_force=zero
-  total_solvent_force=zero
   max_solute_force=zero
-  max_solvent_force=zero
   rms_solute_force=zero
+  total_solvent_force=zero
+  max_solvent_force=zero
   rms_solvent_force=zero
 !
+  __OUT('======= FORCE STATISTICS ==============')
   do ii=1, nsurface_atoms
    iforce=fr(:,isurface_atoms(ii))
    __INCR(total_solute_force, iforce)
@@ -3268,6 +3272,9 @@ __DBGVAR(density_target,1)
    __INCR(rms_solute_force, d0)
    max_solute_force=max(max_solute_force,d0)
   enddo
+  __OUT('Total force applied to surface atoms:  ', total_solute_force)
+  __OUT('RMS of surface atom forces:            ', sqrt(rms_solute_force*oonsurface))
+  __OUT('Largest force acting on a surface atom:', sqrt(max_solute_force))
   do ii=1, nsolvent
    if (qforced_solv(ii)) then
     iforce=fr(:,isolvent_atoms(ii))
@@ -3277,13 +3284,9 @@ __DBGVAR(density_target,1)
     max_solvent_force=max(max_solvent_force,d0)
    endif
   enddo
-   __OUT('======= FORCE STATISTICS ==============')
-   __OUT('Total force applied to surface atoms:  ', total_solute_force)
-   __OUT('RMS of surface atom forces:            ', sqrt(rms_solute_force*oonsurface))
-   __OUT('Largest force acting on a surface atom:', sqrt(max_solute_force))
-   __OUT('Total force applied to solvent atoms:  ', total_solvent_force)
-   __OUT('RMS of solvent atom forces:            ', sqrt(rms_solvent_force*oonsolvent) )
-   __OUT('Largest force acting on a solvent atom:', sqrt(max_solvent_force))
+  __OUT('Total force applied to solvent atoms:  ', total_solvent_force)
+  __OUT('RMS of solvent atom forces:            ', sqrt(rms_solvent_force*oonsolvent) ) ! note that including atoms that experience zero force
+  __OUT('Largest force acting on a solvent atom:', sqrt(max_solvent_force))
 #endif
 !
 #ifdef __ROTRES
@@ -3350,7 +3353,7 @@ __DBGVAR(density_target,1)
    else if ( neighbor_depth .gt. neighbor_dmax ) then 
     neighbor_dmax=neighbor_depth
    endif
-    neighbor_dsum=neighbor_dsum + neighbor_depth
+   neighbor_dsum=neighbor_dsum + neighbor_depth
   enddo
 #ifdef __OMP
 !$omp end parallel do
@@ -3621,7 +3624,7 @@ __DBGVAR(obulk_boundary_contour_value,1)
 #ifdef __HAMILTONIAN
 !$omp ,numthreads,structure_update_memory,surface_force_constant,qsbe,dsurf_solv,surface_distance,surf_stdev,drho_surf,ispt,surface_energy &
 #ifndef __1DSBP
-!$omp ,curvature_force_constant,acurv_solv, curvature_energy &
+!$omp ,curvature_force_constant,acurv_solv,curvature_energy &
 #ifdef __ALLOW_FIXED_CURV
 !$omp ,qfixed_curvature, fixed_curvature &
 #endif
@@ -3690,6 +3693,7 @@ __DBGVAR(obulk_boundary_contour_value,1)
 !$omp )
 !
 #ifdef __DASYSTAT
+! recall that underscore __U means thread-local
  if (dasystat) then
   __U(solvent_mass_ibulk)=zero
   __U(solvent_mass_obulk)=zero
