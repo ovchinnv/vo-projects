@@ -2570,7 +2570,9 @@ endif ! decide whether to compute dr_surf
 !
 #ifndef __1DSBP
 #ifdef __CURVCORRECT
-  if ( dsurf_solv(i).gt.zero & ! i.e., when positive, we are inside the bdry (note that qrepelminus negates the distance)
+!  if ( dsurf_solv(i).gt.zero & ! i.e., when positive, we are inside the bdry (note that qrepelminus negates the distance)
+!  if (.true. &
+   if ( acurv_solv(i).lt.zero & ! apply correction only for convex cases
 #ifdef __ALLOW_FIXED_CURV
    .and. (.not.qfixed_curvature) & 
 #endif
@@ -2578,9 +2580,12 @@ endif ! decide whether to compute dr_surf
 #ifdef __GRADCURV
 &  then
     Lap = one / ( one + abs(acurv_solv(i)) * ( dsurf_solv(i)) ) ! reuse Lap from diff calc for later
+    HoG(1)=sign(one,acurv_solv(i)) ! reuse hog(1) for sign(curv)
     __SCALE(acurv_solv(i),Lap)
-! compute multiplicative curvature gradient correction
-    Lap = Lap * ( one - abs(acurv_solv(i)) )
+! compute multiplicative curvature gradient correction ; bugfix 1/26/25
+!    Lap = Lap * ( one - abs(acurv_solv(i))*(dsurf_solv(i)) )
+    Lap = Lap * ( one - acurv_solv(i)*HoG(1)*(dsurf_solv(i)) ) ! also correct for 1+|C|dR < 0
+! ^ note that we should always run with a curvature limiter, so a huge curvature is not technically possible ...
   else
    Lap=one ! just in case to allow using var even when the appx not applied
   endif
@@ -2604,9 +2609,12 @@ endif ! decide whether to compute dr_surf
 ! sbfe(1,2,3,4) contain "surface" force (with crv subtracted out), curvature_force, surface_energy, curvature_energy, respectively
   pre = sbfe(2)
 #if defined(__GRADCURV) && defined(__CURVCORRECT)
-! gradient contribution coming from the crude curvature correction model (note that with fixed curvature sbfe(5) =0)
-  if ( dsurf_solv(i).gt.zero ) __DECR(pre, sbfe(5)*acurv_solv(i)*abs(acurv_solv(i)) )
-!^ NB:check sign above ; sbfe(5) obtained from integrating and differentiating (i.e. w/o sign changes); so it seems the only source of sigh change is dK/dd=-c|c|
+! gradient contribution coming from the crude curvature correction model (with fixed curvature, sbfe(5)=0 b/c above)
+! basically, modified curvature derivative has a term that multiplies dU/dC by dR, hence sbfe(5)
+!  if ( dsurf_solv(i).gt.zero ) &
+  if ( acurv_solv(i).lt.zero ) &
+   __DECR(pre, sbfe(5) * acurv_solv(i)**2 * HoG(1) ) ! dK/dd=-c*|c*|, but only if (1+|C|dR)>0 ; better to use -c*^2 x sign(c) (?)
+!   __DECR(pre, sbfe(5) * acurv_solv(i) * abs(acurv_solv(i)) ) ! dK/dd=-c*|c*|, but only if (1+|C|dR)>0 ; better to use -c*^2 x sign(c)
 ! where c is the distance-corrected curvature (which is what gives c the d-dependence in the first place)
 #endif
   __SCALE(pre, -( _QREPELMINUS curvature_force_constant ))
@@ -4169,12 +4177,14 @@ __DBGVAR(obulk_boundary_contour_value,1)
   expb = one ! drho has been scaled by 1/|grad rho| above, so nothing to do
 #endif
 #ifndef __1DSBP
+#ifdef __CURVCORRECT
   if ((_QREPELMINUS dsurf_solv(i).gt.0) &
 #ifdef __ALLOW_FIXED_CURV
    .and. .not.qfixed_curvature &
 #endif
      ) &
     acurv_solv(i) = acurv_solv(i) / ( one + abs(acurv_solv(i)) * ( _QREPELMINUS dsurf_solv(i)) ) ! in this model the curvature correction is independent of curvature sign
+#endif
   sbfe = watershell_sbf_spline_compute(acurv_solv(i), dsurf_solv(i), qsbe)
   __SCALE( sbfe(1), surface_force_constant )
   __SCALE( sbfe(2), curvature_force_constant )
