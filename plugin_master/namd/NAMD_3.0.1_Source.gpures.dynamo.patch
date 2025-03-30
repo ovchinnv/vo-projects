@@ -1,0 +1,289 @@
+--- NAMD_3.0.1_Source/src/ComputeGlobal.C	2024-10-14 13:48:35.000000000 -0400
++++ NAMD_3.0.1_Source/src/ComputeGlobal.C	2025-03-28 19:28:20.973722496 -0400
+@@ -52,6 +52,7 @@
+   forceSendEnabled = 0;
+   if ( sp->tclForcesOn ) forceSendEnabled = 1;
+   if ( sp->colvarsOn ) forceSendEnabled = 1;
++  if ( sp->DYPluginActive ) forceSendEnabled = 1; //VO Dynamo
+   forceSendActive = 0;
+   fid.resize(0);
+   totalForce.resize(0);
+--- NAMD_3.0.1_Source/src/GlobalMasterServer.C	2024-10-14 13:47:55.000000000 -0400
++++ NAMD_3.0.1_Source/src/GlobalMasterServer.C	2025-03-28 19:12:46.336002922 -0400
+@@ -592,6 +592,7 @@
+   forceSendEnabled = 0;
+   if ( Node::Object()->simParameters->tclForcesOn ) forceSendEnabled = 1;
+   if ( Node::Object()->simParameters->colvarsOn ) forceSendEnabled = 1;
++  if ( Node::Object()->simParameters->DYPluginActive ) forceSendEnabled = 1; //VO Dynamo
+   DebugM(3,"done constructing\n");
+ }
+ 
+--- NAMD_3.0.1_Source/src/HomePatch.C	2024-10-14 13:48:35.000000000 -0400
++++ NAMD_3.0.1_Source/src/HomePatch.C	2025-03-28 18:22:32.675633630 -0400
+@@ -2386,7 +2386,8 @@
+     // count up total number of double, float, and int arrays
+     // XXX TODO : these magic numbers are bad for maintability
+     const SimParameters *simParams = Node::Object()->simParameters;
+-    int numdoubles = (simParams->colvarsOn || simParams->tclForcesOn) ? 34: 31; 
++//VO
++    int numdoubles = (simParams->colvarsOn || simParams->tclForcesOn || simParams->DYPluginActive) ? 34: 31; 
+     p->numBytes = p->maxAtoms *
+       (numdoubles * sizeof(double) + 9*sizeof(float) + 17*sizeof(int));
+   }
+@@ -2491,7 +2492,7 @@
+   t += p->maxAtoms * sizeof(double);
+   p->f_slow_z = (double *) t;
+   t += p->maxAtoms * sizeof(float);
+-  if (simParams->colvarsOn || simParams->tclForcesOn){  
++  if (simParams->colvarsOn || simParams->tclForcesOn || simParams->DYPluginActive){   //VO Dynamo
+     p->f_global_x = (double *) t;
+     t += p->maxAtoms * sizeof(double);
+     p->f_global_y = (double *) t;
+@@ -2608,7 +2609,7 @@
+ void HomePatch::copy_forces_to_SOA() {
+   NAMD_EVENT_START(1, NamdProfileEvent::COPY_FORCES_TO_SOA);
+   SimParameters *const simParams = Node::Object()->simParameters;
+-  const int saveForce = (simParams->tclForcesOn || simParams->colvarsOn);
++  const int saveForce = (simParams->tclForcesOn || simParams->colvarsOn || simParams->DYPluginActive ); //VO Dynamo
+   const Force *fnormal = f[Results::normal].const_begin();
+   for (int i=0;  i < numAtoms;  i++) {
+     // we set the f_normal_x,y,z to zero before calling positionsReady_SOA in ComputeObjects
+--- NAMD_3.0.1_Source/src/Sequencer.C	2024-10-14 13:48:35.000000000 -0400
++++ NAMD_3.0.1_Source/src/Sequencer.C	2025-03-28 18:34:16.694474901 -0400
+@@ -690,7 +690,9 @@
+   }
+   int doTcl = simParams->tclForcesOn;
+   int doColvars = simParams->colvarsOn;
+-  const int doGlobal = (doTcl || doColvars);
++  //VO Dynamo
++  int doDY = simParams->DYPluginActive;
++  const int doGlobal = (doTcl || doColvars || doDY);
+   CmiNodeBarrier();
+   // Calculate the new force and energy after rescaling the coordinates
+   // Migration happend before calling this function
+@@ -998,7 +1000,9 @@
+     // Do we need to return forces to TCL script or Colvar module?
+     int doTcl = simParams->tclForcesOn;
+     int doColvars = simParams->colvarsOn;
+-    const int doGlobal = (doTcl || doColvars);
++    //VO Dynamo
++    int doDY = simParams->DYPluginActive;
++    const int doGlobal = (doTcl || doColvars || doDY);
+     ComputeGlobal *computeGlobal = Node::Object()->computeMgr->computeGlobalObject;
+ 
+     // The following flags have to be explicitly disabled in Patch object.
+@@ -1173,12 +1177,12 @@
+       CUDASequencer->startRun3(timestep,
+         nbondstep, slowstep, this->patch->lattice.origin(),  
+         CUDASequencer->patchData->reduction,
+-        doTcl || doColvars, maxForceUsed);
++        doTcl || doColvars || doDY, maxForceUsed); //VO Dynamo
+     }
+ 
+     // save total force in computeGlobal, forces are copied from device
+     // to host in startRun3
+-    if (doTcl || doColvars) {
++    if (doTcl || doColvars || doDY) { //VO Dynamo
+       CmiNodeBarrier();
+       // store the total force for compute global clients
+       int numhp = PatchMap::Object()->numHomePatches();
+@@ -1422,7 +1426,7 @@
+         origin,
+ 	step,			  
+         maxForceUsed,
+-        doTcl || doColvars, // requested Force
++        doTcl || doColvars || doDY, // requested Force //VO Dynamo
+         isMigration,
+         isCollection,
+         doEnergy);
+@@ -1432,7 +1436,7 @@
+ 
+     // save total force in computeGlobal, forces are copied from device
+     // to host in launch_part3
+-    if (doTcl || doColvars) {
++    if (doTcl || doColvars || doDY) { //VO Dynamo
+       CmiNodeBarrier();
+       // store the total force for compute global clients
+       int numhp = PatchMap::Object()->numHomePatches();
+@@ -1921,7 +1925,9 @@
+ 
+   // Do we need to return forces to TCL script or Colvar module?
+   int doTcl = simParams->tclForcesOn;
+-	int doColvars = simParams->colvarsOn;
++  //VO Dynamo
++  int doColvars = simParams->colvarsOn;
++  int doDY = simParams->DYPluginActive;
+   ComputeGlobal *computeGlobal = Node::Object()->computeMgr->computeGlobalObject;
+ 
+   int &doVirial = patch->flags.doVirial;
+@@ -2039,7 +2045,7 @@
+     TIMER_STOP(t, RATTLE1);
+ 
+     // save total force in computeGlobal
+-    if (doTcl || doColvars) {
++    if (doTcl || doColvars || doDY) { //VO Dynamo
+       computeGlobal->saveTotalForces(patch);
+     }
+ 
+@@ -2368,7 +2374,7 @@
+     TIMER_STOP(t, RATTLE1);
+ 
+     // save total force in computeGlobal
+-    if (doTcl || doColvars) {
++    if (doTcl || doColvars || doDY ) { //VO Dynamo
+       computeGlobal->saveTotalForces(patch);
+     }
+ 
+@@ -3799,7 +3805,9 @@
+ 
+     // Do we need to return forces to TCL script or Colvar module?
+     int doTcl = simParams->tclForcesOn;
+-	int doColvars = simParams->colvarsOn;
++    //VO Dynamo
++    int doColvars = simParams->colvarsOn;
++    int doDY = simParams->DYPluginActive;
+ //#endif
+     ComputeGlobal *computeGlobal = Node::Object()->computeMgr->computeGlobalObject;
+ 
+@@ -3854,7 +3861,7 @@
+ #endif
+ 
+ #ifndef UPPER_BOUND
+-    if ( staleForces || doTcl || doColvars ) {
++    if ( staleForces || doTcl || doColvars || doDY ) { //VO Dynamo
+       if ( doNonbonded ) saveForce(Results::nbond);
+       if ( doFullElectrostatics ) saveForce(Results::slow);
+     }
+@@ -3890,7 +3897,7 @@
+     TIMER_START(t, RATTLE1);
+     rattle1(timestep,1);
+     TIMER_STOP(t, RATTLE1);
+-    if (doTcl || doColvars)  // include constraint forces
++    if (doTcl || doColvars || doDY)  // include constraint forces //VO Dynamo
+       computeGlobal->saveTotalForces(patch);
+ //    print_vel_AOS(patch->atom.begin(), 0, patch->numAtoms);
+ D_MSG("submitHalfstep()");
+@@ -4084,7 +4091,7 @@
+ #ifndef UPPER_BOUND
+       rescaleaccelMD(step, doNonbonded, doFullElectrostatics); // for accelMD
+ 
+-      if ( staleForces || doTcl || doColvars ) {
++      if ( staleForces || doTcl || doColvars || doDY ) { //VO Dynamo
+         if ( doNonbonded ) saveForce(Results::nbond);
+         if ( doFullElectrostatics ) saveForce(Results::slow);
+       }
+@@ -4115,7 +4122,7 @@
+       TIMER_START(t, RATTLE1);
+       rattle1(timestep,1);
+       TIMER_STOP(t, RATTLE1);
+-      if (doTcl || doColvars)  // include constraint forces
++      if (doTcl || doColvars || doDY)  // include constraint forces //VO Dynamo
+         computeGlobal->saveTotalForces(patch);
+ 
+       TIMER_START(t, SUBMITHALF);
+@@ -4304,12 +4311,13 @@
+   int &doGBIS = patch->flags.doGBIS;
+   doGBIS = simParams->GBISOn;
+ 
+-    int &doLCPO = patch->flags.doLCPO;
+-    doLCPO = simParams->LCPOOn;
++  int &doLCPO = patch->flags.doLCPO;
++  doLCPO = simParams->LCPOOn;
+ 
+-    int doTcl = simParams->tclForcesOn;
+-	int doColvars = simParams->colvarsOn;
+-    ComputeGlobal *computeGlobal = Node::Object()->computeMgr->computeGlobalObject;
++  int doTcl = simParams->tclForcesOn;
++  int doColvars = simParams->colvarsOn;
++  int doDY = simParams->DYPluginActive; //VO Dynamo
++  ComputeGlobal *computeGlobal = Node::Object()->computeMgr->computeGlobalObject;
+ 
+   int &doEnergy = patch->flags.doEnergy;
+   doEnergy = 1;
+@@ -4326,9 +4334,9 @@
+ 
+   runComputeObjects(1,step<numberOfSteps); // must migrate here!
+ 
+-  if ( doTcl || doColvars ) {
++  if ( doTcl || doColvars || doDY) { //VO Dynamo
+ #ifdef DEBUG_MINIMIZE
+-    printf("doTcl = %d   doColvars = %d\n", doTcl, doColvars);
++    printf("doTcl = %d   doColvars = %d   doDY = %d\n", doTcl, doColvars, doDY); //VO Dynamo
+ #endif
+     if ( doNonbonded ) saveForce(Results::nbond);
+     if ( doFullElectrostatics ) saveForce(Results::slow);
+@@ -4373,7 +4381,7 @@
+    }
+ 
+     runComputeObjects(!(step%stepsPerCycle),step<numberOfSteps);
+-    if ( doTcl || doColvars ) {
++    if ( doTcl || doColvars || doDY ) { //VO Dynamo
+       if ( doNonbonded ) saveForce(Results::nbond);
+       if ( doFullElectrostatics ) saveForce(Results::slow);
+       computeGlobal->saveTotalForces(patch);
+--- NAMD_3.0.1_Source/src/SequencerCUDA.C	2024-10-14 13:48:35.000000000 -0400
++++ NAMD_3.0.1_Source/src/SequencerCUDA.C	2025-03-28 18:42:30.762161288 -0400
+@@ -684,7 +684,7 @@
+   allocate_host<double>(&pos_x, numAtomsHomeAndProxyAllocated);
+   allocate_host<double>(&pos_y, numAtomsHomeAndProxyAllocated);
+   allocate_host<double>(&pos_z, numAtomsHomeAndProxyAllocated);
+-  if (simParams->colvarsOn || simParams->tclForcesOn){
++  if (simParams->colvarsOn || simParams->tclForcesOn || simParams->DYPluginActive){ //VO Dynamo
+     allocate_host<double>(&f_global_x, numAtomsHomeAndProxyAllocated);
+     allocate_host<double>(&f_global_y, numAtomsHomeAndProxyAllocated);
+     allocate_host<double>(&f_global_z, numAtomsHomeAndProxyAllocated);
+@@ -735,7 +735,7 @@
+   d_pos_y    = &d_pos_raw[numAtomsHomeAndProxyAllocated*1];
+   d_pos_z    = &d_pos_raw[numAtomsHomeAndProxyAllocated*2];
+   allocate_device<float>(&d_charge, numAtomsHomeAndProxyAllocated);
+-  if (simParams->colvarsOn || simParams->tclForcesOn){  
++  if (simParams->colvarsOn || simParams->tclForcesOn || simParams->DYPluginActive){ //VO Dynamo
+     allocate_device<double>(&d_f_global_x, numAtomsHomeAndProxyAllocated);
+     allocate_device<double>(&d_f_global_y, numAtomsHomeAndProxyAllocated);
+     allocate_device<double>(&d_f_global_z, numAtomsHomeAndProxyAllocated);
+@@ -848,7 +848,7 @@
+     deallocate_host<double>(&f_normal_x);
+     deallocate_host<double>(&f_normal_y);
+     deallocate_host<double>(&f_normal_z);
+-    if (simParams->colvarsOn || simParams->tclForcesOn){    
++    if (simParams->colvarsOn || simParams->tclForcesOn || simParams->DYPluginActive){ //VO Dynamo
+       deallocate_host<double>(&f_global_x);
+       deallocate_host<double>(&f_global_y);
+       deallocate_host<double>(&f_global_z);
+@@ -914,7 +914,7 @@
+       deallocate_device<int>(&d_migrationGroupIndex);
+       deallocate_device<int>(&d_sortIndex);
+     }
+-    if (simParams->colvarsOn || simParams->tclForcesOn){
++    if (simParams->colvarsOn || simParams->tclForcesOn || simParams->DYPluginActive){ //VO Dynamo
+       deallocate_device<double>(&d_f_global_x);
+       deallocate_device<double>(&d_f_global_y);
+       deallocate_device<double>(&d_f_global_z);
+@@ -2352,7 +2352,9 @@
+   }
+   int doTcl = simParams->tclForcesOn;
+   int doColvars = simParams->colvarsOn;
+-  const int doGlobal = (doTcl || doColvars);
++  //VO Dynamo
++  int doDY = simParams->DYPluginActive;
++  const int doGlobal = (doTcl || doColvars || doDY);
+   //Update SOA buffer
+   CUDASequencerKernel->accumulateForceToSOA(
+       doGlobal,
+@@ -2659,7 +2661,7 @@
+     if (simParams->alchDecouple) doAlchDecouple = true;
+     if (simParams->alchElecLambdaStart > 0) doAlchSoftCore = true;
+   }
+-  bool doGlobal = simParams->tclForcesOn || simParams->colvarsOn;
++  bool doGlobal = simParams->tclForcesOn || simParams->colvarsOn || simParams->DYPluginActive; //VO Dynamo
+   if (1) {
+     //fprintf(stderr, "calling set_compute_positions() ****************************************\n");
+     //fprintf(stderr, "calling set_compute_positions\n");
+@@ -2950,6 +2951,7 @@
+   bool doSlow  = false;
+   int doTcl = simParams->tclForcesOn;
+   int doColvars = simParams->colvarsOn;
++  int doDY = simParams->DYPluginActive; //VO Dynamo
+   cudaCheck(cudaSetDevice(deviceID));
+   const int doVirial = simParams->langevinPistonOn || simParams->berendsenPressureOn;
+   // const int doVirial = langevinPistonStep;
