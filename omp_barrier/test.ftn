@@ -1,0 +1,109 @@
+! 5/25 : a study of omp barriers ; this was motivated by a need to put a barrier for a group of threads (i.e. not all)
+! optimization flags make some custom barriers hang !
+! this evidently has to do with the compiler rewriting the code so that some threads have unexpected behavior, like one thread working others waiting ...
+! update : need an atomic read to check condition ; so use an extra var or maybe bflag=bflag+0 ? But a smart compiler can optimize this out
+! update : OK, I think it works, and it actually faster than omp barrier 
+program test
+!implicit none
+
+ use omp_partial_barrier, only : omp_atomic_barrier=>omp_barrier, bflag ! NOTE: bflag should be private
+
+! with the cheat, btypeis comparable with barrier
+
+ use, intrinsic :: omp_lib ! need this to het dynamic thread info
+
+ integer, save :: tid
+ integer, save :: num_threads
+ integer, allocatable :: team(:)
+ integer :: nteam
+! integer :: bflag=0 ! must be initialized to zero
+ integer :: i
+ integer :: bflagp
+! v trying to figure out why some threads do not execute the custom barrier loops!
+
+#ifdef __OMP
+!$omp threadprivate(tid) ! must reside in own command line ; this creates a thread-persistent var
+
+!$omp parallel
+ tid = OMP_get_thread_num()
+ num_threads = OMP_get_num_threads()
+ write(0,*) ' Hello from thread ', tid, ' of ', num_threads
+!$omp end parallel
+
+ allocate(team(nteam))
+ team=(/(i,i=0,nteam-1)/) ! weird form of array constructor
+#else
+ tid=0
+ num_threads=1
+#endif
+
+! define a "team" to be a subset of threads
+ nteam=num_threads ! all threads
+! subset of all threads :
+ nteam=num_threads-1
+! nteam=1
+
+do i=1,_NUMBARRIER ! serial block
+!$omp parallel shared(nteam,bflag) private(bflagp)
+! if (any(team==tid)) then ! subset entering barrier will hang
+ if ( tid < nteam ) then ! this passes custom barrier
+! if ( tid < nteam-1 ) then ! this hangs
+! write(0,*) ' Thread ', tid, ' before barrier'
+
+#ifdef __OMP 
+#if __BTYPE==0
+!$omp barrier
+#elif __BTYPE==1
+ call omp_barrier()
+#elif __BTYPE==2
+ call omp_atomic_barrier(nteam)
+#elif __BTYPE==3
+  if (nteam>1) then
+!$omp atomic capture
+  bflag = bflag + 1 ! update flag by increasing thread count
+  bflagp = bflag ! capture the current value
+!$omp end atomic
+  if (bflagp.eq.nteam) then ! if the value is equal to the # threads, atomically reset flag & leave
+! this can be true only for 1 thread, which resets bflag 
+!$omp atomic write
+   bflag = 0
+!$omp end atomic
+  else ! otherwise, wait until the flag changes to 0
+   do while(bflagp.ne.0 .and. bflagp.ne.nteam)
+!$omp atomic read
+     bflagp=bflag ! this needs to be an atomic read since bflag is being changed by other threads
+!$omp end atomic
+   enddo ! endless while
+  endif
+  endif
+!
+#else // no barrier
+ write(0,*) ' No barrier declared'
+goto 999
+#endif
+
+! write(0,*) ' Thread ', tid, ' after barrier, bflag=', bflag
+! write(0,*) ' barrier var :', barrier_nonce ! with optmization, this is always a fixed num !!!
+ 999 continue
+#endif
+ endif
+
+#ifdef __OMP 
+!$omp end parallel
+#endif
+
+enddo ! i
+
+#ifdef __OMP 
+!$omp parallel
+ write(0,*) ' Thread ', tid, ' after barrier, bflag=', bflag
+!$omp end parallel
+#endif
+
+contains
+ subroutine omp_barrier()
+! write(0,*) ' thread ', tid, 'inside "omp_barrier"'
+!$omp barrier
+ end subroutine omp_barrier
+!
+end program test
