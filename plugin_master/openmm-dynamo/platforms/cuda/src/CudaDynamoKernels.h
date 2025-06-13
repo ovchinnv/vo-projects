@@ -88,7 +88,7 @@ private:
     _Bool usesPeriodic;
     OpenMM::ContextImpl& contextImpl;
     OpenMM::CudaContext& cu;
-    OpenMM::CudaArray* dynamoForces;
+    OpenMM::CudaArray* dynamoForces; // device force array
     CUfunction addForcesKernel;
     CUstream stream;
     CUevent syncEvent;
