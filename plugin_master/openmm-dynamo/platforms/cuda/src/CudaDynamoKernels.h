@@ -40,6 +40,25 @@
 #include "plugin.hpp"
 #include <vector>
 
+#define _whoami #DYNAMO PLUGIN:
+#define _WHOAMI _whoami
+#//define __DYNAMO_SUBSET
+#ifndef __STRING1
+#define __STRING1(__WHAT) #__WHAT
+#endif
+#ifndef __STRNG
+#define __STRNG(__WHAT) __STRING1(__WHAT)
+#endif
+#ifndef __CONCAT
+#define __CONCAT(__A,__B) __CONCAT2(__A,__B)
+#endif
+#ifndef __CONCAT2
+#define __CONCAT2(__A,__B) __CONCAT1(__A,__B)
+#endif
+#ifndef __CONCAT1
+#define __CONCAT1(__A,__B) __A##__B
+#endif
+
 namespace DynamoPlugin {
 
 /**
@@ -49,7 +68,7 @@ class CudaCalcDynamoForceKernel : public CalcDynamoForceKernel {
 public:
     CudaCalcDynamoForceKernel(std::string name, const OpenMM::Platform& platform, OpenMM::ContextImpl& contextImpl, OpenMM::CudaContext& cu) :
             CalcDynamoForceKernel(name, platform), contextImpl(contextImpl), cu(cu), hasInitialized(false), dynamoForces(NULL), r(NULL), fr(NULL), atomlist(NULL),\
-            natoms(0) {
+            natoms(0), natoms_requested(0) {
     }
     ~CudaCalcDynamoForceKernel();
     /**
@@ -89,6 +108,10 @@ private:
     OpenMM::ContextImpl& contextImpl;
     OpenMM::CudaContext& cu;
     OpenMM::CudaArray* dynamoForces; // device force array
+#ifdef __DYNAMO_SUBSET
+    int *atomlist_d=NULL; // atomlist copy maintaned on the device
+    CUfunction addForcesSubKernel; // loop through subset of atoms
+#endif
     CUfunction addForcesKernel;
     CUstream stream;
     CUevent syncEvent;
@@ -98,6 +121,7 @@ private:
 // VO 2017
     _FLOAT master_energy; // plugin energy
     int natoms;    // number of particles
+    int natoms_requested; // number to communicate between host and device
     int *atomlist; // list of atom indices involved in restraints
     _FLOAT *r, *fr; // positions and forces
     _FLOAT box[9] ; //= { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 } ; // box vectors

@@ -8,7 +8,7 @@
  *                                                                            *
  * Portions copyright (c) 2016 Stanford University and the Authors.           *
  * Authors: Peter Eastman                                                     *
- * Contributors: V. Ovchinnikov                                                              *
+ * Contributors: V. Ovchinnikov (DYNAMO Plugin interface)                     *
  *                                                                            *
  * Permission is hereby granted, free of charge, to any person obtaining a    *
  * copy of this software and associated documentation files (the "Software"), *
@@ -78,6 +78,9 @@ CudaCalcDynamoForceKernel::~CudaCalcDynamoForceKernel() {
         master_done_plugin();
         free(r);
         free(fr);
+#ifdef __DYNAMO_SUBSET
+        if (atomlist_d) {cudaFree(atomlist_d); atomlist_d=NULL;}
+#endif
     }
     cu.setAsCurrent();
     if (dynamoForces != NULL)
@@ -93,11 +96,14 @@ void CudaCalcDynamoForceKernel::initialize(const System& system, const DynamoFor
     cuStreamCreate(&stream, CU_STREAM_NON_BLOCKING);
     cuEventCreate(&syncEvent, CU_EVENT_DISABLE_TIMING);
     int elementSize = (cu.getUseDoublePrecision() ? sizeof(double) : sizeof(float));
-    dynamoForces = new CudaArray(cu, 3*natoms, elementSize, "dynamoForces");
+    dynamoForces = new CudaArray(cu, 3*natoms, elementSize, "dynamoForces"); //allocate device force array
     map<string, string> defines;
     defines["NUM_ATOMS"] = cu.intToString(cu.getNumAtoms());
     defines["PADDED_NUM_ATOMS"] = cu.intToString(cu.getPaddedNumAtoms());
     CUmodule module = cu.createModule(CudaDynamoKernelSources::dynamoForce, defines);
+#ifdef __DYNAMO_SUBSET
+    addForcesSubKernel = cu.getKernel(module, "addForcesSub");
+#endif
     addForcesKernel = cu.getKernel(module, "addForces");
     forceGroupFlag = (1<<force.getForceGroup());
     cu.addPreComputation(new StartCalculationPreComputation(*this));
@@ -158,9 +164,30 @@ void CudaCalcDynamoForceKernel::initialize(const System& system, const DynamoFor
     int ierr = (sizeof(_FLOAT)==sizeof(double)) ? \
       master_init_plugin(natoms, 0, (double*)m, NULL, (double*)q, NULL, inputfile, ilen, logfile, llen, &atomlist, usesPeriodic, (double*)box, NULL) : \
       master_init_plugin(natoms, 1, NULL, (float*)m, NULL, (float*)q, inputfile, ilen, logfile, llen, &atomlist, usesPeriodic, NULL, (float*)box);
+
+    if (atomlist!=NULL) { // atom indices provided; check their range
+     int atomid;
+     for ( int l = 0 ; l++ < atomlist[0]  ; ) { // first value in atomlist is the list length
+      atomid = atomlist[l] - 1 ; // subtract one because atom indices are offset from 0 in NAMD, but from 1 in the plugin
+      if ( atomid < 0 || atomid >= natoms ) {
+       cerr<<__STRNG(_whoami)<<"Atom ID"<<atomid<<"is out of range"<<endl; ierr=1;
+      } // atomid valid
+     } // over list
+#ifdef __DYNAMO_SUBSET
+// allocate & populate device atomlist
+     natoms_requested=atomlist[0];
+     cudaError_t cuda_err=cudaMalloc((void**)&(atomlist_d),(natoms_requested+1)*sizeof(int));
+     if (cuda_err!=cudaSuccess) {ierr=1;cerr<<__STRNG(_whoami)<<"Error allocating CUDA memory:"<<cudaGetErrorString(cuda_err)<<endl;}
+     cudaMemcpy(atomlist_d,atomlist,(natoms_requested+1)*sizeof(int),cudaMemcpyHostToDevice);
+#else
+     natoms_requested=natoms;
+#endif
+    } else {
+     natoms_requested=natoms;
+    }
     free(m);
     free(q);
-    pos.resize(natoms);
+    pos.resize(natoms); // this means we are requesting all atoms to be communicated from the GPU at every time step, no ?
     hasInitialized = true;
     if (ierr) throw OpenMMException("Could not initialize DYNAMO plugin");
 } // initialize
@@ -185,7 +212,7 @@ void CudaCalcDynamoForceKernel::executeOnWorkerThread() {
     long int iteration = cu.getStepCount();
     _FLOAT * rptr; // pointer to coordinate array
     int* aptr; // pointer to atom index array
-    int i, j, ierr;
+    int ii, i, j, ierr;
     // buffer for uploading forces to the device:
     bool qdble=cu.getUseDoublePrecision();
     // update periodic vectors
@@ -219,18 +246,37 @@ void CudaCalcDynamoForceKernel::executeOnWorkerThread() {
 //=============
      if (qdble) { // double precision version
       double *frc = (double*) cu.getPinnedBuffer();
-      memset(frc,0,3*natoms*sizeof(double));
       if (atomlist!=NULL) { // atom indices provided; use them for adding forces
-       for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
-        i=*aptr - 1; // for zero offset (e.g. first coordinate lives in r[0]
-        j=3*i;
-        frc[j]= fr[j]*str2omm_f; j++; //units
-// cout << "x-force on atom: "<<j<<"="<<frc[j]<<endl;
-        frc[j]= fr[j]*str2omm_f; j++;
+// if we are here, this means that the atom indices were not provided in the initialization call, so we need to perform that part of init here
+#ifdef __DYNAMO_SUBSET
+// allocate & populate device atomlist
+       natoms_requested=atomlist[0];
+       cudaError_t cuda_err=cudaMalloc((void**)&(atomlist_d),(natoms_requested+1)*sizeof(int));
+       if (cuda_err!=cudaSuccess) {ierr=1;cerr<<__STRNG(_whoami)<<"Error allocating CUDA memory:"<<cudaGetErrorString(cuda_err);}
+       cudaMemcpy(atomlist_d,atomlist,(natoms_requested+1)*sizeof(int),cudaMemcpyHostToDevice);
+       memset(frc,0,3*natoms_requested*sizeof(double)); //should not be needed
+// copy forces to subset array
+       for ( ii=0, i=0 ; i++ < natoms_requested; ) { // increment i right after the comparison, b/c skipping 0th entry which stores list size
+        j=3*(atomlist[i]-1);
+        frc[ii]= fr[j]*str2omm_f; ++ii; ++j;
+        frc[ii]= fr[j]*str2omm_f; ++ii; ++j;
+        frc[ii]= fr[j]*str2omm_f; ++ii;
+       }
+#else
+       memset(frc,0,3*natoms_requested*sizeof(double)); // make sure all forces are zero, since we will be using an all-atom force assignment kernel
+// NOTE: even though we communicated the entire atom array, we still only use the indices in the atomlist, hopefully with slight time savings
+//       for (aptr=atomlist+1 ; aptr<=atomlist + atomlist[0] ; aptr++) // iterate until atomlist points to the last index
+//        i=*aptr - 1; // for zero offset (first coordinate lives in r[0])
+//        j=3*i;
+       for (i=0 ; i++ < atomlist[0] ; ){ // same as above, but clearer ; note: comparing i, then immediately incrementing
+        j=3*(atomlist[i]-1);
+        frc[j]= fr[j]*str2omm_f;++j;
+        frc[j]= fr[j]*str2omm_f;++j;
         frc[j]= fr[j]*str2omm_f;
        }
-      } else { // no atomlist provided; loop over all atoms
-       for (j=0 ; j < 3*natoms ; j++) {
+#endif
+      } else { // no atomlist provided; loop over all atoms (natoms_requested=natoms)
+       for (j=0 ; j < 3*natoms_requested ; j++) {
         frc[j]= fr[j]*str2omm_f; //units
        }
       } // atomlist
@@ -240,7 +286,6 @@ void CudaCalcDynamoForceKernel::executeOnWorkerThread() {
       float *frc = (float*) cu.getPinnedBuffer();
       memset(frc,0,3*natoms*sizeof(float));
       if (atomlist!=NULL) { // atom indices provided; use them for adding forces
-//      if (0) { // atom indices provided; use them for adding forces
        for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
         i=*aptr - 1; // for zero offset (e.g. first coordinate lives in r[0]
         j=3*i;
@@ -265,21 +310,42 @@ void CudaCalcDynamoForceKernel::executeOnWorkerThread() {
 // cerr << "position of atom: "<<j<<"="<<pos[j][0]<<pos[j][1]<<pos[j][2]<<endl;
      }
 //
-// cerr << "CALLING DYNAMO"<<endl;
+#ifdef __TIMEDEBUG
+     clock_t dstart_time=clock();
+#endif
      ierr = (sizeof(_FLOAT)==sizeof(double)) ? \
       master_dyna_plugin(iteration, 0, (double*)r, NULL, (double*)fr, NULL, (double*)&master_energy, NULL, &atomlist, usesPeriodic, (double*)&box, NULL) : \
       master_dyna_plugin(iteration, 1, NULL, (float*)r,  NULL, (float*)fr, NULL, (float*)&master_energy, &atomlist, usesPeriodic, NULL, (float*)&box) ; // atomlist should not be modified in this call
+#ifdef __TIMEDEBUG
+     clock_t dstop_time=clock();
+     cout<<__STRNG(_whoami)<<"master_dyna_plugin took "<<dstop_time-dstart_time<<" cycles"<<endl;
+     cout<<__STRNG(_whoami)<<"OMP INFO :"<<endl;
+#endif
 //
      if (qdble) { // double
       double *frc = (double*) cu.getPinnedBuffer();
-      memset(frc,0,3*natoms*sizeof(double));
-      for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
-       i=*aptr - 1; // zero offset (see above)
-       j=3*i ;
-       frc[j]= fr[j]*str2omm_f;j++; //units
-       frc[j]= fr[j]*str2omm_f;j++;
-       frc[j]= fr[j]*str2omm_f;
+#ifdef __DYNAMO_SUBSET
+      memset(frc,0,3*natoms_requested*sizeof(double));
+// copy forces to subset array
+      for ( ii=0, i=0 ; i++ < natoms_requested; ) {
+        j=3*(atomlist[i]-1);
+        frc[ii]= fr[j]*str2omm_f; ++ii;++j;
+        frc[ii]= fr[j]*str2omm_f; ++ii;++j;
+        frc[ii]= fr[j]*str2omm_f; ++ii;
       }
+#else
+// copy forces of select atoms to full array
+//     for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++)  // iterate until atomlist points to the last index
+//        i=*aptr - 1; // for zero offset (first coordinate lives in r[0])
+//        j=3*i;
+      memset(frc,0,3*natoms_requested*sizeof(double));
+      for (i=0 ; i++ < atomlist[0] ; ) {
+        j=3*(atomlist[i]-1);
+        frc[j]= fr[j]*str2omm_f;++j;
+        frc[j]= fr[j]*str2omm_f;++j;
+        frc[j]= fr[j]*str2omm_f;
+      }
+#endif
      } else { // single
       float *frc = (float*) cu.getPinnedBuffer(); // host force array
       memset(frc,0,3*natoms*sizeof(float));
@@ -294,7 +360,8 @@ void CudaCalcDynamoForceKernel::executeOnWorkerThread() {
     } // atomlist == NULL
     // copy forces to device
     cu.setAsCurrent();
-    cuMemcpyHtoDAsync(dynamoForces->getDevicePointer(), cu.getPinnedBuffer(), dynamoForces->getSize()*dynamoForces->getElementSize(), stream);
+//    cuMemcpyHtoDAsync(dynamoForces->getDevicePointer(), cu.getPinnedBuffer(), dynamoForces->getSize()*dynamoForces->getElementSize(), stream);
+    cuMemcpyHtoDAsync(dynamoForces->getDevicePointer(), cu.getPinnedBuffer(), natoms_requested*dynamoForces->getElementSize(), stream);
     cuEventRecord(syncEvent, stream);
 }
 
@@ -307,8 +374,19 @@ double CudaCalcDynamoForceKernel::addForces(bool includeForces, bool includeEner
     cuStreamWaitEvent(cu.getCurrentStream(), syncEvent, 0);
     // Add in the forces.
     if (includeForces) {
+#ifdef __DYNAMO_SUBSET
+     if (atomlist!=NULL) {
+        void* args[] = {&dynamoForces->getDevicePointer(), &cu.getForce().getDevicePointer(), &cu.getAtomIndexArray().getDevicePointer(),(void**)&atomlist_d};
+//        cu.executeKernel(addForcesSubKernel, args, atomlist[0]);
+//        cu.executeKernel(addForcesKernel, args, cu.getNumAtoms());
+     } else {
         void* args[] = {&dynamoForces->getDevicePointer(), &cu.getForce().getDevicePointer(), &cu.getAtomIndexArray().getDevicePointer()};
         cu.executeKernel(addForcesKernel, args, cu.getNumAtoms());
+     }
+#else
+     void* args[] = {&dynamoForces->getDevicePointer(), &cu.getForce().getDevicePointer(), &cu.getAtomIndexArray().getDevicePointer()};
+     cu.executeKernel(addForcesKernel, args, cu.getNumAtoms());
+#endif
     }
     // Return plugin energy.
     master_energy*=str2omm_e;
