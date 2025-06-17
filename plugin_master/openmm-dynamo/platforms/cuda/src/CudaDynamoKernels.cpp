@@ -83,8 +83,10 @@ CudaCalcDynamoForceKernel::~CudaCalcDynamoForceKernel() {
 #endif
     }
     cu.setAsCurrent();
-    if (dynamoForces != NULL)
-        delete dynamoForces;
+    if (dynamoForces != NULL) delete dynamoForces;
+#ifdef __DYNAMO_SUBSET
+    if (dynamoSubForces != NULL) delete dynamoSubForces;
+#endif
     cuStreamDestroy(stream);
     cuEventDestroy(syncEvent);
 }
@@ -102,7 +104,9 @@ void CudaCalcDynamoForceKernel::initialize(const System& system, const DynamoFor
     defines["PADDED_NUM_ATOMS"] = cu.intToString(cu.getPaddedNumAtoms());
     CUmodule module = cu.createModule(CudaDynamoKernelSources::dynamoForce, defines);
 #ifdef __DYNAMO_SUBSET
-    addForcesSubKernel = cu.getKernel(module, "addForcesSub");
+    dynamoSubForces = new CudaArray(cu, 3*natoms, elementSize, "dynamoSubForces"); //overdimensioned
+    cudaMemset((void*)dynamoSubForces->getDevicePointer(), 0.0, 3*natoms*elementSize); // do not know whether needed
+    expandSubForcesKernel = cu.getKernel(module, "expandSubForces");
 #endif
     addForcesKernel = cu.getKernel(module, "addForces");
     forceGroupFlag = (1<<force.getForceGroup());
@@ -255,7 +259,7 @@ void CudaCalcDynamoForceKernel::executeOnWorkerThread() {
        if (cuda_err!=cudaSuccess) {ierr=1;cerr<<__STRNG(_whoami)<<"Error allocating CUDA memory:"<<cudaGetErrorString(cuda_err);}
        cudaMemcpy(atomlist_d,atomlist,(natoms_requested+1)*sizeof(int),cudaMemcpyHostToDevice);
        memset(frc,0,3*natoms_requested*sizeof(double)); //should not be needed
-// copy forces to subset array
+// copy subset of forces to array
        for ( ii=0, i=0 ; i++ < natoms_requested; ) { // increment i right after the comparison, b/c skipping 0th entry which stores list size
         j=3*(atomlist[i]-1);
         frc[ii]= fr[j]*str2omm_f; ++ii; ++j;
@@ -361,7 +365,11 @@ void CudaCalcDynamoForceKernel::executeOnWorkerThread() {
     // copy forces to device
     cu.setAsCurrent();
 //    cuMemcpyHtoDAsync(dynamoForces->getDevicePointer(), cu.getPinnedBuffer(), dynamoForces->getSize()*dynamoForces->getElementSize(), stream);
-    cuMemcpyHtoDAsync(dynamoForces->getDevicePointer(), cu.getPinnedBuffer(), natoms_requested*dynamoForces->getElementSize(), stream);
+#ifdef __SUBSET_DYNAMO
+    cuMemcpyHtoDAsync(dynamoSubForces->getDevicePointer(), cu.getPinnedBuffer(), 3*natoms_requested*dynamoSubForces->getElementSize(), stream);
+#else
+    cuMemcpyHtoDAsync(dynamoForces->getDevicePointer(), cu.getPinnedBuffer(), 3*natoms_requested*dynamoForces->getElementSize(), stream);
+#endif
     cuEventRecord(syncEvent, stream);
 }
 
@@ -373,20 +381,22 @@ double CudaCalcDynamoForceKernel::addForces(bool includeForces, bool includeEner
     cu.getWorkThread().flush();
     cuStreamWaitEvent(cu.getCurrentStream(), syncEvent, 0);
     // Add in the forces.
+//==== DBG check index array === NOTE: the inds are mangled after a few iterations !
+//    int * indexArray = (int*) malloc(natoms*sizeof(int));
+//    for (int i=0 ; i<natoms ; i++) { indexArray[i]=-i; }
+//    cuMemcpyDtoH(&indexArray[0], cu.getAtomIndexArray().getDevicePointer(), natoms*sizeof(int));
+//    cudaMemcpy(indexArray, (void *)cu.getAtomIndexArray().getDevicePointer(), natoms*sizeof(int),cudaMemcpyDeviceToHost); // same as above
+//    for (int i=0 ; i<natoms ; i++) { cout<<i<<"~="<<indexArray[i]<<endl; }
+//==== DBG
     if (includeForces) {
 #ifdef __DYNAMO_SUBSET
      if (atomlist!=NULL) {
-        void* args[] = {&dynamoForces->getDevicePointer(), &cu.getForce().getDevicePointer(), &cu.getAtomIndexArray().getDevicePointer(),(void**)&atomlist_d};
-//        cu.executeKernel(addForcesSubKernel, args, atomlist[0]);
-//        cu.executeKernel(addForcesKernel, args, cu.getNumAtoms());
-     } else {
-        void* args[] = {&dynamoForces->getDevicePointer(), &cu.getForce().getDevicePointer(), &cu.getAtomIndexArray().getDevicePointer()};
-        cu.executeKernel(addForcesKernel, args, cu.getNumAtoms());
+        void* args[] = {&dynamoSubForces->getDevicePointer(), &dynamoForces->getDevicePointer(), &atomlist_d};
+        cu.executeKernel(expandSubForcesKernel, args, atomlist[0]); // kernel, arguments, workunits, blocksize=-1 ;
      }
-#else
+#endif
      void* args[] = {&dynamoForces->getDevicePointer(), &cu.getForce().getDevicePointer(), &cu.getAtomIndexArray().getDevicePointer()};
      cu.executeKernel(addForcesKernel, args, cu.getNumAtoms());
-#endif
     }
     // Return plugin energy.
     master_energy*=str2omm_e;

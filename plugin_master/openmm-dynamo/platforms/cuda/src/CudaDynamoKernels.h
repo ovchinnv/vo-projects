@@ -42,7 +42,7 @@
 
 #define _whoami #DYNAMO PLUGIN:
 #define _WHOAMI _whoami
-#//define __DYNAMO_SUBSET
+#define __DYNAMO_SUBSET
 #ifndef __STRING1
 #define __STRING1(__WHAT) #__WHAT
 #endif
@@ -109,8 +109,9 @@ private:
     OpenMM::CudaContext& cu;
     OpenMM::CudaArray* dynamoForces; // device force array
 #ifdef __DYNAMO_SUBSET
+    OpenMM::CudaArray* dynamoSubForces; // device subset force array
     int *atomlist_d=NULL; // atomlist copy maintaned on the device
-    CUfunction addForcesSubKernel; // loop through subset of atoms
+    CUfunction expandSubForcesKernel; // loop through subset of atoms
 #endif
     CUfunction addForcesKernel;
     CUstream stream;
