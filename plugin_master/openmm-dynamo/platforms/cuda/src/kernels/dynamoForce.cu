@@ -9,10 +9,10 @@ void addForces(const real* __restrict__ forces, long long* __restrict__ forceBuf
 }
 extern "C" __global__
 void expandSubForces(const real* __restrict__ subforces, real* __restrict__ forces, const int* __restrict__ atomlist) {
-    for (int iatom = blockIdx.x*blockDim.x+threadIdx.x; iatom < atomlist[0]; iatom += blockDim.x*gridDim.x) {
-        int atom = atomlist[iatom+1]-1; // psf index of atom
-        forces[3*atom  ]=subforces[3*iatom  ];
-        forces[3*atom+1]=subforces[3*iatom+1];
-        forces[3*atom+2]=subforces[3*iatom+2];
+    for (int i = blockIdx.x*blockDim.x+threadIdx.x; i < atomlist[0]; i+= blockDim.x*gridDim.x) {
+        int j = (atomlist[i+1]-1); // coordinate index consistent with psf
+        forces[3*j  ]=subforces[3*i  ];
+        forces[3*j+1]=subforces[3*i+1];
+        forces[3*j+2]=subforces[3*i+2];
     }
 }

@@ -42,7 +42,9 @@
 
 #define _whoami #DYNAMO PLUGIN:
 #define _WHOAMI _whoami
+#//define __DYNAMO_DEBUG
 #define __DYNAMO_SUBSET
+#//^ hard to believe, but __DYNAMO_SUBSET essentially makes no difference (maybe 2% faster...)
 #ifndef __STRING1
 #define __STRING1(__WHAT) #__WHAT
 #endif
@@ -119,7 +121,7 @@ private:
     int forceGroupFlag;
     std::vector<OpenMM::Vec3> pos ; //, frc;
     OpenMM::Vec3 boxVectors[3];
-// VO 2017
+    int elementSize=0 ;
     _FLOAT master_energy; // plugin energy
     int natoms;    // number of particles
     int natoms_requested; // number to communicate between host and device
