@@ -1,0 +1,34 @@
+! Victor Ovchinnikov, Harvard, 2025
+! attempt to replace openmp barrier with a mode flexible alternative
+! that allows blocking until a subset of the thread team passes
+module omp_partial_barrier
+ __IMPNONE
+ int, save :: bflag=0
+#ifndef __DEBUG
+ private bflag ! there is no reason to expose this, except in debugging
+#endif
+ public omp_barrier
+contains
+ subroutine omp_barrier(nteam)
+ int, intent(in) :: nteam
+ int :: bflagp ! not really sure what kind of var this is -- local & cached ?
+ if (nteam.gt.1) then
+!$omp atomic capture
+  bflag = bflag + 1 ! update flag by increasing thread count
+  bflagp = bflag ! capture the current value
+!$omp end atomic
+  if (bflagp.eq.nteam) then ! if the value is equal to the # threads, atomically reset flag & leave
+! this can be true only for 1 thread, which resets bflag 
+!$omp atomic write
+   bflag = 0
+!$omp end atomic
+  else ! otherwise, wait until the flag changes to 0
+   do while (bflagp.ne.0 .and. bflagp.ne.nteam)
+!$omp atomic read
+     bflagp=bflag ! needs to be an atomic read because bflag is possibly being changed by other threads
+!$omp end atomic
+   enddo ! while
+  endif
+ endif
+end subroutine omp_barrier
+end module omp_partial_barrier

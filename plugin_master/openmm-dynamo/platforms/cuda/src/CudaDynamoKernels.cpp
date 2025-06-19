@@ -281,7 +281,7 @@ void CudaCalcDynamoForceKernel::executeOnWorkerThread() {
        frc[j]= fr[j]*str2omm_f;
       }
      } else { // single
-      float *frc = (float*) cu.getPinnedBuffer();
+      float *frc = (float*) cu.getPinnedBuffer(); // host force array
       memset(frc,0,3*natoms*sizeof(float));
       for (aptr=atomlist+1 ; aptr<atomlist + 1 + (*atomlist) ; aptr++) { // iterate until atomlist points to the last index
        i=*aptr - 1; // zero offset (see above)
@@ -292,7 +292,7 @@ void CudaCalcDynamoForceKernel::executeOnWorkerThread() {
       }
      } // qdble
     } // atomlist == NULL
-    // upload forces to device
+    // copy forces to device
     cu.setAsCurrent();
     cuMemcpyHtoDAsync(dynamoForces->getDevicePointer(), cu.getPinnedBuffer(), dynamoForces->getSize()*dynamoForces->getElementSize(), stream);
     cuEventRecord(syncEvent, stream);

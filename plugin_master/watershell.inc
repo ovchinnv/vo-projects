@@ -3,9 +3,9 @@ include ../watershell/version.inc
 
 ifeq ($(version),2)
  LINKOBJS+=watershell2.o watershell_sbf_spline.o watershell_sbf_spline1d.o
-else
- version=
- LINKOBJS+=watershell.o
+endif
+ifeq ($(version),1)
+  LINKOBJS+=watershell.o
 endif
 
 DEPS+=watershell
