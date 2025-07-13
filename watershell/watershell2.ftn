@@ -77,8 +77,8 @@ module _N
  public r
  public fr
  public surface_energy
+ public curvature_energy ! this _should_ be protected by ~__1DSBP, but we need it to always be defined for plugin_master to work
 #ifndef __1DSBP
- public curvature_energy
 #endif
 #ifdef __ROTRES
  public rigid_body_energy
@@ -107,8 +107,8 @@ module _N
  float :: cutoff_surf, oo_surf_stdev
  float :: surface_contour_value ! value of density which defines the surface ; negative means to compute from structure
  float :: surface_energy
+ float :: curvature_energy=0d0 ! this _should_ be protected by ~__1DSBP, but we need it to always be defined for plugin_master to work
 #ifndef __1DSBP
- float :: curvature_energy
 #ifdef __GRADCURV
  float :: sbfe(5) ! array that holds instantaneous force and energy on a single solvent particle (distance and curvature force & energy ==> 4 values); 5: dU/dcurv
 #else
@@ -2533,7 +2533,7 @@ endif ! decide whether to compute dr_surf
 #endif
 #endif
 #else
-! __DROINV = FALSE (undefined) case
+! __DROINV = FALSE (undefined) case, i.e. include derivative of rho
   __SCALE(drho_solv(:,i),d0) ! normalize gradient (note that we use the normalized grad as the surface unit normal for forces)
 #ifndef __1DSBP
 ! normalized grad formula:
@@ -2572,7 +2572,7 @@ endif ! decide whether to compute dr_surf
 ! note 2/24 : double check signs for qrepelminus (-); the point of qrepelminus is to have a means of repelling from the boundary (rather than attracting)
 ! note also that the curvature would be negative from the perception of an atom beyond the wall
 #if (_DBGLEV>1)
-  __DBGOUT('solv. atom#:', i, 'density:', rho_solv(i), 'distance to bdry:', dsurf_solv(i), 'outside?:', qoutside_solv(i))
+  __DBGOUT('solv. atom#:', i, 'density:', rho_solv(i), 'distance to bdry:', dsurf_solv(i))
 #endif
 !
 #ifndef __1DSBP
@@ -2620,17 +2620,23 @@ endif ! decide whether to compute dr_surf
 ! basically, modified curvature derivative has a term that multiplies dU/dC by dR, hence sbfe(5)
 !  if ( dsurf_solv(i).gt.zero ) &
   if ( acurv_solv(i).lt.zero ) &
-   __DECR(pre, sbfe(5) * acurv_solv(i)**2 * HoG(1) ) ! dK/dd=-c*|c*|, but only if (1+|C|dR)>0 ; better to use -c*^2 x sign(c) (?)
-!   __DECR(pre, sbfe(5) * acurv_solv(i) * abs(acurv_solv(i)) ) ! dK/dd=-c*|c*|, but only if (1+|C|dR)>0 ; better to use -c*^2 x sign(c)
+   __INCR(pre, sbfe(5) * acurv_solv(i)**2 * HoG(1) ) ! dK/dd=-c*|c*|, but only if (1+|C|dR)>0 ; better to use -c*^2 x sign(c) (?)
+!   __INCR(pre, sbfe(5) * acurv_solv(i) * abs(acurv_solv(i)) ) ! dK/dd=-c*|c*|, but only if (1+|C|dR)>0 ; better to use -c*^2 x sign(c)
 ! where c is the distance-corrected curvature (which is what gives c the d-dependence in the first place)
 #endif
-  __SCALE(pre, -( _QREPELMINUS curvature_force_constant ))
+  __SCALE(pre, -( _QREPELMINUS curvature_force_constant )) ! NOTE that the surface normal is inward, hence (-) force
 !
 #else
   sbfe = watershell_sbf_spline1D_compute(dsurf_solv(i), qsbe)
   pre=zero
 #endif
   __DECR(pre, _QREPELMINUS surface_force_constant*sbfe(1))
+#ifdef __DEBUG
+  if (_DBGLEV>1) then
+   __DBGOUT('QSBE:',qsbe)
+   __DBGOUT('SBFE:',sbfe)
+  endif
+#endif
 
 #ifdef __DRHOINV
 ! include derivative of distance function (simplest model only)
@@ -2648,7 +2654,7 @@ endif ! decide whether to compute dr_surf
 #else
 ! in this case we need to multiply by |grad rho| for a fair comparison
   if ( abs(pre)*sqrt(sum(drho_solv(:,i)**2)) .gt. __FMAX ) then
-   __WRN(whoami, 'FORCE PREFACTOR FOR SOLVENT ATOM '//itoa(i)//' IS TOO HIGH (|'//ftoa(pre*sqrt(sum(drho_solv(:,i)**2)))//'|>'//ftoa(__FMAX)//') AT ITERATION '//itoa(iteration))
+   __WRN(whoami, 'FORCE PREFACTOR FOR SOLVENT ATOM '//itoa(i)//' IS TOO HIGH (|'//ftoa(pre*sqrt(sum(drho_solv(:,i)**2)))//'|>'//ftoa(one*__FMAX)//') AT ITERATION '//itoa(iteration))
 #endif
 ! from output section below
 #define __OUT(...)  __INC(i_);write(_MSGBUF(i_),*) __VA_ARGS__
@@ -2657,9 +2663,9 @@ endif ! decide whether to compute dr_surf
    __OUT('=Surface density:', rho_solv(i))
    __OUT('=Surface distance:', dsurf_solv(i))
    __OUT('=Surface density gradient (magnitude):',drho_solv(:,i),sqrt(sum(drho_solv(:,i)**2)));
-   __OUT('=Surface curvature:', acurv_solv(i))
    __OUT('=Surface spline force:',sbfe(1))
 #ifndef __1DSBP
+   __OUT('=Surface curvature:', acurv_solv(i))
    __OUT('=Curvature spline force:',sbfe(2))
 #endif
 #ifdef __DRHOINV
@@ -2671,7 +2677,7 @@ endif ! decide whether to compute dr_surf
   endif
 #endif
 ! add forces to force arrays ; the normalized gradient gives direction
-! note that the gradient is inwardly directed, and the force has the "correct" sign (+/-) for inside/out, so need (-) above
+! RECALL(!) that the gradient is inwardly directed, and the force has the "correct" sign (+/-) for inside/out
   __INCR(fr(1,isolvent_atoms(i)), pre * drho_solv(1,i))
   __INCR(fr(2,isolvent_atoms(i)), pre * drho_solv(2,i))
   __INCR(fr(3,isolvent_atoms(i)), pre * drho_solv(3,i))
@@ -2683,7 +2689,7 @@ endif ! decide whether to compute dr_surf
 ! note two mods : (1) derivative of potential wrt curvature x grad curv (here), and
 ! (2) a modification of the above to account for the curvature correction (already included above)
 ! Lap has the curvature correction, if needed, otherwise =1
-  pre = - ( _QREPELMINUS curvature_force_constant * sbfe(5) &    ! _qrepelminus to account for curvature sign flip upon bdry crossing
+  pre = ( _QREPELMINUS curvature_force_constant * sbfe(5) &    ! _qrepelminus to account for curvature sign flip upon bdry crossing
 #ifdef __CURVCORRECT
   * Lap &
 #endif
@@ -3295,12 +3301,14 @@ __DBGVAR(density_target,1)
 !
 #ifdef __ROTRES
   if (qrigid_body_restraint) then
-#ifdef __OBSOLETE
+#ifndef __OBSOLETE
 ! compute energy here, since this will happen rarely
+! note also that prescaling by fc precludes the use of fc=0, b/c division below
    rigid_body_energy=zero
    if ( abs(rigid_body_force_constant).gt.__ERRTOL) then
     do ii=1, nsurface_atoms
-     __INCR(rigid_body_energy, sum( dr_surf(:,ii) * rb_wgt(ii) *  matmul(A_rb,r_surf_ref(:,ii))) )
+! in the below, A_rb is actuall ( A_rb - I )  x k_rb ; dr_surf are actually _inst_ coords shifted to COM
+     __INCR(rigid_body_energy, sum( dr_surf(:,ii) * rb_wgt(ii) *  matmul(A_rb,r_surf_ref(:,ii))) ) ! r * w (A-I) * r0, as in paper
     enddo
    __OUT('Rotational restraint energy:        ', rigid_body_energy)
 ! translational component :
@@ -3328,11 +3336,12 @@ __DBGVAR(density_target,1)
 #ifdef __DEBUG
 ! repeat
 ! alternative calculation, close to the unsimplified analytical definition
+! note that may need to unscale pre-scaled terms
    rigid_body_energy=zero
    if ( abs(rigid_body_force_constant).gt.__ERRTOL) then
     do ii=1, nsurface_atoms
-     __INCR(rigid_body_energy, sum( ( dr_surf(:,ii) - r_surf_ref(:,ii) + dcom )**2 ) * rb_wgt(ii))
-     __DECR(rigid_body_energy, sum( ( dr_surf(:,ii) - matmul(A_rb, r_surf_ref(:,ii)))**2) * rb_wgt(ii))
+     __INCR(rigid_body_energy, sum( ( dr_surf(:,ii) - r_surf_ref(:,ii) + dcom/rigid_body_force_constant )**2 ) * rb_wgt(ii))
+     __DECR(rigid_body_energy, sum( ( dr_surf(:,ii) - matmul(A_rb/rigid_body_force_constant+Id3, r_surf_ref(:,ii)))**2) * rb_wgt(ii))
     enddo
     __SCALE(rigid_body_energy, half*rigid_body_force_constant)
     __OUT('Rigid-body restraint energy (DBG):  ', rigid_body_energy)
