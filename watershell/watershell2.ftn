@@ -1822,6 +1822,7 @@ __DBGVAR(r_com_sa,1)
 ! copy solvent coordinates
 ! 12/24 : wonder whether the below copy is ever more efficient with OMP; based on tests in plugin_master wth __OMPCOPY, the answer seems to be no
  r_solv=r(:,isolvent_atoms)
+!
 #if defined(__SORT_LIST) && defined(__NEIGHBOR_LIST)
 ! sort neighbor list on first iteration
  if (qneighbor_list.and.sort_neighbor_list_freq.gt.izero) then
@@ -2345,6 +2346,14 @@ endif ! decide whether to compute dr_surf
 
  endif ! compute surface distance / contour value
 !========================== compute contour value ^
+#ifdef __DEBUGDUMP
+! moved here, because the gradient is normalized when __DRHOINV=false below:
+ i=-1
+ call files_open(i, 'drho_solv.dat', 'FORMATTED','WRITE')
+ write(i,*) drho_solv
+ call files_close(i)
+#endif
+!
 #ifdef __DASYSTAT
 ! compute outer-boundary bulk2_dist.
  if (dasystat .and. abs(obulk_boundary_distance).lt.__ERRTOL ) then
@@ -2519,20 +2528,20 @@ endif ! decide whether to compute dr_surf
 #define _D0 d0
 #include "gradcurv.src"
 #undef _D0
-#else
+#else __GRADCURV
 ! compute curvature without derivative
 ! note that qrepelminus is present because the curvature flips sign when we cross the boundary ; the c-gradient should also flip the sign (can do at force application)
 ! 12/24 : note that I am averaging the two curvatures (trace of the curvature matrix) to get the mean curvature
    acurv_solv(i) = _QREPELMINUS  half * d0  * ( d2rho_solv(1,i) + d2rho_solv(4,i) + d2rho_solv(6,i) \
               - d0**2 * ( d2rho_solv(1,i)*drho_solv(1,i)**2 + d2rho_solv(4,i)*drho_solv(2,i)**2 + d2rho_solv(6,i)*drho_solv(3,i)**2 \
             + ( drho_solv(1,i)*(d2rho_solv(2,i)*drho_solv(2,i) + d2rho_solv(3,i)*drho_solv(3,i)) + d2rho_solv(5,i)*drho_solv(2,i)*drho_solv(3,i) )*2 ) )
-#endif
+#endif __GRADCURV
 !
 #ifdef __ALLOW_FIXED_CURV
   endif
 #endif
-#endif
-#else
+#endif __1DSBP
+#else __DRHOINV
 ! __DROINV = FALSE (undefined) case, i.e. include derivative of rho
   __SCALE(drho_solv(:,i),d0) ! normalize gradient (note that we use the normalized grad as the surface unit normal for forces)
 #ifndef __1DSBP
@@ -2549,16 +2558,16 @@ endif ! decide whether to compute dr_surf
 #define _D0 1
 #include "gradcurv.src"
 #undef _D0
-#else
+#else __GRADCURV
  acurv_solv(i)= _QREPELMINUS half * d0  * ( d2rho_solv(1,i)*(one-drho_solv(1,i)**2) + d2rho_solv(4,i)*(one-drho_solv(2,i)**2) + d2rho_solv(6,i)*(one-drho_solv(3,i)**2)\
                        - ( drho_solv(1,i)*( d2rho_solv(2,i)*drho_solv(2,i) + d2rho_solv(3,i)*drho_solv(3,i)) + d2rho_solv(5,i)*drho_solv(2,i)*drho_solv(3,i) )*2 )
-#endif
+#endif __GRADCURV
 !
 #ifdef __ALLOW_FIXED_CURV
   endif
 #endif
-#endif
-#endif
+#endif __1DSBP
+#endif __DRHOINV
 ! now can compute the boundary force from spline data
 ! NB: this is the lowest order of approximation for the distance to boundary and curvature
 ! a very slightly better curvature value is obtained by adding a function of the distance to boundary :
@@ -3426,11 +3435,11 @@ __DBGVAR(solvent_mass_ibulk,1)
 #ifdef __DEBUGDUMP
 ! write simulation state to file for force debugging
  i=-1;
- call files_open(i, 'surfind.dat', 'FORMATTED','WRITE')
+ call files_open(i, 'surf_inds.dat', 'FORMATTED','WRITE')
  write(i,*) isurface_atoms
  call files_close(i)
 !
- call files_open(i, 'solvind.dat', 'FORMATTED','WRITE')
+ call files_open(i, 'solv_inds.dat', 'FORMATTED','WRITE')
  write(i,*) isolvent_atoms
  call files_close(i)
 !
@@ -3466,15 +3475,19 @@ __DBGVAR(solvent_mass_ibulk,1)
  write(i,*) rho_solv
  call files_close(i)
 !
+ call files_open(i, 'max_rho.dat', 'FORMATTED','WRITE')
+ write(i,*) maxinner_contour_value
+ call files_close(i)
+!
 #ifdef __HAMILTONIAN
  call files_open(i, 'drho_surf.dat', 'FORMATTED','WRITE')
  write(i,*) drho_surf(:,:,0)
  call files_close(i)
 #endif
-!
- call files_open(i, 'drho_solv.dat', 'FORMATTED','WRITE')
- write(i,*) drho_solv
- call files_close(i)
+! moved up, because the gradient is normalized when __DRHOINV=false :
+! call files_open(i, 'drho_solv.dat', 'FORMATTED','WRITE')
+! write(i,*) drho_solv
+! call files_close(i)
 !
  call files_open(i, 'd2rho_solv.dat', 'FORMATTED','WRITE')
  write(i,'(G20.12)') d2rho_solv
@@ -3961,7 +3974,7 @@ __DBGVAR(obulk_boundary_contour_value,1)
       rhoppp = oo_surf_stdev**2 * ( expb*(one-2*b**2) - expa*(one-2*a**2) )
 #endif
 #else
-      rhopp = oo_surf_stdev * ( ooc * (one + 2 * ooc**2 + rsurf**2) * em  +  rsurf * (ooc**2 + one) * ep ) ! prime-prime
+      rhopp = oo_surf_stdev * ( ooc * (one + 2 * ooc**2 + rsurf**2) * em  +  rsurf * (2 * ooc**2 + one) * ep ) ! prime-prime
 #ifdef __GRADCURV
       rhoppp = - ( ( three*oor**2 * ( one + rsurf**2 + two*ooc**2 ) + oo_surf_stdev**2 * ( one + two*rsurf**2 ) ) * em &
      &           + rsurf*ooc * ( six * oor**2 + (three+rsurf**2+drn**2) * oo_surf_stdev**2 ) * ep )
