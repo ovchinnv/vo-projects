@@ -1,0 +1,39 @@
+
+ all solvent molecules perturbed even on 1st iter ; surf atoms perturbed, even on 1st iter ; if this is MD, then why aren't other atoms perturbed from init r0?
+ (1) disable omp -- no diff
+ (2) disable string -- same
+ 
+ Basically, plugin master compiles a list of atom indices that get used by the components, only those are copied from the omm side, so I think the problem is that
+ OMM always modifies coords for some reason ; can disable dynamo & look at OMM restart coordinates : yes, with dynamo=0, get the same coords in the restart file, 
+ up to single prec. Btw, recompile in dble prec, ok no diff
+ 
+ if I set nsteps=0, then get rsurf=r(surfind), i.w. within 3e-14
+ 
+ rho matched to within single prec with cutoff of 5 std ; 1e-9 for cutoff=6 (default) ; dble prec w/ cutoff 9 ; _almost_ dblprec (1e-15) for 8
+ with the hessian, can only get to 1e-13
+ 
+ third derivatives : the agreement seems very low, within 1e-2, will need to check code :( There is a sign difference (-) finding out why we have it :
+ (1st and 2nd derivatives are OK ; this might just have to do with rw-rp [here] vs rp-rw [F] (i.e. water vs prot coordinates)! However: why is this not
+ affecting 1st order gradients ? Fixed sign error in F code
+
+ Noticed that, whcn using full density, the hessian and third derivatives match to within 1e-2 -- check !!! NOTE that old grad code gives wrong(er) hess ...
+ 8/12/25 : investigating :
+  (i) lower precision to single via sig cutoff=6: same o(-2) error ; lower cutoff to 5 : weird, but I get exactly the same numbers ! This means that there is a
+   fundamental error, i.e. not a precision artifact b/c of unstable or near-singular arithmetic, etc. Check formulas: found bug in F code :
+   rhopp had ( ooc^2 +1 ) instead of (2*ooc^2 +1 ); notes pages 2-3 of 8/24 ; or p1 of 11/24 ; now, the 2nd and 3rd dervs equal;
+   should also fix the (incomplete) old grad code, since we are on the subject : looking first at the comparison suggests that one term in the derivative is
+   included with the wrong sign, checking : fixed; the formula was correct, but dr was overwritten too early in grad, so put that at end of loop
+ 
+ NOTE : in the code sonvex surfaces (e.g. ball) correspond to negative curvatures
+ 
+ need to output other quantities from code :
+ (1) curvature gradient -- does not match, investigate !
+  checking one term at a time: 
+   T21, T22, T23 : pass
+   T3i fail :
+   HoG1 : -1 sign difference ! Inherited from 3rd gradient sign error -- fixed
+ (2) curvature gradients now PASS
+ 
+ checked all of the above for simple, medium, and full densities
+  
+ 
