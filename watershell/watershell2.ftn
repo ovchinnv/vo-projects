@@ -55,7 +55,7 @@ module _N
 #ifdef __OMP
  use omp_lib
 #endif
-! use erf_ext
+ use erf_ext ! these are essentially the same as native fortran, so no need for this module
 ! use ppoly1
 ! use ppoly2
 #ifdef __1DSBP
@@ -251,6 +251,9 @@ module _N
 &                  d2rho_solv(:,:),& ! density hessian at solvent coordinate (xx,xy,xz,yy,yz,zz)
 #ifdef __GRADCURV
 &                  d3rho_solv(:,:),& ! density third order gradient at solvent coordinate (xxx,xxy,xxz,xyy,xyz,xzz,yyy,yyz,yzz,zzz)
+#if defined(__DEBUGDUMP) && !defined(__1DSBP)
+&                  dacurv_solv(:,:),& ! curvature gradient
+#endif
 #endif
 #ifndef __1DSBP
 &                  acurv_solv(:),& ! average surface curvature corresponding to solvent coordinate
@@ -1296,6 +1299,9 @@ endif
   __ALLOC(dsurf_solv(nsolvent))
 #ifndef __1DSBP
   __ALLOC(acurv_solv(nsolvent))
+#if defined(__GRADCURV)&&defined(__DEBUGDUMP)
+  __ALLOC(dacurv_solv(3,nsolvent))
+#endif
 #endif
   __ALLOC(drho_solv(3,nsolvent))
   __ALLOC(d2rho_solv(6,nsolvent))
@@ -1702,6 +1708,9 @@ __DBGVAR(r_com_sa,1)
  __FREE(dsurf_solv)
 #ifndef __1DSBP
  __FREE(acurv_solv)
+#if defined(__GRADCURV)&&defined(__DEBUGDUMP)
+ __FREE(dacurv_solv)
+#endif
 #endif
  __FREE(isurface_atoms)
  __FREE(isolvent_atoms)
@@ -2586,21 +2595,21 @@ endif ! decide whether to compute dr_surf
 !
 #ifndef __1DSBP
 #ifdef __CURVCORRECT
-!  if ( dsurf_solv(i).gt.zero & ! i.e., when positive, we are inside the bdry (note that qrepelminus negates the distance)
+!  if ( dsurf_solv(i).gt.zero & ! i.e., when positive, we are inside the bdry (note that qrepelminus negates the distance); discontinuous fc @ dsurf=0
 !  if (.true. &
-   if ( acurv_solv(i).lt.zero & ! apply correction only for convex cases
+   if ( acurv_solv(i).lt.zero & ! apply correction only for convex cases; continuous fc for curv=0
 #ifdef __ALLOW_FIXED_CURV
    .and. (.not.qfixed_curvature) & 
 #endif
      ) &
 #ifdef __GRADCURV
 &  then
-    Lap = one / ( one + abs(acurv_solv(i)) * ( dsurf_solv(i)) ) ! reuse Lap from diff calc for later
+    Lap = one / ( one + abs(acurv_solv(i)) * ( dsurf_solv(i)) ) ! reuse Lap from diff calc for later ; could be <0 for dsurf<0
     HoG(1)=sign(one,acurv_solv(i)) ! reuse hog(1) for sign(curv)
-    __SCALE(acurv_solv(i),Lap)
+    __SCALE(acurv_solv(i),Lap) ! this is now corrected curvature
 ! compute multiplicative curvature gradient correction ; bugfix 1/26/25
 !    Lap = Lap * ( one - abs(acurv_solv(i))*(dsurf_solv(i)) )
-    Lap = Lap * ( one - acurv_solv(i)*HoG(1)*(dsurf_solv(i)) ) ! also correct for 1+|C|dR < 0
+    Lap = Lap * ( one - acurv_solv(i)*HoG(1)*(dsurf_solv(i)) ) ! also correct for 1+|C|dR < 0 ; ok, checked 8/25
 ! ^ note that we should always run with a curvature limiter, so a huge curvature is not technically possible ...
   else
    Lap=one ! just in case to allow using var even when the appx not applied
@@ -2706,6 +2715,9 @@ endif ! decide whether to compute dr_surf
   __INCR(fr(1,isolvent_atoms(i)), pre * dCurv(1))
   __INCR(fr(2,isolvent_atoms(i)), pre * dCurv(2))
   __INCR(fr(3,isolvent_atoms(i)), pre * dCurv(3))
+#ifdef __DEBUGDUMP
+  dacurv_solv(:,i)=dCurv
+#endif
 #endif
 #ifdef __ALLOW_FIXED_CURV
   endif
@@ -3493,21 +3505,28 @@ __DBGVAR(solvent_mass_ibulk,1)
  write(i,'(G20.12)') d2rho_solv
  call files_close(i)
 !
-#ifdef __GRADCURV
- call files_open(i, 'd3rho_solv.dat', 'FORMATTED','WRITE')
- write(i,'(G20.12)') d3rho_solv
- call files_close(i)
-#endif
-!
  call files_open(i, 'dsurf_solv.dat', 'FORMATTED','WRITE')
  write(i,*) dsurf_solv
-! write(i,*) __RHO_INVSAFE(rho_solv(1)), rho_solv(1), rho_solv(1)*2-1
+ call files_close(i)
+!
+ call files_open(i, 'surface_distance.dat', 'FORMATTED','WRITE')
+ write(i,*) surface_distance
  call files_close(i)
 !
 #ifndef __1DSBP
  call files_open(i, 'acurv_solv.dat', 'FORMATTED','WRITE')
  write(i,*) acurv_solv
  call files_close(i)
+#ifdef __GRADCURV
+!
+ call files_open(i, 'd3rho_solv.dat', 'FORMATTED','WRITE')
+ write(i,'(G20.12)') d3rho_solv
+ call files_close(i)
+!
+ call files_open(i, 'dacurv_solv.dat', 'FORMATTED','WRITE')
+ write(i,'(G20.12)') dacurv_solv
+ call files_close(i)
+#endif
 #endif
 !
  call files_open(i, 'misc.dat', 'FORMATTED','WRITE')
@@ -3930,12 +3949,12 @@ __DBGVAR(obulk_boundary_contour_value,1)
      expb=__gauss(b)
      em = expa-expb
      rhop  = em ! prime
-#else
+#else __SIMPLERHO
      em = expa-expb
      ep = expa+expb
 !     rhop = - oo_surf_stdev * osq2pi * ( ooc**2 * em + rsurf * ooc * ep ) ! rsurf x ooc  = a/r in notes
      rhop = - ( ooc * ( ooc * em + rsurf * ep ) ) ! prime
-#endif
+#endif __SIMPLERHO
      oor = ooc * oo_surf_stdev ! 1/r
      if (qcompute_hess) then
       dr2(1)=dr(1)**2    !xx
@@ -3957,7 +3976,7 @@ __DBGVAR(obulk_boundary_contour_value,1)
       dr3(8)=dr2(4)*dr(3) !yyz
       dr3(9)=dr2(5)*dr(3) !yzz
       dr3(10)=dr2(6)*dr(3)!zzz
-#endif
+#endif __GRADCURV
 #if defined(__SIMPLERHO)
 ! matlab :  rhopp  =  B.*expB*oosig^2/sqrt(pi);
 !      rhopp = -oo_surf_stdev * (drn-rsurf) * rhop ! prime-prime (note 1/sqrt(2*pi)/s scaling missing here)
@@ -3973,7 +3992,7 @@ __DBGVAR(obulk_boundary_contour_value,1)
 #ifdef __GRADCURV
       rhoppp = oo_surf_stdev**2 * ( expb*(one-2*b**2) - expa*(one-2*a**2) )
 #endif
-#else
+#else __SIMPLERHO
       rhopp = oo_surf_stdev * ( ooc * (one + 2 * ooc**2 + rsurf**2) * em  +  rsurf * (2 * ooc**2 + one) * ep ) ! prime-prime
 #ifdef __GRADCURV
       rhoppp = - ( ( three*oor**2 * ( one + rsurf**2 + two*ooc**2 ) + oo_surf_stdev**2 * ( one + two*rsurf**2 ) ) * em &
@@ -3982,7 +4001,7 @@ __DBGVAR(obulk_boundary_contour_value,1)
 !      rhoppp = -oosig*oosq2pi*( ( 3*oodR.^2 .* (1 + (arad/sig)^2 + 2*(sig.*oodR).^2) + (1+2*(arad/sig)^2)/sig^2 ) .* (expA-expB) + ...
 !                                                arad * ( ( 6*oodR.^2 + (3+(arad/sig)^2+(dR/sig).^2)/sig^2).*oodR ).* (expA+expB) );
 #endif
-#endif
+#endif __SIMPLERHO
 #ifdef __GRADCURV
 !% from matlab, fd-tested
 ! drhoxxx = drhoxxx +  dX.* (dX.^2 .* ( rhoppp - 3*d2 ) + 3*d2 ) ;
@@ -4012,11 +4031,11 @@ __DBGVAR(obulk_boundary_contour_value,1)
       __INCR(dr3(1), b*dr(1)) !xxx
       __INCR(dr3(7), b*dr(2)) !yyy
       __INCR(dr3(10),b*dr(3)) !zzz
-      __SCALE(dr3,oor)
+      __SCALE(dr3, - oor) ! note the (-) sign because here we use dr=rp-rw, unlike in the prototype code where dr=rw-rp;
       __INCR(d3rho_solv(:,i),dr3)
-#else
+#else  __GRADCURV
       __SCALE(dr2,oor*(rhopp-rhop*oor))
-#endif
+#endif __GRADCURV
       __INCR(dr2(1),rhop)
       __INCR(dr2(4),rhop)
       __INCR(dr2(6),rhop)
@@ -4024,10 +4043,10 @@ __DBGVAR(obulk_boundary_contour_value,1)
       __INCR(d2rho_solv(:,i),dr2)
      endif ! qcompute_hess
      if (qcompute_grad) then
-      __SCALE(dr, - rhop * oor ) ! note that this destroys dr for use after, which is why it is at the end !!!
+      __SCALE(dr, - rhop * oor ) ! note that this destroys dr for use after, which is why it is at the end ! Also note (-) sign b/c dr=rp-rw ;
       __INCR(drho_solv(:,i),dr) ! negative above because dr = r_protein - r_water
      endif
-#else
+#else __NEWGRADHESS
 !=================== OLDER CODE BELOW ===================================
 ! 12/24 : note : old code does _not_ have curvature derivatives implemented :
 #ifdef __GRADCURV
@@ -4043,13 +4062,6 @@ __DBGVAR(obulk_boundary_contour_value,1)
 ! note the sign difference vs notes (dr = rp-rw here, and the derivative is wrt rw, so need - for grad)
      expb = expa * ( a * rsurf + b * ooc ) ! drho/d|r| / |r|)
 !     b=ooc * oo_surf_stdev**2 ! reuse = 1/(sr)
-     if (qcompute_grad) then
-!      __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( a * rsurf + b * ooc) )
-!      __SCALE(dr, (ooc*oo_surf_stdev)**2 * ( a * rsurf + b * ooc) )
-       __SCALE(dr, expb)
-! add gradient contribution
-      __INCR(drho_solv(:,i),dr)
-     endif
      if (qcompute_hess) then
       dr2(1)=dr(1)**2
       dr2(2)=dr(1)*dr(2)
@@ -4064,6 +4076,13 @@ __DBGVAR(obulk_boundary_contour_value,1)
       __DECR(dr2(6),expb)
       __INCR(d2rho_solv(:,i),dr2)
      endif ! hessian
+     if (qcompute_grad) then
+!      __SCALE(dr, osq2pi * (ooc*oo_surf_stdev)**2 * ( a * rsurf + b * ooc) )
+!      __SCALE(dr, (ooc*oo_surf_stdev)**2 * ( a * rsurf + b * ooc) )
+       __SCALE(dr, expb) ! Note that this destroys dr, so should go after hess
+! add gradient contribution
+      __INCR(drho_solv(:,i),dr)
+     endif
 #else
 #ifdef __MEDIUMRHO
      expa = __gauss(a)
