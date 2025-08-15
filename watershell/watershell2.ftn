@@ -122,6 +122,9 @@ module _N
 #else
  float :: sbfe(2)
 #endif
+#ifdef __DEBUGDUMP
+ float, pointer :: sbfe_solv(:,:)=>NULL() ! for storing splined values
+#endif
  bool :: qsbe=.false. ! whether to compute energy from the splines
 #ifdef __BAROSTAT
  float :: surface_force
@@ -1299,10 +1302,18 @@ endif
   __ALLOC(dsurf_solv(nsolvent))
 #ifndef __1DSBP
   __ALLOC(acurv_solv(nsolvent))
-#if defined(__GRADCURV)&&defined(__DEBUGDUMP)
+#ifdef __DEBUGDUMP
+#ifdef __GRADCURV
   __ALLOC(dacurv_solv(3,nsolvent))
-#endif
-#endif
+  __ALLOC(sbfe_solv(5,nsolvent))
+#else __GRADCURV
+  __ALLOC(sbfe_solv(4,nsolvent))
+#endif __GRADCURV
+#endif __DEBUGDUMP
+!
+#elif defined(__DEBUGDUMP)
+  __ALLOC(sbfe_solv(2,nsolvent))
+#endif __1DSBP
   __ALLOC(drho_solv(3,nsolvent))
   __ALLOC(d2rho_solv(6,nsolvent))
 #ifdef __GRADCURV
@@ -1708,9 +1719,12 @@ __DBGVAR(r_com_sa,1)
  __FREE(dsurf_solv)
 #ifndef __1DSBP
  __FREE(acurv_solv)
-#if defined(__GRADCURV)&&defined(__DEBUGDUMP)
+#if defined(__DEBUGDUMP)&&defined(__GRADCURV)
  __FREE(dacurv_solv)
 #endif
+#endif
+#ifdef __DEBUGDUMP
+ __FREE(sbfe_solv)
 #endif
  __FREE(isurface_atoms)
  __FREE(isolvent_atoms)
@@ -2638,11 +2652,11 @@ endif ! decide whether to compute dr_surf
 ! basically, modified curvature derivative has a term that multiplies dU/dC by dR, hence sbfe(5)
 !  if ( dsurf_solv(i).gt.zero ) &
   if ( acurv_solv(i).lt.zero ) &
-   __INCR(pre, sbfe(5) * acurv_solv(i)**2 * HoG(1) ) ! dK/dd=-c*|c*|, but only if (1+|C|dR)>0 ; better to use -c*^2 x sign(c) (?)
+   __INCR(pre, sbfe(5) * acurv_solv(i)**2 * HoG(1) ) ! dK/dd=-c*|c*|, but only if (1+|C|dR)>0 ; better to use -c*^2 x sign(c)
 !   __INCR(pre, sbfe(5) * acurv_solv(i) * abs(acurv_solv(i)) ) ! dK/dd=-c*|c*|, but only if (1+|C|dR)>0 ; better to use -c*^2 x sign(c)
 ! where c is the distance-corrected curvature (which is what gives c the d-dependence in the first place)
 #endif
-  __SCALE(pre, -( _QREPELMINUS curvature_force_constant )) ! NOTE that the surface normal is inward, hence (-) force
+  __SCALE(pre, -( _QREPELMINUS curvature_force_constant )) ! NOTE that the spline file actually gives (-) force
 !
 #else
   sbfe = watershell_sbf_spline1D_compute(dsurf_solv(i), qsbe)
@@ -2658,7 +2672,7 @@ endif ! decide whether to compute dr_surf
 
 #ifdef __DRHOINV
 ! include derivative of distance function (simplest model only)
-  __SCALE(pre, surf_stdev * sq2pi * exp (d0**2)) ! recall our sign convention, in which distance to boundary is negative when you are inside, + for outside
+  __SCALE(pre, surf_stdev * sq2pi * exp (d0**2)) ! recall our sign convention, in which distance to boundary is negative when you are outside, + for inside
 #else
 ! in this case, we should scale by 1/|grad rho|, but this was done in the first protected block above, so need nothing here
 #endif
@@ -2707,7 +2721,7 @@ endif ! decide whether to compute dr_surf
 ! note two mods : (1) derivative of potential wrt curvature x grad curv (here), and
 ! (2) a modification of the above to account for the curvature correction (already included above)
 ! Lap has the curvature correction, if needed, otherwise =1
-  pre = ( _QREPELMINUS curvature_force_constant * sbfe(5) &    ! _qrepelminus to account for curvature sign flip upon bdry crossing
+  pre = - ( _QREPELMINUS curvature_force_constant * sbfe(5) &    ! _qrepelminus to account for curvature sign flip upon bdry crossing ; same sign as 
 #ifdef __CURVCORRECT
   * Lap &
 #endif
@@ -2717,6 +2731,7 @@ endif ! decide whether to compute dr_surf
   __INCR(fr(3,isolvent_atoms(i)), pre * dCurv(3))
 #ifdef __DEBUGDUMP
   dacurv_solv(:,i)=dCurv
+  sbfe_solv(:,i)=sbfe;
 #endif
 #endif
 #ifdef __ALLOW_FIXED_CURV
@@ -3461,6 +3476,10 @@ __DBGVAR(solvent_mass_ibulk,1)
 !
  call files_open(i, 'forces_solv.dat', 'FORMATTED','WRITE')
  write(i,*) fr(:,isolvent_atoms)
+ call files_close(i)
+!
+ call files_open(i, 'sbfe_solv.dat', 'FORMATTED','WRITE')
+ write(i,*) sbfe_solv
  call files_close(i)
 !
  call files_open(i, 'forces_surf.dat', 'FORMATTED','WRITE')
