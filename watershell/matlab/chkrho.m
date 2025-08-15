@@ -6,11 +6,10 @@ if exist('OCTAVE_VERSION'); graphics_toolkit('gnuplot'); end
 if ~exist('qsimple'); qsimple=1; end
 if ~exist('qmed'); qmed=0; end
 if ~exist('qfull'); qfull=0; end
-qsimple=0;qmed=0;qfull=1; %
 %
 qcurv=1 ;% whether to compute gaussian curvature (not needed for cvapx)
 qdcurv=1 ;% whether to compute curvature derivatives
-%
+
 qdcurv=qdcurv&qcurv ;% otherwise, nonsense
 %
 % compute various quantities below
@@ -21,7 +20,7 @@ rho=zeros(1,nsolv);
 % grad (3)
 drhox=rho ; % init
 drhoy=rho ;
-drhoz=rho ; 
+drhoz=rho ;
 % hess (6 by symmetry)
 drhoxx=rho ; % init
 drhoxy=rho ;
@@ -236,23 +235,27 @@ if (qcurv)
   2* ( drhoxy.*drhox.*drhoy + ( 0.5 * drhozz.*drhoz + drhoxz.*drhox + drhoyz.*drhoy).*drhoz ) ...
   ) ) / 2; % average curvature
 %
- fprintf(':checking curvature :\n') ;
+% check curvature against F output
  acurv_solv=load('../acurv_solv.dat');
- fprintf(':C(r):');
- max( abs ( Curv(ifr) - acurv_solv(ifr) ) )
- fprintf(':c_P:');
- corr(Curv(ifr)',acurv_solv(ifr)')
-% also check optional curvature correction here:
- iconvex=find(Curv(ifr)<=0); iconvex=ifr(iconvex);
- cCurv(ifr)=Curv(ifr); cCurv(iconvex)=Curv(iconvex)./(1+abs(Curv(iconvex)).* ( dsurf(iconvex)-surface_distance) );
- fprintf(':checking corrected curvature :\n') ;
- max( abs ( cCurv(ifr) - acurv_solv(ifr) ) ) % note that this is limited by the accuracy of the inverse error function in F
- fprintf(':c_P:');
- corr(cCurv(ifr)',acurv_solv(ifr)')
-
+ if (~qcurvcorr)
+  fprintf(':checking curvature :\n') ;
+  fprintf(':C(r):');
+  max( abs ( Curv(ifr) - acurv_solv(ifr) ) )
+  fprintf(':c_P:');
+  corr(Curv(ifr)',acurv_solv(ifr)')
+ else
+% check optional curvature correction here:
+  iconvex2=find(Curv(ifr)<=0); iconvex=ifr(iconvex2); % iconvex2 relative to ifr (double indexing)
+  cCurv(ifr)=Curv(ifr); cCurv(iconvex)=Curv(iconvex)./(1+abs(Curv(iconvex)).* ( dsurf(iconvex)-surface_distance) );
+  fprintf(':checking corrected curvature :\n') ;
+  max( abs ( cCurv(ifr) - acurv_solv(ifr) ) ) % note that this is limited by the accuracy of the inverse error function in F
+  fprintf(':c_P:');
+  corr(cCurv(ifr)',acurv_solv(ifr)')
+ end
+%
  if (qplot)
   figure(2) ; clf ; hold on ;
-  plot(cCurv(ifr),acurv_solv(ifr),'k.')
+  plot(Curv(ifr),acurv_solv(ifr),'k.')
 % plot(drhoxxx(ifr),'k.')
 % plot(d3rho_solv(1,ifr),'r.');
  end
@@ -337,7 +340,7 @@ if (qcurv)
 % dCurvy = -2*(drhoxy.*drhox + drhoyy.*drhoy + drhoyz.*drhoz).*Curv.^2;
 % dCurvz = -2*(drhoxz.*drhox + drhoyz.*drhoy + drhozz.*drhoz).*Curv.^2;
 %
-  fprintf(':checking curvature gradient:\n') ; % to output in code !
+  fprintf(':checking curvature gradient:\n') ; % NOTE: does not include gradient of curvature correction !
   dacurv_solv=load('../dacurv_solv.dat');
   dacurv_solv=reshape(dacurv_solv,3,[]);
   fprintf(':∇x:');

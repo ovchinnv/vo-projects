@@ -3,9 +3,6 @@ addpath('~/scripts/matlab');
 splinefile='../sbf-md-rcut8spl2dkz.dat';
 spl2d=readspl2d(splinefile);
 %
-qcrvsmooth=1; % smooth by Gaussian convolution
-qcurvgrad=1; % whether to include forces from the curvature gradient
-%
 % show a simple force plot at 0 curvature :
 zzgrid=spl2d.breaks{2};
 kkgrid=spl2d.breaks{1};
@@ -18,7 +15,11 @@ if (qplot)
 end
 %
 % first, evaluate the 0-curvature, surface force ; decide whether to use derivative of drho_inverse (F code parameter), which can be very large
-ddsurf_solv(ifr) = sig * sqrt(2*pi) * exp ( (dsurf(ifr) + padding).^2 / (2*sig^2)  ) ;# note sign convention
+if (qdrhoinv)
+ ddsurf_solv(ifr) = sig * sqrt(2*pi) * exp ( (dsurf(ifr) + padding).^2 / (2*sig^2)  ) ;% note sign convention
+else
+ ddsurf_solv(ifr)=odrhon(ifr);
+end
 iforced=find ( (dsurf(ifr)-surface_distance) <= zzgrid(end) ) ; iforced=ifr(iforced);
 
 fsurf0=zeros(1,nsolv);
@@ -54,8 +55,8 @@ fpot=zeros(1,nsolv);
 fcurv=zeros(1,nsolv);
 kmin=kkgrid(1);
 kmax=kkgrid(end);
-%kmin=-0.1;
-%kmax= 0.1;
+kmin=-0.1;
+kmax= 0.1;
 ksig=0.03; % NOTE different sigma from the one for rho !
 
 if qcurvgrad % define new splines for evaluating derivative wrt curvature
@@ -66,13 +67,21 @@ end
 for i=iforced
 % need to limit curvature to grid support (or to manual spec from wshell input)
  if (qcrvsmooth)
-  k1 = (kmin-Curv(i))/(ksig*sqrt(2));
-  k2 = (kmax-Curv(i))/(ksig*sqrt(2));
+  if (qcurvcorr) % to use corrected curvature
+   k1 = (kmin-cCurv(i))/(ksig*sqrt(2));
+   k2 = (kmax-cCurv(i))/(ksig*sqrt(2));
+  else
+   k1 = (kmin-Curv(i))/(ksig*sqrt(2));
+   k2 = (kmax-Curv(i))/(ksig*sqrt(2));
+  end
   ka = 0.5 * ( kmin+kmax + ksig*sqrt(2) * ( k1*erf(k1) - k2*erf(k2) ) ) + ksig*oosq2pi*(exp(-k1^2)-exp(-k2^2));
   kadiff=0.5*(erf(k2)-erf(k1)); % curvature correction
  else % cap
-  ka=min(kmax,max(kmin,Curv(i)));
-  kadiff=1;
+  if (qcurvcorr)
+   ka=min(kmax,max(kmin,cCurv(i)));kadiff=(cCurv(i)==ka); % if oob, kadiff=0
+  else
+   ka=min(kmax,max(kmin,Curv(i)));kadiff=(Curv(i)==ka);
+  end
  end
  fsurf(i)=fspl2d(spl2d,ka,dsurf(i)-surface_distance); % custom function
 % fsurf(i)=ppval(spl2d,[ka,dsurf(i)-surface_distance]'); % native -- does not work
@@ -104,19 +113,33 @@ end
 % note the composition of the surface force :
 % first part is from the spline, which has the "sign" with which (-) z-positions give (-) force [ so we reverse it ]; the grad is inward pointing, and the
 % distance derivative does not change the sign because it increases monotonically with rho in view of the (-) sign convention 
-frcx = -fsurf(ifr) .* ddsurf_solv(ifr) .* drhox(ifr);
-frcy = -fsurf(ifr) .* ddsurf_solv(ifr) .* drhoy(ifr);
-frcz = -fsurf(ifr) .* ddsurf_solv(ifr) .* drhoz(ifr);
+% you can think of the distance derivative as normalizing the surface normal, i.e. ddsurf_solv ~ 1/drhon
+frcx = fsurf(ifr) .* (ddsurf_solv(ifr) .* drhox(ifr));
+frcy = fsurf(ifr) .* (ddsurf_solv(ifr) .* drhoy(ifr));
+frcz = fsurf(ifr) .* (ddsurf_solv(ifr) .* drhoz(ifr));
 
 % curvature force :
 if qcurvgrad
  fcvx =  fcurv(ifr) .* dCurvx(ifr);
  fcvy =  fcurv(ifr) .* dCurvy(ifr);
  fcvz =  fcurv(ifr) .* dCurvz(ifr);
+
+% NOTE: if we are using a corrected curvature, then CC=CC( C(x), d(rho(x)) );  so grad CC will have contributions from grad_x(C) and grad_x(rho) !
+ if (qcurvcorr)
+  c1 =  ( 1-cCurv(iconvex).*sign(Curv(iconvex)).*(dsurf(iconvex)-surface_distance) ) ./ ( 1+abs(Curv(iconvex)).*(dsurf(iconvex)-surface_distance) );
+  fcvx(iconvex2) = fcvx(iconvex2) .* c1; % multiplicative correction
+  fcvy(iconvex2) = fcvy(iconvex2) .* c1;
+  fcvz(iconvex2) = fcvz(iconvex2) .* c1;
 %
- frcx=frcx-fcvx;
- frcy=frcy-fcvy;
- frcz=frcz-fcvz;
+  c2 = cCurv(iconvex).^2  .* sign(Curv(iconvex));
+  frcx(iconvex2) = frcx(iconvex2) - fcurv(iconvex) .* c2.* ( ddsurf_solv(iconvex) .* drhox(iconvex) ) ;
+  frcy(iconvex2) = frcy(iconvex2) - fcurv(iconvex) .* c2.* ( ddsurf_solv(iconvex) .* drhoy(iconvex) ) ;
+  frcz(iconvex2) = frcz(iconvex2) - fcurv(iconvex) .* c2.* ( ddsurf_solv(iconvex) .* drhoz(iconvex) ) ;
+ end
+
+ frcx=frcx+fcvx;
+ frcy=frcy+fcvy;
+ frcz=frcz+fcvz;
 end
 
 if (qcurvgrad)
@@ -128,10 +151,10 @@ end
 forces_solv=load('../forces_solv.dat');
 forces_solv=reshape(forces_solv,3,[]);
 fprintf(':fx:');
-max( abs ( frcx - forces_solv(1,ifr) ) )
+max( abs ( -frcx - forces_solv(1,ifr) ) )
 fprintf(':fy:');
-max( abs ( frcy - forces_solv(2,ifr) ) )
+max( abs ( -frcy - forces_solv(2,ifr) ) )
 fprintf(':fz:');
-max( abs ( frcz - forces_solv(3,ifr) ) )
-corr(frcx',forces_solv(1,ifr)')
+max( abs ( -frcz - forces_solv(3,ifr) ) )
+corr(-frcx',forces_solv(1,ifr)')
 
