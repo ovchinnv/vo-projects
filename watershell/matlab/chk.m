@@ -1,4 +1,4 @@
- qplot=1;
+ qplot=0;
 
  chkpos ;% positions
  chkrho ;% gradients of rho, curvature

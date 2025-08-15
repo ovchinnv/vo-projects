@@ -6,7 +6,7 @@ if exist('OCTAVE_VERSION'); graphics_toolkit('gnuplot'); end
 if ~exist('qsimple'); qsimple=1; end
 if ~exist('qmed'); qmed=0; end
 if ~exist('qfull'); qfull=0; end
-qsimple=1;qmed=0;qfull=0; %
+qsimple=0;qmed=0;qfull=1; %
 %
 qcurv=1 ;% whether to compute gaussian curvature (not needed for cvapx)
 qdcurv=1 ;% whether to compute curvature derivatives
